@@ -5,21 +5,28 @@
 ////
 //// ## Example
 ////
+//// ### Build a config and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+////
 //// ```gleam
 //// import dream_postgres/client as postgres
 //// import gleam/erlang/process
+//// import gleam/otp/actor
 ////
-//// // Builder pattern: returns Result(Connection, actor.StartError)
-//// let db = postgres.new(process.new_name("db_pool"))
+//// pub fn database_config() -> postgres.Config {
+////   let pool_name = process.new_name("db_pool")
+////   postgres.new(pool_name)
 ////   |> postgres.host("localhost")
 ////   |> postgres.port(5432)
 ////   |> postgres.database("myapp")
 ////   |> postgres.user("postgres")
+////   |> postgres.password("secret")
 ////   |> postgres.pool_size(15)
-////   |> postgres.connect()
+//// }
 ////
-//// // Or from URL: returns Result(Connection, FromUrlError)
-//// let db = postgres.from_url("postgresql://user:pass@localhost:5432/myapp")
+//// pub fn connect_database() -> Result(postgres.Connection, actor.StartError) {
+////   database_config()
+////   |> postgres.connect()
+//// }
 //// ```
 
 import gleam/erlang/process
@@ -31,19 +38,40 @@ import gleam/string
 import gleam/uri
 import pog
 
-// Re-export Pog types
+/// A connection to a PostgreSQL connection pool.
+///
+/// The same type as `pog.Connection`. Pass it to `pog.execute` to run a
+/// query. `connect` and `from_url` return it.
 pub type Connection =
   pog.Connection
 
+/// The settings of a connection pool.
+///
+/// The same type as `pog.Config`. Make one with `new` or `parse_config`,
+/// change it with the builder functions, then start the pool with
+/// `connect`. The `pog` functions that take a `pog.Config` also accept it.
 pub type Config =
   pog.Config
 
+/// Why a query failed.
+///
+/// The same type as `pog.QueryError`. `pog.execute` returns it. The
+/// `dream_postgres/query` helpers turn it into the simpler
+/// `query.QueryError`.
 pub type QueryError =
   pog.QueryError
 
+/// A value for a parameter of a query.
+///
+/// The same type as `pog.Value`. Make one with `pog.int`, `pog.text` and the
+/// other `pog` value functions.
 pub type Value =
   pog.Value
 
+/// The result of a query that succeeded.
+///
+/// The same type as `pog.Returned`. `count` is the number of rows, and
+/// `rows` holds the decoded rows.
 pub type Returned(a) =
   pog.Returned(a)
 
@@ -62,12 +90,16 @@ pub type Returned(a) =
 ///
 /// ## Example
 ///
+/// ### Create a config for a pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_new.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
 /// ```gleam
 /// import dream_postgres/client as postgres
 /// import gleam/erlang/process
 ///
-/// let pool_name = process.new_name("my_db_pool")
-/// let config = postgres.new(pool_name)
+/// pub fn create_config() -> postgres.Config {
+///   let pool_name = process.new_name("my_db_pool")
+///   postgres.new(pool_name)
+/// }
 /// ```
 pub fn new(pool_name: process.Name(pog.Message)) -> Config {
   pog.default_config(pool_name: pool_name)
@@ -88,9 +120,15 @@ pub fn new(pool_name: process.Name(pog.Message)) -> Config {
 ///
 /// ## Example
 ///
+/// ### Set the host <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_host.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
 /// ```gleam
-/// config
-/// |> postgres.host("localhost")
+/// import dream_postgres/client as postgres
+///
+/// pub fn use_local_host(config: postgres.Config) -> postgres.Config {
+///   config
+///   |> postgres.host("localhost")
+/// }
 /// ```
 pub fn host(config: Config, value: String) -> Config {
   pog.Config(..config, host: value)
@@ -111,9 +149,15 @@ pub fn host(config: Config, value: String) -> Config {
 ///
 /// ## Example
 ///
+/// ### Set the port <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_port.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
 /// ```gleam
-/// config
-/// |> postgres.port(5432)
+/// import dream_postgres/client as postgres
+///
+/// pub fn use_default_port(config: postgres.Config) -> postgres.Config {
+///   config
+///   |> postgres.port(5432)
+/// }
 /// ```
 pub fn port(config: Config, value: Int) -> Config {
   pog.Config(..config, port: value)
@@ -134,9 +178,15 @@ pub fn port(config: Config, value: Int) -> Config {
 ///
 /// ## Example
 ///
+/// ### Set the database name <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_database.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
 /// ```gleam
-/// config
-/// |> postgres.database("myapp_prod")
+/// import dream_postgres/client as postgres
+///
+/// pub fn use_production_database(config: postgres.Config) -> postgres.Config {
+///   config
+///   |> postgres.database("myapp_prod")
+/// }
 /// ```
 pub fn database(config: Config, value: String) -> Config {
   pog.Config(..config, database: value)
@@ -157,9 +207,15 @@ pub fn database(config: Config, value: String) -> Config {
 ///
 /// ## Example
 ///
+/// ### Set the user <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
 /// ```gleam
-/// config
-/// |> postgres.user("postgres")
+/// import dream_postgres/client as postgres
+///
+/// pub fn use_postgres_user(config: postgres.Config) -> postgres.Config {
+///   config
+///   |> postgres.user("postgres")
+/// }
 /// ```
 pub fn user(config: Config, value: String) -> Config {
   pog.Config(..config, user: value)
@@ -180,9 +236,15 @@ pub fn user(config: Config, value: String) -> Config {
 ///
 /// ## Example
 ///
+/// ### Set the password <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_password.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
 /// ```gleam
-/// config
-/// |> postgres.password("secret123")
+/// import dream_postgres/client as postgres
+///
+/// pub fn use_password(config: postgres.Config) -> postgres.Config {
+///   config
+///   |> postgres.password("secret123")
+/// }
 /// ```
 pub fn password(config: Config, value: String) -> Config {
   pog.Config(..config, password: option.Some(value))
@@ -204,9 +266,16 @@ pub fn password(config: Config, value: String) -> Config {
 ///
 /// ## Example
 ///
+/// ### Set the pool size <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_pool_size.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
 /// ```gleam
-/// config
-/// |> postgres.pool_size(20)  // Allow up to 20 concurrent connections
+/// import dream_postgres/client as postgres
+///
+/// pub fn allow_twenty_connections(config: postgres.Config) -> postgres.Config {
+///   config
+///   // Allow up to 20 connections at the same time
+///   |> postgres.pool_size(20)
+/// }
 /// ```
 pub fn pool_size(config: Config, value: Int) -> Config {
   pog.Config(..config, pool_size: value)
@@ -227,14 +296,25 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// - `Ok(Connection)`: Successfully started the pool
 /// - `Error(StartError)`: Failed to start (e.g., connection refused, invalid config)
 ///
+/// ## See Also
+///
+/// - `new`: make the config
+/// - `from_url`: read a URL and start the pool in one step
+///
 /// ## Example
+///
+/// ### Start a connection pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
 /// import gleam/erlang/process
+/// import gleam/otp/actor
+/// import pog
 ///
-/// let pool_name = process.new_name("db_pool")
-/// let result = postgres.new(pool_name)
+/// pub fn connect_database(
+///   pool_name: process.Name(pog.Message),
+/// ) -> Result(postgres.Connection, actor.StartError) {
+///   postgres.new(pool_name)
 ///   |> postgres.host("localhost")
 ///   |> postgres.port(5432)
 ///   |> postgres.database("myapp")
@@ -242,6 +322,7 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 ///   |> postgres.password("secret")
 ///   |> postgres.pool_size(15)
 ///   |> postgres.connect()
+/// }
 /// ```
 pub fn connect(config: Config) -> Result(Connection, actor.StartError) {
   pog.start(config)
@@ -300,9 +381,12 @@ pub type UrlError {
 pub type FromUrlError {
   /// The URL is not a valid PostgreSQL connection URL.
   InvalidUrl(error: UrlError)
-  /// The pool process did not start in time.
+  /// The pool process did not start in time. `from_url` does not return
+  /// this value with `pog` 4, which reports every start failure as an exit.
   PoolStartTimedOut
-  /// The pool process returned an error message when it started.
+  /// The pool process returned an error message when it started. `from_url`
+  /// does not return this value with `pog` 4, which reports every start
+  /// failure as an exit.
   PoolStartFailed(message: String)
   /// The pool process stopped while it started. The exit reason is not kept,
   /// because it can hold the pool settings, and the settings hold the
@@ -317,7 +401,7 @@ pub type FromUrlError {
 ///
 /// ## URL Format
 ///
-/// ```
+/// ```text
 /// postgresql://user:password@host:port/database?parameter=value
 /// ```
 ///
@@ -347,15 +431,25 @@ pub type FromUrlError {
 /// - `Error(UrlError)`: What is wrong with the URL. The error never holds
 ///   the password.
 ///
+/// ## See Also
+///
+/// - `from_url`: read a URL and start the pool in one step
+/// - `connect`: start the pool from a config
+///
 /// ## Example
+///
+/// ### Read a connection URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_parse_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
 /// import gleam/erlang/process
+/// import pog
 ///
-/// let pool_name = process.new_name("db_pool")
-/// let config =
+/// pub fn read_database_url(
+///   pool_name: process.Name(pog.Message),
+/// ) -> Result(postgres.Config, postgres.UrlError) {
 ///   postgres.parse_config(pool_name, "postgresql://user:pass@localhost/myapp")
+/// }
 /// ```
 pub fn parse_config(
   pool_name: process.Name(pog.Message),
@@ -396,17 +490,33 @@ pub fn parse_config(
 ///
 /// - `Ok(Connection)`: The pool started
 /// - `Error(InvalidUrl(UrlError))`: The URL is not valid
-/// - `Error(PoolStartTimedOut)`, `Error(PoolStartFailed(message))` or
-///   `Error(PoolStartExited)`: The pool process did not start
+/// - `Error(PoolStartExited)`: The pool process did not start. `pog` 4
+///   reports every start failure as an exit, so `from_url` does not return
+///   `PoolStartTimedOut` or `PoolStartFailed`.
 ///
 /// No error holds the password.
 ///
+/// ## See Also
+///
+/// - `parse_config`: read a URL without starting a pool
+/// - `connect`: start the pool from a config
+///
 /// ## Example
+///
+/// ### Start a pool from a URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_from_url.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
+/// import gleam/string
 ///
-/// let result = postgres.from_url("postgresql://postgres:secret@localhost:5432/myapp")
+/// pub fn describe_connection(url: String) -> String {
+///   case postgres.from_url(url) {
+///     Ok(_connection) -> "The pool started"
+///     Error(postgres.InvalidUrl(error)) ->
+///       "Invalid URL: " <> string.inspect(error)
+///     Error(error) -> "The pool did not start: " <> string.inspect(error)
+///   }
+/// }
 /// ```
 pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
   use config <- result.try(
@@ -416,17 +526,9 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
   config
   |> pool_size(15)
   |> connect()
-  |> result.map_error(convert_start_error_to_from_url_error)
-}
-
-fn convert_start_error_to_from_url_error(
-  error: actor.StartError,
-) -> FromUrlError {
-  case error {
-    actor.InitTimeout -> PoolStartTimedOut
-    actor.InitFailed(message) -> PoolStartFailed(message)
-    actor.InitExited(_reason_that_can_hold_the_password) -> PoolStartExited
-  }
+  // `pog.start` reports every start failure as `actor.InitExited`, and the
+  // exit reason can hold the password, so it is not kept.
+  |> result.replace_error(PoolStartExited)
 }
 
 // Private URL parsing - flat functions, no nesting
@@ -466,11 +568,12 @@ fn check_port(port_number: option.Option(Int)) -> Result(Int, UrlError) {
   }
 }
 
+// When the URL has a host, `gleam/uri` gives a path that is empty or that
+// starts with `/`, so dropping the first character removes that `/`.
 fn parse_database(path: String) -> Result(String, UrlError) {
-  case path {
-    "" | "/" -> Error(MissingDatabase)
-    "/" <> encoded_name -> decode_database_name(path, encoded_name)
-    _ -> Error(InvalidDatabase(path))
+  case string.drop_start(path, 1) {
+    "" -> Error(MissingDatabase)
+    encoded_name -> decode_database_name(path, encoded_name)
   }
 }
 
