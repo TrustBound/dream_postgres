@@ -2,10 +2,10 @@ name = "dream_postgres"
 version = "2.0.0"
 description = "PostgreSQL utilities for Gleam with type-safe query helpers"
 licences = ["MIT"]
-repository = { type = "github", user = "TrustBound", repo = "dream" }
+repository = { type = "github", user = "TrustBound", repo = "dream_postgres" }
 links = [
     { title = "Documentation", href = "https://hexdocs.pm/dream_postgres" },
-    { title = "GitHub", href = "https://github.com/TrustBound/dream" },
+    { title = "GitHub", href = "https://github.com/TrustBound/dream_postgres" },
 ]
 
 [dependencies]
@@ -15,5 +15,5 @@ gleam_otp = ">= 1.0.0 and < 2.0.0"
 pog = ">= 4.0.0 and < 5.0.0"
 
 [dev-dependencies]
-gleeunit = ">= 1.0.0 and < 2.0.0"
-
+# Switched to a Hex version range once it is published.
+dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "c583145874e63118cc5e680a293dd52cd4c35517" }

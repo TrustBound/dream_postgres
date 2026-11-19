@@ -1,14 +1,36 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/TrustBound/dream/main/ricky_and_lucy.png" alt="Dream Logo" width="200">
-  
+  <img src="https://raw.githubusercontent.com/TrustBound/dream/main/ricky_and_lucy.png" alt="Ricky Moony and Lucy, a moon shaped mascot for Dream with the star shaped mascot for Gleam, each with cute cartoon eyes and a smile" width="200">
+
+<b>PostgreSQL utilities for Gleam with type-safe query helpers</b>
+
+</div>
+
+<br />
+
+<div align="center">
+  <a href="https://hex.pm/packages/dream_postgres">
+    <img src="https://img.shields.io/hexpm/v/dream_postgres" alt="Hex Package">
+  </a>
+  <a href="https://github.com/TrustBound/dream_postgres/releases">
+    <img src="https://img.shields.io/github/v/release/TrustBound/dream_postgres?label=Release" alt="Latest Release">
+  </a>
   <a href="https://hexdocs.pm/dream_postgres">
     <img src="https://img.shields.io/badge/hex-docs-lightgreen.svg" alt="HexDocs">
   </a>
+  <a href="https://github.com/TrustBound/dream_postgres/actions/workflows/ci.yml?query=branch%3Amain">
+    <img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/TrustBound/dream_postgres/badges/coverage.json" alt="Coverage">
+  </a>
+  <a href="https://github.com/TrustBound/dream_postgres/blob/main/LICENSE.md">
+    <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License">
+  </a>
+  <a href="https://gleam.run">
+    <img src="https://img.shields.io/badge/gleam-%E2%9C%A8-ffaff3" alt="Gleam">
+  </a>
 </div>
 
-# dream_postgres
+<br />
 
-**PostgreSQL utilities for Gleam with type-safe query helpers.**
+# dream_postgres
 
 A standalone module providing clean interfaces for PostgreSQL operations using [Pog](https://hex.pm/packages/pog). Includes query result helpers and a builder pattern for connection management. Built with the same quality standards as [Dream](https://github.com/TrustBound/dream), but completely independent—use it in any Gleam project.
 
@@ -28,7 +50,7 @@ gleam add dream_postgres
 
 ## Quick Start
 
-### Connection Setup <a href="https://github.com/TrustBound/dream/blob/dream_postgres-2.0.0/modules/postgres/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Connection Setup <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -52,7 +74,7 @@ pub fn connect_database() -> Result(postgres.Connection, actor.StartError) {
 }
 ```
 
-### Or from URL <a href="https://github.com/TrustBound/dream/blob/dream_postgres-2.0.0/modules/postgres/test/snippets/readme_connection_from_url.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Or from URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_connection_from_url.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -89,7 +111,7 @@ The pool connects to the database in the background. When no database listens at
 
 Use with [Squirrel](https://hex.pm/packages/squirrel) or Pog directly:
 
-#### Run a query with Pog <a href="https://github.com/TrustBound/dream/blob/dream_postgres-2.0.0/modules/postgres/test/snippets/readme_query_execution.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### Run a query with Pog <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_query_execution.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -156,7 +178,7 @@ pub fn describe_user_count(
 
 Configure your database connection step by step:
 
-#### Build a production config <a href="https://github.com/TrustBound/dream/blob/dream_postgres-2.0.0/modules/postgres/test/snippets/readme_connection_builder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### Build a production config <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_connection_builder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -185,7 +207,7 @@ pub fn connect_production() -> Result(postgres.Connection, actor.StartError) {
 
 The `query` module provides simple helpers for extracting data from Pog results:
 
-#### Turn results into values <a href="https://github.com/TrustBound/dream/blob/dream_postgres-2.0.0/modules/postgres/test/snippets/readme_query_result_helpers.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### Turn results into values <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_query_result_helpers.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -237,7 +259,7 @@ pub fn user_names_from_result(
 
 The `QueryError` type simplifies error handling:
 
-#### Handle each QueryError <a href="https://github.com/TrustBound/dream/blob/dream_postgres-2.0.0/modules/postgres/test/snippets/readme_error_handling.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### Handle each QueryError <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_error_handling.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/query
@@ -276,13 +298,7 @@ This is much simpler than Pog's error types, making it easier to handle common c
 
 ## Design Principles
 
-This module follows the same quality standards as [Dream](https://github.com/TrustBound/dream):
-
-- **No nested cases** - Clear, flat control flow
-- **No anonymous functions** - Named functions for clarity
-- **Builder pattern** - Consistent, composable APIs
-- **Type safety** - `Result` types force error handling
-- **Quality testing** - Comprehensive test coverage
+dream_postgres follows Dream's [design principles](https://github.com/TrustBound/dream/blob/release/3.0.0/docs/reference/design-principles.md) and [contributing guide](https://github.com/TrustBound/dream/blob/release/3.0.0/docs/contributing/contributing.md).
 
 ## About Dream
 
@@ -290,4 +306,10 @@ This module was originally built for the [Dream](https://github.com/TrustBound/d
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT — see [LICENSE.md](https://github.com/TrustBound/dream_postgres/blob/main/LICENSE.md)
+
+---
+
+<div align="center">
+  <sub>Built in Gleam, on the BEAM, by the <a href="https://github.com/trustbound/dream">Dream Team</a> ❤️</sub>
+</div>

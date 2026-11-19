@@ -1,75 +1,89 @@
-//// Tests for the dream_postgres snippet in docs/learn/02-building-api.md.
+//// Tests for the dream_postgres snippet in Dream's
+//// docs/learn/02-building-api.md.
 ////
 //// These tests need no database: they check the config that the snippet
-//// builds. initialize_services needs a running PostgreSQL, so it is only
-//// compiled.
+//// builds and that initialize_services starts the pool. The pool connects
+//// in the background, so pool start returns Ok with no database.
 
+import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/types.{type TestSuite}
+import dream_test/unit.{describe, it}
 import gleam/option.{Some}
-import gleeunit/should
+import gleam/result
 import snippets/learn_building_api_services
 
-pub fn create_database_config_sets_host_test() {
-  // Arrange
-  let config = learn_building_api_services.create_database_config()
+pub fn tests() -> TestSuite(Nil) {
+  describe("learn: building an API snippets", [
+    it("create_database_config sets the host", fn() {
+      // Act
+      let config = learn_building_api_services.create_database_config()
 
-  // Act
-  let host = config.host
+      // Assert
+      config.host
+      |> should
+      |> be_equal("localhost")
+      |> or_fail_with("Expected host localhost")
+    }),
+    it("create_database_config sets the port", fn() {
+      // Act
+      let config = learn_building_api_services.create_database_config()
 
-  // Assert
-  host |> should.equal("localhost")
-}
+      // Assert
+      config.port
+      |> should
+      |> be_equal(5432)
+      |> or_fail_with("Expected port 5432")
+    }),
+    it("create_database_config sets the database", fn() {
+      // Act
+      let config = learn_building_api_services.create_database_config()
 
-pub fn create_database_config_sets_port_test() {
-  // Arrange
-  let config = learn_building_api_services.create_database_config()
+      // Assert
+      config.database
+      |> should
+      |> be_equal("myapp")
+      |> or_fail_with("Expected database myapp")
+    }),
+    it("create_database_config sets the user", fn() {
+      // Act
+      let config = learn_building_api_services.create_database_config()
 
-  // Act
-  let port = config.port
+      // Assert
+      config.user
+      |> should
+      |> be_equal("postgres")
+      |> or_fail_with("Expected user postgres")
+    }),
+    it("create_database_config sets the password", fn() {
+      // Act
+      let config = learn_building_api_services.create_database_config()
 
-  // Assert
-  port |> should.equal(5432)
-}
+      // Assert
+      config.password
+      |> should
+      |> be_equal(Some("postgres"))
+      |> or_fail_with("Expected password postgres")
+    }),
+    it("create_database_config sets the pool size", fn() {
+      // Act
+      let config = learn_building_api_services.create_database_config()
 
-pub fn create_database_config_sets_database_test() {
-  // Arrange
-  let config = learn_building_api_services.create_database_config()
+      // Assert
+      config.pool_size
+      |> should
+      |> be_equal(10)
+      |> or_fail_with("Expected pool size 10")
+    }),
+    it("initialize_services starts the pool", fn() {
+      // Act
+      let result = learn_building_api_services.initialize_services()
 
-  // Act
-  let database = config.database
-
-  // Assert
-  database |> should.equal("myapp")
-}
-
-pub fn create_database_config_sets_user_test() {
-  // Arrange
-  let config = learn_building_api_services.create_database_config()
-
-  // Act
-  let user = config.user
-
-  // Assert
-  user |> should.equal("postgres")
-}
-
-pub fn create_database_config_sets_password_test() {
-  // Arrange
-  let config = learn_building_api_services.create_database_config()
-
-  // Act
-  let password = config.password
-
-  // Assert
-  password |> should.equal(Some("postgres"))
-}
-
-pub fn create_database_config_sets_pool_size_test() {
-  // Arrange
-  let config = learn_building_api_services.create_database_config()
-
-  // Act
-  let pool_size = config.pool_size
-
-  // Assert
-  pool_size |> should.equal(10)
+      // Assert
+      result
+      |> result.replace(Nil)
+      |> should
+      |> be_equal(Ok(Nil))
+      |> or_fail_with("Expected the services to start")
+    }),
+  ])
 }
