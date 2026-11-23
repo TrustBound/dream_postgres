@@ -1,7 +1,8 @@
 //// Tests for what the guides say a real PostgreSQL server does: the
 //// errors for a wrong login, a bad query and a slow query, the pool size,
-//// the application name and the SSL modes. Each test runs against the
-//// server of `fixtures/test_database`.
+//// the application name and the SSL modes on a server with SSL off. Each
+//// test runs against the server of `fixtures/test_database`. The tests for
+//// a server with SSL on are in `postgres_ssl_test`.
 
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_between, be_equal, or_fail_with, should}
@@ -300,6 +301,40 @@ fn connection_setting_tests() {
         let answer = {
           use <- test_database.with_own_pools()
           postgres.from_url(test_database.url() <> "?sslmode=require")
+          |> result.map(test_database.texts(_, "SELECT 'answered'"))
+        }
+
+        // Assert
+        answer
+        |> should
+        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> or_fail_with("Expected ConnectionUnavailable")
+      },
+    ),
+    it(
+      "sslmode=verify-full gives ConnectionUnavailable on a server without SSL",
+      fn() {
+        // Act
+        let answer = {
+          use <- test_database.with_own_pools()
+          postgres.from_url(test_database.url() <> "?sslmode=verify-full")
+          |> result.map(test_database.texts(_, "SELECT 'answered'"))
+        }
+
+        // Assert
+        answer
+        |> should
+        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> or_fail_with("Expected ConnectionUnavailable")
+      },
+    ),
+    it(
+      "sslmode=verify-ca gives ConnectionUnavailable on a server without SSL",
+      fn() {
+        // Act
+        let answer = {
+          use <- test_database.with_own_pools()
+          postgres.from_url(test_database.url() <> "?sslmode=verify-ca")
           |> result.map(test_database.texts(_, "SELECT 'answered'"))
         }
 

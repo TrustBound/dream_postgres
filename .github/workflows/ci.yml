@@ -21,7 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     # Many tests run queries on a real PostgreSQL server. This is the server
     # of docker-compose.yml: the same image, user, password, database and
-    # port, so the tests use their default URL here too.
+    # port, so the tests use their default URL here too. The server with SSL
+    # on starts in a step after the checkout.
     services:
       postgres:
         image: postgres:16-alpine
@@ -81,6 +82,14 @@ jobs:
 
       - name: Build project
         run: gleam build
+
+      - name: Start the PostgreSQL server with SSL on
+        # The SSL tests need a second server, with the certificates of
+        # test/fixtures/ssl. It isn't a service container: a service starts
+        # before the checkout, so it can't mount those files, and it can't
+        # change the command that starts PostgreSQL. This is the same
+        # command as `make db-up` uses.
+        run: docker compose up -d --wait postgres-ssl
 
       - name: Run tests
         env:

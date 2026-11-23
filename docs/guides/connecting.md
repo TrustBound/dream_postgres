@@ -294,15 +294,66 @@ When no database listens, this works the same as `connect`: `start_supervised` r
 
 The `sslmode` parameter of the URL maps to `pog.Ssl`. With the builder, you pass the `pog.Ssl` value to `pog.ssl` yourself.
 
+The results below come from the package's tests. They run against two PostgreSQL 16 servers: one with SSL off, and one with SSL on, whose certificate comes from a test CA and names only `localhost`.
+
 | `sslmode` | `pog.Ssl` | What the connection does |
 |:---|:---|:---|
-| `disable` | `SslDisabled` | No TLS. This is also what you get with no `sslmode` at all. The server's `pg_stat_ssl` shows `ssl = false` for the connection. |
-| `require` | `SslUnverified` | TLS, but no check of the server's certificate. Against a server with SSL turned off, the pool never connects: each query returns `ConnectionUnavailable` after about 2 seconds. There's no fallback to plain text. |
-| `verify-ca` | `SslVerified` | TLS. Checks the certificate against the system's CA certificates, and checks the host name too. |
-| `verify-full` | `SslVerified` | TLS. Checks the certificate and the host name. |
+| `disable` | `SslDisabled` | No TLS, also when the server has SSL turned on. This is also what you get with no `sslmode` at all. The server's `pg_stat_ssl` shows `ssl = false` for the connection. |
+| `require` | `SslUnverified` | TLS 1.3, with no check of the certificate or the host name: it connects to a server whose certificate comes from a CA the client doesn't trust, at an address the certificate doesn't name. Against a server with SSL turned off, the pool never connects: each query returns `ConnectionUnavailable` after about 2 seconds. There's no fallback to plain text. |
+| `verify-ca` | `SslVerified` | The same as `verify-full`: it checks the certificate and the host name. `libpq` (the client library behind `psql`) checks only the certificate here, so a URL with an address the certificate doesn't name works in `psql` and fails here. |
+| `verify-full` | `SslVerified` | TLS. Checks that a CA the client trusts signed the certificate, and that the certificate names the host of the URL. |
 | `prefer`, `allow` or anything else | none | `UnsupportedSslMode(mode)`, because the pool can't fall back from TLS to plain text. |
 
-Two things to know about `SslVerified`, both from Pog's source. Pog reads the CA certificates of the operating system, so a provider whose CA isn't in that store fails the check. And it always checks the host name, even for `verify-ca`, where `libpq` (the client library behind `psql`) checks only the certificate chain. If you connect by IP address to a server whose certificate names a host, use the host name in the URL. A failed check looks like every other failed connection: the pool starts, and each query returns `ConnectionUnavailable`.
+The client trusts the CA list of OTP's `public_key` application, which is the CA certificates of the operating system. A managed database whose certificate comes from a public CA passes the check. A certificate from a private CA doesn't, until you load that CA as the next section shows.
+
+A failed check looks like every other failed connection: the pool starts, and each query returns `ConnectionUnavailable` after about 2 seconds. The cause shows only in the log. OTP's `ssl` application logs a notice for each try of each connection:
+
+```text
+TLS client: ... generated CLIENT ALERT: Fatal - Unknown CA
+TLS client: ... generated CLIENT ALERT: Fatal - Bad Certificate, - {bad_cert,{hostname_check_failed,{requested,"127.0.0.1"},{received,[{dNSName,"localhost"}]}}}
+```
+
+`Unknown CA` means the client doesn't trust the CA that signed the certificate. `hostname_check_failed` means the certificate doesn't name the host of the URL: here the URL has `127.0.0.1`, and the certificate names only `localhost`.
+
+### Trust a private certificate authority
+
+Neither this package nor Pog has a setting for a CA file. `pog.Config` has no field for one, and Pog gives every `SslVerified` pool the list from `public_key:cacerts_get()`. You can change that list with `public_key:cacerts_load`, before you start the pool:
+
+### Load a CA file, then start the pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_private_ca.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+import gleam/dynamic.{type Dynamic}
+import gleam/erlang/atom
+import gleam/result
+import pog
+
+pub fn connect_with_private_ca(
+  url: String,
+  ca_file: String,
+) -> Result(pog.Connection, String) {
+  case load_ca_certificates(ca_file) == atom.to_dynamic(atom.create("ok")) {
+    False -> Error("Can't read the CA certificates in " <> ca_file)
+    True ->
+      postgres.from_url(url)
+      |> result.replace_error("The pool did not start")
+  }
+}
+
+// Replaces the CA list of the whole BEAM with the certificates of the
+// file. Pog reads that list when a pool starts.
+@external(erlang, "public_key", "cacerts_load")
+fn load_ca_certificates(path: String) -> Dynamic
+```
+
+How it works:
+
+- `ca_file` is a PEM file with the CA certificate, as your provider gives it.
+- `public_key:cacerts_load` returns the atom `ok` when it read the file. For a file that doesn't exist, `connect_with_private_ca` returns `Error("Can't read the CA certificates in ...")`.
+- With the test CA loaded, `sslmode=verify-full` and `sslmode=verify-ca` connect with TLS to `localhost`, the name in the test server's certificate. To `127.0.0.1`, both return `ConnectionUnavailable`.
+- The pool keeps the list it read when it started, so it keeps trusting the CA when the list changes later.
+
+`cacerts_load` replaces the list. It doesn't add to it: after the call, `public_key:cacerts_get()` returns the certificates of that file only. That counts for the whole BEAM, so other pools and other TLS clients that use `public_key:cacerts_get()` lose the CA certificates of the operating system too. If your app also needs those, put them in the same PEM file.
 
 ## The URL format
 
@@ -332,7 +383,9 @@ A bad percent-encoding, such as `%zz`, gives `InvalidUserEncoding`, `InvalidPass
 | The URL is wrong | `Error(UrlError)` from `parse_config`, or `Error(InvalidUrl(UrlError))` from `from_url` | Print it with `explain` from [Step 1](#step-1-say-exactly-whats-wrong-with-a-url). |
 | Nothing listens at the host and port | `connect` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Run `SELECT 1` at startup, as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#step-2-stop-at-startup-when-the-database-doesnt-answer) guide does. |
 | The password is wrong, or the user or the database doesn't exist | `connect` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | The same startup check catches it. The PostgreSQL server log says which one it was. |
-| `sslmode=require`, and the server has SSL turned off | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query | Turn on SSL on the server, or use `sslmode=disable` on a network you trust. |
+| Any `sslmode` but `disable`, and the server has SSL turned off | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds | Turn on SSL on the server, or use `sslmode=disable` on a network you trust. |
+| `verify-ca` or `verify-full`, and the client doesn't trust the CA of the server's certificate | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `Fatal - Unknown CA`. | Load the CA with `public_key:cacerts_load`, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows. |
+| `verify-ca` or `verify-full`, and the certificate doesn't name the host of the URL | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `hostname_check_failed`. | Put a host name from the certificate in the URL. |
 | The pool size is 0 | `connect` returns `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Set a pool size of 1 or more. |
 | You call `connect` twice with the same pool name | The second call returns `Error(actor.StartError)`. The first pool keeps running. | Make a new name with `process.new_name` for each pool, or start the pool once. |
 | The pool process doesn't start | `Error(actor.StartError)` from `connect`, `Error(PoolStartExited)` from `from_url` | Don't log the `StartError` with `string.inspect`: its reason can hold the config, and the config holds the password. |
@@ -422,7 +475,9 @@ To check that the pool really connects, give `connect_pool` the URL of a test se
 
 **`sslmode=prefer`.** *Symptom:* `UnsupportedSslMode("prefer")`. `prefer` is the `libpq` default, so you'll find it in URLs that other tools generate. *Fix:* use `require` for TLS without a certificate check, or `verify-full` for TLS with one.
 
-**`verify-ca` with an IP address.** *Symptom:* with `sslmode=verify-ca` and an IP address in the URL, the pool doesn't connect and queries return `ConnectionUnavailable`, although `psql` connects with the same URL. *Fix:* Pog checks the host name for `verify-ca` too, because it maps `verify-ca` to the same setting as `verify-full`. Put the host name from the certificate in the URL, or use `require`.
+**`verify-ca` with an address the certificate doesn't name.** *Symptom:* with `sslmode=verify-ca` and an IP address in the URL, the pool doesn't connect and queries return `ConnectionUnavailable`, although `psql` connects with the same URL. *Fix:* this package checks the host name for `verify-ca` too, because it maps `verify-ca` to the same `pog.SslVerified` as `verify-full`. Put a host name from the certificate in the URL, or use `require`.
+
+**A database with a private CA.** *Symptom:* with `sslmode=verify-full`, queries return `ConnectionUnavailable`, and the log shows `Fatal - Unknown CA`, but `sslmode=require` connects. *Fix:* the client trusts only the CA certificates of the operating system. Load your provider's CA file with `public_key:cacerts_load` before you start the pool, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows.
 
 **Looking for `application_name` in `pg_stat_activity`.** *Symptom:* your connections show the Erlang node name, such as `nonode@nohost`, not the name you set. *Fix:* there's none in the URL or the config for now: pgo sends its own value after yours. Give the Erlang node a name that identifies the app.
 

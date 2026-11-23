@@ -55,7 +55,7 @@ pub fn describe_connection(url: String) -> String {
 
 ### `sslmode`, `application_name` and IPv6
 
-The `sslmode` query parameter sets the SSL mode. The values are `disable`, `require`, `verify-ca` and `verify-full`. `application_name` sets the PostgreSQL connection parameter with that name in the config. With Pog 4.1, the server does not see it: pgo, the driver under Pog, sends the Erlang node name as `application_name` after it, and PostgreSQL keeps the last value. An IPv6 host such as `[::1]` sets IPv6.
+The `sslmode` query parameter sets the SSL mode. The values are `disable`, `require`, `verify-ca` and `verify-full`. `verify-ca` works the same as `verify-full`: it checks the certificate and the host name, where `libpq` checks only the certificate. The client trusts the CA certificates of the operating system. The connecting guide shows how to trust a private CA. `application_name` sets the PostgreSQL connection parameter with that name in the config. With Pog 4.1, the server does not see it: pgo, the driver under Pog, sends the Erlang node name as `application_name` after it, and PostgreSQL keeps the last value. An IPv6 host such as `[::1]` sets IPv6.
 
 ### Its Own Repository
 
@@ -83,8 +83,8 @@ The README is short and links to them, and HexDocs shows the guides.
 
 ## Testing
 
-- 165 tests run, 0 failed, 100.0% line coverage. `make test` takes about 24 seconds, and the test times add up to about 41 seconds, because 4 tests run at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
-- The tests run against PostgreSQL 16 (the `postgres:16-alpine` image)
+- 183 tests run, 0 failed, 100.0% line coverage. `make test` takes about 39 seconds, and the test times add up to about 60 seconds, because 4 tests run at a time and the 16 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image): one with SSL off, and one with SSL on and a certificate from a test CA. The SSL tests run each `sslmode` against both, with a matching and a non-matching host name, and with and without the test CA in the CA list
 
 ## Upgrading
 

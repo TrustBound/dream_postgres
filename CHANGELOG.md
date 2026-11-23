@@ -43,7 +43,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FromUrlError` holds a `UrlError` or the reason the pool did not start:
   `InvalidUrl` and `PoolStartExited`.
   No error value holds the password.
-- The `sslmode` query parameter sets the SSL mode, and `application_name`
+- The `sslmode` query parameter sets the SSL mode. `verify-ca` and
+  `verify-full` both give `pog.SslVerified`, which checks the certificate
+  and the host name, so `verify-ca` checks more than in `libpq`. The client
+  trusts the CA certificates of the operating system. The connecting guide
+  shows how to trust a private CA. `application_name`
   sets the PostgreSQL connection parameter with that name in the config. With
   Pog 4.1, the server does not see it: pgo sends the Erlang node name as
   `application_name` after it. An IPv6 host such as `[::1]` sets IPv6.
@@ -60,8 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 165 tests, 0 failed, 100.0% line coverage. `make test` takes about 24 seconds, and the test times add up to about 41 seconds, because 4 tests run at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
-- The tests run against PostgreSQL 16 (the `postgres:16-alpine` image, started with `make db-up` locally and as a service container in CI).
+- 183 tests, 0 failed, 100.0% line coverage. `make test` takes about 39 seconds, and the test times add up to about 60 seconds, because 4 tests run at a time. The 16 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image), started with `make db-up`. One has SSL off. It runs as a service container in CI. The other has SSL on, with a test CA and a server certificate from `test/fixtures/ssl`. CI starts it with `docker compose`.
 
 ## [1.0.2] - 2025-11-21
 

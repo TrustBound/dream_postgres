@@ -18,9 +18,14 @@ dream_postgres is part of the [Dream](https://github.com/TrustBound/dream) famil
 
 - Gleam 1.19.2 or later
 - Erlang/OTP 28 or later, with the JIT (the test run measures line coverage)
-- Docker with Docker Compose, for the PostgreSQL 16 server that the tests run against
+- Docker with Docker Compose, for the two PostgreSQL 16 servers that the tests run against
 
-Many tests run queries on a real PostgreSQL server. `make db-up` starts one from `docker-compose.yml`, on port 5436 with the user `dream`, the password `dream` and the database `dream_test`. It keeps no data. To use another server, set `DREAM_POSTGRES_TEST_URL` to its URL. When no server answers, `make test` stops at once with a message that says so.
+Many tests run queries on a real PostgreSQL server. `make db-up` starts two from `docker-compose.yml`, both with the user `dream`, the password `dream` and the database `dream_test`, and both keep no data:
+
+- `postgres`, on port 5436, with SSL off. Most tests use it. To use another server, set `DREAM_POSTGRES_TEST_URL` to its URL.
+- `postgres-ssl`, on port 5437, with SSL on. The SSL tests (`test/postgres_ssl_test.gleam`) use it. Its certificate and the test CA that signed it are in `test/fixtures/ssl`, which also says how they were made. They are for the tests only. The certificate names only `localhost`, so the tests connect to `localhost` for a matching host name and to `127.0.0.1` for one that does not match.
+
+When a server does not answer, `make test` stops at once with a message that says so. The SSL tests change the CA list of the whole BEAM, so they run one at a time, after the other tests.
 
 ### Development Setup
 
@@ -32,10 +37,10 @@ Many tests run queries on a real PostgreSQL server. `make db-up` starts one from
 
 2. **Run tests:**
    ```bash
-   make db-up               # Start the test PostgreSQL server
+   make db-up               # Start the two test PostgreSQL servers
    make test                # All tests, with line coverage
    make check               # Format check, build, tests and docs build
-   make db-down             # Stop the test PostgreSQL server
+   make db-down             # Stop the two test PostgreSQL servers
    ```
 
 3. **Make your changes:**
