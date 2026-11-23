@@ -65,6 +65,19 @@ fn explain_tests() {
       ))
       |> or_fail_with("Expected the sslmode message")
     }),
+    it("explains a parameter one letter from sslmode", fn() {
+      // Act
+      let explained =
+        explain_url("postgresql://app:secret@db.example.com/app?sslmod=require")
+
+      // Assert
+      explained
+      |> should
+      |> be_equal(Error(
+        "DATABASE_URL has the parameter sslmod, which looks like sslmode. Fix the spelling.",
+      ))
+      |> or_fail_with("Expected the sslmod message")
+    }),
     it("explains a password with an @ that is not encoded", fn() {
       // Act
       let explained = explain_url("postgresql://app:p@ss@db.example.com/app")

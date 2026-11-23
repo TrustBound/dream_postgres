@@ -28,6 +28,12 @@ pub fn explain(error: postgres.UrlError) -> String {
       "The database name in DATABASE_URL has a bad percent-encoding"
     postgres.UnsupportedParameter(name) ->
       "DATABASE_URL has the parameter " <> name <> ". Remove it."
+    postgres.UnknownParameterLooksLike(name, keyword) ->
+      "DATABASE_URL has the parameter "
+      <> name
+      <> ", which looks like "
+      <> keyword
+      <> ". Fix the spelling."
     postgres.UnsupportedSslMode(mode) ->
       "DATABASE_URL has sslmode="
       <> mode

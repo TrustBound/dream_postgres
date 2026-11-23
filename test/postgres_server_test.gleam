@@ -29,6 +29,8 @@ pub fn tests() -> TestSuite {
     pool_tests(),
     connection_setting_tests(),
     application_name_tests(),
+    url_parameter_tests(),
+    parameter_permission_tests(),
   ])
 }
 
@@ -721,6 +723,304 @@ fn application_name_tests() {
       },
     ),
   ])
+}
+
+@external(erlang, "database_ffi", "unique_integer")
+fn unique_integer() -> Int
+
+const three_settings_query =
+  "SELECT current_setting('search_path') || '|' || current_setting('timezone') || '|' || current_setting('application_name')"
+
+const search_path_query = "SELECT current_setting('search_path')"
+
+fn url_parameter_tests() {
+  group("server parameters from the URL", [
+    it(
+      "search_path, timezone and application_name from the URL reach the server",
+      fn() {
+        // Act
+        let settings =
+          from_url_and_select(
+            "?search_path=app&timezone=UTC&application_name=billing",
+            three_settings_query,
+          )
+
+        // Assert
+        settings
+        |> should
+        |> be_equal(Ok(Ok(["app|UTC|billing"])))
+        |> or_fail_with("Expected app|UTC|billing")
+      },
+    ),
+    it("options from the URL reaches the server", fn() {
+      // Act
+      let timeout =
+        from_url_and_select(
+          "?options=-c%20statement_timeout%3D5s",
+          "SELECT current_setting('statement_timeout')",
+        )
+
+      // Assert
+      timeout
+      |> should
+      |> be_equal(Ok(Ok(["5s"])))
+      |> or_fail_with("Expected a statement_timeout of 5s")
+    }),
+    it("the last of two search_path values reaches the server", fn() {
+      // Act
+      let path =
+        from_url_and_select("?search_path=a&search_path=b", search_path_query)
+
+      // Assert
+      path
+      |> should
+      |> be_equal(Ok(Ok(["b"])))
+      |> or_fail_with("Expected the last search_path")
+    }),
+    it("the last of two application_name values reaches the server", fn() {
+      // Act
+      let name =
+        from_url_and_select(
+          "?application_name=a&application_name=b",
+          application_name_query,
+        )
+
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok(Ok(["b"])))
+      |> or_fail_with("Expected the last application name")
+    }),
+    it("Search_Path in mixed case reaches the server", fn() {
+      // Act
+      let path = from_url_and_select("?Search_Path=app", search_path_query)
+
+      // Assert
+      path
+      |> should
+      |> be_equal(Ok(Ok(["app"])))
+      |> or_fail_with("Expected the search_path app")
+    }),
+    it("a percent-encoded search_path reaches the server decoded", fn() {
+      // Act
+      let path =
+        from_url_and_select(
+          "?search_path=%22my%20app%22%2Cpublic",
+          search_path_query,
+        )
+
+      // Assert
+      path
+      |> should
+      |> be_equal(Ok(Ok(["\"my app\",public"])))
+      |> or_fail_with("Expected the decoded search_path")
+    }),
+    it("an empty search_path reaches the server", fn() {
+      // Act
+      let path = from_url_and_select("?search_path=", search_path_query)
+
+      // Assert
+      path
+      |> should
+      |> be_equal(Ok(Ok([""])))
+      |> or_fail_with("Expected an empty search_path")
+    }),
+    it("an unknown parameter gives ConnectionUnavailable from check", fn() {
+      // Act
+      let checked = check_url(test_database.url() <> "?serach_path=app").result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
+    }),
+    it("an unknown parameter gives the error after about 2 seconds", fn() {
+      // Act
+      let elapsed = check_url(test_database.url() <> "?serach_path=app").elapsed
+
+      // Assert
+      elapsed
+      |> should
+      |> be_between(1500, 3500)
+      |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
+    }),
+    it("timezone=Mars/Phobos gives ConnectionUnavailable", fn() {
+      // Act
+      let checked =
+        check_url(test_database.url() <> "?timezone=Mars%2FPhobos").result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
+    }),
+    it("statement_timeout=abc gives ConnectionUnavailable", fn() {
+      // Act
+      let checked =
+        check_url(test_database.url() <> "?statement_timeout=abc").result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
+    }),
+    it("an empty timezone gives ConnectionUnavailable", fn() {
+      // Act
+      let checked = check_url(test_database.url() <> "?timezone=").result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
+    }),
+    it("no server parameter of the server is one edit from a keyword", fn() {
+      // Arrange
+      let names =
+        from_url_and_select("", "SELECT name FROM pg_settings ORDER BY name")
+
+      // Act
+      let near_misses =
+        result.map(names, result.map(_, list.filter_map(_, near_miss)))
+
+      // Assert
+      near_misses
+      |> should
+      |> be_equal(Ok(Ok([])))
+      |> or_fail_with("Expected no UnknownParameterLooksLike error")
+    }),
+  ])
+}
+
+fn parameter_permission_tests() {
+  group("server parameters from the URL and permissions", [
+    it("a role without superuser connects with a search_path", fn() {
+      // Act
+      let path = {
+        use url <- with_plain_role()
+        use <- test_database.with_own_pools()
+        postgres.from_url(url <> "?search_path=app")
+        |> result.map(test_database.texts(_, search_path_query))
+      }
+
+      // Assert
+      path
+      |> should
+      |> be_equal(Ok(Ok(["app"])))
+      |> or_fail_with("Expected the search_path app")
+    }),
+    it("a role without superuser cannot set session_replication_role", fn() {
+      // Act
+      let checked = {
+        use url <- with_plain_role()
+        check_url(url <> "?session_replication_role=replica").result
+      }
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
+    }),
+    it("a role without superuser cannot set the role of a superuser", fn() {
+      // Act
+      let checked = {
+        use url <- with_plain_role()
+        check_url(url <> "?role=" <> test_database.config().user).result
+      }
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
+    }),
+    it("a role without superuser cannot set session_authorization", fn() {
+      // Act
+      let checked = {
+        use url <- with_plain_role()
+        check_url(
+          url <> "?session_authorization=" <> test_database.config().user,
+        ).result
+      }
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
+    }),
+    it(
+      "a role without superuser cannot set session_replication_role in options",
+      fn() {
+        // Act
+        let checked = {
+          use url <- with_plain_role()
+          check_url(url <> "?options=-c%20session_replication_role%3Dreplica").result
+        }
+
+        // Assert
+        checked
+        |> should
+        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
+      },
+    ),
+  ])
+}
+
+// Starts a pool from the test server URL with the query string `query`,
+// runs `sql` (a query that returns one text column) and stops the pool.
+fn from_url_and_select(
+  query: String,
+  sql: String,
+) -> Result(Result(List(String), pog.QueryError), postgres.FromUrlError) {
+  use <- test_database.with_own_pools()
+  postgres.from_url(test_database.url() <> query)
+  |> result.map(test_database.texts(_, sql))
+}
+
+// Gives the name and the error when `parse_config` reads the server
+// parameter `name` as a near miss of a client keyword.
+fn near_miss(name: String) -> Result(#(String, postgres.UrlError), Nil) {
+  case
+    postgres.parse_config(
+      process.new_name("near_miss_test"),
+      test_database.url() <> "?" <> name <> "=1",
+    )
+  {
+    Error(postgres.UnknownParameterLooksLike(..) as error) -> Ok(#(name, error))
+    _ -> Error(Nil)
+  }
+}
+
+// Makes a role that can log in and is not a superuser, gives `run` the URL
+// of the test database for that role, and drops the role after `run`
+// returns.
+fn with_plain_role(run: fn(String) -> a) -> a {
+  use <- test_database.with_own_pools()
+  let config = test_database.config()
+  let role = "plain_role_" <> int.to_string(unique_integer())
+  let assert Ok(admin) =
+    config
+    |> postgres.pool_size(1)
+    |> postgres.connect()
+  let assert Ok(_created) =
+    test_database.execute(
+      admin,
+      "CREATE ROLE " <> role <> " LOGIN PASSWORD 'plain'",
+    )
+  let value =
+    run(test_database.url_for(
+      user: role,
+      password: "plain",
+      database: config.database,
+    ))
+  let assert Ok(_dropped) = test_database.execute(admin, "DROP ROLE " <> role)
+  value
 }
 
 // Starts a pool of 1 connection from `config` with `connect`, runs `sql`

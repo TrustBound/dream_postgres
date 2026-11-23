@@ -10,7 +10,7 @@ It is a major version because `from_url()` now returns a `Result`. Read the Migr
 
 - **`from_url()` returns a `Result` (breaking)**: a pool that does not start, or a URL that cannot be read, is an error that your code can handle
 - **The user and the password come from the URL**: `postgresql://user:pass@localhost:5432/myapp` now connects as `user` with the password `pass`
-- **`sslmode` and `application_name` work**: the query string no longer becomes a part of the database name
+- **`sslmode`, `application_name` and server parameters work**: the query string no longer becomes a part of the database name, and a parameter such as `search_path` goes to the server
 - **New `parse_config`**: read a URL into a `Config` and do not connect
 - **New `check`**: stop at startup when the database does not answer
 - **Its own repository**: `dream_postgres` now lives at [TrustBound/dream_postgres](https://github.com/TrustBound/dream_postgres), with its own version and its own releases
@@ -48,7 +48,7 @@ pub fn describe_connection(url: String) -> String {
 
 `from_url()` returns `Error(InvalidUrl(UrlError))` for a URL it cannot read. Before, it used default values for the parts it could not find.
 
-`UrlError` says what is wrong: `MalformedUrl`, `MissingScheme`, `UnsupportedScheme`, `MissingHost`, `InvalidPort`, `MissingDatabase`, `InvalidDatabase`, `MissingUser`, `InvalidUserEncoding`, `InvalidPasswordEncoding`, `InvalidDatabaseEncoding`, `UnsupportedParameter`, `UnsupportedSslMode` and `UnsupportedFragment`.
+`UrlError` says what is wrong: `MalformedUrl`, `MissingScheme`, `UnsupportedScheme`, `MissingHost`, `InvalidPort`, `MissingDatabase`, `InvalidDatabase`, `MissingUser`, `InvalidUserEncoding`, `InvalidPasswordEncoding`, `InvalidDatabaseEncoding`, `UnsupportedParameter`, `UnknownParameterLooksLike`, `UnsupportedSslMode` and `UnsupportedFragment`.
 
 ### `parse_config`
 
@@ -61,6 +61,8 @@ pub fn describe_connection(url: String) -> String {
 ### `sslmode`, `application_name` and IPv6
 
 The `sslmode` query parameter sets the SSL mode. The values are `disable`, `require`, `verify-ca` and `verify-full`. `verify-ca` works the same as `verify-full`: it checks the certificate and the host name, where `libpq` checks only the certificate. The client trusts the CA certificates of the operating system. The connecting guide shows how to trust a private CA. `application_name` sets the PostgreSQL connection parameter with that name in the config, and the server shows that name. Tests on a real PostgreSQL 16 server, with SSL off and with SSL on, assert it. pgo, the driver under Pog, also sends the Erlang node name as `application_name`, and PostgreSQL keeps the last value. So `parse_config` and `connect` put `client_encoding` (`UTF8`, or the value of the config) just before your `application_name`, and pgo then puts its own value before both. A config without an `application_name` sends no `client_encoding`. A config that goes to `pog.supervised` or `pog.start` without `parse_config` or `connect` does not get this order: the connecting guide shows the fix. An IPv6 host such as `[::1]` sets IPv6.
+
+Any other name in the query string goes to the server as a run-time parameter, with its percent-decoded value, in the order of the URL: `?search_path=app&timezone=UTC` sets `search_path` and `timezone` on each connection, and `options` goes to the server as `libpq` sends it. The other `libpq` connection keywords, such as `connect_timeout`, and `database` give `UnsupportedParameter`, because the server cannot apply them. A name one edit from a keyword, such as `sslmod` or `SSLMODE`, gives `UnknownParameterLooksLike(name, keyword)`, so a misspelled `sslmode` never connects without TLS. A name or a value that the server refuses fails at connection time: `from_url` returns `Ok`, and each query returns `pog.ConnectionUnavailable` after about 2 seconds. Only the server log says why.
 
 ### Its Own Repository
 
@@ -88,7 +90,7 @@ The README is short and links to them, and HexDocs shows the guides.
 
 ## Testing
 
-- 210 tests run, 0 failed, 100.0% line coverage. `make test` takes about 47 seconds, and the test times add up to about 81 seconds, because 4 tests run at a time and the 18 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- 243 tests run, 0 failed, 100.0% line coverage. `make test` takes about 52 seconds, and the test times add up to about 97 seconds, because 4 tests run at a time and the 18 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image): one with SSL off, and one with SSL on and a certificate from a test CA. The SSL tests run each `sslmode` against both, with a matching and a non-matching host name, and with and without the test CA in the CA list
 
 ## Upgrading
@@ -116,7 +118,7 @@ Handle the `Result`, as the example under "What's New" shows.
 
 #### 2. Your URL has parts that `from_url()` does not support
 
-These now give an error: a query parameter other than `sslmode` or `application_name`, a `sslmode` other than `disable`, `require`, `verify-ca` or `verify-full`, a fragment, no host, or no database. Remove the unsupported parts from the URL, or use the builder functions for those settings.
+These now give an error: a `libpq` connection keyword other than `sslmode`, `application_name` and `options` (for example `connect_timeout` or `channel_binding`), `database`, a name one edit from a keyword (for example `sslmod`), a `sslmode` other than `disable`, `require`, `verify-ca` or `verify-full`, a fragment, no host, or no database. Remove the unsupported parts from the URL, or use the builder functions for those settings. Every other query parameter, such as `search_path`, goes to the server. A name or a value that the server refuses makes each query return `ConnectionUnavailable`, so call `check` at startup.
 
 #### 3. Your app connected only because of the old bugs
 

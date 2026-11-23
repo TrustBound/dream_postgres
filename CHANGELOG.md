@@ -18,10 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `case postgres.from_url(url) { Ok(db) -> ... Error(error) -> ... }`.
 - `postgres.from_url()` now returns `Error(InvalidUrl(UrlError))` for a URL it
   cannot read. Before, it used default values for the parts it could not
-  find. URLs with a query parameter other than `sslmode` or
-  `application_name`, a `sslmode` other than `disable`, `require`,
-  `verify-ca` or `verify-full`, a fragment, no host or no database now give
-  an error. Upgrade: remove the unsupported parts from the URL, or use the
+  find. URLs with a `libpq` connection keyword other than `sslmode`,
+  `application_name` and `options` (for example `connect_timeout`),
+  `database`, a name one edit from a keyword (for example `sslmod`), a
+  `sslmode` other than `disable`, `require`, `verify-ca` or `verify-full`, a
+  fragment, no host or no database now give an error. Upgrade: remove the unsupported parts from the URL, or use the
   builder functions for those settings.
 
 ### Changed
@@ -39,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UnsupportedScheme`, `MissingHost`, `InvalidPort`, `MissingDatabase`,
   `InvalidDatabase`, `MissingUser`, `InvalidUserEncoding`,
   `InvalidPasswordEncoding`, `InvalidDatabaseEncoding`,
-  `UnsupportedParameter`, `UnsupportedSslMode` and `UnsupportedFragment`.
+  `UnsupportedParameter`, `UnknownParameterLooksLike`, `UnsupportedSslMode`
+  and `UnsupportedFragment`.
 - `postgres.check(connection) -> Result(Nil, QueryError)` runs `SELECT 1`
   and gives `Ok(Nil)` when the database answers, or the error of the query.
   `connect` and `from_url` return `Ok` before the pool connects, so call
@@ -66,6 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pog.start` without `parse_config` or `connect` does not get this order.
   The connecting guide shows the fix for that case. An IPv6 host such as
   `[::1]` sets IPv6.
+- Every other query parameter goes to the server as a run-time parameter,
+  with its percent-decoded value, in the order of the URL:
+  `?search_path=app&timezone=UTC` sets both on each connection, and
+  `options` goes to the server as `libpq` sends it. Of two parameters with
+  the same name, the last wins, as in `libpq`. The other `libpq` connection
+  keywords and `database` give `UnsupportedParameter`, because the server
+  cannot apply them. A name one edit from a keyword, such as `sslmod` or
+  `SSLMODE`, gives `UnknownParameterLooksLike(name, keyword)`, so a
+  misspelled `sslmode` never connects without TLS. A name or a value that
+  the server refuses (for example `serach_path` or `timezone=Mars%2FPhobos`)
+  fails at connection time: each query returns `pog.ConnectionUnavailable`
+  after about 2 seconds, and only the server log says why.
 
 ### Fixed
 - `postgres.from_url()` read the user and the password wrongly. For
@@ -79,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 210 tests, 0 failed, 100.0% line coverage. `make test` takes about 47 seconds, and the test times add up to about 81 seconds, because 4 tests run at a time. The 18 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- 243 tests, 0 failed, 100.0% line coverage. `make test` takes about 52 seconds, and the test times add up to about 97 seconds, because 4 tests run at a time. The 18 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image), started with `make db-up`. One has SSL off. It runs as a service container in CI. The other has SSL on, with a test CA and a server certificate from `test/fixtures/ssl`. CI starts it with `docker compose`.
 
 ## [1.0.2] - 2025-11-21

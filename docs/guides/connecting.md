@@ -86,6 +86,12 @@ pub fn explain(error: postgres.UrlError) -> String {
       "The database name in DATABASE_URL has a bad percent-encoding"
     postgres.UnsupportedParameter(name) ->
       "DATABASE_URL has the parameter " <> name <> ". Remove it."
+    postgres.UnknownParameterLooksLike(name, keyword) ->
+      "DATABASE_URL has the parameter "
+      <> name
+      <> ", which looks like "
+      <> keyword
+      <> ". Fix the spelling."
     postgres.UnsupportedSslMode(mode) ->
       "DATABASE_URL has sslmode="
       <> mode
@@ -105,6 +111,9 @@ postgresql://app:secret@db.example.com/app?sslmode=require&channel_binding=requi
 
 postgresql://app:secret@db.example.com/app?sslmode=prefer
   -> DATABASE_URL has sslmode=prefer. Use disable, require or verify-full.
+
+postgresql://app:secret@db.example.com/app?sslmod=require
+  -> DATABASE_URL has the parameter sslmod, which looks like sslmode. Fix the spelling.
 
 postgresql://app:p@ss@db.example.com/app
   -> DATABASE_URL is not a URL. Percent-encode @, :, / and # in the password.
@@ -184,6 +193,14 @@ The host in brackets is an IPv6 address, so `parse_config` sets `Ipv6` for you. 
 from_url("postgresql://dream:dream@localhost:5436/dream_test?application_name=billing")
 SELECT current_setting('application_name')
   -> "billing"
+```
+
+Any other name in the query string that isn't a `libpq` connection keyword goes to the server as a run-time parameter, such as `search_path`, `timezone` or `statement_timeout`. The server applies it to each connection of the pool:
+
+```text
+from_url("postgresql://dream:dream@localhost:5436/dream_test?search_path=app&timezone=UTC&application_name=billing")
+SELECT current_setting('search_path') || '|' || current_setting('timezone') || '|' || current_setting('application_name')
+  -> "app|UTC|billing"
 ```
 
 Why `client_encoding` is in the list: pgo, the driver under Pog, adds its own `application_name`, the name of the Erlang node, such as `nonode@nohost`. PostgreSQL keeps the last `application_name` it gets. pgo puts its value before the first of your parameters whose name sorts after `application_name`. So when there's an `application_name`, this package puts `client_encoding` just before it, and your name comes last. `UTF8` is the encoding that Pog reads and writes. On a UTF-8 database it's also the server's default, so text comes back the same. If you set `client_encoding` yourself, your value stays. Without an `application_name`, the list stays as it is, and the server shows the node name.
@@ -372,10 +389,21 @@ postgresql://user:password@host:port/database?sslmode=verify-full&application_na
 | `database` | yes | `MissingDatabase` | One path segment, percent-decoded. `/a/b` gives `InvalidDatabase("/a/b")`. Encode a `/` in the name as `%2F`. |
 | `sslmode` | no | `SslDisabled` | See [SSL modes](#ssl-modes). |
 | `application_name` | no | not set | Sets the PostgreSQL connection parameter of that name, with `client_encoding=UTF8` before it, so that the server shows the name. |
-| any other parameter | no | | `UnsupportedParameter(name)` |
+| `options` | no | not set | Goes to the server, which reads it like the command line of a backend. `options=-c%20statement_timeout%3D5s` sets `statement_timeout` to `5s`. |
+| any other `libpq` connection keyword, such as `connect_timeout`, `channel_binding`, `user`, `password` or `client_encoding`, and `database` | no | | `UnsupportedParameter(name)`. The server can't apply these, so the package refuses them, not drops them. |
+| a name at most one edit from a keyword (one character added, removed or changed, or two next to each other swapped, with upper case read as lower case), such as `sslmod`, `ssl_mode`, `sslmdoe` or `SSLMODE` | no | | `UnknownParameterLooksLike(name, keyword)`, for example `UnknownParameterLooksLike("sslmod", "sslmode")`. Fix the spelling. |
+| any other name, such as `search_path`, `timezone` or `statement_timeout` | no | not set | Goes to the server as a run-time parameter, with its percent-decoded value. |
 | a `#` part | no | | `UnsupportedFragment` |
 
 A bad percent-encoding, such as `%zz`, gives `InvalidUserEncoding`, `InvalidPasswordEncoding` or `InvalidDatabaseEncoding`. Settings the URL can't express, such as the pool size, keep the values from `new`.
+
+How the query string is read:
+
+- Parameters go to the server in the order of the URL. When a name comes twice, the last value wins, as in `libpq`: `search_path=a&search_path=b` gives `b`. That holds for `sslmode` and `application_name` too.
+- Keyword names are case-sensitive, as in `libpq`, so `SSLMODE` and `Application_Name` give `UnknownParameterLooksLike`. The server reads its own parameter names in any case: `Search_Path=app` sets `search_path`.
+- Names and values are percent-decoded: `search_path=%22my%20app%22%2Cpublic` gives `"my app",public`.
+- An empty value goes to the server as it is: `search_path=` gives an empty `search_path`. An empty name gives `UnsupportedParameter("")`, and `%00` in a name or a value gives `MalformedUrl`.
+- The package doesn't know the server's parameters. A name the server doesn't know, such as `serach_path`, or a value it refuses, such as `timezone=Mars%2FPhobos`, fails at connection time, as [What goes wrong at startup](#what-goes-wrong-at-startup) shows.
 
 ## What goes wrong at startup
 
@@ -387,6 +415,8 @@ A bad percent-encoding, such as `%zz`, gives `InvalidUserEncoding`, `InvalidPass
 | Any `sslmode` but `disable`, and the server has SSL turned off | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds | Turn on SSL on the server, or use `sslmode=disable` on a network you trust. |
 | `verify-ca` or `verify-full`, and the client doesn't trust the CA of the server's certificate | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `Fatal - Unknown CA`. | Load the CA with `public_key:cacerts_load`, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows. |
 | `verify-ca` or `verify-full`, and the certificate doesn't name the host of the URL | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `hostname_check_failed`. | Put a host name from the certificate in the URL. |
+| A server parameter that the server doesn't know, such as `serach_path`, or a value it refuses, such as `timezone=Mars%2FPhobos`, `timezone=` or `statement_timeout=abc` | `parse_config` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | `postgres.check` at startup gives the same error. Only the PostgreSQL server log says why, for example `unrecognized configuration parameter "serach_path"`. Fix the name or the value in the URL. |
+| A parameter the user may not set, such as `session_replication_role`, or `role` for a role the user isn't a member of | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The server log shows `permission denied to set parameter`. | Remove the parameter, or let an administrator grant the right. |
 | The pool size is 0 | `connect` returns `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Set a pool size of 1 or more. |
 | You call `connect` twice with the same pool name | The second call returns `Error(actor.StartError)`. The first pool keeps running. | Make a new name with `process.new_name` for each pool, or start the pool once. |
 | The pool process doesn't start | `Error(actor.StartError)` from `connect`, `Error(PoolStartExited)` from `from_url` | Don't log the `StartError` with `string.inspect`: its reason can hold the config, and the config holds the password. |
@@ -471,7 +501,9 @@ To check that the pool really connects, give `connect_pool` the URL of a test se
 
 ## Common pitfalls
 
-**Extra parameters from a hosting provider.** *Symptom:* `UnsupportedParameter("channel_binding")`, `UnsupportedParameter("connect_timeout")` or similar, for a URL that `psql` accepts. *Fix:* this package reads only `sslmode` and `application_name`, and it refuses the rest so that no setting is silently dropped. Remove the parameter from the URL, or build the config with the builder functions.
+**Extra parameters from a hosting provider.** *Symptom:* `UnsupportedParameter("channel_binding")`, `UnsupportedParameter("connect_timeout")` or similar, for a URL that `psql` accepts. *Fix:* this package reads `sslmode`, `application_name` and `options`, and sends server parameters such as `search_path` to the server. It refuses the other `libpq` connection keywords, because the server can't apply them, so no setting is silently dropped. Remove the parameter from the URL, or build the config with the builder functions.
+
+**A misspelled server parameter.** *Symptom:* `from_url` returns `Ok`, and each query returns `ConnectionUnavailable` after about 2 seconds. The server log shows `unrecognized configuration parameter`. *Cause:* the package sends every name that isn't a `libpq` keyword to the server, and the server refuses the connection for a name it doesn't know. *Fix:* call `postgres.check` at startup, and fix the name from the server log. A name one edit from a keyword, such as `sslmod`, gives `UnknownParameterLooksLike` at once, so a misspelled `sslmode` never runs without TLS.
 
 **`sslmode=prefer`.** *Symptom:* `UnsupportedSslMode("prefer")`. `prefer` is the `libpq` default, so you'll find it in URLs that other tools generate. *Fix:* use `require` for TLS without a certificate check, or `verify-full` for TLS with one.
 

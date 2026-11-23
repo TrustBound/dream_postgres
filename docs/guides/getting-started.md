@@ -279,7 +279,8 @@ The [Connecting to PostgreSQL in production](https://github.com/TrustBound/dream
 
 | What happened | What you see | What to do |
 |:---|:---|:---|
-| The URL has a typo, a missing part or a parameter this package doesn't read | `Error(InvalidUrl(error))` from `from_url`, where `error` names the problem | Fix the URL. The [connecting guide](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md#step-1-say-exactly-whats-wrong-with-a-url) turns each `UrlError` into a message. |
+| The URL has a typo, a missing part or a `libpq` keyword this package doesn't read | `Error(InvalidUrl(error))` from `from_url`, where `error` names the problem | Fix the URL. The [connecting guide](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md#step-1-say-exactly-whats-wrong-with-a-url) turns each `UrlError` into a message. |
+| The URL has a server parameter that the server doesn't know, such as `serach_path`, or a value it refuses, such as `timezone=Mars%2FPhobos` | `from_url` returns `Ok`. The first query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | The Step 2 check catches it. The PostgreSQL server log names the parameter. |
 | The password has an `@`, `/`, `:` or `#` that isn't encoded | `Error(InvalidUrl(MalformedUrl))` | Percent-encode it: `@` is `%40`, `/` is `%2F`, `:` is `%3A`, `#` is `%23`. |
 | No database listens at the host and port | `from_url` returns `Ok`. The first query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Check at startup, as Step 2 does. |
 | The password is wrong, the user doesn't exist, or the database doesn't exist | `from_url` returns `Ok`. The first query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds, the same as when nothing listens. | The Step 2 check catches it. The PostgreSQL server log names the cause. |

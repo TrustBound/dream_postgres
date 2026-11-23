@@ -28,6 +28,7 @@ pub fn tests() -> TestSuite {
     connect_tests(),
     parse_config_value_tests(),
     parse_config_error_tests(),
+    query_parameter_tests(),
     from_url_tests(),
   ])
 }
@@ -684,6 +685,260 @@ fn parse_config_error_tests() {
   ])
 }
 
+// The libpq connection keywords that `parse_config` refuses, and
+// `database`, the startup field that the path of the URL sets.
+const refused_names = [
+  "host", "hostaddr", "port", "dbname", "user", "password", "passfile",
+  "require_auth", "channel_binding", "connect_timeout", "client_encoding",
+  "fallback_application_name", "keepalives", "keepalives_idle",
+  "keepalives_interval", "keepalives_count", "tcp_user_timeout", "replication",
+  "gssencmode", "requiressl", "sslnegotiation", "sslcompression", "sslcert",
+  "sslkey", "sslkeylogfile", "sslpassword", "sslcertmode", "sslrootcert",
+  "sslcrl", "sslcrldir", "sslsni", "requirepeer", "ssl_min_protocol_version",
+  "ssl_max_protocol_version", "min_protocol_version", "max_protocol_version",
+  "krbsrvname", "gsslib", "gssdelegation", "scram_client_key",
+  "scram_server_key", "service", "target_session_attrs", "load_balance_hosts",
+  "oauth_issuer", "oauth_client_id", "oauth_client_secret", "oauth_scope",
+  "database",
+]
+
+// Returns the connection parameters of the config for the query string
+// `query`, for example `?search_path=app`.
+fn parameters_of(
+  query: String,
+) -> Result(List(#(String, String)), postgres.UrlError) {
+  postgres.parse_config(
+    process.new_name("client_test_pool"),
+    "postgresql://localhost/myapp" <> query,
+  )
+  |> result.map(fn(config) { config.connection_parameters })
+}
+
+// Returns the result of `parse_config` for the query string `query`.
+fn parse_query(query: String) -> Result(postgres.Config, postgres.UrlError) {
+  postgres.parse_config(
+    process.new_name("client_test_pool"),
+    "postgresql://localhost/myapp" <> query,
+  )
+}
+
+fn query_parameter_tests() {
+  group("parse_config query parameters", [
+    it(
+      "passes server parameters in URL order, with application_name last",
+      fn() {
+        // Act
+        let parameters =
+          parameters_of(
+            "?search_path=app&timezone=UTC&application_name=billing",
+          )
+
+        // Assert
+        parameters
+        |> should
+        |> be_equal(
+          Ok([
+            #("search_path", "app"),
+            #("timezone", "UTC"),
+            #("client_encoding", "UTF8"),
+            #("application_name", "billing"),
+          ]),
+        )
+        |> or_fail_with("Expected the server parameters in URL order")
+      },
+    ),
+    it("passes options to the server", fn() {
+      // Act
+      let parameters = parameters_of("?options=-c%20statement_timeout%3D5s")
+
+      // Assert
+      parameters
+      |> should
+      |> be_equal(Ok([#("options", "-c statement_timeout=5s")]))
+      |> or_fail_with("Expected the options parameter")
+    }),
+    it(
+      "returns UnsupportedParameter for each client keyword it does not read",
+      fn() {
+        // Act
+        let results =
+          list.map(refused_names, fn(name) {
+            parse_query("?" <> name <> "=1")
+            |> result.replace(Nil)
+          })
+
+        // Assert
+        results
+        |> should
+        |> be_equal(
+          list.map(refused_names, fn(name) {
+            Error(postgres.UnsupportedParameter(name))
+          }),
+        )
+        |> or_fail_with("Expected UnsupportedParameter for each client keyword")
+      },
+    ),
+    it("returns UnsupportedParameter for an empty name", fn() {
+      // Act
+      let result = parse_query("?=app")
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Error(postgres.UnsupportedParameter("")))
+      |> or_fail_with("Expected Error(UnsupportedParameter(''))")
+    }),
+    it("returns UnknownParameterLooksLike for sslmod", fn() {
+      // Act
+      let result = parse_query("?sslmod=require")
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Error(postgres.UnknownParameterLooksLike("sslmod", "sslmode")),
+      )
+      |> or_fail_with("Expected UnknownParameterLooksLike('sslmod', 'sslmode')")
+    }),
+    it(
+      "returns UnknownParameterLooksLike for each name one edit from a keyword",
+      fn() {
+        // Arrange
+        let names = [
+          "ssl_mode", "sslmdoe", "sslmodes", "SSLMODE", "sslMode",
+          "applicaton_name", "Application_Name", "optons", "Options",
+          "conect_timeout", "pasword", "databse", "User", "Port",
+        ]
+
+        // Act
+        let results =
+          list.map(names, fn(name) {
+            parse_query("?" <> name <> "=1")
+            |> result.replace(Nil)
+          })
+
+        // Assert
+        results
+        |> should
+        |> be_equal([
+          Error(postgres.UnknownParameterLooksLike("ssl_mode", "sslmode")),
+          Error(postgres.UnknownParameterLooksLike("sslmdoe", "sslmode")),
+          Error(postgres.UnknownParameterLooksLike("sslmodes", "sslmode")),
+          Error(postgres.UnknownParameterLooksLike("SSLMODE", "sslmode")),
+          Error(postgres.UnknownParameterLooksLike("sslMode", "sslmode")),
+          Error(postgres.UnknownParameterLooksLike(
+            "applicaton_name",
+            "application_name",
+          )),
+          Error(postgres.UnknownParameterLooksLike(
+            "Application_Name",
+            "application_name",
+          )),
+          Error(postgres.UnknownParameterLooksLike("optons", "options")),
+          Error(postgres.UnknownParameterLooksLike("Options", "options")),
+          Error(postgres.UnknownParameterLooksLike(
+            "conect_timeout",
+            "connect_timeout",
+          )),
+          Error(postgres.UnknownParameterLooksLike("pasword", "password")),
+          Error(postgres.UnknownParameterLooksLike("databse", "database")),
+          Error(postgres.UnknownParameterLooksLike("User", "user")),
+          Error(postgres.UnknownParameterLooksLike("Port", "port")),
+        ])
+        |> or_fail_with("Expected UnknownParameterLooksLike for each name")
+      },
+    ),
+    it("passes a name two edits from every keyword to the server", fn() {
+      // Act
+      let parameters = parameters_of("?sslmox=require&serach_path=app")
+
+      // Assert
+      parameters
+      |> should
+      |> be_equal(Ok([#("sslmox", "require"), #("serach_path", "app")]))
+      |> or_fail_with("Expected both names in the connection parameters")
+    }),
+    it("keeps both values of a duplicate name, in URL order", fn() {
+      // Act
+      let parameters = parameters_of("?search_path=a&search_path=b")
+
+      // Assert
+      parameters
+      |> should
+      |> be_equal(Ok([#("search_path", "a"), #("search_path", "b")]))
+      |> or_fail_with("Expected both values in URL order")
+    }),
+    it("uses the last application_name of the URL", fn() {
+      // Act
+      let parameters = parameters_of("?application_name=a&application_name=b")
+
+      // Assert
+      parameters
+      |> should
+      |> be_equal(
+        Ok([#("client_encoding", "UTF8"), #("application_name", "b")]),
+      )
+      |> or_fail_with("Expected the last application name")
+    }),
+    it("uses the last sslmode of the URL", fn() {
+      // Act
+      let ssl =
+        parse_query("?sslmode=disable&sslmode=require")
+        |> result.map(fn(config) { config.ssl })
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(Ok(pog.SslUnverified))
+      |> or_fail_with("Expected Ok(SslUnverified)")
+    }),
+    it("passes a server parameter name with upper-case letters unchanged", fn() {
+      // Act
+      let parameters = parameters_of("?Search_Path=app&TimeZone=UTC")
+
+      // Assert
+      parameters
+      |> should
+      |> be_equal(Ok([#("Search_Path", "app"), #("TimeZone", "UTC")]))
+      |> or_fail_with("Expected the names as the URL gives them")
+    }),
+    it("percent-decodes the name and the value", fn() {
+      // Act
+      let parameters = parameters_of("?search%5Fpath=%22my%20app%22%2Cpublic")
+
+      // Assert
+      parameters
+      |> should
+      |> be_equal(Ok([#("search_path", "\"my app\",public")]))
+      |> or_fail_with("Expected the decoded name and value")
+    }),
+    it("passes an empty value", fn() {
+      // Act
+      let parameters = parameters_of("?search_path=")
+
+      // Assert
+      parameters
+      |> should
+      |> be_equal(Ok([#("search_path", "")]))
+      |> or_fail_with("Expected an empty value")
+    }),
+    it("returns MalformedUrl for %00 in a name or a value", fn() {
+      // Act
+      let results = [
+        parse_query("?application_name=a%00search_path%00b")
+          |> result.replace(Nil),
+        parse_query("?search%00path=app") |> result.replace(Nil),
+      ]
+
+      // Assert
+      results
+      |> should
+      |> be_equal([Error(postgres.MalformedUrl), Error(postgres.MalformedUrl)])
+      |> or_fail_with("Expected MalformedUrl for each %00")
+    }),
+  ])
+}
+
 fn from_url_tests() {
   group("from_url", [
     it("from_url gives a pool that runs a query on the server", fn() {
@@ -723,6 +978,7 @@ fn from_url_tests() {
         "postgresql://user:hunter2%zz@localhost/myapp",
         "postgresql://user:hunter2@localhost/myapp?password=hunter2",
         "postgresql://user:hunter2@localhost/myapp?sslmode=prefer",
+        "postgresql://user:hunter2@localhost/myapp?sslmod=hunter2",
         "postgresql://user:hunter2@localhost/myapp#hunter2",
       ]
 
@@ -741,6 +997,12 @@ fn from_url_tests() {
         Error(postgres.InvalidUrl(postgres.InvalidPasswordEncoding)),
         Error(postgres.InvalidUrl(postgres.UnsupportedParameter("password"))),
         Error(postgres.InvalidUrl(postgres.UnsupportedSslMode("prefer"))),
+        Error(
+          postgres.InvalidUrl(postgres.UnknownParameterLooksLike(
+            "sslmod",
+            "sslmode",
+          )),
+        ),
         Error(postgres.InvalidUrl(postgres.UnsupportedFragment)),
       ])
       |> or_fail_with("Expected one URL error for each URL")
@@ -756,6 +1018,7 @@ fn from_url_tests() {
         "postgresql://user:hunter2%zz@localhost/myapp",
         "postgresql://user:hunter2@localhost/myapp?password=hunter2",
         "postgresql://user:hunter2@localhost/myapp?sslmode=prefer",
+        "postgresql://user:hunter2@localhost/myapp?sslmod=hunter2",
         "postgresql://user:hunter2@localhost/myapp#hunter2",
       ]
 

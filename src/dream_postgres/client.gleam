@@ -360,7 +360,8 @@ fn extract_connection_from_started(
 /// log an error with `string.inspect`.
 pub type UrlError {
   /// The text is not a URL, or its query string cannot be read. A port that
-  /// is not a number (for example `localhost:abc`) also gives this error.
+  /// is not a number (for example `localhost:abc`) also gives this error,
+  /// and so does `%00` in the name or the value of a query parameter.
   MalformedUrl
   /// The URL has no scheme. Start it with `postgresql://` or `postgres://`.
   MissingScheme
@@ -383,9 +384,21 @@ pub type UrlError {
   InvalidPasswordEncoding
   /// The database name has a bad percent-encoding, for example `%zz`.
   InvalidDatabaseEncoding
-  /// The query string has a parameter that this package does not support.
-  /// Only `sslmode` and `application_name` are supported.
+  /// The query string has a `libpq` connection keyword that this package
+  /// does not read, for example `connect_timeout`, `channel_binding`,
+  /// `user` or `client_encoding`, or `database`, which the path of the URL
+  /// sets. The server cannot apply these, so they are not sent to it. An
+  /// empty name also gives this error.
   UnsupportedParameter(name: String)
+  /// The query string has a name that is not a `libpq` connection keyword
+  /// but is at most one edit from one: one character added, removed or
+  /// changed, or two characters next to each other swapped, with upper case
+  /// read as lower case. `keyword` is that keyword. For example `sslmod`,
+  /// `ssl_mode` and `SSLMODE` give
+  /// `UnknownParameterLooksLike(name, "sslmode")`. Each server parameter of
+  /// PostgreSQL 16 is either a keyword or more than one edit from every
+  /// keyword, so such a name is a misspelled keyword.
+  UnknownParameterLooksLike(name: String, keyword: String)
   /// The `sslmode` value is not one that this package reads. Use `disable`,
   /// `require`, `verify-ca` or `verify-full`. `verify-ca` is not an exact
   /// equivalent of the `libpq` mode: here `verify-ca` and `verify-full` both
@@ -427,12 +440,23 @@ pub type FromUrlError {
 /// - `port` is optional and defaults to 5432.
 /// - `database` is required and percent-decoded.
 /// - Query parameters: `sslmode` (`disable`, `require`, `verify-ca`,
-///   `verify-full`) sets the SSL mode, and `application_name` sets the
-///   PostgreSQL connection parameter with that name. Any other parameter is
-///   an error.
+///   `verify-full`) sets the SSL mode. `application_name` and `options` go
+///   to the server. The other `libpq` connection keywords, such as
+///   `connect_timeout`, and `database` give `UnsupportedParameter(name)`,
+///   because the server cannot apply them. A name one edit from a keyword,
+///   such as `sslmod`, gives `UnknownParameterLooksLike(name, keyword)`.
+///   Every other name, such as `search_path` or `timezone`, goes to the
+///   server as a run-time parameter, with its percent-decoded value. Of two
+///   parameters with the same name, the last wins, as in `libpq`.
 ///
-/// With an `application_name`, the connection parameters of the config end
-/// with `client_encoding` (`UTF8`) and then `application_name`. pgo, the
+/// This function does not know the parameters of the server. A name that
+/// the server does not know, or a value that it refuses, gives `Ok` here,
+/// and each query on the pool then returns `pog.ConnectionUnavailable`
+/// after about 2 seconds. The server log says why. Call `check` at startup.
+///
+/// The connection parameters of the config keep the order of the URL. With
+/// an `application_name`, they end with `client_encoding` (`UTF8`) and then
+/// `application_name`. pgo, the
 /// driver under Pog, sends its own `application_name` (the Erlang node
 /// name), and this order makes the server show your name. It also holds
 /// when you give the config to `pog.supervised` or `pog.start`.
@@ -503,7 +527,10 @@ pub fn parse_config(
 ///
 /// See `parse_config` for the URL format and the supported query parameters.
 /// An `application_name` in the URL is the name that the server shows for
-/// the connections of the pool.
+/// the connections of the pool. A server parameter in the URL, such as
+/// `search_path`, applies to each connection of the pool. When the server
+/// refuses one, this function still returns `Ok`, and each query returns
+/// `Error(pog.ConnectionUnavailable)`.
 ///
 /// ## Parameters
 ///
@@ -822,11 +849,123 @@ fn apply_parameter(
   config: Config,
   parameter: #(String, String),
 ) -> Result(Config, UrlError) {
-  case parameter {
-    #("sslmode", mode) -> apply_ssl_mode(config, mode)
-    #("application_name", value) ->
-      Ok(pog.connection_parameter(config, name: "application_name", value:))
-    #(name, _value) -> Error(UnsupportedParameter(name))
+  let #(name, value) = parameter
+  case string.contains(name, "\u{0}"), string.contains(value, "\u{0}"), name {
+    True, _, _ | _, True, _ -> Error(MalformedUrl)
+    False, False, "sslmode" -> apply_ssl_mode(config, value)
+    False, False, _ -> apply_named_parameter(config, name, value)
+  }
+}
+
+// `application_name` and `options` go to the server. The server reads
+// `options` like the command line of a backend, for example
+// `-c statement_timeout=5s`, the same as libpq sends it.
+fn apply_named_parameter(
+  config: Config,
+  name: String,
+  value: String,
+) -> Result(Config, UrlError) {
+  case
+    list.contains(passed_keywords, name),
+    list.contains(refused_names, name)
+  {
+    True, _ -> Ok(append_connection_parameter(config, name, value))
+    False, True -> Error(UnsupportedParameter(name))
+    False, False -> apply_server_parameter(config, name, value)
+  }
+}
+
+// A name that is not a keyword goes to the server, unless it is one edit
+// from a keyword: then it is almost always a misspelled keyword, such as
+// `sslmod` for `sslmode`, and the server would refuse it or, worse, the
+// connection would run without the setting.
+fn apply_server_parameter(
+  config: Config,
+  name: String,
+  value: String,
+) -> Result(Config, UrlError) {
+  case find_near_keyword(name) {
+    Ok(keyword) -> Error(UnknownParameterLooksLike(name:, keyword:))
+    Error(Nil) -> Ok(append_connection_parameter(config, name, value))
+  }
+}
+
+// Keeps the order of the URL, so that of two parameters with the same name
+// the server takes the last, as libpq does.
+fn append_connection_parameter(
+  config: Config,
+  name: String,
+  value: String,
+) -> Config {
+  pog.Config(
+    ..config,
+    connection_parameters: list.append(config.connection_parameters, [
+      #(name, value),
+    ]),
+  )
+}
+
+// The keywords that `parse_config` reads: `sslmode` sets the SSL mode, and
+// the others go to the server.
+const handled_keywords = ["sslmode", "application_name", "options"]
+
+const passed_keywords = ["application_name", "options"]
+
+// The libpq connection keywords that this package has no code for, then
+// `database` (the path of the URL sets it, and a second one in the startup
+// message would replace it) and the empty name (the startup message cannot
+// hold it). libpq 16 accepts each keyword up to `target_session_attrs`
+// except `sslnegotiation`, `sslkeylogfile`, `min_protocol_version`,
+// `max_protocol_version`, `scram_client_key` and `scram_server_key`, which
+// come from later libpq versions, as do the `oauth_` keywords.
+const refused_names = [
+  "host", "hostaddr", "port", "dbname", "user", "password", "passfile",
+  "require_auth", "channel_binding", "connect_timeout", "client_encoding",
+  "fallback_application_name", "keepalives", "keepalives_idle",
+  "keepalives_interval", "keepalives_count", "tcp_user_timeout", "replication",
+  "gssencmode", "requiressl", "sslnegotiation", "sslcompression", "sslcert",
+  "sslkey", "sslkeylogfile", "sslpassword", "sslcertmode", "sslrootcert",
+  "sslcrl", "sslcrldir", "sslsni", "requirepeer", "ssl_min_protocol_version",
+  "ssl_max_protocol_version", "min_protocol_version", "max_protocol_version",
+  "krbsrvname", "gsslib", "gssdelegation", "scram_client_key",
+  "scram_server_key", "service", "target_session_attrs", "load_balance_hosts",
+  "oauth_issuer", "oauth_client_id", "oauth_client_secret", "oauth_scope",
+  "database", "",
+]
+
+// Gives the first keyword that the lower-case name is at most one edit
+// from: one character added, removed or changed, or two characters next to
+// each other swapped. libpq keywords are case-sensitive, so `SSLMODE` is
+// not `sslmode` and gives this error too. No server parameter of
+// PostgreSQL 16 (`SELECT name FROM pg_settings`) is one edit from a
+// keyword without being that keyword, and a test checks this on each run.
+fn find_near_keyword(name: String) -> Result(String, Nil) {
+  let letters = string.to_graphemes(string.lowercase(name))
+  list.append(handled_keywords, refused_names)
+  |> list.find(fn(keyword) {
+    keyword != "" && within_one_edit(letters, string.to_graphemes(keyword))
+  })
+}
+
+fn within_one_edit(left: List(String), right: List(String)) -> Bool {
+  case left, right {
+    [], _ -> list.length(right) <= 1
+    _, [] -> list.length(left) <= 1
+    [first, ..left_rest], [second, ..right_rest] if first == second ->
+      within_one_edit(left_rest, right_rest)
+    [_, ..left_rest], [_, ..right_rest] ->
+      left_rest == right_rest
+      || left_rest == right
+      || left == right_rest
+      || is_swap(left, right)
+  }
+}
+
+fn is_swap(left: List(String), right: List(String)) -> Bool {
+  case left, right {
+    [first, second, ..left_rest], [third, fourth, ..right_rest] ->
+      first == fourth && second == third && left_rest == right_rest
+    _, _ -> False
   }
 }
 
