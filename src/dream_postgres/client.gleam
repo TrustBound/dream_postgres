@@ -381,13 +381,6 @@ pub type UrlError {
 pub type FromUrlError {
   /// The URL is not a valid PostgreSQL connection URL.
   InvalidUrl(error: UrlError)
-  /// The pool process did not start in time. `from_url` does not return
-  /// this value with `pog` 4, which reports every start failure as an exit.
-  PoolStartTimedOut
-  /// The pool process returned an error message when it started. `from_url`
-  /// does not return this value with `pog` 4, which reports every start
-  /// failure as an exit.
-  PoolStartFailed(message: String)
   /// The pool process stopped while it started. The exit reason is not kept,
   /// because it can hold the pool settings, and the settings hold the
   /// password.
@@ -491,8 +484,7 @@ pub fn parse_config(
 /// - `Ok(Connection)`: The pool started
 /// - `Error(InvalidUrl(UrlError))`: The URL is not valid
 /// - `Error(PoolStartExited)`: The pool process did not start. `pog` 4
-///   reports every start failure as an exit, so `from_url` does not return
-///   `PoolStartTimedOut` or `PoolStartFailed`.
+///   reports every start failure as an exit.
 ///
 /// No error holds the password.
 ///

@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `InvalidPasswordEncoding`, `InvalidDatabaseEncoding`,
   `UnsupportedParameter`, `UnsupportedSslMode` and `UnsupportedFragment`.
 - `FromUrlError` holds a `UrlError` or the reason the pool did not start:
-  `InvalidUrl`, `PoolStartTimedOut`, `PoolStartFailed` and `PoolStartExited`.
+  `InvalidUrl` and `PoolStartExited`.
   No error value holds the password.
 - The `sslmode` query parameter sets the SSL mode, and `application_name`
   sets the PostgreSQL connection parameter with that name. An IPv6 host such
@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 100 tests, 0 failed, 95.2% line coverage (below the 100.0% minimum, so the run exits 1), in about 6.1 seconds. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- 100 tests, 0 failed, 100.0% line coverage, in about 6.1 seconds. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 
 ## 1.0.2 - 2025-11-21
 
