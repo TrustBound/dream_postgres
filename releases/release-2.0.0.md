@@ -55,7 +55,7 @@ pub fn describe_connection(url: String) -> String {
 
 ### `sslmode`, `application_name` and IPv6
 
-The `sslmode` query parameter sets the SSL mode. The values are `disable`, `require`, `verify-ca` and `verify-full`. `application_name` sets the PostgreSQL connection parameter with that name. An IPv6 host such as `[::1]` sets IPv6.
+The `sslmode` query parameter sets the SSL mode. The values are `disable`, `require`, `verify-ca` and `verify-full`. `application_name` sets the PostgreSQL connection parameter with that name in the config. With Pog 4.1, the server does not see it: pgo, the driver under Pog, sends the Erlang node name as `application_name` after it, and PostgreSQL keeps the last value. An IPv6 host such as `[::1]` sets IPv6.
 
 ### Its Own Repository
 
@@ -63,7 +63,13 @@ The `sslmode` query parameter sets the SSL mode. The values are `disable`, `requ
 
 ### Guides
 
-The package has guides in [`docs/guides/`](https://github.com/TrustBound/dream_postgres/tree/main/docs/guides). The README is short and links to them, and HexDocs shows the guides.
+The package has three guides in [`docs/guides/`](https://github.com/TrustBound/dream_postgres/tree/main/docs/guides). Each one walks through a task from start to finish, with tested code, the failure cases, a test and the common pitfalls:
+
+- **Getting started**: connect from `DATABASE_URL`, stop at startup when the URL or the database is wrong, and run a first query.
+- **Connecting to PostgreSQL in production**: SSL, pool size, IPv6, a supervised pool, the URL format and a clear message for each URL error.
+- **Running queries and handling their results**: turn query results and their errors into responses, and test them without a database.
+
+The README is short and links to them, and HexDocs shows the guides.
 
 ## Bug Fixes
 
@@ -77,7 +83,8 @@ The package has guides in [`docs/guides/`](https://github.com/TrustBound/dream_p
 
 ## Testing
 
-- 100 tests run, 0 failed, 100.0% line coverage, in about 6.1 seconds (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- 165 tests run, 0 failed, 100.0% line coverage. `make test` takes about 24 seconds, and the test times add up to about 41 seconds, because 4 tests run at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The tests run against PostgreSQL 16 (the `postgres:16-alpine` image)
 
 ## Upgrading
 
@@ -115,10 +122,8 @@ Before, the user was always `postgres` with no password, whatever the URL said. 
 - [dream_postgres](https://hexdocs.pm/dream_postgres) - v2.0.0
 - [README](https://github.com/TrustBound/dream_postgres/blob/main/README.md)
 - [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md)
-- [Connection builder](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connection-builder.md)
-- [Connection URLs](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connection-urls.md)
-- [Running queries](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/running-queries.md)
-- [Query results and errors](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/query-results.md)
+- [Connecting to PostgreSQL in production](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md)
+- [Running queries and handling their results](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md)
 - [Changelog](https://github.com/TrustBound/dream_postgres/blob/main/CHANGELOG.md)
 
 ## Community

@@ -1,21 +1,45 @@
 //// Tests for the dream_postgres snippet in Dream's
 //// docs/reference/architecture.md.
 ////
-//// These tests need no database: they check the config the builder makes,
-//// that connect_database starts the pool, and how query results become
-//// values. The pool connects in the background, so pool start returns Ok
-//// with no database. find_user_name runs a query on a pool, so it is only
-//// compiled.
+//// These tests check the config the builder makes, that connect_database
+//// starts the pool, and how query results become values. The pool connects
+//// in the background, so pool start returns Ok with no database.
+//// find_user_name runs its query on the test PostgreSQL server.
 
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
+import fixtures/test_database
 import gleam/result
 import pog
 import snippets/architecture_postgres
 
 pub fn tests() -> TestSuite {
   describe("architecture snippets", [
+    group("find_user_name with a database", [
+      it("returns the name of the user with the id", fn() {
+        // Act
+        let name =
+          with_one_user(fn(db) { architecture_postgres.find_user_name(db, 1) })
+
+        // Assert
+        name
+        |> should
+        |> be_equal("Ada")
+        |> or_fail_with("Expected Ada")
+      }),
+      it("returns No such user for an id with no row", fn() {
+        // Act
+        let name =
+          with_one_user(fn(db) { architecture_postgres.find_user_name(db, 2) })
+
+        // Assert
+        name
+        |> should
+        |> be_equal("No such user")
+        |> or_fail_with("Expected No such user")
+      }),
+    ]),
     group("create_database_config", [
       it("sets the host", fn() {
         // Act
@@ -103,4 +127,19 @@ pub fn tests() -> TestSuite {
       }),
     ]),
   ])
+}
+
+// Runs `run` on a schema of its own with a users table that holds Ada with
+// id 1.
+fn with_one_user(run: fn(pog.Connection) -> a) -> a {
+  test_database.with_schema(fn(db) {
+    let assert Ok(_created) =
+      test_database.execute(
+        db,
+        "CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL)",
+      )
+    let assert Ok(_inserted) =
+      test_database.execute(db, "INSERT INTO users (name) VALUES ('Ada')")
+    run(db)
+  })
 }

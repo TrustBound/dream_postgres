@@ -26,8 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Moved to its own repository
-- The package has guides in `docs/guides/`. The README is short and links
-  to them, and HexDocs shows the guides.
+- The package has three guides in `docs/guides/`: Getting started,
+  Connecting to PostgreSQL in production, and Running queries and handling
+  their results. Each guide walks through a task from start to finish, with
+  tested code, the failure cases, a test and the common pitfalls. The README
+  is short and links to them, and HexDocs shows the guides.
 
 ### Added
 - `postgres.parse_config(pool_name, url) -> Result(Config, UrlError)` reads
@@ -41,8 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `InvalidUrl` and `PoolStartExited`.
   No error value holds the password.
 - The `sslmode` query parameter sets the SSL mode, and `application_name`
-  sets the PostgreSQL connection parameter with that name. An IPv6 host such
-  as `[::1]` sets IPv6.
+  sets the PostgreSQL connection parameter with that name in the config. With
+  Pog 4.1, the server does not see it: pgo sends the Erlang node name as
+  `application_name` after it. An IPv6 host such as `[::1]` sets IPv6.
 
 ### Fixed
 - `postgres.from_url()` read the user and the password wrongly. For
@@ -56,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 100 tests, 0 failed, 100.0% line coverage, in about 6.1 seconds. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- 165 tests, 0 failed, 100.0% line coverage. `make test` takes about 24 seconds, and the test times add up to about 41 seconds, because 4 tests run at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- The tests run against PostgreSQL 16 (the `postgres:16-alpine` image, started with `make db-up` locally and as a service container in CI).
 
 ## [1.0.2] - 2025-11-21
 

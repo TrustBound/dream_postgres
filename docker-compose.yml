@@ -1,0 +1,22 @@
+# The PostgreSQL server for the tests. Start it with `make db-up` and stop it
+# with `make db-down`. It keeps no data: each start gives an empty database.
+#
+# CI runs the same image with the same user, password, database and port as a
+# service container (see .github/workflows/ci.yml).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dream
+      POSTGRES_PASSWORD: dream
+      POSTGRES_DB: dream_test
+    ports:
+      # Port 5436 on this machine, so the tests do not use a PostgreSQL
+      # server that already listens on 5432.
+      - "5436:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30

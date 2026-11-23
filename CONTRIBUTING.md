@@ -18,8 +18,9 @@ dream_postgres is part of the [Dream](https://github.com/TrustBound/dream) famil
 
 - Gleam 1.19.2 or later
 - Erlang/OTP 28 or later, with the JIT (the test run measures line coverage)
+- Docker with Docker Compose, for the PostgreSQL 16 server that the tests run against
 
-The tests need no PostgreSQL server.
+Many tests run queries on a real PostgreSQL server. `make db-up` starts one from `docker-compose.yml`, on port 5436 with the user `dream`, the password `dream` and the database `dream_test`. It keeps no data. To use another server, set `DREAM_POSTGRES_TEST_URL` to its URL. When no server answers, `make test` stops at once with a message that says so.
 
 ### Development Setup
 
@@ -31,8 +32,10 @@ The tests need no PostgreSQL server.
 
 2. **Run tests:**
    ```bash
+   make db-up               # Start the test PostgreSQL server
    make test                # All tests, with line coverage
    make check               # Format check, build, tests and docs build
+   make db-down             # Stop the test PostgreSQL server
    ```
 
 3. **Make your changes:**

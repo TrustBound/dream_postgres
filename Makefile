@@ -1,8 +1,10 @@
 # dream_postgres Makefile
 
-.PHONY: test build format check check-snippets docs clean
+.PHONY: test build format check check-snippets docs clean db-up db-down
 
-# Run the tests with line coverage (fails below 100%)
+# Run the tests with line coverage (fails below 100%). The tests need the
+# PostgreSQL server of docker-compose.yml: start it with `make db-up`. The
+# test run stops at once with a message when the server does not answer.
 test:
 	@gleam test
 
@@ -29,6 +31,15 @@ check-snippets:
 # Generate documentation
 docs:
 	@gleam docs build
+
+# Start the test PostgreSQL server and wait until it accepts connections
+db-up:
+	@docker compose up -d --wait postgres
+	@echo "PostgreSQL 16 accepts connections at postgresql://dream:dream@localhost:5436/dream_test"
+
+# Stop the test PostgreSQL server and remove its container (it keeps no data)
+db-down:
+	@docker compose down
 
 # Clean build artifacts
 clean:

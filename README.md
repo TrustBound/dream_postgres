@@ -38,7 +38,7 @@ gleam add dream_postgres
 
 ## Quick Start
 
-### Connection Setup <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/docs/guides/getting-started.md#connection-setup-"><img align="right" alt="Guide" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### Connection Setup <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/docs/guides/connecting.md#build-a-config-and-connect-"><img align="right" alt="Guide" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -64,15 +64,13 @@ pub fn connect_database() -> Result(postgres.Connection, actor.StartError) {
 
 ## Guides
 
-- [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md): install the package and connect to a database
-- [Connection builder](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connection-builder.md): configure a connection step by step and start the pool
-- [Connection URLs](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connection-urls.md): read a PostgreSQL URL into a config or start a pool from it, the URL format and the URL errors
-- [Running queries](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/running-queries.md): run queries with Pog or Squirrel on a connection
-- [Query results and errors](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/query-results.md): turn query results into values and handle each error
+- [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md): connect from `DATABASE_URL`, stop at startup when the URL or the database is wrong, run a first query and test it
+- [Connecting to PostgreSQL in production](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md): SSL, pool size, IPv6, a supervised pool, the URL format and a clear message for each URL error
+- [Running queries and handling their results](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md): turn query results and their errors into responses, tell a duplicate apart from a failure, and test it without a database
 
 ## API Reference
 
-The full API reference is on [HexDocs](https://hexdocs.pm/dream_postgres). Each guide lists the functions it uses.
+The full API reference is on [HexDocs](https://hexdocs.pm/dream_postgres). The guides show each function where a task needs it.
 
 ## Design Principles
 

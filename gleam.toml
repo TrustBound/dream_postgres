@@ -11,10 +11,8 @@ links = [
 [documentation]
 pages = [
     { title = "Getting started", path = "guides/getting-started.html", source = "./docs/guides/getting-started.md" },
-    { title = "Connection builder", path = "guides/connection-builder.html", source = "./docs/guides/connection-builder.md" },
-    { title = "Connection URLs", path = "guides/connection-urls.html", source = "./docs/guides/connection-urls.md" },
-    { title = "Running queries", path = "guides/running-queries.html", source = "./docs/guides/running-queries.md" },
-    { title = "Query results and errors", path = "guides/query-results.html", source = "./docs/guides/query-results.md" },
+    { title = "Connecting to PostgreSQL in production", path = "guides/connecting.html", source = "./docs/guides/connecting.md" },
+    { title = "Running queries and handling their results", path = "guides/queries.html", source = "./docs/guides/queries.md" },
 ]
 
 [dependencies]

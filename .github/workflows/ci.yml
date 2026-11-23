@@ -19,8 +19,23 @@ jobs:
   test:
     name: Build & Test
     runs-on: ubuntu-latest
-    # The tests need no PostgreSQL server: the pool tests use a local port
-    # that has no listener, so this job has no services.
+    # Many tests run queries on a real PostgreSQL server. This is the server
+    # of docker-compose.yml: the same image, user, password, database and
+    # port, so the tests use their default URL here too.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: dream
+          POSTGRES_PASSWORD: dream
+          POSTGRES_DB: dream_test
+        ports:
+          - 5436:5432
+        options: >-
+          --health-cmd "pg_isready -U dream -d dream_test"
+          --health-interval 1s
+          --health-timeout 5s
+          --health-retries 30
     outputs:
       coverage_message: ${{ steps.coverage_badge.outputs.message }}
       coverage_color: ${{ steps.coverage_badge.outputs.color }}

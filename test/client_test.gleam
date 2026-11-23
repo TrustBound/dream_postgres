@@ -2,7 +2,8 @@
 ////
 //// The builder functions and `parse_config` are pure, so these tests check
 //// exact `Config` values and need no database. The `connect` and `from_url`
-//// tests start a pool on a local port that has no listener.
+//// tests run a query on the test PostgreSQL server, or start a pool on a
+//// local port that has no listener.
 
 import dream_postgres/client as postgres
 import dream_test/matchers.{
@@ -13,6 +14,7 @@ import dream_test/unit.{describe, group, it}
 import fixtures/clock
 import fixtures/database
 import fixtures/database_url
+import fixtures/test_database
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{Some}
@@ -134,6 +136,22 @@ fn builder_tests() {
 
 fn connect_tests() {
   group("connect", [
+    it("connect gives a pool that runs a query on the server", fn() {
+      // Act
+      let answer = {
+        use <- test_database.with_own_pools()
+        test_database.config()
+        |> postgres.pool_size(1)
+        |> postgres.connect()
+        |> result.map(test_database.texts(_, "SELECT 'connected'"))
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Ok(["connected"])))
+      |> or_fail_with("Expected the row of the query")
+    }),
     it("connect returns a connection to the named pool", fn() {
       // Arrange
       let pool_name = process.new_name("client_test_pool")
@@ -663,6 +681,20 @@ fn parse_config_error_tests() {
 
 fn from_url_tests() {
   group("from_url", [
+    it("from_url gives a pool that runs a query on the server", fn() {
+      // Act
+      let answer = {
+        use <- test_database.with_own_pools()
+        postgres.from_url(test_database.url())
+        |> result.map(test_database.texts(_, "SELECT 'connected'"))
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Ok(["connected"])))
+      |> or_fail_with("Expected the row of the query")
+    }),
     it("returns InvalidUrl for a URL that is not valid", fn() {
       // Act
       let result = postgres.from_url("mysql://user:secret@localhost/myapp")
