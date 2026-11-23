@@ -61,6 +61,10 @@ The `sslmode` query parameter sets the SSL mode. The values are `disable`, `requ
 
 `dream_postgres` moved out of the Dream repository. It has its own version, its own changelog and its own release workflow. The package name on Hex and the module names are the same as before.
 
+### Guides
+
+The package has guides in [`docs/guides/`](https://github.com/TrustBound/dream_postgres/tree/main/docs/guides). The README is short and links to them, and HexDocs shows the guides.
+
 ## Bug Fixes
 
 ### The User and the Password
@@ -110,6 +114,11 @@ Before, the user was always `postgres` with no password, whatever the URL said. 
 
 - [dream_postgres](https://hexdocs.pm/dream_postgres) - v2.0.0
 - [README](https://github.com/TrustBound/dream_postgres/blob/main/README.md)
+- [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md)
+- [Connection builder](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connection-builder.md)
+- [Connection URLs](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connection-urls.md)
+- [Running queries](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/running-queries.md)
+- [Query results and errors](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/query-results.md)
 - [Changelog](https://github.com/TrustBound/dream_postgres/blob/main/CHANGELOG.md)
 
 ## Community

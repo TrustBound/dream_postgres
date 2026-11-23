@@ -8,6 +8,15 @@ links = [
     { title = "GitHub", href = "https://github.com/TrustBound/dream_postgres" },
 ]
 
+[documentation]
+pages = [
+    { title = "Getting started", path = "guides/getting-started.html", source = "./docs/guides/getting-started.md" },
+    { title = "Connection builder", path = "guides/connection-builder.html", source = "./docs/guides/connection-builder.md" },
+    { title = "Connection URLs", path = "guides/connection-urls.html", source = "./docs/guides/connection-urls.md" },
+    { title = "Running queries", path = "guides/running-queries.html", source = "./docs/guides/running-queries.md" },
+    { title = "Query results and errors", path = "guides/query-results.html", source = "./docs/guides/query-results.md" },
+]
+
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_erlang = ">= 0.30.0 and < 2.0.0"
@@ -18,7 +27,7 @@ pog = ">= 4.0.0 and < 5.0.0"
 # Switched to a Hex version range once it is published.
 dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "1639959578a14ae3577f8e3ae5cac058f933aa53" }
 # Switched to a Hex version range once it is published.
-dream_snippets = { git = "https://github.com/TrustBound/dream_snippets.git", ref = "7a862a3e5b74f0a7f2e9c15170d4d6c772605cfb" }
+dream_snippets = { git = "https://github.com/TrustBound/dream_snippets.git", ref = "f116b072699ec33315980418036d962e22fab872" }
 
 [tools.dream_snippets]
 # Changelog sections and release notes before this version are history. They are not checked.

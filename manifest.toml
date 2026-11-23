@@ -8,7 +8,7 @@
 
 packages = [
   { name = "backoff", version = "1.1.6", build_tools = ["rebar3"], requirements = [], otp_app = "backoff", source = "hex", outer_checksum = "CF0CFFF8995FB20562F822E5CC47D8CCF664C5ECDC26A684CBE85C225F9D7C39" },
-  { name = "dream_snippets", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "simplifile", "tom"], source = "git", repo = "https://github.com/TrustBound/dream_snippets.git", commit = "7a862a3e5b74f0a7f2e9c15170d4d6c772605cfb" },
+  { name = "dream_snippets", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "simplifile", "tom"], source = "git", repo = "https://github.com/TrustBound/dream_snippets.git", commit = "f116b072699ec33315980418036d962e22fab872" },
   { name = "dream_test", version = "3.0.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_json", "gleam_otp", "gleam_regexp", "gleam_stdlib"], source = "git", repo = "https://github.com/TrustBound/dream_test.git", commit = "1639959578a14ae3577f8e3ae5cac058f933aa53" },
   { name = "exception", version = "2.1.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "exception", source = "hex", outer_checksum = "329D269D5C2A314F7364BD2711372B6F2C58FA6F39981572E5CA68624D291F8C" },
   { name = "filepath", version = "1.1.2", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "filepath", source = "hex", outer_checksum = "B06A9AF0BF10E51401D64B98E4B627F1D2E48C154967DA7AF4D0914780A6D40A" },
@@ -27,7 +27,7 @@ packages = [
 ]
 
 [requirements]
-dream_snippets = { git = "https://github.com/TrustBound/dream_snippets.git", ref = "7a862a3e5b74f0a7f2e9c15170d4d6c772605cfb" }
+dream_snippets = { git = "https://github.com/TrustBound/dream_snippets.git", ref = "f116b072699ec33315980418036d962e22fab872" }
 dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "1639959578a14ae3577f8e3ae5cac058f933aa53" }
 gleam_erlang = { version = ">= 0.30.0 and < 2.0.0" }
 gleam_otp = { version = ">= 1.0.0 and < 2.0.0" }

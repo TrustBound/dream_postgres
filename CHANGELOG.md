@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Moved to its own repository
+- The package has guides in `docs/guides/`. The README is short and links
+  to them, and HexDocs shows the guides.
 
 ### Added
 - `postgres.parse_config(pool_name, url) -> Result(Config, UrlError)` reads
