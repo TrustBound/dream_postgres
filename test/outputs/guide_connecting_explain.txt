@@ -1,0 +1,20 @@
+postgresql://app:secret@db.example.com/app?sslmode=require&channel_binding=require
+  -> DATABASE_URL has the parameter channel_binding. Remove it.
+
+postgresql://app:secret@db.example.com/app?sslmode=prefer
+  -> DATABASE_URL has sslmode=prefer. Use disable, require or verify-full.
+
+postgresql://app:secret@db.example.com/app?sslmod=require
+  -> DATABASE_URL has the parameter sslmod, which looks like sslmode. Fix the spelling.
+
+postgresql://app:p@ss@db.example.com/app
+  -> DATABASE_URL is not a URL. Percent-encode @, :, / and # in the password.
+
+postgresql://app:secret@db.example.com:5432
+  -> DATABASE_URL has no database name
+
+mysql://app:secret@db.example.com/app
+  -> DATABASE_URL has the scheme mysql, not postgresql
+
+db.example.com:5432/app
+  -> DATABASE_URL has the scheme db.example.com, not postgresql

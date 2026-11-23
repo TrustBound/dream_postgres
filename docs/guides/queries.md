@@ -38,6 +38,8 @@ gleam add dream_postgres pog
 
 The examples use this table. With the `docker-compose.yml` from [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#before-you-start), create it in `psql` (`docker compose exec postgres psql -U dream -d dream_test`):
 
+### Make the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/fixtures/sql/queries_users.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```sql
 CREATE TABLE users (
   id serial PRIMARY KEY,
@@ -176,6 +178,8 @@ pub fn user_response(
 
 Against the table, after `sql.create_user(db, "Ada", "ada@example.com")` gave Ada the id 1, here's what `show_user` answers:
 
+### What show_user answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_show_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 show_user(db, 1)
   -> Response(200, "1: Ada <ada@example.com>")
@@ -185,6 +189,8 @@ show_user(db, 2)
 ```
 
 And here's what `user_response` returns for each case, with results built by hand:
+
+### What user_response returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_user_response.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 user_response(Ok(pog.Returned(count: 1, rows: [FindUserRow(1, "Ada", "ada@example.com")])))
@@ -230,6 +236,8 @@ pub fn users_response(
 ```
 
 `Ok([])` comes first, so an empty table gets its own message. `Ok(users)` joins the names. `all_rows` only fails with `DatabaseError`, but the error type has `NotFound` too, so the last branch matches any error with `Error(_error)`.
+
+### What index_users and users_response return <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_index_users.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 index_users(db)                       // the table is empty
@@ -294,6 +302,8 @@ fn new_user_response(
 
 Here's the handler against the table, for a first sign-up and a second one with the same email, and the Pog error behind the 409:
 
+### What create_user answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_create_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 create_user(db, "Ada", "ada@example.com")
   -> Response(201, "Created user 1")
@@ -301,7 +311,7 @@ create_user(db, "Ada", "ada@example.com")
 create_user(db, "Ada", "ada@example.com")
   -> Response(409, "That email is already taken")
 
-sql.create_user(db, "Ada", "ada@example.com")   // the second time
+sql.create_user(db, "Ada", "ada@example.com")   // the email is taken
   -> Error(ConstraintViolated(
        message: "duplicate key value violates unique constraint \"users_email_key\"",
        constraint: "users_email_key",
@@ -310,6 +320,8 @@ sql.create_user(db, "Ada", "ada@example.com")   // the second time
 ```
 
 And with results built by hand:
+
+### What created_response returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_created_response.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 created_response(Ok(pog.Returned(count: 1, rows: [CreateUserRow(7)])))

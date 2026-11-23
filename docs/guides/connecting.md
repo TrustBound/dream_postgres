@@ -105,6 +105,8 @@ Every variant of `UrlError` has a branch, so when a new version of the package a
 
 Here's what it returns for URLs you'll meet in practice:
 
+### What explain returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_explain.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 postgresql://app:secret@db.example.com/app?sslmode=require&channel_binding=require
   -> DATABASE_URL has the parameter channel_binding. Remove it.
@@ -177,6 +179,8 @@ How it works:
 
 The URL also sets SSL, IPv6 and the application name. Here's the config that `pool_config` returns for a URL with all three and a pool size of 30:
 
+### The config of pool_config <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_pool_config.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 pool_config(name, "postgresql://app:secret@[2001:db8::10]:6432/app?sslmode=verify-full&application_name=billing", 30)
   host:                  "2001:db8::10"
@@ -189,6 +193,8 @@ pool_config(name, "postgresql://app:secret@[2001:db8::10]:6432/app?sslmode=verif
 
 The host in brackets is an IPv6 address, so `parse_config` sets `Ipv6` for you. `application_name` is the name PostgreSQL shows for your connections in `pg_stat_activity`, which helps when several apps share one database. Ask the server and you'll see it:
 
+### The application name the server shows <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_application_name.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 from_url("postgresql://dream:dream@localhost:5436/dream_test?application_name=billing")
 SELECT current_setting('application_name')
@@ -197,13 +203,15 @@ SELECT current_setting('application_name')
 
 Any other name in the query string that isn't a `libpq` connection keyword goes to the server as a run-time parameter, such as `search_path`, `timezone` or `statement_timeout`. The server applies it to each connection of the pool:
 
+### The parameters the server applies <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_server_parameters.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 from_url("postgresql://dream:dream@localhost:5436/dream_test?search_path=app&timezone=UTC&application_name=billing")
 SELECT current_setting('search_path') || '|' || current_setting('timezone') || '|' || current_setting('application_name')
   -> "app|UTC|billing"
 ```
 
-Why `client_encoding` is in the list: pgo, the driver under Pog, adds its own `application_name`, the name of the Erlang node, such as `nonode@nohost`. PostgreSQL keeps the last `application_name` it gets. pgo puts its value before the first of your parameters whose name sorts after `application_name`. So when there's an `application_name`, this package puts `client_encoding` just before it, and your name comes last. `UTF8` is the encoding that Pog reads and writes. On a UTF-8 database it's also the server's default, so text comes back the same. If you set `client_encoding` yourself, your value stays. Without an `application_name`, the list stays as it is, and the server shows the node name.
+Why `client_encoding` is in the list: pgo, the driver under Pog, adds its own `application_name`, the name of the Erlang node, such as `nonode@nohost`. PostgreSQL keeps the last `application_name` it gets. pgo puts its value before the first of your parameters whose name sorts after `application_name`. So when there's an `application_name`, this package puts `client_encoding` just before it, and your name comes last. `UTF8` is the encoding that Pog reads and writes. On a UTF-8 database it's also the server's default, so text comes back the same. If you set `client_encoding` yourself, your value stays. Without an `application_name`, the list stays as it is, and the server shows the node name. Set the name with the `application_name` parameter, not with `-c application_name=...` in `options`: the server applies `options` first and the separate parameters after it, so the node name replaces a name from `options`.
 
 **How big should the pool be?** Each connection in the pool is one connection on the PostgreSQL server, and the server has a limit (`max_connections`, 100 by default). Add up the pools of every instance of your app, plus anything else that connects, and stay under that limit. A pool that's too small makes requests wait for a free connection: with a pool of 1, two queries of half a second each, sent at the same time, run one after the other on the same connection, and the second answers after about 1 second. A pool that's too big makes the server refuse connections when you scale out. And don't set the size to 0: `pool_size(0)` is accepted, the pool starts, and every query returns `ConnectionUnavailable` after about 2 seconds.
 
@@ -326,12 +334,14 @@ The client trusts the CA list of OTP's `public_key` application, which is the CA
 
 A failed check looks like every other failed connection: the pool starts, and each query returns `ConnectionUnavailable` after about 2 seconds. The cause shows only in the log. OTP's `ssl` application logs a notice for each try of each connection:
 
+### The notices of a failed certificate check <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_tls_notices.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 TLS client: ... generated CLIENT ALERT: Fatal - Unknown CA
 TLS client: ... generated CLIENT ALERT: Fatal - Bad Certificate, - {bad_cert,{hostname_check_failed,{requested,"127.0.0.1"},{received,[{dNSName,"localhost"}]}}}
 ```
 
-`Unknown CA` means the client doesn't trust the CA that signed the certificate. `hostname_check_failed` means the certificate doesn't name the host of the URL: here the URL has `127.0.0.1`, and the certificate names only `localhost`.
+The `...` stands for the place in OTP's source that logs the alert, which changes from one OTP release to the next. `Unknown CA` means the client doesn't trust the CA that signed the certificate. `hostname_check_failed` means the certificate doesn't name the host of the URL: here the URL has `127.0.0.1`, and the certificate names only `localhost`.
 
 ### Trust a private certificate authority
 
@@ -375,27 +385,28 @@ How it works:
 
 ## The URL format
 
-```text
+```text illustration
 postgresql://user:password@host:port/database?sslmode=verify-full&application_name=myapp
 ```
 
 | Part | Required | When it's missing | Notes |
 |:---|:---|:---|:---|
 | `postgresql://` or `postgres://` | yes | `MissingScheme`, or `UnsupportedScheme` when the text before `:` looks like one | Any other scheme gives `UnsupportedScheme(scheme)`. |
-| `user` | no | the user `postgres` | Percent-decoded. A password with no user gives `MissingUser`. |
-| `password` | no | no password | Percent-decoded. It starts after the first `:`, so a `:` later in the password is kept. |
+| `user` | no | the user `postgres` | Percent-decoded. A password with no user gives `MissingUser`. `%00` gives `InvalidUserEncoding`. |
+| `password` | no | no password | Percent-decoded. It starts after the first `:`, so a `:` later in the password is kept. `%00` gives `InvalidPasswordEncoding`. |
 | `host` | yes | `MissingHost` | An IPv6 address in brackets, such as `[::1]`, sets IPv6. |
 | `port` | no | 5432 | 1 to 65535, or `InvalidPort(port)`. A port that isn't a number gives `MalformedUrl`. |
-| `database` | yes | `MissingDatabase` | One path segment, percent-decoded. `/a/b` gives `InvalidDatabase("/a/b")`. Encode a `/` in the name as `%2F`. |
+| `database` | yes | `MissingDatabase` | One path segment, percent-decoded. `/a/b` gives `InvalidDatabase("/a/b")`. Encode a `/` in the name as `%2F`. `%00` gives `InvalidDatabaseEncoding`. |
 | `sslmode` | no | `SslDisabled` | See [SSL modes](#ssl-modes). |
-| `application_name` | no | not set | Sets the PostgreSQL connection parameter of that name, with `client_encoding=UTF8` before it, so that the server shows the name. |
-| `options` | no | not set | Goes to the server, which reads it like the command line of a backend. `options=-c%20statement_timeout%3D5s` sets `statement_timeout` to `5s`. |
+| `application_name` | no | not set | Sets the PostgreSQL connection parameter of that name, with `client_encoding=UTF8` before it, so that the server shows the name. It wins over `-c application_name=...` in `options`. |
+| `options` | no | not set | Goes to the server, which reads it like the command line of a backend. `options=-c%20statement_timeout%3D5s` sets `statement_timeout` to `5s`. Don't set `application_name` here: the server applies the separate parameters after `options`, and the driver always sends an `application_name`. So `options=-c%20application_name%3Dx` alone shows the Erlang node name, such as `nonode@nohost`, and with `application_name=y` in the URL too, the server shows `y`, in either order. |
+| a name that starts with `_pq_.` | no | | `UnsupportedParameter(name)`. PostgreSQL reads such a name as a protocol option, not a setting, and closes the connection when it doesn't know it. |
 | any other `libpq` connection keyword, such as `connect_timeout`, `channel_binding`, `user`, `password` or `client_encoding`, and `database` | no | | `UnsupportedParameter(name)`. The server can't apply these, so the package refuses them, not drops them. |
 | a name at most one edit from a keyword (one character added, removed or changed, or two next to each other swapped, with upper case read as lower case), such as `sslmod`, `ssl_mode`, `sslmdoe` or `SSLMODE` | no | | `UnknownParameterLooksLike(name, keyword)`, for example `UnknownParameterLooksLike("sslmod", "sslmode")`. Fix the spelling. |
 | any other name, such as `search_path`, `timezone` or `statement_timeout` | no | not set | Goes to the server as a run-time parameter, with its percent-decoded value. |
 | a `#` part | no | | `UnsupportedFragment` |
 
-A bad percent-encoding, such as `%zz`, gives `InvalidUserEncoding`, `InvalidPasswordEncoding` or `InvalidDatabaseEncoding`. Settings the URL can't express, such as the pool size, keep the values from `new`.
+A bad percent-encoding, such as `%zz`, gives `InvalidUserEncoding`, `InvalidPasswordEncoding` or `InvalidDatabaseEncoding`. So does `%00`: the driver ends each of these at a null byte and would send the rest to the server as another parameter. A database name of `dream_test%00search_path%00evil` would connect to `dream_test` with `search_path` set to `evil`. `connect` refuses a config built with the builder functions in the same case: a user, database name, password or connection parameter that holds a null byte gives `Error(actor.InitFailed("the user holds a null byte, which PostgreSQL cannot take"))`, with the part's name, and no pool starts. Settings the URL can't express, such as the pool size, keep the values from `new`.
 
 How the query string is read:
 

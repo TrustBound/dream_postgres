@@ -37,8 +37,11 @@ dream_postgres has no dependency on Dream or on any web framework, so it works i
 
 You also need a PostgreSQL server. If you have Docker, put this `docker-compose.yml` in your project. It's the server this package's own tests run against: PostgreSQL 16 on port 5436, so it doesn't clash with a PostgreSQL you already run on 5432, and with no volume, so each start gives you an empty database:
 
+### The PostgreSQL service of docker-compose.yml <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/docker-compose.yml#L11-L27"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```yaml
 services:
+  # The server for most tests. SSL is off.
   postgres:
     image: postgres:16-alpine
     environment:
@@ -46,6 +49,8 @@ services:
       POSTGRES_PASSWORD: dream
       POSTGRES_DB: dream_test
     ports:
+      # Port 5436 on this machine, so the tests do not use a PostgreSQL
+      # server that already listens on 5432.
       - "5436:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
@@ -56,11 +61,15 @@ services:
 
 Start it, and wait until it accepts connections:
 
+### Start the server <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/scripts/db-up.sh#L7"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```sh
-docker compose up -d --wait
+docker compose up -d --wait postgres
 ```
 
 Its URL is `postgresql://dream:dream@localhost:5436/dream_test`. Step 3 reads a `users` table. Create it in `psql` (`docker compose exec postgres psql -U dream -d dream_test`):
+
+### Make the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/fixtures/sql/getting_started_users.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```sql
 CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL);
@@ -97,6 +106,8 @@ Here's what happens:
 - `PoolStartExited` means the pool process didn't start.
 
 No error from `from_url` holds the password from the URL, so it's safe to print or log one with `string.inspect`. Here's what `connect` returns for a URL with an `sslmode` this package doesn't support:
+
+### What connect returns for an sslmode it does not support <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_connect_error.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 connect("postgresql://app:secret@db.example.com/app?sslmode=prefer")
@@ -163,6 +174,8 @@ A few things to notice:
 
 Here's what `start` returns, passed through `describe` when it fails, for the server from [Before you start](#before-you-start), for a wrong password, for a password with an `@` that isn't encoded, and for a URL where nothing listens:
 
+### What start returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_start.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 start("postgresql://dream:dream@localhost:5436/dream_test")
   -> Ok(connection)
@@ -177,7 +190,7 @@ start("postgresql://user:pass@127.0.0.1:<a port where nothing listens>/myapp")
   -> Error("The database did not answer: ConnectionUnavailable")
 ```
 
-The two `ConnectionUnavailable` answers aren't instant. The query waits while the pool tries to connect, and gives up after about 2 seconds. A user that doesn't exist and a database name that doesn't exist give the same error after the same wait. The error doesn't say which of these it was, but the server's log does: `password authentication failed for user "dream"`, for example. One check at startup covers all of them.
+`Ok(connection)` stands for the connection that `start` gives back: it holds a pool name that changes on each call. The port of the last URL is a free port, which changes on each test run. The two `ConnectionUnavailable` answers aren't instant. The query waits while the pool tries to connect, and gives up after about 2 seconds. A user that doesn't exist and a database name that doesn't exist give the same error after the same wait. The error doesn't say which of these it was, but the server's log does: `password authentication failed for user "dream"`, for example. One check at startup covers all of them.
 
 In your `main`, call `start` once. On `Error(error)`, print `describe(error)` to standard error and exit, so whatever runs your app (a container platform, systemd, a release script) sees the failure and the message.
 
@@ -239,6 +252,8 @@ Here's how the pieces fit:
 
 With the table and the two rows from [Before you start](#before-you-start), here's what `greet_user` and `find_user` return:
 
+### What greet_user and find_user return <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_greet_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```text
 greet_user(Context(db:), 1)
   -> "Hello, Ada"
@@ -247,10 +262,12 @@ greet_user(Context(db:), 3)
   -> "No user with that id"
 
 find_user(db, 2)
-  -> Ok(pog.Returned(count: 1, rows: [User(2, "Grace")]))
+  -> Ok(Returned(1, [User(2, "Grace")]))
 ```
 
-Splitting the query from the code that reads its result is what makes this easy to test. `greeting` doesn't need a database at all. Here's what it returns for a result with two rows, and what `greet_user` returns when no database listens:
+`find_user` shows the result as `string.inspect` writes it, so `pog.Returned(count: 1, rows: [...])` shows as `Returned(1, [...])`. Splitting the query from the code that reads its result is what makes this easy to test. `greeting` doesn't need a database at all. Here's what it returns for a result with two rows, and what `greet_user` returns when no database listens:
+
+### What greeting returns, and greet_user with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_greeting.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 greeting(Ok(pog.Returned(count: 2, rows: [User(1, "Ada"), User(2, "Grace")])))
@@ -292,8 +309,11 @@ The code that reads results is where your logic lives, and you can test it with 
 
 The tests here use [dream_test](https://hexdocs.pm/dream_test). It isn't on Hex yet, so add it from GitHub, with the commit this package tests with:
 
+### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L24-L26"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
 ```toml
 [dev-dependencies]
+# Switched to a Hex version range once it is published.
 dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "1639959578a14ae3577f8e3ae5cac058f933aa53" }
 ```
 

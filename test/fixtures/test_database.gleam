@@ -102,23 +102,21 @@ pub fn with_schema(run: fn(pog.Connection) -> a) -> a {
   value
 }
 
-/// Runs each SQL statement in the first `sql` code block of the guide, in
-/// order. Use it to make the tables that a guide tells the reader to make.
-pub fn run_guide_sql(db: pog.Connection, guide_path: String) -> Nil {
-  guide_sql_statements(guide_path)
+/// Runs each SQL statement of the file at `path`, in order. The guides
+/// show these files in their `sql` blocks, so the tests make the tables
+/// that a guide tells the reader to make.
+pub fn run_sql_file(db: pog.Connection, path: String) -> Nil {
+  sql_statements(path)
   |> list.each(fn(statement) {
     let assert Ok(_returned) = execute(db, statement)
     Nil
   })
 }
 
-/// Returns the SQL statements of the first `sql` code block of the guide.
-pub fn guide_sql_statements(guide_path: String) -> List(String) {
-  let assert Ok(text) = read_file(guide_path)
-  let assert Ok(#(_before, block_and_rest)) =
-    string.split_once(text, "```sql\n")
-  let assert Ok(#(block, _after)) = string.split_once(block_and_rest, "```")
-  string.split(block, ";")
+/// Returns the SQL statements of the file at `path`.
+pub fn sql_statements(path: String) -> List(String) {
+  let assert Ok(text) = read_file(path)
+  string.split(text, ";")
   |> list.map(string.trim)
   |> list.filter(fn(statement) { statement != "" })
 }

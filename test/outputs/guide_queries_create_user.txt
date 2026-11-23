@@ -1,0 +1,12 @@
+create_user(db, "Ada", "ada@example.com")
+  -> Response(201, "Created user 1")
+
+create_user(db, "Ada", "ada@example.com")
+  -> Response(409, "That email is already taken")
+
+sql.create_user(db, "Ada", "ada@example.com")   // the email is taken
+  -> Error(ConstraintViolated(
+       message: "duplicate key value violates unique constraint \"users_email_key\"",
+       constraint: "users_email_key",
+       detail: "Key (email)=(ada@example.com) already exists.",
+     ))

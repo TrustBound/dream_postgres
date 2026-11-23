@@ -10,7 +10,10 @@ import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/database_url
+import fixtures/output_file
 import fixtures/test_database
+import gleam/list
+import gleam/string
 import pog
 import snippets/guide_queries_create_user
 import snippets/guide_queries_list_users
@@ -18,97 +21,84 @@ import snippets/guide_queries_log_failure
 import snippets/guide_queries_show_user.{Response}
 import snippets/guide_queries_sql.{CreateUserRow, FindUserRow, ListUsersRow}
 
-const guide_path = "docs/guides/queries.md"
+// The SQL that the guide shows in its `sql` block.
+const users_sql = "test/fixtures/sql/queries_users.sql"
 
 pub fn tests() -> TestSuite {
   describe("queries guide", [
     with_database_tests(),
-    it("step 2: user_response answers 500 for a query error", fn() {
-      // Act
-      let response =
-        guide_queries_show_user.user_response(Error(pog.QueryTimeout))
-
-      // Assert
-      response
-      |> should
-      |> be_equal(Response(500, "Internal server error"))
-      |> or_fail_with("Expected 500")
-    }),
-    it("step 3: users_response joins the names", fn() {
+    it("step 2: user_response answers as the output file shows", fn() {
       // Arrange
-      let result =
-        Ok(
-          pog.Returned(count: 2, rows: [
-            ListUsersRow(id: 1, name: "Ada"),
-            ListUsersRow(id: 2, name: "Grace"),
-          ]),
-        )
-
-      // Act
-      let response = guide_queries_list_users.users_response(result)
-
-      // Assert
-      response
-      |> should
-      |> be_equal(Response(200, "Ada, Grace"))
-      |> or_fail_with("Expected both names")
-    }),
-    it("step 3: users_response answers 200 for no rows", fn() {
-      // Act
-      let response =
-        guide_queries_list_users.users_response(
+      let results = [
+        #(
+          "user_response(Ok(pog.Returned(count: 1, rows: [FindUserRow(1, \"Ada\", \"ada@example.com\")])))",
+          Ok(
+            pog.Returned(count: 1, rows: [
+              FindUserRow(id: 1, name: "Ada", email: "ada@example.com"),
+            ]),
+          ),
+        ),
+        #(
+          "user_response(Ok(pog.Returned(count: 0, rows: [])))",
           Ok(pog.Returned(count: 0, rows: [])),
-        )
+        ),
+        #("user_response(Error(pog.QueryTimeout))", Error(pog.QueryTimeout)),
+      ]
+
+      // Act
+      let answers =
+        list.map(results, fn(entry) {
+          #(
+            entry.0,
+            string.inspect(guide_queries_show_user.user_response(entry.1)),
+          )
+        })
 
       // Assert
-      response
+      output_file.calls(answers)
       |> should
-      |> be_equal(Response(200, "No users yet"))
-      |> or_fail_with("Expected the empty list message")
+      |> be_equal(output_file.read("guide_queries_user_response"))
+      |> or_fail_with("Expected the output file")
     }),
-    it("step 3: index_users answers 500 when the database is not there", fn() {
+    it("step 4: created_response answers as the output file shows", fn() {
       // Arrange
-      let assert Ok(db) = postgres.from_url(database_url.unused_database_url())
-
-      // Act
-      let response = guide_queries_list_users.index_users(db)
-
-      // Assert
-      response
-      |> should
-      |> be_equal(Response(500, "Internal server error"))
-      |> or_fail_with("Expected 500")
-    }),
-    it("step 4: created_response answers 201 with the new id", fn() {
-      // Act
-      let response =
-        guide_queries_create_user.created_response(
+      let results = [
+        #(
+          "created_response(Ok(pog.Returned(count: 1, rows: [CreateUserRow(7)])))",
           Ok(pog.Returned(count: 1, rows: [CreateUserRow(id: 7)])),
-        )
-
-      // Assert
-      response
-      |> should
-      |> be_equal(Response(201, "Created user 7"))
-      |> or_fail_with("Expected 201")
-    }),
-    it("step 4: created_response answers 500 for another constraint", fn() {
-      // Arrange
-      let result =
-        Error(pog.ConstraintViolated(
-          message: "new row violates check constraint \"users_name_check\"",
-          constraint: "users_name_check",
-          detail: "",
-        ))
+        ),
+        #(
+          "created_response(Error(pog.ConstraintViolated(constraint: \"users_email_key\", ..)))",
+          Error(pog.ConstraintViolated(
+            message: "duplicate key value violates unique constraint \"users_email_key\"",
+            constraint: "users_email_key",
+            detail: "Key (email)=(ada@example.com) already exists.",
+          )),
+        ),
+        #(
+          "created_response(Error(pog.ConstraintViolated(constraint: \"users_name_check\", ..)))",
+          Error(pog.ConstraintViolated(
+            message: "new row violates check constraint \"users_name_check\"",
+            constraint: "users_name_check",
+            detail: "",
+          )),
+        ),
+      ]
 
       // Act
-      let response = guide_queries_create_user.created_response(result)
+      let answers =
+        list.map(results, fn(entry) {
+          #(
+            entry.0,
+            string.inspect(guide_queries_create_user.created_response(entry.1)),
+          )
+        })
 
       // Assert
-      response
+      output_file.calls(answers)
       |> should
-      |> be_equal(Response(500, "Internal server error"))
-      |> or_fail_with("Expected 500")
+      |> be_equal(output_file.read("guide_queries_created_response"))
+      |> or_fail_with("Expected the output file")
     }),
     it("step 5: log_failure gives back the result it gets", fn() {
       // Act
@@ -197,27 +187,6 @@ fn with_database_tests() {
       )
       |> or_fail_with("Expected Ada, then Grace")
     }),
-    it("step 1: a duplicate email gives the error the test shows", fn() {
-      // Act
-      let duplicate =
-        with_users_table(fn(db) {
-          let assert Ok(_first) =
-            guide_queries_sql.create_user(db, "Ada", "ada@example.com")
-          guide_queries_sql.create_user(db, "Ada", "ada@example.com")
-        })
-
-      // Assert
-      duplicate
-      |> should
-      |> be_equal(
-        Error(pog.ConstraintViolated(
-          message: "duplicate key value violates unique constraint \"users_email_key\"",
-          constraint: "users_email_key",
-          detail: "Key (email)=(ada@example.com) already exists.",
-        )),
-      )
-      |> or_fail_with("Expected the unique violation of users_email_key")
-    }),
     it(
       "step 1: find_user gives PostgresqlError when the table is missing",
       fn() {
@@ -240,87 +209,117 @@ fn with_database_tests() {
         |> or_fail_with("Expected undefined_table")
       },
     ),
-    it("step 2: show_user answers 200 with the user", fn() {
+    it("step 2: show_user answers as the output file shows", fn() {
       // Act
-      let response =
+      let answers =
         with_users_table(fn(db) {
           let assert Ok(_created) =
             guide_queries_sql.create_user(db, "Ada", "ada@example.com")
-          guide_queries_show_user.show_user(db, 1)
+          [
+            #(
+              "show_user(db, 1)",
+              string.inspect(guide_queries_show_user.show_user(db, 1)),
+            ),
+            #(
+              "show_user(db, 2)",
+              string.inspect(guide_queries_show_user.show_user(db, 2)),
+            ),
+          ]
         })
 
       // Assert
-      response
+      output_file.calls(answers)
       |> should
-      |> be_equal(Response(200, "1: Ada <ada@example.com>"))
-      |> or_fail_with("Expected 200 with Ada")
+      |> be_equal(output_file.read("guide_queries_show_user"))
+      |> or_fail_with("Expected the output file")
     }),
-    it("step 2: show_user answers 404 for an id with no row", fn() {
+    it("step 3: index_users answers as the output file shows", fn() {
       // Act
-      let response =
-        with_users_table(fn(db) { guide_queries_show_user.show_user(db, 1) })
-
-      // Assert
-      response
-      |> should
-      |> be_equal(Response(404, "No user with that id"))
-      |> or_fail_with("Expected 404")
-    }),
-    it("step 3: index_users answers with the names in order", fn() {
-      // Act
-      let response =
+      let answers =
         with_users_table(fn(db) {
+          let empty = guide_queries_list_users.index_users(db)
           let assert Ok(_grace) =
             guide_queries_sql.create_user(db, "Grace", "grace@example.com")
           let assert Ok(_ada) =
             guide_queries_sql.create_user(db, "Ada", "ada@example.com")
-          guide_queries_list_users.index_users(db)
+          let full = guide_queries_list_users.index_users(db)
+          let both =
+            guide_queries_list_users.users_response(
+              Ok(
+                pog.Returned(count: 2, rows: [
+                  ListUsersRow(id: 1, name: "Ada"),
+                  ListUsersRow(id: 2, name: "Grace"),
+                ]),
+              ),
+            )
+          let none =
+            guide_queries_list_users.users_response(
+              Ok(pog.Returned(count: 0, rows: [])),
+            )
+          let assert Ok(unavailable_db) =
+            postgres.from_url(database_url.unused_database_url())
+          let unavailable = guide_queries_list_users.index_users(unavailable_db)
+          [
+            #(
+              "index_users(db)                       // the table is empty",
+              string.inspect(empty),
+            ),
+            #(
+              "index_users(db)                       // after Grace, then Ada, signed up",
+              string.inspect(full),
+            ),
+            #(
+              "users_response(Ok(pog.Returned(count: 2, rows: [ListUsersRow(1, \"Ada\"), ListUsersRow(2, \"Grace\")])))",
+              string.inspect(both),
+            ),
+            #(
+              "users_response(Ok(pog.Returned(count: 0, rows: [])))",
+              string.inspect(none),
+            ),
+            #(
+              "index_users(<a pool where nothing listens>)",
+              string.inspect(unavailable),
+            ),
+          ]
         })
 
       // Assert
-      response
+      output_file.calls(answers)
       |> should
-      |> be_equal(Response(200, "Ada, Grace"))
-      |> or_fail_with("Expected both names")
+      |> be_equal(output_file.read("guide_queries_index_users"))
+      |> or_fail_with("Expected the output file")
     }),
-    it("step 3: index_users answers 200 for an empty table", fn() {
+    it("step 4: create_user answers as the output file shows", fn() {
       // Act
-      let response =
-        with_users_table(fn(db) { guide_queries_list_users.index_users(db) })
-
-      // Assert
-      response
-      |> should
-      |> be_equal(Response(200, "No users yet"))
-      |> or_fail_with("Expected the empty list message")
-    }),
-    it("step 4: create_user answers 201 with the new id", fn() {
-      // Act
-      let response =
+      let answers =
         with_users_table(fn(db) {
-          guide_queries_create_user.create_user(db, "Ada", "ada@example.com")
-        })
-
-      // Assert
-      response
-      |> should
-      |> be_equal(Response(201, "Created user 1"))
-      |> or_fail_with("Expected 201")
-    }),
-    it("step 4: create_user answers 409 for an email that is taken", fn() {
-      // Act
-      let response =
-        with_users_table(fn(db) {
-          let assert Ok(_first) =
+          let first =
+            guide_queries_create_user.create_user(db, "Ada", "ada@example.com")
+          let second =
+            guide_queries_create_user.create_user(db, "Ada", "ada@example.com")
+          let error =
             guide_queries_sql.create_user(db, "Ada", "ada@example.com")
-          guide_queries_create_user.create_user(db, "Ada", "ada@example.com")
+          [
+            #(
+              "create_user(db, \"Ada\", \"ada@example.com\")",
+              string.inspect(first),
+            ),
+            #(
+              "create_user(db, \"Ada\", \"ada@example.com\")",
+              string.inspect(second),
+            ),
+            #(
+              "sql.create_user(db, \"Ada\", \"ada@example.com\")   // the email is taken",
+              constraint_text(error),
+            ),
+          ]
         })
 
       // Assert
-      response
+      output_file.calls(answers)
       |> should
-      |> be_equal(Response(409, "That email is already taken"))
-      |> or_fail_with("Expected 409")
+      |> be_equal(output_file.read("guide_queries_create_user"))
+      |> or_fail_with("Expected the output file")
     }),
     it("step 5: show_user answers 500 when the table is missing", fn() {
       // Act
@@ -357,7 +356,23 @@ fn with_database_tests() {
 // guide's SQL, with no rows.
 fn with_users_table(run: fn(pog.Connection) -> a) -> a {
   test_database.with_schema(fn(db) {
-    test_database.run_guide_sql(db, guide_path)
+    test_database.run_sql_file(db, users_sql)
     run(db)
   })
+}
+
+// Writes a unique violation as the guide shows it, one field on a line.
+// Any other result is written with `string.inspect`.
+fn constraint_text(result: Result(a, pog.QueryError)) -> String {
+  case result {
+    Error(pog.ConstraintViolated(message:, constraint:, detail:)) ->
+      "Error(ConstraintViolated(\n       message: "
+      <> string.inspect(message)
+      <> ",\n       constraint: "
+      <> string.inspect(constraint)
+      <> ",\n       detail: "
+      <> string.inspect(detail)
+      <> ",\n     ))"
+    other -> string.inspect(other)
+  }
 }

@@ -33,11 +33,9 @@ docs:
 	@gleam docs build
 
 # Start the two test PostgreSQL servers and wait until they accept
-# connections: one with SSL off, one with SSL on
+# connections: one with SSL off, one with SSL on (CI runs the same script)
 db-up:
-	@docker compose up -d --wait postgres postgres-ssl
-	@echo "PostgreSQL 16 accepts connections at postgresql://dream:dream@localhost:5436/dream_test"
-	@echo "PostgreSQL 16 with SSL on accepts connections at postgresql://dream:dream@localhost:5437/dream_test"
+	@sh scripts/db-up.sh
 
 # Stop the two test PostgreSQL servers and remove their containers (they keep
 # no data)

@@ -1,0 +1,11 @@
+start("postgresql://dream:dream@localhost:5436/dream_test")
+  -> Ok(connection)
+
+start("postgresql://dream:wrong-password@localhost:5436/dream_test")
+  -> Error("The database did not answer: ConnectionUnavailable")
+
+start("postgresql://app:p@ss@db.example.com/app")
+  -> Error("DATABASE_URL is not valid: MalformedUrl")
+
+start("postgresql://user:pass@127.0.0.1:<a port where nothing listens>/myapp")
+  -> Error("The database did not answer: ConnectionUnavailable")

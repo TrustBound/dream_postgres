@@ -1,0 +1,3 @@
+from_url("postgresql://dream:dream@localhost:5436/dream_test?application_name=billing")
+SELECT current_setting('application_name')
+  -> "billing"

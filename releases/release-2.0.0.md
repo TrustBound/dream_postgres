@@ -19,10 +19,8 @@ It is a major version because `from_url()` now returns a `Result`. Read the Migr
 
 ### `from_url()` Returns a `Result`
 
-```text
-Before: pub fn from_url(url: String) -> Connection
-After:  pub fn from_url(url: String) -> Result(Connection, FromUrlError)
-```
+- Before: `pub fn from_url(url: String) -> Connection`
+- After: `pub fn from_url(url: String) -> Result(Connection, FromUrlError)`
 
 Before, `from_url()` stopped the calling process with a `let assert` when the pool did not start, so a caller could not handle the failure.
 
@@ -62,7 +60,9 @@ pub fn describe_connection(url: String) -> String {
 
 The `sslmode` query parameter sets the SSL mode. The values are `disable`, `require`, `verify-ca` and `verify-full`. `verify-ca` works the same as `verify-full`: it checks the certificate and the host name, where `libpq` checks only the certificate. The client trusts the CA certificates of the operating system. The connecting guide shows how to trust a private CA. `application_name` sets the PostgreSQL connection parameter with that name in the config, and the server shows that name. Tests on a real PostgreSQL 16 server, with SSL off and with SSL on, assert it. pgo, the driver under Pog, also sends the Erlang node name as `application_name`, and PostgreSQL keeps the last value. So `parse_config` and `connect` put `client_encoding` (`UTF8`, or the value of the config) just before your `application_name`, and pgo then puts its own value before both. A config without an `application_name` sends no `client_encoding`. A config that goes to `pog.supervised` or `pog.start` without `parse_config` or `connect` does not get this order: the connecting guide shows the fix. An IPv6 host such as `[::1]` sets IPv6.
 
-Any other name in the query string goes to the server as a run-time parameter, with its percent-decoded value, in the order of the URL: `?search_path=app&timezone=UTC` sets `search_path` and `timezone` on each connection, and `options` goes to the server as `libpq` sends it. The other `libpq` connection keywords, such as `connect_timeout`, and `database` give `UnsupportedParameter`, because the server cannot apply them. A name one edit from a keyword, such as `sslmod` or `SSLMODE`, gives `UnknownParameterLooksLike(name, keyword)`, so a misspelled `sslmode` never connects without TLS. A name or a value that the server refuses fails at connection time: `from_url` returns `Ok`, and each query returns `pog.ConnectionUnavailable` after about 2 seconds. Only the server log says why.
+Any other name in the query string goes to the server as a run-time parameter, with its percent-decoded value, in the order of the URL: `?search_path=app&timezone=UTC` sets `search_path` and `timezone` on each connection, and `options` goes to the server as `libpq` sends it. The other `libpq` connection keywords, such as `connect_timeout`, and `database` give `UnsupportedParameter`, because the server cannot apply them. A name one edit from a keyword, such as `sslmod` or `SSLMODE`, gives `UnknownParameterLooksLike(name, keyword)`, so a misspelled `sslmode` never connects without TLS. A name or a value that the server refuses fails at connection time: `from_url` returns `Ok`, and each query returns `pog.ConnectionUnavailable` after about 2 seconds. Only the server log says why. A name that starts with `_pq_.` is a protocol option of PostgreSQL, not a setting, so it gives `UnsupportedParameter`. An `application_name` in `options` (`-c application_name=x`) does not show: the server applies the separate parameters after `options`, so it shows the `application_name` parameter or the Erlang node name.
+
+A null byte never reaches the server. pgo writes the user, the database name and the connection parameters as strings that end with a null byte, so the text after a null byte would reach the server as another parameter: the database name `dream_test%00search_path%00evil` connected to `dream_test` with `search_path` set to `evil`. `%00` in a query parameter gives `MalformedUrl`, and `%00` in the user, the password or the database name gives `InvalidUserEncoding`, `InvalidPasswordEncoding` or `InvalidDatabaseEncoding`. `connect` refuses a config with a null byte in the user, the database name, the password or a connection parameter with `actor.InitFailed`, and starts no pool.
 
 ### Its Own Repository
 
@@ -90,7 +90,7 @@ The README is short and links to them, and HexDocs shows the guides.
 
 ## Testing
 
-- 243 tests run, 0 failed, 100.0% line coverage. `make test` takes about 52 seconds, and the test times add up to about 97 seconds, because 4 tests run at a time and the 18 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- 239 tests run, 0 failed, 100.0% line coverage. `make test` takes about 58 seconds, and the test times add up to about 100 seconds, because 4 tests run at a time and the 18 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image): one with SSL off, and one with SSL on and a certificate from a test CA. The SSL tests run each `sslmode` against both, with a matching and a non-matching host name, and with and without the test CA in the CA list
 
 ## Upgrading
@@ -118,7 +118,7 @@ Handle the `Result`, as the example under "What's New" shows.
 
 #### 2. Your URL has parts that `from_url()` does not support
 
-These now give an error: a `libpq` connection keyword other than `sslmode`, `application_name` and `options` (for example `connect_timeout` or `channel_binding`), `database`, a name one edit from a keyword (for example `sslmod`), a `sslmode` other than `disable`, `require`, `verify-ca` or `verify-full`, a fragment, no host, or no database. Remove the unsupported parts from the URL, or use the builder functions for those settings. Every other query parameter, such as `search_path`, goes to the server. A name or a value that the server refuses makes each query return `ConnectionUnavailable`, so call `check` at startup.
+These now give an error: a `libpq` connection keyword other than `sslmode`, `application_name` and `options` (for example `connect_timeout` or `channel_binding`), `database`, a name one edit from a keyword (for example `sslmod`), a `sslmode` other than `disable`, `require`, `verify-ca` or `verify-full`, a fragment, no host, no database, a name that starts with `_pq_.`, and `%00` in the user, the password, the database name or a query parameter. Remove the unsupported parts from the URL, or use the builder functions for those settings. Every other query parameter, such as `search_path`, goes to the server. A name or a value that the server refuses makes each query return `ConnectionUnavailable`, so call `check` at startup.
 
 #### 3. Your app connected only because of the old bugs
 

@@ -19,24 +19,6 @@ jobs:
   test:
     name: Build & Test
     runs-on: ubuntu-latest
-    # Many tests run queries on a real PostgreSQL server. This is the server
-    # of docker-compose.yml: the same image, user, password, database and
-    # port, so the tests use their default URL here too. The server with SSL
-    # on starts in a step after the checkout.
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: dream
-          POSTGRES_PASSWORD: dream
-          POSTGRES_DB: dream_test
-        ports:
-          - 5436:5432
-        options: >-
-          --health-cmd "pg_isready -U dream -d dream_test"
-          --health-interval 1s
-          --health-timeout 5s
-          --health-retries 30
     outputs:
       coverage_message: ${{ steps.coverage_badge.outputs.message }}
       coverage_color: ${{ steps.coverage_badge.outputs.color }}
@@ -83,13 +65,12 @@ jobs:
       - name: Build project
         run: gleam build
 
-      - name: Start the PostgreSQL server with SSL on
-        # The SSL tests need a second server, with the certificates of
-        # test/fixtures/ssl. It isn't a service container: a service starts
-        # before the checkout, so it can't mount those files, and it can't
-        # change the command that starts PostgreSQL. This is the same
-        # command as `make db-up` uses.
-        run: docker compose up -d --wait postgres-ssl
+      - name: Start the PostgreSQL servers
+        # The tests run queries on two real PostgreSQL servers: a plain one
+        # and one with SSL on and the certificates of test/fixtures/ssl.
+        # scripts/db-up.sh starts both from docker-compose.yml, the same as
+        # `make db-up`. The docs show lines of that script and of that file.
+        run: sh scripts/db-up.sh
 
       - name: Run tests
         env:

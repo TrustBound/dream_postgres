@@ -2,7 +2,7 @@
 # both with `make db-down`. They keep no data: each start gives an empty
 # database.
 #
-# CI starts both servers with the same `docker compose up` command as
+# CI starts both servers with scripts/db-up.sh, the script of
 # `make db-up` (see .github/workflows/ci.yml). A service container of
 # GitHub Actions can't do it: it starts before the checkout, so it can't
 # mount the certificates of test/fixtures/ssl, and it can't change the

@@ -1,0 +1,8 @@
+created_response(Ok(pog.Returned(count: 1, rows: [CreateUserRow(7)])))
+  -> Response(201, "Created user 7")
+
+created_response(Error(pog.ConstraintViolated(constraint: "users_email_key", ..)))
+  -> Response(409, "That email is already taken")
+
+created_response(Error(pog.ConstraintViolated(constraint: "users_name_check", ..)))
+  -> Response(500, "Internal server error")

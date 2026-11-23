@@ -617,6 +617,39 @@ fn parse_config_error_tests() {
       |> be_equal(Error(postgres.InvalidDatabaseEncoding))
       |> or_fail_with("Expected Error(InvalidDatabaseEncoding)")
     }),
+    it(
+      "returns the encoding error of the part for %00 in the user, the password or the database",
+      fn() {
+        // Act
+        let results = [
+          postgres.parse_config(
+            process.new_name("client_test_pool"),
+            "postgresql://us%00er:secret@localhost/myapp",
+          )
+            |> result.replace(Nil),
+          postgres.parse_config(
+            process.new_name("client_test_pool"),
+            "postgresql://user:sec%00ret@localhost/myapp",
+          )
+            |> result.replace(Nil),
+          postgres.parse_config(
+            process.new_name("client_test_pool"),
+            "postgresql://localhost/my%00app",
+          )
+            |> result.replace(Nil),
+        ]
+
+        // Assert
+        results
+        |> should
+        |> be_equal([
+          Error(postgres.InvalidUserEncoding),
+          Error(postgres.InvalidPasswordEncoding),
+          Error(postgres.InvalidDatabaseEncoding),
+        ])
+        |> or_fail_with("Expected the encoding error of each part")
+      },
+    ),
     it("returns UnsupportedParameter with the parameter name", fn() {
       // Arrange
       let pool_name = process.new_name("client_test_pool")
@@ -935,6 +968,16 @@ fn query_parameter_tests() {
       |> should
       |> be_equal([Error(postgres.MalformedUrl), Error(postgres.MalformedUrl)])
       |> or_fail_with("Expected MalformedUrl for each %00")
+    }),
+    it("returns UnsupportedParameter for a _pq_. protocol option", fn() {
+      // Act
+      let config = parse_query("?_pq_.dream=1")
+
+      // Assert
+      config
+      |> should
+      |> be_equal(Error(postgres.UnsupportedParameter("_pq_.dream")))
+      |> or_fail_with("Expected Error(UnsupportedParameter('_pq_.dream'))")
     }),
   ])
 }

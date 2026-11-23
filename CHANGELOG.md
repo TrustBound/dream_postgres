@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `application_name` and `options` (for example `connect_timeout`),
   `database`, a name one edit from a keyword (for example `sslmod`), a
   `sslmode` other than `disable`, `require`, `verify-ca` or `verify-full`, a
-  fragment, no host or no database now give an error. Upgrade: remove the unsupported parts from the URL, or use the
+  fragment, no host, no database, a name that starts with `_pq_.` and `%00` in
+  the user, the password, the database name or a query parameter now give
+  an error. Upgrade: remove the unsupported parts from the URL, or use the
   builder functions for those settings.
 
 ### Changed
@@ -31,7 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Connecting to PostgreSQL in production, and Running queries and handling
   their results. Each guide walks through a task from start to finish, with
   tested code, the failure cases, a test and the common pitfalls. The README
-  is short and links to them, and HexDocs shows the guides.
+  is short and links to them, and HexDocs shows the guides. Each output
+  block of the guides is a file in `test/outputs/` that a test compares
+  with the real output, and the SQL, the `docker-compose.yml` service and
+  the commands are copies of the files that the tests and CI use.
 
 ### Added
 - `postgres.parse_config(pool_name, url) -> Result(Config, UrlError)` reads
@@ -79,7 +84,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   misspelled `sslmode` never connects without TLS. A name or a value that
   the server refuses (for example `serach_path` or `timezone=Mars%2FPhobos`)
   fails at connection time: each query returns `pog.ConnectionUnavailable`
-  after about 2 seconds, and only the server log says why.
+  after about 2 seconds, and only the server log says why. A name that
+  starts with `_pq_.` is a protocol option of PostgreSQL, not a setting, so
+  it gives `UnsupportedParameter`. An `application_name` in `options`
+  (`-c application_name=x`) does not show: the server applies the separate
+  parameters after `options`, so it shows the `application_name` parameter
+  or the Erlang node name.
+- A null byte never reaches the server. pgo writes the user, the database
+  name and the connection parameters as strings that end with a null byte,
+  so the text after a null byte would reach the server as another
+  parameter: the database name `dream_test%00search_path%00evil` connected
+  to `dream_test` with `search_path` set to `evil`. `%00` in a query
+  parameter name or value gives `MalformedUrl`, and `%00` in the user, the
+  password or the database name gives `InvalidUserEncoding`,
+  `InvalidPasswordEncoding` or `InvalidDatabaseEncoding`. `connect` refuses
+  a config with a null byte in the user, the database name, the password or
+  a connection parameter with `actor.InitFailed`, and starts no pool. A
+  config that goes to `pog.start` or `pog.supervised` without `connect` or
+  `parse_config` does not get this check.
 
 ### Fixed
 - `postgres.from_url()` read the user and the password wrongly. For
@@ -93,7 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 243 tests, 0 failed, 100.0% line coverage. `make test` takes about 52 seconds, and the test times add up to about 97 seconds, because 4 tests run at a time. The 18 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- 239 tests, 0 failed, 100.0% line coverage. `make test` takes about 58 seconds, and the test times add up to about 100 seconds, because 4 tests run at a time. The 18 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image), started with `make db-up`. One has SSL off. It runs as a service container in CI. The other has SSL on, with a test CA and a server certificate from `test/fixtures/ssl`. CI starts it with `docker compose`.
 
 ## [1.0.2] - 2025-11-21

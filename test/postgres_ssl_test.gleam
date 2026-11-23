@@ -9,6 +9,7 @@ import dream_test/matchers.{be_between, be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/clock
+import fixtures/output_file
 import fixtures/ssl_database.{matching_host, other_address, url}
 import fixtures/test_database
 import gleam/list
@@ -153,9 +154,9 @@ fn untrusted_ca_tests() {
 
       // Assert
       list.first(alerts)
-      |> result.map(level_and_alert)
+      |> result.map(level_and_guide_line)
       |> should
-      |> be_equal(Ok(#("notice", "Fatal - Unknown CA")))
+      |> be_equal(Ok(#("notice", tls_notice_of_guide(0))))
       |> or_fail_with("Expected an Unknown CA notice")
     }),
     it("verify-full gives the error after about 2 seconds", fn() {
@@ -212,14 +213,9 @@ fn trusted_ca_tests() {
 
       // Assert
       list.first(alerts)
-      |> result.map(level_and_alert)
+      |> result.map(level_and_guide_line)
       |> should
-      |> be_equal(
-        Ok(#(
-          "notice",
-          "Fatal - Bad Certificate, - {bad_cert,{hostname_check_failed,{requested,\"127.0.0.1\"},{received,[{dNSName,\"localhost\"}]}}}",
-        )),
-      )
+      |> be_equal(Ok(#("notice", tls_notice_of_guide(1))))
       |> or_fail_with("Expected a Bad Certificate notice")
     }),
     it(
@@ -321,13 +317,35 @@ fn ssl_with_test_ca(
   |> result.map(test_database.texts(_, ssl_sql))
 }
 
-// Keeps the level of a TLS alert report and the text after
-// "CLIENT ALERT: ". The text before it names a line of OTP's source, which
-// changes from one OTP release to the next.
-fn level_and_alert(alert: #(String, String)) -> #(String, String) {
+// Keeps the level of a TLS alert report, and writes its text as the
+// connecting guide shows it: `...` in place of the text between
+// "TLS client: " and " generated CLIENT ALERT: ", which names a line of
+// OTP's source and changes from one OTP release to the next.
+fn level_and_guide_line(alert: #(String, String)) -> #(String, String) {
   let #(level, text) = alert
-  case string.split_once(text, "CLIENT ALERT: ") {
-    Ok(#(_before, reason)) -> #(level, reason)
-    Error(Nil) -> #(level, text)
+  #(level, guide_line(text))
+}
+
+fn guide_line(text: String) -> String {
+  case string.split_once(text, " generated CLIENT ALERT: ") {
+    Ok(#(before, reason)) -> hide_source_line(text, before, reason)
+    Error(Nil) -> text
   }
+}
+
+fn hide_source_line(text: String, before: String, reason: String) -> String {
+  case string.starts_with(before, "TLS client: ") {
+    True -> "TLS client: ... generated CLIENT ALERT: " <> reason
+    False -> text
+  }
+}
+
+// Gives the line at `index` (from 0) of the output file of the TLS notices
+// that the connecting guide shows.
+fn tls_notice_of_guide(index: Int) -> String {
+  output_file.read("guide_connecting_tls_notices")
+  |> string.split("\n")
+  |> list.drop(index)
+  |> list.first()
+  |> result.unwrap("")
 }

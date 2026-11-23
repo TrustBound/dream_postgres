@@ -303,6 +303,11 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// - `Ok(Connection)`: The pool process started
 /// - `Error(StartError)`: The pool process did not start, for example
 ///   because a pool with the same name runs
+/// - `Error(actor.InitFailed(message))`: The user, the database name, the
+///   password or a connection parameter holds a null byte (`"\u{0}"`), and
+///   no pool starts. The driver would end the text at the null byte and
+///   send the rest to the server as another parameter. The message names
+///   the part, never its value.
 ///
 /// The pool connects to the database in the background. So this function
 /// returns `Ok` at once also when no database listens at the host and port,
@@ -341,10 +346,45 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// }
 /// ```
 pub fn connect(config: Config) -> Result(Connection, actor.StartError) {
+  use Nil <- result.try(refuse_null_bytes(config))
   config
   |> order_connection_parameters()
   |> pog.start()
   |> result.map(extract_connection_from_started)
+}
+
+// pgo, the driver under Pog, writes the user, the database name and the
+// connection parameters into the startup packet as strings that end with a
+// null byte. So a null byte in one of them ends that string early, and the
+// server reads the rest as the next name or value: a database name of
+// "app\u{0}search_path\u{0}evil" sets `search_path`. A PostgreSQL name or
+// password is SQL text, which cannot hold a null byte, so no correct config
+// has one in these parts.
+fn refuse_null_bytes(config: Config) -> Result(Nil, actor.StartError) {
+  let parts = [
+    #("the user", config.user),
+    #("the database name", config.database),
+    #("the password", option.unwrap(config.password, "")),
+    ..list.flat_map(config.connection_parameters, parameter_parts)
+  ]
+  case list.find(parts, holds_null_byte) {
+    Ok(#(part, _value)) ->
+      Error(actor.InitFailed(
+        part <> " holds a null byte, which PostgreSQL cannot take",
+      ))
+    Error(Nil) -> Ok(Nil)
+  }
+}
+
+fn parameter_parts(parameter: #(String, String)) -> List(#(String, String)) {
+  [
+    #("a connection parameter", parameter.0),
+    #("a connection parameter", parameter.1),
+  ]
+}
+
+fn holds_null_byte(part: #(String, String)) -> Bool {
+  string.contains(part.1, "\u{0}")
 }
 
 fn extract_connection_from_started(
@@ -378,17 +418,23 @@ pub type UrlError {
   InvalidDatabase(path: String)
   /// The URL has a password but no user name, for example `:secret@host`.
   MissingUser
-  /// The user name has a bad percent-encoding, for example `%zz`.
+  /// The user name has a bad percent-encoding, for example `%zz`, or holds
+  /// `%00`. PostgreSQL names cannot hold a null byte, and the driver would
+  /// read the text after it as another connection parameter.
   InvalidUserEncoding
-  /// The password has a bad percent-encoding, for example `%zz`.
+  /// The password has a bad percent-encoding, for example `%zz`, or holds
+  /// `%00`. A PostgreSQL password cannot hold a null byte.
   InvalidPasswordEncoding
-  /// The database name has a bad percent-encoding, for example `%zz`.
+  /// The database name has a bad percent-encoding, for example `%zz`, or
+  /// holds `%00`. PostgreSQL names cannot hold a null byte, and the driver
+  /// would read the text after it as another connection parameter.
   InvalidDatabaseEncoding
   /// The query string has a `libpq` connection keyword that this package
   /// does not read, for example `connect_timeout`, `channel_binding`,
   /// `user` or `client_encoding`, or `database`, which the path of the URL
   /// sets. The server cannot apply these, so they are not sent to it. An
-  /// empty name also gives this error.
+  /// empty name also gives this error, and so does a name that starts with
+  /// `_pq_.`, which PostgreSQL reads as a protocol option, not a setting.
   UnsupportedParameter(name: String)
   /// The query string has a name that is not a `libpq` connection keyword
   /// but is at most one edit from one: one character added, removed or
@@ -427,7 +473,7 @@ pub type FromUrlError {
 ///
 /// ## URL Format
 ///
-/// ```text
+/// ```text illustration
 /// postgresql://user:password@host:port/database?parameter=value
 /// ```
 ///
@@ -435,15 +481,21 @@ pub type FromUrlError {
 /// - `user` and `password` are optional and percent-decoded, so a password
 ///   can hold `@`, `:` or `/` when you encode them as `%40`, `%3A` and `%2F`.
 ///   The password starts after the first `:`. Without a user, the config
-///   keeps the default user `postgres`.
+///   keeps the default user `postgres`. `%00` in the user or the password
+///   gives `InvalidUserEncoding` or `InvalidPasswordEncoding`.
 /// - `host` is required. An IPv6 host such as `[::1]` sets IPv6.
 /// - `port` is optional and defaults to 5432.
-/// - `database` is required and percent-decoded.
+/// - `database` is required and percent-decoded. `%00` in it gives
+///   `InvalidDatabaseEncoding`.
 /// - Query parameters: `sslmode` (`disable`, `require`, `verify-ca`,
 ///   `verify-full`) sets the SSL mode. `application_name` and `options` go
-///   to the server. The other `libpq` connection keywords, such as
-///   `connect_timeout`, and `database` give `UnsupportedParameter(name)`,
-///   because the server cannot apply them. A name one edit from a keyword,
+///   to the server. An `application_name` in `options`
+///   (`-c application_name=x`) does not show, because the server applies
+///   the separate parameters after `options` and the driver always sends
+///   one: use the `application_name` parameter. The other `libpq` connection
+///   keywords, such as `connect_timeout`, `database` and a name that starts
+///   with `_pq_.` give `UnsupportedParameter(name)`, because the server
+///   cannot apply them. A name one edit from a keyword,
 ///   such as `sslmod`, gives `UnknownParameterLooksLike(name, keyword)`.
 ///   Every other name, such as `search_path` or `timezone`, goes to the
 ///   server as a run-time parameter, with its percent-decoded value. Of two
@@ -756,9 +808,7 @@ fn decode_database_name(
 ) -> Result(String, UrlError) {
   case string.contains(encoded_name, "/") {
     True -> Error(InvalidDatabase(path))
-    False ->
-      uri.percent_decode(encoded_name)
-      |> result.replace_error(InvalidDatabaseEncoding)
+    False -> decode_part(encoded_name, InvalidDatabaseEncoding)
   }
 }
 
@@ -813,15 +863,33 @@ fn apply_user(
 fn decode_user(encoded_user: String) -> Result(String, UrlError) {
   case encoded_user {
     "" -> Error(MissingUser)
-    _ ->
-      uri.percent_decode(encoded_user)
-      |> result.replace_error(InvalidUserEncoding)
+    _ -> decode_part(encoded_user, InvalidUserEncoding)
   }
 }
 
 fn decode_password(encoded_password: String) -> Result(String, UrlError) {
-  uri.percent_decode(encoded_password)
-  |> result.replace_error(InvalidPasswordEncoding)
+  decode_part(encoded_password, InvalidPasswordEncoding)
+}
+
+// Percent-decodes the user, the password or the database name. A decoded
+// null byte gives `error` too: the driver sends each of them as a string
+// that ends with a null byte, so the rest would reach the server as another
+// parameter (see `refuse_null_bytes`).
+fn decode_part(encoded: String, error: UrlError) -> Result(String, UrlError) {
+  case uri.percent_decode(encoded) {
+    Ok(decoded) -> refuse_decoded_null_byte(decoded, error)
+    Error(Nil) -> Error(error)
+  }
+}
+
+fn refuse_decoded_null_byte(
+  decoded: String,
+  error: UrlError,
+) -> Result(String, UrlError) {
+  case string.contains(decoded, "\u{0}") {
+    True -> Error(error)
+    False -> Ok(decoded)
+  }
 }
 
 fn apply_query(
@@ -865,10 +933,7 @@ fn apply_named_parameter(
   name: String,
   value: String,
 ) -> Result(Config, UrlError) {
-  case
-    list.contains(passed_keywords, name),
-    list.contains(refused_names, name)
-  {
+  case list.contains(passed_keywords, name), is_refused_name(name) {
     True, _ -> Ok(append_connection_parameter(config, name, value))
     False, True -> Error(UnsupportedParameter(name))
     False, False -> apply_server_parameter(config, name, value)
@@ -932,6 +997,13 @@ const refused_names = [
   "oauth_issuer", "oauth_client_id", "oauth_client_secret", "oauth_scope",
   "database", "",
 ]
+
+// A name that starts with `_pq_.` is a protocol option of PostgreSQL, not a
+// server parameter. The server refuses one that it does not know and closes
+// the connection, so the URL is refused here, where the error names it.
+fn is_refused_name(name: String) -> Bool {
+  list.contains(refused_names, name) || string.starts_with(name, "_pq_.")
+}
 
 // Gives the first keyword that the lower-case name is at most one edit
 // from: one character added, removed or changed, or two characters next to

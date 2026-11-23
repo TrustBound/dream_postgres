@@ -31,6 +31,8 @@ pub fn tests() -> TestSuite {
     application_name_tests(),
     url_parameter_tests(),
     parameter_permission_tests(),
+    null_byte_tests(),
+    protocol_option_tests(),
   ])
 }
 
@@ -970,6 +972,238 @@ fn parameter_permission_tests() {
       },
     ),
   ])
+}
+
+// A decoded null byte ends a string of the startup packet, so the text
+// after it would be read as another parameter: `search_path=evil` below.
+fn null_byte_tests() {
+  group("a null byte never reaches the startup packet", [
+    it("%00 in the user of the URL gives InvalidUserEncoding", fn() {
+      // Arrange
+      let config = test_database.config()
+      let url =
+        test_database.url_for(
+          user: config.user <> "%00search_path%00evil",
+          password: "dream",
+          database: config.database,
+        )
+
+      // Act
+      let path = from_full_url_and_select(url, search_path_query)
+
+      // Assert
+      path
+      |> should
+      |> be_equal(Error(postgres.InvalidUrl(postgres.InvalidUserEncoding)))
+      |> or_fail_with("Expected InvalidUserEncoding, not search_path evil")
+    }),
+    it(
+      "%00 in the database name of the URL gives InvalidDatabaseEncoding",
+      fn() {
+        // Arrange
+        let config = test_database.config()
+        let url =
+          test_database.url_for(
+            user: config.user,
+            password: "dream",
+            database: config.database <> "%00search_path%00evil",
+          )
+
+        // Act
+        let path = from_full_url_and_select(url, search_path_query)
+
+        // Assert
+        path
+        |> should
+        |> be_equal(
+          Error(postgres.InvalidUrl(postgres.InvalidDatabaseEncoding)),
+        )
+        |> or_fail_with(
+          "Expected InvalidDatabaseEncoding, not search_path evil",
+        )
+      },
+    ),
+    it("%00 in the password of the URL gives InvalidPasswordEncoding", fn() {
+      // Arrange
+      let config = test_database.config()
+      let url =
+        test_database.url_for(
+          user: config.user,
+          password: "dream%00",
+          database: config.database,
+        )
+
+      // Act
+      let checked = check_url(url).result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Error(postgres.InvalidUrl(postgres.InvalidPasswordEncoding)))
+      |> or_fail_with("Expected InvalidPasswordEncoding")
+    }),
+    it("connect refuses a user with a null byte", fn() {
+      // Arrange
+      let config =
+        test_database.config()
+        |> postgres.user("dream\u{0}search_path\u{0}evil")
+
+      // Act
+      let path = connect_and_select(config, search_path_query)
+
+      // Assert
+      path
+      |> should
+      |> be_equal(
+        Error(actor.InitFailed(
+          "the user holds a null byte, which PostgreSQL cannot take",
+        )),
+      )
+      |> or_fail_with("Expected InitFailed, not search_path evil")
+    }),
+    it("connect refuses a database name with a null byte", fn() {
+      // Arrange
+      let config =
+        test_database.config()
+        |> postgres.database("dream_test\u{0}search_path\u{0}evil")
+
+      // Act
+      let path = connect_and_select(config, search_path_query)
+
+      // Assert
+      path
+      |> should
+      |> be_equal(
+        Error(actor.InitFailed(
+          "the database name holds a null byte, which PostgreSQL cannot take",
+        )),
+      )
+      |> or_fail_with("Expected InitFailed, not search_path evil")
+    }),
+    it("connect refuses a password with a null byte", fn() {
+      // Arrange
+      let config =
+        test_database.config()
+        |> postgres.password("dream\u{0}")
+
+      // Act
+      let checked = {
+        use <- test_database.with_own_pools()
+        config
+        |> postgres.pool_size(1)
+        |> postgres.connect()
+        |> result.map(postgres.check)
+      }
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(
+        Error(actor.InitFailed(
+          "the password holds a null byte, which PostgreSQL cannot take",
+        )),
+      )
+      |> or_fail_with("Expected InitFailed")
+    }),
+    it("connect refuses a connection parameter with a null byte", fn() {
+      // Arrange
+      let config =
+        test_database.config()
+        |> pog.connection_parameter(
+          name: "application_name",
+          value: "billing\u{0}search_path\u{0}evil",
+        )
+
+      // Act
+      let path = connect_and_select(config, search_path_query)
+
+      // Assert
+      path
+      |> should
+      |> be_equal(
+        Error(actor.InitFailed(
+          "a connection parameter holds a null byte, which PostgreSQL cannot take",
+        )),
+      )
+      |> or_fail_with("Expected InitFailed, not search_path evil")
+    }),
+  ])
+}
+
+fn protocol_option_tests() {
+  group("protocol options and options", [
+    it("a _pq_. name in the URL gives UnsupportedParameter", fn() {
+      // Act
+      let checked = check_url(test_database.url() <> "?_pq_.dream=1").result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(
+        Error(postgres.InvalidUrl(postgres.UnsupportedParameter("_pq_.dream"))),
+      )
+      |> or_fail_with("Expected UnsupportedParameter(\"_pq_.dream\")")
+    }),
+    it("application_name in options alone loses to the Erlang node name", fn() {
+      // Act
+      let name =
+        from_url_and_select(
+          "?options=-c%20application_name%3Doptions_name",
+          application_name_query,
+        )
+
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok(Ok(["nonode@nohost"])))
+      |> or_fail_with("Expected the Erlang node name")
+    }),
+    it(
+      "application_name in the URL wins over application_name in options",
+      fn() {
+        // Act
+        let name =
+          from_url_and_select(
+            "?options=-c%20application_name%3Doptions_name&application_name=billing",
+            application_name_query,
+          )
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application_name parameter")
+      },
+    ),
+    it(
+      "application_name in the URL wins over application_name in options that come after it",
+      fn() {
+        // Act
+        let name =
+          from_url_and_select(
+            "?application_name=billing&options=-c%20application_name%3Doptions_name",
+            application_name_query,
+          )
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application_name parameter")
+      },
+    ),
+  ])
+}
+
+// Starts a pool from `url`, runs `sql` (a query that returns one text
+// column) and stops the pool.
+fn from_full_url_and_select(
+  url: String,
+  sql: String,
+) -> Result(Result(List(String), pog.QueryError), postgres.FromUrlError) {
+  use <- test_database.with_own_pools()
+  postgres.from_url(url)
+  |> result.map(test_database.texts(_, sql))
 }
 
 // Starts a pool from the test server URL with the query string `query`,
