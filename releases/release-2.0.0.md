@@ -12,6 +12,7 @@ It is a major version because `from_url()` now returns a `Result`. Read the Migr
 - **The user and the password come from the URL**: `postgresql://user:pass@localhost:5432/myapp` now connects as `user` with the password `pass`
 - **`sslmode` and `application_name` work**: the query string no longer becomes a part of the database name
 - **New `parse_config`**: read a URL into a `Config` and do not connect
+- **New `check`**: stop at startup when the database does not answer
 - **Its own repository**: `dream_postgres` now lives at [TrustBound/dream_postgres](https://github.com/TrustBound/dream_postgres), with its own version and its own releases
 
 ## What's New
@@ -53,6 +54,10 @@ pub fn describe_connection(url: String) -> String {
 
 `postgres.parse_config(pool_name, url) -> Result(Config, UrlError)` reads a connection URL into a `Config` and does not connect. Use it to check a URL at startup, or to change a setting with the builder functions before you connect.
 
+### `check`
+
+`postgres.check(connection) -> Result(Nil, QueryError)` runs `SELECT 1` on the connection. It gives `Ok(Nil)` when the database answers, or the error of the query when it does not. `connect` and `from_url` return `Ok` before the pool connects, so an app calls `check` after them to stop at startup, not at the first request. When no database listens, the password is wrong, the database does not exist or the pool size is 0, the error is `pog.ConnectionUnavailable`, after about 2 seconds. The getting started guide shows how to combine the errors of `from_url` and `check` in one startup error type.
+
 ### `sslmode`, `application_name` and IPv6
 
 The `sslmode` query parameter sets the SSL mode. The values are `disable`, `require`, `verify-ca` and `verify-full`. `verify-ca` works the same as `verify-full`: it checks the certificate and the host name, where `libpq` checks only the certificate. The client trusts the CA certificates of the operating system. The connecting guide shows how to trust a private CA. `application_name` sets the PostgreSQL connection parameter with that name in the config. With Pog 4.1, the server does not see it: pgo, the driver under Pog, sends the Erlang node name as `application_name` after it, and PostgreSQL keeps the last value. An IPv6 host such as `[::1]` sets IPv6.
@@ -83,7 +88,7 @@ The README is short and links to them, and HexDocs shows the guides.
 
 ## Testing
 
-- 183 tests run, 0 failed, 100.0% line coverage. `make test` takes about 39 seconds, and the test times add up to about 60 seconds, because 4 tests run at a time and the 16 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- 195 tests run, 0 failed, 100.0% line coverage. `make test` takes about 45 seconds, and the test times add up to about 77 seconds, because 4 tests run at a time and the 17 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image): one with SSL off, and one with SSL on and a certificate from a test CA. The SSL tests run each `sslmode` against both, with a matching and a non-matching host name, and with and without the test CA in the CA list
 
 ## Upgrading

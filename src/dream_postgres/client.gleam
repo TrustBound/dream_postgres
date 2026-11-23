@@ -293,13 +293,22 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 ///
 /// ## Returns
 ///
-/// - `Ok(Connection)`: Successfully started the pool
-/// - `Error(StartError)`: Failed to start (e.g., connection refused, invalid config)
+/// - `Ok(Connection)`: The pool process started
+/// - `Error(StartError)`: The pool process did not start, for example
+///   because a pool with the same name runs
+///
+/// The pool connects to the database in the background. So this function
+/// returns `Ok` at once also when no database listens at the host and port,
+/// when the password is wrong, when the database does not exist, and for a
+/// pool size of 0. The failure shows on the first query: it returns
+/// `Error(pog.ConnectionUnavailable)` after about 2 seconds. Call `check`
+/// after `connect` to stop at startup when the database does not answer.
 ///
 /// ## See Also
 ///
 /// - `new`: make the config
 /// - `from_url`: read a URL and start the pool in one step
+/// - `check`: make sure that the database answers
 ///
 /// ## Example
 ///
@@ -368,8 +377,10 @@ pub type UrlError {
   /// The query string has a parameter that this package does not support.
   /// Only `sslmode` and `application_name` are supported.
   UnsupportedParameter(name: String)
-  /// The `sslmode` value has no exact equivalent in the pool settings.
-  /// Use `disable`, `require`, `verify-ca` or `verify-full`.
+  /// The `sslmode` value is not one that this package reads. Use `disable`,
+  /// `require`, `verify-ca` or `verify-full`. `verify-ca` is not an exact
+  /// equivalent of the `libpq` mode: here `verify-ca` and `verify-full` both
+  /// check the certificate and the host name.
   UnsupportedSslMode(mode: String)
   /// The URL has a fragment (a `#` part). PostgreSQL URLs do not use one.
   UnsupportedFragment
@@ -471,7 +482,8 @@ pub fn parse_config(
 ///
 /// The pool connects to the database in the background. When no database
 /// listens at the URL, this function still returns `Ok`, and each query on
-/// the connection returns `Error(pog.ConnectionUnavailable)`.
+/// the connection returns `Error(pog.ConnectionUnavailable)`. Call `check`
+/// after `from_url` to stop at startup when the database does not answer.
 ///
 /// See `parse_config` for the URL format and the supported query parameters.
 ///
@@ -492,6 +504,7 @@ pub fn parse_config(
 ///
 /// - `parse_config`: read a URL without starting a pool
 /// - `connect`: start the pool from a config
+/// - `check`: make sure that the database answers
 ///
 /// ## Example
 ///
@@ -521,6 +534,50 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
   // `pog.start` reports every start failure as `actor.InitExited`, and the
   // exit reason can hold the password, so it is not kept.
   |> result.replace_error(PoolStartExited)
+}
+
+/// Make sure that the database answers
+///
+/// Runs `SELECT 1` on the connection. `connect` and `from_url` return `Ok`
+/// before the pool connects, so call this function after them to find a
+/// database that does not answer at startup, not at the first request.
+///
+/// ## Parameters
+///
+/// - `connection`: The connection from `connect` or `from_url`
+///
+/// ## Returns
+///
+/// - `Ok(Nil)`: The database answered
+/// - `Error(QueryError)`: The error of the query. When no database listens
+///   at the host and port, the password is wrong, the database does not
+///   exist or the pool size is 0, the error is `pog.ConnectionUnavailable`,
+///   after about 2 seconds.
+///
+/// ## See Also
+///
+/// - `from_url`: read a URL and start the pool in one step
+/// - `connect`: start the pool from a config
+///
+/// ## Example
+///
+/// ### Check that the database answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_check.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/string
+///
+/// pub fn describe_database(connection: postgres.Connection) -> String {
+///   case postgres.check(connection) {
+///     Ok(Nil) -> "The database answers"
+///     Error(error) -> "The database did not answer: " <> string.inspect(error)
+///   }
+/// }
+/// ```
+pub fn check(connection: Connection) -> Result(Nil, QueryError) {
+  pog.query("SELECT 1")
+  |> pog.execute(connection)
+  |> result.replace(Nil)
 }
 
 // Private URL parsing - flat functions, no nesting

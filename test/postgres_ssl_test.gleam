@@ -4,6 +4,7 @@
 //// Some tests change the CA list of the whole BEAM with
 //// `public_key:cacerts_load`, so this suite runs one test at a time.
 
+import dream_postgres/client as postgres
 import dream_test/matchers.{be_between, be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -55,6 +56,20 @@ fn require_tests() {
       |> should
       |> be_equal(Ok(Ok(["true"])))
       |> or_fail_with("Expected a connection with TLS")
+    }),
+    it("check gives Ok(Nil)", fn() {
+      // Act
+      let checked = {
+        use <- test_database.with_own_pools()
+        postgres.from_url(url(host: matching_host, sslmode: "require"))
+        |> result.map(postgres.check)
+      }
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Ok(Nil)))
+      |> or_fail_with("Expected Ok(Nil) from check over TLS")
     }),
     it("connects with TLS 1.3", fn() {
       // Act

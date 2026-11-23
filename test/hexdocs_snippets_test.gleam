@@ -9,9 +9,12 @@ import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/database_url
+import fixtures/test_database
 import gleam/erlang/process
 import gleam/option.{Some}
+import gleam/result
 import pog
+import snippets/client_check
 import snippets/client_connect
 import snippets/client_database
 import snippets/client_from_url
@@ -178,6 +181,37 @@ fn client_tests() {
       |> be_equal("Invalid URL: MissingDatabase")
       |> or_fail_with("Expected Invalid URL: MissingDatabase")
     }),
+    it("client_check.describe_database says the database answers", fn() {
+      // Act
+      let description = {
+        use <- test_database.with_own_pools()
+        postgres.from_url(test_database.url())
+        |> result.map(client_check.describe_database)
+      }
+
+      // Assert
+      description
+      |> should
+      |> be_equal(Ok("The database answers"))
+      |> or_fail_with("Expected The database answers")
+    }),
+    it(
+      "client_check.describe_database gives ConnectionUnavailable when no database listens",
+      fn() {
+        // Act
+        let description = {
+          use <- test_database.with_own_pools()
+          postgres.from_url(database_url.unused_database_url())
+          |> result.map(client_check.describe_database)
+        }
+
+        // Assert
+        description
+        |> should
+        |> be_equal(Ok("The database did not answer: ConnectionUnavailable"))
+        |> or_fail_with("Expected ConnectionUnavailable")
+      },
+    ),
   ])
 }
 

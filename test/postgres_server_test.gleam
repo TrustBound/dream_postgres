@@ -9,11 +9,13 @@ import dream_test/matchers.{be_between, be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/clock
+import fixtures/database_url
 import fixtures/test_database
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/otp/actor
 import gleam/result
 import pog
 import snippets/guide_getting_started_startup.{describe as describe_error, start}
@@ -21,6 +23,7 @@ import snippets/guide_getting_started_startup.{describe as describe_error, start
 pub fn tests() -> TestSuite {
   describe("a real PostgreSQL 16 server", [
     startup_check_tests(),
+    check_tests(),
     query_error_tests(),
     pool_tests(),
     connection_setting_tests(),
@@ -118,6 +121,107 @@ fn startup_check_tests() {
       // Act
       let _started = start_and_describe(url)
       let elapsed = clock.now_in_milliseconds() - started_at
+
+      // Assert
+      elapsed
+      |> should
+      |> be_between(1500, 3500)
+      |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
+    }),
+  ])
+}
+
+fn check_tests() {
+  group("check", [
+    it("gives Ok(Nil) when the server answers", fn() {
+      // Act
+      let checked = {
+        use <- test_database.with_own_pools()
+        postgres.from_url(test_database.url())
+        |> result.map(postgres.check)
+      }
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Ok(Nil)))
+      |> or_fail_with("Expected Ok(Nil) from check")
+    }),
+    it("gives ConnectionUnavailable for a wrong password", fn() {
+      // Act
+      let checked = check_url(wrong_password_url()).result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected ConnectionUnavailable for a wrong password")
+    }),
+    it("gives the wrong-password error after about 2 seconds", fn() {
+      // Act
+      let elapsed = check_url(wrong_password_url()).elapsed
+
+      // Assert
+      elapsed
+      |> should
+      |> be_between(1500, 3500)
+      |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
+    }),
+    it("gives ConnectionUnavailable for a database that does not exist", fn() {
+      // Act
+      let checked = check_url(missing_database_url()).result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected ConnectionUnavailable for a wrong database")
+    }),
+    it("gives the missing-database error after about 2 seconds", fn() {
+      // Act
+      let elapsed = check_url(missing_database_url()).elapsed
+
+      // Assert
+      elapsed
+      |> should
+      |> be_between(1500, 3500)
+      |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
+    }),
+    it("gives ConnectionUnavailable for a port with no listener", fn() {
+      // Act
+      let checked = check_url(database_url.unused_database_url()).result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with(
+        "Expected ConnectionUnavailable for a port with no listener",
+      )
+    }),
+    it("gives the no-listener error after about 2 seconds", fn() {
+      // Act
+      let elapsed = check_url(database_url.unused_database_url()).elapsed
+
+      // Assert
+      elapsed
+      |> should
+      |> be_between(1500, 3500)
+      |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
+    }),
+    it("gives ConnectionUnavailable for pool_size(0)", fn() {
+      // Act
+      let checked = check_empty_pool().result
+
+      // Assert
+      checked
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected ConnectionUnavailable for pool_size(0)")
+    }),
+    it("gives the pool_size(0) error after about 2 seconds", fn() {
+      // Act
+      let elapsed = check_empty_pool().elapsed
 
       // Assert
       elapsed
@@ -353,6 +457,56 @@ fn start_and_describe(url: String) -> Result(Nil, String) {
   start(url)
   |> result.replace(Nil)
   |> result.map_error(describe_error)
+}
+
+type TimedCheck(start_error) {
+  TimedCheck(
+    result: Result(Result(Nil, pog.QueryError), start_error),
+    elapsed: Int,
+  )
+}
+
+// Starts a pool from `url`, runs `postgres.check` on it and stops the pool.
+// Gives the answer and the time in milliseconds from the start of the pool
+// until the answer came.
+fn check_url(url: String) -> TimedCheck(postgres.FromUrlError) {
+  use <- test_database.with_own_pools()
+  let started_at = clock.now_in_milliseconds()
+  let checked =
+    postgres.from_url(url)
+    |> result.map(postgres.check)
+  TimedCheck(result: checked, elapsed: clock.now_in_milliseconds() - started_at)
+}
+
+// Starts a pool of size 0 on the test server, runs `postgres.check` on it
+// and stops the pool.
+fn check_empty_pool() -> TimedCheck(actor.StartError) {
+  use <- test_database.with_own_pools()
+  let started_at = clock.now_in_milliseconds()
+  let checked =
+    test_database.config()
+    |> postgres.pool_size(0)
+    |> postgres.connect()
+    |> result.map(postgres.check)
+  TimedCheck(result: checked, elapsed: clock.now_in_milliseconds() - started_at)
+}
+
+fn wrong_password_url() -> String {
+  let config = test_database.config()
+  test_database.url_for(
+    user: config.user,
+    password: "wrong-password",
+    database: config.database,
+  )
+}
+
+fn missing_database_url() -> String {
+  let config = test_database.config()
+  test_database.url_for(
+    user: config.user,
+    password: "dream",
+    database: "no_such_database",
+  )
 }
 
 type SlowAnswer {

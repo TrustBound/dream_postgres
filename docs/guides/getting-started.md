@@ -107,7 +107,7 @@ There's one thing `from_url` can't tell you: whether a database is listening. Th
 
 ## Step 2: Stop at startup when the database doesn't answer
 
-If the database is down or the URL points at the wrong host, you want to know when the app starts, not when the first user clicks something. The simple way is to run `SELECT 1` right after the pool starts, and fail if it doesn't come back. This module grows Step 1 into a `start` function with its own error type:
+If the database is down or the URL points at the wrong host, you want to know when the app starts, not when the first user clicks something. `postgres.check` does that: it runs `SELECT 1` on the connection, and returns `Ok(Nil)` when the database answers or the query's error when it doesn't. Call it right after `from_url`. This module grows Step 1 into a `start` function with its own error type:
 
 ### Start the pool and check that the database answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_startup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -115,12 +115,11 @@ If the database is down or the URL points at the wrong host, you want to know wh
 import dream_postgres/client as postgres
 import gleam/result
 import gleam/string
-import pog
 
 pub type StartupError {
   BadDatabaseUrl(error: postgres.UrlError)
   PoolDidNotStart
-  DatabaseDidNotAnswer(error: pog.QueryError)
+  DatabaseDidNotAnswer(error: postgres.QueryError)
 }
 
 pub fn start(
@@ -130,9 +129,8 @@ pub fn start(
     postgres.from_url(database_url)
     |> result.map_error(startup_error),
   )
-  use _returned <- result.try(
-    pog.query("SELECT 1")
-    |> pog.execute(connection)
+  use Nil <- result.try(
+    postgres.check(connection)
     |> result.map_error(DatabaseDidNotAnswer),
   )
   Ok(connection)
@@ -159,8 +157,9 @@ pub fn describe(error: StartupError) -> String {
 A few things to notice:
 
 - `StartupError` keeps the three failures apart, so `main` can print a message that says what to fix. Each variant keeps the error value too, if you'd rather log it than print it.
-- `pog.query("SELECT 1") |> pog.execute(connection)` is a complete Pog query. It returns `Ok` with one row, which `start` doesn't need, so it binds it as `_returned`.
-- `result.try` stops at the first `Error`, so a bad URL never gets as far as the query.
+- `from_url` and `check` fail with different error types: `postgres.FromUrlError` and `postgres.QueryError`. `result.try` needs one error type, so `result.map_error` puts each error into a `StartupError` first.
+- `check` returns `Ok(Nil)`, so `start` binds it as `Nil`.
+- `result.try` stops at the first `Error`, so a bad URL never gets as far as `check`.
 
 Here's what `start` returns, passed through `describe` when it fails, for the server from [Before you start](#before-you-start), for a wrong password, for a password with an `@` that isn't encoded, and for a URL where nothing listens:
 

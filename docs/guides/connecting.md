@@ -381,8 +381,8 @@ A bad percent-encoding, such as `%zz`, gives `InvalidUserEncoding`, `InvalidPass
 | What happened | What you see | What to do |
 |:---|:---|:---|
 | The URL is wrong | `Error(UrlError)` from `parse_config`, or `Error(InvalidUrl(UrlError))` from `from_url` | Print it with `explain` from [Step 1](#step-1-say-exactly-whats-wrong-with-a-url). |
-| Nothing listens at the host and port | `connect` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Run `SELECT 1` at startup, as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#step-2-stop-at-startup-when-the-database-doesnt-answer) guide does. |
-| The password is wrong, or the user or the database doesn't exist | `connect` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | The same startup check catches it. The PostgreSQL server log says which one it was. |
+| Nothing listens at the host and port | `connect` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Call `postgres.check` after `from_url` or `connect`, as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#step-2-stop-at-startup-when-the-database-doesnt-answer) guide does. |
+| The password is wrong, or the user or the database doesn't exist | `connect` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | `postgres.check` at startup gives the same error. The PostgreSQL server log says which one it was. |
 | Any `sslmode` but `disable`, and the server has SSL turned off | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds | Turn on SSL on the server, or use `sslmode=disable` on a network you trust. |
 | `verify-ca` or `verify-full`, and the client doesn't trust the CA of the server's certificate | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `Fatal - Unknown CA`. | Load the CA with `public_key:cacerts_load`, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows. |
 | `verify-ca` or `verify-full`, and the certificate doesn't name the host of the URL | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `hostname_check_failed`. | Put a host name from the certificate in the URL. |
@@ -399,6 +399,7 @@ These tests use [dream_test](https://hexdocs.pm/dream_test), added from GitHub a
 ### Test the config and a pool with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -447,9 +448,7 @@ pub fn tests() -> TestSuite {
         connect_pool("postgresql://app:secret@127.0.0.1:1/app", 2)
 
       // Act
-      let answer =
-        pog.query("SELECT 1")
-        |> pog.execute(db)
+      let answer = postgres.check(db)
 
       // Assert
       answer
@@ -465,7 +464,7 @@ What each test covers:
 
 - The first test checks the three values your production config depends on. A typo in the code that sets them shows up here, not in production.
 - The second test checks the message an operator sees for a URL from a provider that adds `connect_timeout`.
-- The third test starts a real pool on port 1 of `127.0.0.1`, where nothing listens, and runs `SELECT 1`. It takes about 2 seconds, so keep tests like it few.
+- The third test starts a real pool on port 1 of `127.0.0.1`, where nothing listens, and calls `postgres.check`. It takes about 2 seconds, so keep tests like it few.
 
 To check that the pool really connects, give `connect_pool` the URL of a test server, such as the one from [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#before-you-start), and run a query on it. This package's tests do that for `connect_pool` and `start_supervised`.
 

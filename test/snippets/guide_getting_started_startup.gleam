@@ -1,17 +1,16 @@
 //// Getting started guide: Step 2
 ////
-//// Starts a connection pool from a DATABASE_URL, then runs `SELECT 1` so
-//// that the program stops at startup when the database does not answer.
+//// Starts a connection pool from a DATABASE_URL, then calls `postgres.check`
+//// so that the program stops at startup when the database does not answer.
 
 import dream_postgres/client as postgres
 import gleam/result
 import gleam/string
-import pog
 
 pub type StartupError {
   BadDatabaseUrl(error: postgres.UrlError)
   PoolDidNotStart
-  DatabaseDidNotAnswer(error: pog.QueryError)
+  DatabaseDidNotAnswer(error: postgres.QueryError)
 }
 
 pub fn start(
@@ -21,9 +20,8 @@ pub fn start(
     postgres.from_url(database_url)
     |> result.map_error(startup_error),
   )
-  use _returned <- result.try(
-    pog.query("SELECT 1")
-    |> pog.execute(connection)
+  use Nil <- result.try(
+    postgres.check(connection)
     |> result.map_error(DatabaseDidNotAnswer),
   )
   Ok(connection)

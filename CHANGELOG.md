@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `InvalidDatabase`, `MissingUser`, `InvalidUserEncoding`,
   `InvalidPasswordEncoding`, `InvalidDatabaseEncoding`,
   `UnsupportedParameter`, `UnsupportedSslMode` and `UnsupportedFragment`.
+- `postgres.check(connection) -> Result(Nil, QueryError)` runs `SELECT 1`
+  and gives `Ok(Nil)` when the database answers, or the error of the query.
+  `connect` and `from_url` return `Ok` before the pool connects, so call
+  `check` after them to stop at startup when the database does not answer.
+  When no database listens, the password is wrong, the database does not
+  exist or the pool size is 0, the error is `pog.ConnectionUnavailable`,
+  after about 2 seconds. The guides use it for their startup check.
 - `FromUrlError` holds a `UrlError` or the reason the pool did not start:
   `InvalidUrl` and `PoolStartExited`.
   No error value holds the password.
@@ -64,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 183 tests, 0 failed, 100.0% line coverage. `make test` takes about 39 seconds, and the test times add up to about 60 seconds, because 4 tests run at a time. The 16 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- 195 tests, 0 failed, 100.0% line coverage. `make test` takes about 45 seconds, and the test times add up to about 77 seconds, because 4 tests run at a time. The 17 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image), started with `make db-up`. One has SSL off. It runs as a service container in CI. The other has SSL on, with a test CA and a server certificate from `test/fixtures/ssl`. CI starts it with `docker compose`.
 
 ## [1.0.2] - 2025-11-21

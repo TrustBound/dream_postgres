@@ -3,6 +3,7 @@
 //// Tests the config that a URL gives, the message for a bad URL, and a pool
 //// on a port where no database listens.
 
+import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -51,9 +52,7 @@ pub fn tests() -> TestSuite {
         connect_pool("postgresql://app:secret@127.0.0.1:1/app", 2)
 
       // Act
-      let answer =
-        pog.query("SELECT 1")
-        |> pog.execute(db)
+      let answer = postgres.check(db)
 
       // Assert
       answer
