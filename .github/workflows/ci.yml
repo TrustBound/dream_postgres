@@ -73,6 +73,9 @@ jobs:
       - name: Build documentation
         run: gleam docs build
 
+      - name: Check docs code blocks against tested snippets
+        run: gleam run -m dream_snippets
+
       - name: Read coverage for the badge
         # Runs on every event, so a pull request also shows that the JSON
         # summary is readable. Only the badge job below publishes.
