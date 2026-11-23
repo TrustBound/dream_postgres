@@ -157,7 +157,7 @@ fn pool_tests() {
           6432,
           pog.SslVerified,
           pog.Ipv6,
-          [#("application_name", "billing")],
+          [#("client_encoding", "UTF8"), #("application_name", "billing")],
           30,
         )),
       )

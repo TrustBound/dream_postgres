@@ -55,9 +55,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the host name, so `verify-ca` checks more than in `libpq`. The client
   trusts the CA certificates of the operating system. The connecting guide
   shows how to trust a private CA. `application_name`
-  sets the PostgreSQL connection parameter with that name in the config. With
-  Pog 4.1, the server does not see it: pgo sends the Erlang node name as
-  `application_name` after it. An IPv6 host such as `[::1]` sets IPv6.
+  sets the PostgreSQL connection parameter with that name in the config, and
+  the server shows that name: a test on a real PostgreSQL 16 server, with SSL
+  off and with SSL on, asserts it. pgo, the driver under Pog, also sends the
+  Erlang node name as `application_name`, and PostgreSQL keeps the last one.
+  So `parse_config` and `connect` put `client_encoding` (`UTF8`, or the value
+  of the config) just before the caller's `application_name`, and then pgo
+  puts its own value before both. A config without an `application_name`
+  sends no `client_encoding`. A config that goes to `pog.supervised` or
+  `pog.start` without `parse_config` or `connect` does not get this order.
+  The connecting guide shows the fix for that case. An IPv6 host such as
+  `[::1]` sets IPv6.
 
 ### Fixed
 - `postgres.from_url()` read the user and the password wrongly. For
@@ -71,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 195 tests, 0 failed, 100.0% line coverage. `make test` takes about 45 seconds, and the test times add up to about 77 seconds, because 4 tests run at a time. The 17 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- 210 tests, 0 failed, 100.0% line coverage. `make test` takes about 47 seconds, and the test times add up to about 81 seconds, because 4 tests run at a time. The 18 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image), started with `make db-up`. One has SSL off. It runs as a service container in CI. The other has SSL on, with a test CA and a server certificate from `test/fixtures/ssl`. CI starts it with `docker compose`.
 
 ## [1.0.2] - 2025-11-21

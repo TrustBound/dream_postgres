@@ -284,17 +284,22 @@ fn parse_config_value_tests() {
       |> be_equal(Ok(expected))
       |> or_fail_with("Expected the default user")
     }),
-    it("maps sslmode and application_name", fn() {
+    it("maps sslmode and application_name, with client_encoding first", fn() {
       // Arrange
       let pool_name = process.new_name("client_test_pool")
       let expected =
-        postgres.new(pool_name)
-        |> postgres.host("localhost")
-        |> postgres.database("myapp")
-        |> postgres.user("user")
-        |> postgres.password("pass")
-        |> pog.ssl(pog.SslVerified)
-        |> pog.connection_parameter(name: "application_name", value: "my app")
+        pog.Config(
+          ..postgres.new(pool_name)
+          |> postgres.host("localhost")
+          |> postgres.database("myapp")
+          |> postgres.user("user")
+          |> postgres.password("pass")
+          |> pog.ssl(pog.SslVerified),
+          connection_parameters: [
+            #("client_encoding", "UTF8"),
+            #("application_name", "my app"),
+          ],
+        )
 
       // Act
       let config =

@@ -174,19 +174,19 @@ pool_config(name, "postgresql://app:secret@[2001:db8::10]:6432/app?sslmode=verif
   port:                  6432
   ssl:                   SslVerified
   ip_version:            Ipv6
-  connection_parameters: [#("application_name", "billing")]
+  connection_parameters: [#("client_encoding", "UTF8"), #("application_name", "billing")]
   pool_size:             30
 ```
 
-The host in brackets is an IPv6 address, so `parse_config` sets `Ipv6` for you. `application_name` is meant to be the name PostgreSQL shows for your connections in `pg_stat_activity`, which helps when several apps share one database. With Pog 4.1, though, the server never sees it. pgo, the driver under Pog, adds its own `application_name`, the name of the Erlang node, after yours, and PostgreSQL keeps the last one. Ask the server and you'll see:
+The host in brackets is an IPv6 address, so `parse_config` sets `Ipv6` for you. `application_name` is the name PostgreSQL shows for your connections in `pg_stat_activity`, which helps when several apps share one database. Ask the server and you'll see it:
 
 ```text
 from_url("postgresql://dream:dream@localhost:5436/dream_test?application_name=billing")
 SELECT current_setting('application_name')
-  -> "nonode@nohost"
+  -> "billing"
 ```
 
-`nonode@nohost` is the name of a node that wasn't given one. A release started with a node name shows that name instead. The config still holds your value, but pgo's comes after it.
+Why `client_encoding` is in the list: pgo, the driver under Pog, adds its own `application_name`, the name of the Erlang node, such as `nonode@nohost`. PostgreSQL keeps the last `application_name` it gets. pgo puts its value before the first of your parameters whose name sorts after `application_name`. So when there's an `application_name`, this package puts `client_encoding` just before it, and your name comes last. `UTF8` is the encoding that Pog reads and writes. On a UTF-8 database it's also the server's default, so text comes back the same. If you set `client_encoding` yourself, your value stays. Without an `application_name`, the list stays as it is, and the server shows the node name.
 
 **How big should the pool be?** Each connection in the pool is one connection on the PostgreSQL server, and the server has a limit (`max_connections`, 100 by default). Add up the pools of every instance of your app, plus anything else that connects, and stay under that limit. A pool that's too small makes requests wait for a free connection: with a pool of 1, two queries of half a second each, sent at the same time, run one after the other on the same connection, and the second answers after about 1 second. A pool that's too big makes the server refuse connections when you scale out. And don't set the size to 0: `pool_size(0)` is accepted, the pool starts, and every query returns `ConnectionUnavailable` after about 2 seconds.
 
@@ -246,7 +246,7 @@ pub fn production_config(
 }
 ```
 
-`pog.ssl(pog.SslVerified)` turns on TLS and checks the server's certificate, and `pog.connection_parameter` puts `application_name` in the config. As [Step 2](#step-2-read-a-url-and-set-the-pool-size) shows, the server sees the Erlang node name instead for now. The [SSL modes](#ssl-modes) section explains the TLS choices.
+`pog.ssl(pog.SslVerified)` turns on TLS and checks the server's certificate, and `pog.connection_parameter` puts `application_name` in the config. `connect` puts `client_encoding` before it, as [Step 2](#step-2-read-a-url-and-set-the-pool-size) explains, so the server shows `myapp-web`. The [SSL modes](#ssl-modes) section explains the TLS choices.
 
 One difference from the URL path: `host` doesn't look at the address. With `parse_config`, a host like `[2001:db8::10]` sets IPv6. With the builder, `postgres.host("2001:db8::10")` keeps IPv4, so add `|> pog.ip_version(pog.Ipv6)` yourself.
 
@@ -287,6 +287,7 @@ What changes here:
 - `pog.supervised(config)` is a child specification. The supervisor starts the pool and restarts it under the same name if it stops.
 - A supervisor doesn't hand back the pool's `Connection`. `pog.named_connection(pool_name)` makes one from the name, and it keeps working after a restart, because the new pool registers under the same name.
 - In a real app you add the pool to the supervisor that starts the rest of your app, and pass the connection to the children that need it.
+- `parse_config` already puts `client_encoding` before the `application_name` of the URL, so the server shows that name under `pog.supervised` too.
 
 When no database listens, this works the same as `connect`: `start_supervised` returns `Ok`, and a query on the connection returns `Error(pog.ConnectionUnavailable)`.
 
@@ -370,7 +371,7 @@ postgresql://user:password@host:port/database?sslmode=verify-full&application_na
 | `port` | no | 5432 | 1 to 65535, or `InvalidPort(port)`. A port that isn't a number gives `MalformedUrl`. |
 | `database` | yes | `MissingDatabase` | One path segment, percent-decoded. `/a/b` gives `InvalidDatabase("/a/b")`. Encode a `/` in the name as `%2F`. |
 | `sslmode` | no | `SslDisabled` | See [SSL modes](#ssl-modes). |
-| `application_name` | no | not set | Sets the PostgreSQL connection parameter of that name. |
+| `application_name` | no | not set | Sets the PostgreSQL connection parameter of that name, with `client_encoding=UTF8` before it, so that the server shows the name. |
 | any other parameter | no | | `UnsupportedParameter(name)` |
 | a `#` part | no | | `UnsupportedFragment` |
 
@@ -478,7 +479,7 @@ To check that the pool really connects, give `connect_pool` the URL of a test se
 
 **A database with a private CA.** *Symptom:* with `sslmode=verify-full`, queries return `ConnectionUnavailable`, and the log shows `Fatal - Unknown CA`, but `sslmode=require` connects. *Fix:* the client trusts only the CA certificates of the operating system. Load your provider's CA file with `public_key:cacerts_load` before you start the pool, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows.
 
-**Looking for `application_name` in `pg_stat_activity`.** *Symptom:* your connections show the Erlang node name, such as `nonode@nohost`, not the name you set. *Fix:* there's none in the URL or the config for now: pgo sends its own value after yours. Give the Erlang node a name that identifies the app.
+**`application_name` with `pog.supervised` or `pog.start` and the builder.** *Symptom:* `pg_stat_activity` shows the Erlang node name, such as `nonode@nohost`, not the `application_name` you set with `pog.connection_parameter`. *Cause:* the config went to Pog without `connect` or `parse_config`, so this package didn't put `client_encoding` before the name. *Fix:* add `|> pog.connection_parameter(name: "client_encoding", value: "UTF8")` after the `application_name` line, or start the pool with `connect`.
 
 **A password with special characters.** *Symptom:* `MalformedUrl`, or a login that fails. *Fix:* percent-encode `@`, `/`, `:` and `#` in the password (`%40`, `%2F`, `%3A`, `%23`).
 

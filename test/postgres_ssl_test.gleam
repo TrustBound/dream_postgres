@@ -85,6 +85,21 @@ fn require_tests() {
       |> be_equal(Ok(Ok(["TLSv1.3"])))
       |> or_fail_with("Expected TLSv1.3")
     }),
+    it("application_name from the URL reaches the server over TLS", fn() {
+      // Act
+      let name =
+        ssl_database.query_texts(
+          url(host: matching_host, sslmode: "require")
+            <> "&application_name=billing",
+          "SELECT current_setting('application_name')",
+        )
+
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok(Ok(["billing"])))
+      |> or_fail_with("Expected the application name from the URL")
+    }),
     it(
       "connects to an address the certificate does not name, from an unknown CA",
       fn() {

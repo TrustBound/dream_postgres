@@ -287,6 +287,13 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// configuration. The pool will be registered with the process name you
 /// provided to `new()`.
 ///
+/// When the config has an `application_name` connection parameter, for
+/// example from `pog.connection_parameter`, `connect` puts `client_encoding`
+/// just before it. Then the server shows that name, not the Erlang node name
+/// that pgo, the driver under Pog, also sends. The `client_encoding` of the
+/// config stays, else it is `UTF8`. Without an `application_name`, the
+/// connection parameters do not change.
+///
 /// ## Parameters
 ///
 /// - `config`: The complete configuration
@@ -334,7 +341,9 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// }
 /// ```
 pub fn connect(config: Config) -> Result(Connection, actor.StartError) {
-  pog.start(config)
+  config
+  |> order_connection_parameters()
+  |> pog.start()
   |> result.map(extract_connection_from_started)
 }
 
@@ -422,6 +431,12 @@ pub type FromUrlError {
 ///   PostgreSQL connection parameter with that name. Any other parameter is
 ///   an error.
 ///
+/// With an `application_name`, the connection parameters of the config end
+/// with `client_encoding` (`UTF8`) and then `application_name`. pgo, the
+/// driver under Pog, sends its own `application_name` (the Erlang node
+/// name), and this order makes the server show your name. It also holds
+/// when you give the config to `pog.supervised` or `pog.start`.
+///
 /// All other settings keep the values from `new(pool_name)`.
 ///
 /// ## Parameters
@@ -472,6 +487,7 @@ pub fn parse_config(
     |> database(database_name)
   use config <- result.try(apply_userinfo(config, parsed.userinfo))
   apply_query(config, parsed.query)
+  |> result.map(order_connection_parameters)
 }
 
 /// Connect from a PostgreSQL connection URL
@@ -486,6 +502,8 @@ pub fn parse_config(
 /// after `from_url` to stop at startup when the database does not answer.
 ///
 /// See `parse_config` for the URL format and the supported query parameters.
+/// An `application_name` in the URL is the name that the server shows for
+/// the connections of the pool.
 ///
 /// ## Parameters
 ///
@@ -578,6 +596,85 @@ pub fn check(connection: Connection) -> Result(Nil, QueryError) {
   pog.query("SELECT 1")
   |> pog.execute(connection)
   |> result.replace(Nil)
+}
+
+// Puts the connection parameters in an order that makes the server use the
+// caller's `application_name`.
+//
+// pgo 0.15 (the driver under Pog) adds its own `application_name`, the
+// Erlang node name, with `lists:keymerge(1, Ours, [{AppName, Node}])` in
+// `pgo_handler:setup_startup`. keymerge expects sorted lists, so it puts
+// the driver's entry just before the first of our entries whose name sorts
+// after "application_name". PostgreSQL uses the last `application_name` of
+// the startup packet. So the list ends with `client_encoding` (it sorts
+// after "application_name") and then the caller's `application_name`: the
+// driver's entry then always comes before the caller's.
+//
+// The caller's `client_encoding` stays when there is one. Else the value is
+// UTF8, the encoding that pgo and Pog read and write. Without an
+// `application_name` the list does not change and no `client_encoding` is
+// sent.
+//
+// When the server would take one of several entries with the same name, it
+// takes the last, so only the last `application_name` and the last
+// `client_encoding` stay. Names are compared without case, like PostgreSQL
+// does.
+//
+// When pgo is fixed so that the caller's `application_name` replaces the
+// driver's, or the merge is `lists:ukeymerge` (which keeps our entry and
+// drops the driver's), the caller's name is still the last one, so the
+// server still shows it. A real-server test checks this order on each test
+// run.
+//
+// `connect` and `parse_config` both call this function, so a URL config that
+// goes to `pog.supervised` or `pog.start` also gets the order. Calling it
+// again on its own result gives the same list.
+fn order_connection_parameters(config: Config) -> Config {
+  let parameters = config.connection_parameters
+  case last_parameter_value(parameters, "application_name") {
+    Error(Nil) -> config
+    Ok(application_name) ->
+      pog.Config(
+        ..config,
+        connection_parameters: parameters_with_name_last(
+          parameters,
+          application_name,
+        ),
+      )
+  }
+}
+
+fn parameters_with_name_last(
+  parameters: List(#(String, String)),
+  application_name: String,
+) -> List(#(String, String)) {
+  let client_encoding =
+    last_parameter_value(parameters, "client_encoding")
+    |> result.unwrap("UTF8")
+  list.filter(parameters, is_not_ordered_parameter)
+  |> list.append([
+    #("client_encoding", client_encoding),
+    #("application_name", application_name),
+  ])
+}
+
+fn last_parameter_value(
+  parameters: List(#(String, String)),
+  name: String,
+) -> Result(String, Nil) {
+  parameters
+  |> list.filter(fn(parameter) { has_name(parameter, name) })
+  |> list.last()
+  |> result.map(fn(parameter) { parameter.1 })
+}
+
+fn is_not_ordered_parameter(parameter: #(String, String)) -> Bool {
+  !has_name(parameter, "application_name")
+  && !has_name(parameter, "client_encoding")
+}
+
+fn has_name(parameter: #(String, String), name: String) -> Bool {
+  string.lowercase(parameter.0) == name
 }
 
 // Private URL parsing - flat functions, no nesting

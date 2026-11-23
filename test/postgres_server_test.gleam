@@ -1,6 +1,6 @@
 //// Tests for what the guides say a real PostgreSQL server does: the
 //// errors for a wrong login, a bad query and a slow query, the pool size,
-//// the application name and the SSL modes on a server with SSL off. Each
+//// the application name, the client encoding and the SSL modes on a server with SSL off. Each
 //// test runs against the server of `fixtures/test_database`. The tests for
 //// a server with SSL on are in `postgres_ssl_test`.
 
@@ -18,6 +18,7 @@ import gleam/list
 import gleam/otp/actor
 import gleam/result
 import pog
+import snippets/guide_connecting_supervised.{start_supervised}
 import snippets/guide_getting_started_startup.{describe as describe_error, start}
 
 pub fn tests() -> TestSuite {
@@ -27,6 +28,7 @@ pub fn tests() -> TestSuite {
     query_error_tests(),
     pool_tests(),
     connection_setting_tests(),
+    application_name_tests(),
   ])
 }
 
@@ -364,23 +366,6 @@ fn pool_tests() {
 
 fn connection_setting_tests() {
   group("connection settings", [
-    it("application_name from the URL does not reach the server", fn() {
-      // Act
-      let name = {
-        use <- test_database.with_own_pools()
-        postgres.from_url(test_database.url() <> "?application_name=billing")
-        |> result.map(test_database.texts(
-          _,
-          "SELECT current_setting('application_name')",
-        ))
-      }
-
-      // Assert
-      name
-      |> should
-      |> be_equal(Ok(Ok(["nonode@nohost"])))
-      |> or_fail_with("Expected the Erlang node name, which pgo sends last")
-    }),
     it("sslmode=disable connects without TLS", fn() {
       // Act
       let ssl = {
@@ -450,6 +435,342 @@ fn connection_setting_tests() {
       },
     ),
   ])
+}
+
+const application_name_query = "SELECT current_setting('application_name')"
+
+const client_encoding_query =
+  "SELECT setting || ' from ' || source FROM pg_settings WHERE name = 'client_encoding'"
+
+fn application_name_tests() {
+  group("application_name", [
+    it("application_name from the URL reaches the server", fn() {
+      // Act
+      let name = {
+        use <- test_database.with_own_pools()
+        postgres.from_url(test_database.url() <> "?application_name=billing")
+        |> result.map(test_database.texts(_, application_name_query))
+      }
+
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok(Ok(["billing"])))
+      |> or_fail_with("Expected the application name from the URL")
+    }),
+    it(
+      "application_name from pog.connection_parameter reaches the server",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> pog.connection_parameter(
+            name: "application_name",
+            value: "billing",
+          )
+
+        // Act
+        let name = connect_and_select(config, application_name_query)
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application name from the config")
+      },
+    ),
+    it(
+      "application_name reaches the server with search_path set before it",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> pog.connection_parameter(name: "search_path", value: "public")
+          |> pog.connection_parameter(
+            name: "application_name",
+            value: "billing",
+          )
+
+        // Act
+        let name = connect_and_select(config, application_name_query)
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application name from the config")
+      },
+    ),
+    it(
+      "application_name reaches the server with search_path set after it",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> pog.connection_parameter(
+            name: "application_name",
+            value: "billing",
+          )
+          |> pog.connection_parameter(name: "search_path", value: "public")
+
+        // Act
+        let name = connect_and_select(config, application_name_query)
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application name from the config")
+      },
+    ),
+    it(
+      "application_name from the URL reaches the server with timezone set after it",
+      fn() {
+        // Arrange
+        let config =
+          url_config("?application_name=billing")
+          |> pog.connection_parameter(name: "timezone", value: "UTC")
+
+        // Act
+        let name = connect_and_select(config, application_name_query)
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application name from the URL")
+      },
+    ),
+    it(
+      "application_name reaches the server with the caller's client_encoding",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> pog.connection_parameter(name: "client_encoding", value: "UTF8")
+          |> pog.connection_parameter(
+            name: "application_name",
+            value: "billing",
+          )
+
+        // Act
+        let name = connect_and_select(config, application_name_query)
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application name from the config")
+      },
+    ),
+    it(
+      "the caller's client_encoding reaches the server with an application_name",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> pog.connection_parameter(
+            name: "application_name",
+            value: "billing",
+          )
+          |> pog.connection_parameter(
+            name: "client_encoding",
+            value: "SQL_ASCII",
+          )
+
+        // Act
+        let encoding = connect_and_select(config, client_encoding_query)
+
+        // Assert
+        encoding
+        |> should
+        |> be_equal(Ok(Ok(["SQL_ASCII from client"])))
+        |> or_fail_with("Expected the client_encoding of the caller")
+      },
+    ),
+    it("Application_Name in mixed case reaches the server", fn() {
+      // Arrange
+      let config =
+        test_database.config()
+        |> pog.connection_parameter(name: "Application_Name", value: "billing")
+
+      // Act
+      let name = connect_and_select(config, application_name_query)
+
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok(Ok(["billing"])))
+      |> or_fail_with("Expected the application name from the config")
+    }),
+    it(
+      "application_name from the URL reaches the server under pog.supervised",
+      fn() {
+        // Act
+        let name = {
+          use <- test_database.with_own_pools()
+          start_supervised(test_database.url() <> "?application_name=billing")
+          |> result.map(test_database.texts(_, application_name_query))
+        }
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application name from the URL")
+      },
+    ),
+    it(
+      "pog.start of a builder config shows the Erlang node name, not application_name",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> pog.connection_parameter(
+            name: "application_name",
+            value: "billing",
+          )
+
+        // Act
+        let name = pog_start_and_select(config, application_name_query)
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["nonode@nohost"])))
+        |> or_fail_with("Expected the Erlang node name, which pgo sends last")
+      },
+    ),
+    it(
+      "pog.start of a builder config with client_encoding after application_name shows the name",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> pog.connection_parameter(
+            name: "application_name",
+            value: "billing",
+          )
+          |> pog.connection_parameter(name: "client_encoding", value: "UTF8")
+
+        // Act
+        let name = pog_start_and_select(config, application_name_query)
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application name from the config")
+      },
+    ),
+    it("an application_name sends client_encoding UTF8", fn() {
+      // Arrange
+      let config = url_config("?application_name=billing")
+
+      // Act
+      let encoding = connect_and_select(config, client_encoding_query)
+
+      // Assert
+      encoding
+      |> should
+      |> be_equal(Ok(Ok(["UTF8 from client"])))
+      |> or_fail_with("Expected client_encoding UTF8 from the client")
+    }),
+    it("no application_name sends no client_encoding", fn() {
+      // Act
+      let encoding =
+        connect_and_select(test_database.config(), client_encoding_query)
+
+      // Assert
+      encoding
+      |> should
+      |> be_equal(Ok(Ok(["UTF8 from default"])))
+      |> or_fail_with("Expected the default client_encoding of the server")
+    }),
+    it("no application_name shows the Erlang node name", fn() {
+      // Act
+      let name =
+        connect_and_select(test_database.config(), application_name_query)
+
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok(Ok(["nonode@nohost"])))
+      |> or_fail_with("Expected the Erlang node name, which pgo sends")
+    }),
+    it(
+      "non-ASCII text goes to the server and back with an application_name",
+      fn() {
+        // Arrange
+        let config = url_config("?application_name=billing")
+
+        // Act
+        let answer = {
+          use <- test_database.with_own_pools()
+          config
+          |> postgres.pool_size(1)
+          |> postgres.connect()
+          |> result.map(text_and_length(_, "héllo € 日本"))
+        }
+
+        // Assert
+        answer
+        |> should
+        |> be_equal(Ok(Ok(["héllo € 日本 10"])))
+        |> or_fail_with("Expected the same text and a length of 10 characters")
+      },
+    ),
+  ])
+}
+
+// Starts a pool of 1 connection from `config` with `connect`, runs `sql`
+// (a query that returns one text column) and stops the pool.
+fn connect_and_select(
+  config: postgres.Config,
+  sql: String,
+) -> Result(Result(List(String), pog.QueryError), actor.StartError) {
+  use <- test_database.with_own_pools()
+  config
+  |> postgres.pool_size(1)
+  |> postgres.connect()
+  |> result.map(test_database.texts(_, sql))
+}
+
+// Starts a pool of 1 connection from `config` with `pog.start`, which
+// does not go through `connect`, runs `sql` and stops the pool.
+fn pog_start_and_select(
+  config: postgres.Config,
+  sql: String,
+) -> Result(Result(List(String), pog.QueryError), actor.StartError) {
+  use <- test_database.with_own_pools()
+  config
+  |> postgres.pool_size(1)
+  |> pog.start()
+  |> result.map(fn(started) { test_database.texts(started.data, sql) })
+}
+
+// Returns the config of `parse_config` for the test server URL with the
+// query string `query`, for example `?application_name=billing`.
+fn url_config(query: String) -> postgres.Config {
+  let assert Ok(config) =
+    postgres.parse_config(
+      process.new_name("application_name_test"),
+      test_database.url() <> query,
+    )
+  config
+}
+
+// Sends `text` as a query parameter, and gives back the text that the
+// server returns and its length in characters, as the server counts them.
+fn text_and_length(
+  db: pog.Connection,
+  text: String,
+) -> Result(List(String), pog.QueryError) {
+  pog.query("SELECT $1::text || ' ' || length($1::text)::text")
+  |> pog.parameter(pog.text(text))
+  |> pog.returning(decode.at([0], decode.string))
+  |> pog.execute(db)
+  |> result.map(fn(returned) { returned.rows })
 }
 
 fn start_and_describe(url: String) -> Result(Nil, String) {
