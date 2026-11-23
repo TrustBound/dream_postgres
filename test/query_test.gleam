@@ -5,11 +5,11 @@
 
 import dream_postgres/query
 import dream_test/matchers.{be_equal, or_fail_with, should}
-import dream_test/types.{type TestSuite}
+import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import pog
 
-pub fn tests() -> TestSuite(Nil) {
+pub fn tests() -> TestSuite {
   describe("dream_postgres/query", [
     group("first_row", [
       it("returns the first row when the result has rows", fn() {

@@ -8,13 +8,13 @@
 //// compiled.
 
 import dream_test/matchers.{be_equal, or_fail_with, should}
-import dream_test/types.{type TestSuite}
+import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import gleam/result
 import pog
 import snippets/architecture_postgres
 
-pub fn tests() -> TestSuite(Nil) {
+pub fn tests() -> TestSuite {
   describe("architecture snippets", [
     group("create_database_config", [
       it("sets the host", fn() {

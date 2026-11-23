@@ -6,13 +6,13 @@
 //// in the background, so pool start returns Ok with no database.
 
 import dream_test/matchers.{be_equal, or_fail_with, should}
-import dream_test/types.{type TestSuite}
+import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
 import gleam/option.{Some}
 import gleam/result
 import snippets/learn_building_api_services
 
-pub fn tests() -> TestSuite(Nil) {
+pub fn tests() -> TestSuite {
   describe("learn: building an API snippets", [
     it("create_database_config sets the host", fn() {
       // Act

@@ -9,7 +9,7 @@
 
 import dream_postgres/query
 import dream_test/matchers.{be_equal, or_fail_with, should}
-import dream_test/types.{type TestSuite}
+import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import gleam/option
 import gleam/result
@@ -21,7 +21,7 @@ import snippets/readme_error_handling
 import snippets/readme_query_execution
 import snippets/readme_query_result_helpers
 
-pub fn tests() -> TestSuite(Nil) {
+pub fn tests() -> TestSuite {
   describe("README snippets", [
     connection_setup_tests(),
     connection_from_url_tests(),

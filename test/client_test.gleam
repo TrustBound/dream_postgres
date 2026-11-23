@@ -8,7 +8,7 @@ import dream_postgres/client as postgres
 import dream_test/matchers.{
   be_equal, be_false, be_less_than, or_fail_with, should,
 }
-import dream_test/types.{type TestSuite}
+import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/clock
 import fixtures/database
@@ -20,7 +20,7 @@ import gleam/result
 import gleam/string
 import pog
 
-pub fn tests() -> TestSuite(Nil) {
+pub fn tests() -> TestSuite {
   describe("dream_postgres/client", [
     builder_tests(),
     connect_tests(),

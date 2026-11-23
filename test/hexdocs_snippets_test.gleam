@@ -6,7 +6,7 @@
 
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
-import dream_test/types.{type TestSuite}
+import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/database_url
 import gleam/erlang/process
@@ -25,7 +25,7 @@ import snippets/client_user
 import snippets/query_all_rows
 import snippets/query_first_row
 
-pub fn tests() -> TestSuite(Nil) {
+pub fn tests() -> TestSuite {
   describe("hexdocs snippets", [client_tests(), query_tests()])
 }
 
