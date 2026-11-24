@@ -49,7 +49,7 @@ read_file(Path) ->
         {error, _Reason} -> {error, nil}
     end.
 
-%% Drops the supervisor reports that pgo writes when a pool stops while a
+%% Drops the supervisor reports that dream_postgres_driver writes when a pool stops while a
 %% connection loads its types. run_in_own_process/1 stops a pool after each
 %% test, so without this filter the test output shows these reports, which
 %% are not failures. Every other log event is kept.
@@ -66,7 +66,7 @@ drop_pool_shutdown_report(
     _Extra
 ) ->
     case proplists:get_value(supervisor, Report) of
-        {_Pid, pgo_pool_sup} -> stop;
+        {_Pid, dream_postgres_driver_pool_sup} -> stop;
         _ -> ignore
     end;
 drop_pool_shutdown_report(_Event, _Extra) ->

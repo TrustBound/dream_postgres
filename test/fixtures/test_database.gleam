@@ -8,8 +8,8 @@
 //// Tests that write make their own schema with `with_schema`, so tests that
 //// run at the same time never see each other's tables or rows.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/int
@@ -83,7 +83,7 @@ pub fn with_own_pools(run: fn() -> a) -> a {
 ///
 /// An unqualified table name such as `users` is then a table of that
 /// schema only, so each test has its own `users` table.
-pub fn with_schema(run: fn(pog.Connection) -> a) -> a {
+pub fn with_schema(run: fn(dream_postgres_client.Connection) -> a) -> a {
   use <- with_own_pools()
   let schema = "test_" <> int.to_string(unique_integer())
   let assert Ok(admin) =
@@ -94,7 +94,10 @@ pub fn with_schema(run: fn(pog.Connection) -> a) -> a {
   let assert Ok(db) =
     config()
     |> postgres.pool_size(2)
-    |> pog.connection_parameter(name: "search_path", value: schema)
+    |> dream_postgres_client.connection_parameter(
+      name: "search_path",
+      value: schema,
+    )
     |> postgres.connect()
   let value = run(db)
   let assert Ok(_dropped) =
@@ -105,7 +108,7 @@ pub fn with_schema(run: fn(pog.Connection) -> a) -> a {
 /// Runs each SQL statement of the file at `path`, in order. The guides
 /// show these files in their `sql` blocks, so the tests make the tables
 /// that a guide tells the reader to make.
-pub fn run_sql_file(db: pog.Connection, path: String) -> Nil {
+pub fn run_sql_file(db: dream_postgres_client.Connection, path: String) -> Nil {
   sql_statements(path)
   |> list.each(fn(statement) {
     let assert Ok(_returned) = execute(db, statement)
@@ -123,21 +126,24 @@ pub fn sql_statements(path: String) -> List(String) {
 
 /// Runs one SQL statement that returns no rows that the test needs.
 pub fn execute(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   sql: String,
-) -> Result(pog.Returned(Nil), pog.QueryError) {
-  pog.query(sql)
-  |> pog.execute(db)
+) -> Result(
+  dream_postgres_client.Returned(Nil),
+  dream_postgres_client.QueryError,
+) {
+  dream_postgres_client.query(sql)
+  |> dream_postgres_client.execute(db)
 }
 
 /// Runs a query that returns one text column, and returns its values.
 pub fn texts(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   sql: String,
-) -> Result(List(String), pog.QueryError) {
-  pog.query(sql)
-  |> pog.returning(decode.at([0], decode.string))
-  |> pog.execute(db)
+) -> Result(List(String), dream_postgres_client.QueryError) {
+  dream_postgres_client.query(sql)
+  |> dream_postgres_client.returning(decode.at([0], decode.string))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
@@ -162,7 +168,7 @@ pub fn check_reachable() -> Result(Nil, String) {
 
 fn not_reachable_message(
   config: postgres.Config,
-  error: pog.QueryError,
+  error: dream_postgres_client.QueryError,
 ) -> String {
   "The tests need a PostgreSQL server, and none answered at "
   <> config.host

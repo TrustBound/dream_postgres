@@ -1,10 +1,10 @@
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import gleam/erlang/process
 import gleam/otp/actor
 
 pub fn connect_database(
-  pool_name: process.Name(pog.Message),
+  pool_name: process.Name(dream_postgres_client.Message),
 ) -> Result(postgres.Connection, actor.StartError) {
   postgres.new(pool_name)
   |> postgres.host("localhost")

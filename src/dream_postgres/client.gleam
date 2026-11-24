@@ -1,9 +1,9 @@
 //// PostgreSQL client wrapper
 ////
 //// Provides a clean builder interface to the connection pool of
-//// `dream_pog`, a fork of Pog. Follows Dream's builder pattern for
-//// consistency. Import `dream_pog` as `pog` to use its types and query
-//// functions with this module.
+//// `dream_postgres_client`, a fork of Pog. Follows Dream's builder pattern
+//// for consistency. Import `dream_postgres_client` to use its types and
+//// query functions with this module.
 ////
 //// ## Example
 ////
@@ -31,7 +31,7 @@
 //// }
 //// ```
 
-import dream_pog as pog
+import dream_postgres_client
 import gleam/erlang/process
 import gleam/list
 import gleam/option
@@ -42,40 +42,43 @@ import gleam/uri
 
 /// A connection to a PostgreSQL connection pool.
 ///
-/// The same type as `pog.Connection`. Pass it to `pog.execute` to run a
-/// query. `connect` and `from_url` return it.
+/// The same type as `dream_postgres_client.Connection`. Pass it to
+/// `dream_postgres_client.execute` to run a query. `connect` and `from_url`
+/// return it.
 pub type Connection =
-  pog.Connection
+  dream_postgres_client.Connection
 
 /// The settings of a connection pool.
 ///
-/// The same type as `pog.Config`. Make one with `new` or `parse_config`,
-/// change it with the builder functions, then start the pool with
-/// `connect`. The `pog` functions that take a `pog.Config` also accept it.
+/// The same type as `dream_postgres_client.Config`. Make one with `new` or
+/// `parse_config`, change it with the builder functions, then start the pool
+/// with `connect`. The `dream_postgres_client` functions that take a
+/// `dream_postgres_client.Config` also accept it.
 pub type Config =
-  pog.Config
+  dream_postgres_client.Config
 
 /// Why a query failed.
 ///
-/// The same type as `pog.QueryError`. `pog.execute` returns it. The
-/// `dream_postgres/query` helpers turn it into the simpler
-/// `query.QueryError`.
+/// The same type as `dream_postgres_client.QueryError`.
+/// `dream_postgres_client.execute` returns it. The `dream_postgres/query`
+/// helpers turn it into the simpler `query.QueryError`.
 pub type QueryError =
-  pog.QueryError
+  dream_postgres_client.QueryError
 
 /// A value for a parameter of a query.
 ///
-/// The same type as `pog.Value`. Make one with `pog.int`, `pog.text` and the
-/// other `pog` value functions.
+/// The same type as `dream_postgres_client.Value`. Make one with
+/// `dream_postgres_client.int`, `dream_postgres_client.text` and the other
+/// value functions of `dream_postgres_client`.
 pub type Value =
-  pog.Value
+  dream_postgres_client.Value
 
 /// The result of a query that succeeded.
 ///
-/// The same type as `pog.Returned`. `count` is the number of rows, and
-/// `rows` holds the decoded rows.
+/// The same type as `dream_postgres_client.Returned`. `count` is the number of
+/// rows, and `rows` holds the decoded rows.
 pub type Returned(a) =
-  pog.Returned(a)
+  dream_postgres_client.Returned(a)
 
 /// Create a new default PostgreSQL configuration
 ///
@@ -103,8 +106,8 @@ pub type Returned(a) =
 ///   postgres.new(pool_name)
 /// }
 /// ```
-pub fn new(pool_name: process.Name(pog.Message)) -> Config {
-  pog.default_config(pool_name: pool_name)
+pub fn new(pool_name: process.Name(dream_postgres_client.Message)) -> Config {
+  dream_postgres_client.default_config(pool_name: pool_name)
 }
 
 /// Set the database host
@@ -133,7 +136,7 @@ pub fn new(pool_name: process.Name(pog.Message)) -> Config {
 /// }
 /// ```
 pub fn host(config: Config, value: String) -> Config {
-  pog.Config(..config, host: value)
+  dream_postgres_client.Config(..config, host: value)
 }
 
 /// Set the database port
@@ -162,7 +165,7 @@ pub fn host(config: Config, value: String) -> Config {
 /// }
 /// ```
 pub fn port(config: Config, value: Int) -> Config {
-  pog.Config(..config, port: value)
+  dream_postgres_client.Config(..config, port: value)
 }
 
 /// Set the database name
@@ -191,7 +194,7 @@ pub fn port(config: Config, value: Int) -> Config {
 /// }
 /// ```
 pub fn database(config: Config, value: String) -> Config {
-  pog.Config(..config, database: value)
+  dream_postgres_client.Config(..config, database: value)
 }
 
 /// Set the database user
@@ -220,7 +223,7 @@ pub fn database(config: Config, value: String) -> Config {
 /// }
 /// ```
 pub fn user(config: Config, value: String) -> Config {
-  pog.Config(..config, user: value)
+  dream_postgres_client.Config(..config, user: value)
 }
 
 /// Set the database password
@@ -249,7 +252,7 @@ pub fn user(config: Config, value: String) -> Config {
 /// }
 /// ```
 pub fn password(config: Config, value: String) -> Config {
-  pog.Config(..config, password: option.Some(value))
+  dream_postgres_client.Config(..config, password: option.Some(value))
 }
 
 /// Set the connection pool size
@@ -280,7 +283,7 @@ pub fn password(config: Config, value: String) -> Config {
 /// }
 /// ```
 pub fn pool_size(config: Config, value: Int) -> Config {
-  pog.Config(..config, pool_size: value)
+  dream_postgres_client.Config(..config, pool_size: value)
 }
 
 /// Start the connection pool
@@ -290,9 +293,9 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// provided to `new()`.
 ///
 /// An `application_name` connection parameter, for example from
-/// `pog.connection_parameter`, is the name that the server shows for the
-/// connections of the pool. Without one, the server shows the Erlang node
-/// name.
+/// `dream_postgres_client.connection_parameter`, is the name that the server
+/// shows for the connections of the pool. Without one, the server shows the
+/// Erlang node name.
 ///
 /// ## Parameters
 ///
@@ -308,17 +311,19 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 ///   no pool starts. The driver would end the text at the null byte and
 ///   send the rest to the server as another parameter. The message names
 ///   the part, never its value.
-/// - `Error(actor.InitExited(_))`: The SSL mode is `pog.SslVerifiedCaFile`
-///   or `pog.SslVerifiedChainOnlyCaFile`, and the CA file cannot be read or
-///   holds no PEM certificate. `dream_pog` reads the file before the pool
-///   starts.
+/// - `Error(actor.InitExited(_))`: The SSL mode is
+///   `dream_postgres_client.SslVerifiedCaFile` or
+///   `dream_postgres_client.SslVerifiedChainOnlyCaFile`, and the CA file cannot
+///   be read or holds no PEM certificate. `dream_postgres_client` reads the
+///   file before the pool starts.
 ///
 /// The pool connects to the database in the background. So this function
 /// returns `Ok` at once also when no database listens at the host and port,
-/// when the password is wrong, when the database does not exist, and for a
-/// pool size of 0. The failure shows on the first query: it returns
-/// `Error(pog.ConnectionUnavailable)` after about 2 seconds. Call `check`
-/// after `connect` to stop at startup when the database does not answer.
+/// when the password is wrong, when the database does not exist, and for a pool
+/// size of 0. The failure shows on the first query: it returns
+/// `Error(dream_postgres_client.ConnectionUnavailable)` after about 2 seconds.
+/// Call `check` after `connect` to stop at startup when the database does not
+/// answer.
 ///
 /// ## See Also
 ///
@@ -331,13 +336,13 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// ### Start a connection pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/client as postgres
+/// import dream_postgres_client
 /// import gleam/erlang/process
 /// import gleam/otp/actor
 ///
 /// pub fn connect_database(
-///   pool_name: process.Name(pog.Message),
+///   pool_name: process.Name(dream_postgres_client.Message),
 /// ) -> Result(postgres.Connection, actor.StartError) {
 ///   postgres.new(pool_name)
 ///   |> postgres.host("localhost")
@@ -352,17 +357,17 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 pub fn connect(config: Config) -> Result(Connection, actor.StartError) {
   use Nil <- result.try(refuse_null_bytes(config))
   config
-  |> pog.start()
+  |> dream_postgres_client.start()
   |> result.map(extract_connection_from_started)
 }
 
-// dream_pgo, the driver under dream_pog, writes the user, the database name and the
-// connection parameters into the startup packet as strings that end with a
-// null byte. So a null byte in one of them ends that string early, and the
-// server reads the rest as the next name or value: a database name of
-// "app\u{0}search_path\u{0}evil" sets `search_path`. A PostgreSQL name or
-// password is SQL text, which cannot hold a null byte, so no correct config
-// has one in these parts.
+// dream_postgres_driver, the driver under dream_postgres_client, writes the
+// user, the database name and the connection parameters into the startup packet
+// as strings that end with a null byte. So a null byte in one of them ends that
+// string early, and the server reads the rest as the next name or value: a
+// database name of "app\u{0}search_path\u{0}evil" sets `search_path`. A
+// PostgreSQL name or password is SQL text, which cannot hold a null byte, so no
+// correct config has one in these parts.
 fn refuse_null_bytes(config: Config) -> Result(Nil, actor.StartError) {
   let parts = [
     #("the user", config.user),
@@ -513,9 +518,9 @@ pub type FromUrlError {
 ///   server as a run-time parameter, with its percent-decoded value. Of two
 ///   parameters with the same name, the last wins, as in `libpq`.
 ///
-/// `sslmode` and `sslrootcert` give the `pog.Ssl` of the config, with the
-/// meaning that `libpq` gives them, the same as `pog.url_config` of
-/// `dream_pog`:
+/// `sslmode` and `sslrootcert` give the `dream_postgres_client.Ssl` of the
+/// config, with the meaning that `libpq` gives them, the same as
+/// `dream_postgres_client.url_config` of `dream_postgres_client`:
 ///
 /// | `sslmode`     | no `sslrootcert`       | `sslrootcert=<path>`               |
 /// |---------------|------------------------|------------------------------------|
@@ -534,14 +539,15 @@ pub type FromUrlError {
 /// `SslRootCertSystemNeedsVerifyFull(mode)`. `connect` reads the file before
 /// the pool starts.
 ///
-/// This function does not know the parameters of the server. A name that
-/// the server does not know, or a value that it refuses, gives `Ok` here,
-/// and each query on the pool then returns `pog.ConnectionUnavailable`
+/// This function does not know the parameters of the server. A name that the
+/// server does not know, or a value that it refuses, gives `Ok` here, and each
+/// query on the pool then returns `dream_postgres_client.ConnectionUnavailable`
 /// after about 2 seconds. The server log says why. Call `check` at startup.
 ///
 /// The connection parameters of the config keep the order of the URL. The
-/// `application_name` of the URL is the name that the server shows, also
-/// when you give the config to `pog.supervised` or `pog.start`.
+/// `application_name` of the URL is the name that the server shows, also when
+/// you give the config to `dream_postgres_client.supervised` or
+/// `dream_postgres_client.start`.
 ///
 /// All other settings keep the values from `new(pool_name)`.
 ///
@@ -566,18 +572,18 @@ pub type FromUrlError {
 /// ### Read a connection URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_parse_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/client as postgres
+/// import dream_postgres_client
 /// import gleam/erlang/process
 ///
 /// pub fn read_database_url(
-///   pool_name: process.Name(pog.Message),
+///   pool_name: process.Name(dream_postgres_client.Message),
 /// ) -> Result(postgres.Config, postgres.UrlError) {
 ///   postgres.parse_config(pool_name, "postgresql://user:pass@localhost/myapp")
 /// }
 /// ```
 pub fn parse_config(
-  pool_name: process.Name(pog.Message),
+  pool_name: process.Name(dream_postgres_client.Message),
   url: String,
 ) -> Result(Config, UrlError) {
   use parsed <- result.try(parse_uri(url))
@@ -602,16 +608,17 @@ pub fn parse_config(
 /// unique process name, so you can call it more than once.
 ///
 /// The pool connects to the database in the background. When no database
-/// listens at the URL, this function still returns `Ok`, and each query on
-/// the connection returns `Error(pog.ConnectionUnavailable)`. Call `check`
-/// after `from_url` to stop at startup when the database does not answer.
+/// listens at the URL, this function still returns `Ok`, and each query on the
+/// connection returns `Error(dream_postgres_client.ConnectionUnavailable)`.
+/// Call `check` after `from_url` to stop at startup when the database does not
+/// answer.
 ///
 /// See `parse_config` for the URL format and the supported query parameters.
 /// An `application_name` in the URL is the name that the server shows for
 /// the connections of the pool. A server parameter in the URL, such as
 /// `search_path`, applies to each connection of the pool. When the server
 /// refuses one, this function still returns `Ok`, and each query returns
-/// `Error(pog.ConnectionUnavailable)`.
+/// `Error(dream_postgres_client.ConnectionUnavailable)`.
 ///
 /// ## Parameters
 ///
@@ -621,8 +628,8 @@ pub fn parse_config(
 ///
 /// - `Ok(Connection)`: The pool started
 /// - `Error(InvalidUrl(UrlError))`: The URL is not valid
-/// - `Error(PoolStartExited)`: The pool process did not start. `pog` 4
-///   reports every start failure as an exit.
+/// - `Error(PoolStartExited)`: The pool process did not start.
+///   `dream_postgres_client` reports every start failure as an exit.
 ///
 /// No error holds the password.
 ///
@@ -657,8 +664,9 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
   config
   |> pool_size(15)
   |> connect()
-  // `pog.start` reports every start failure as `actor.InitExited`, and the
-  // exit reason can hold the password, so it is not kept.
+  // `dream_postgres_client.start` reports every start failure as
+  // `actor.InitExited`, and the exit reason can hold the password, so it is not
+  // kept.
   |> result.replace_error(PoolStartExited)
 }
 
@@ -675,10 +683,10 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
 /// ## Returns
 ///
 /// - `Ok(Nil)`: The database answered
-/// - `Error(QueryError)`: The error of the query. When no database listens
-///   at the host and port, the password is wrong, the database does not
-///   exist or the pool size is 0, the error is `pog.ConnectionUnavailable`,
-///   after about 2 seconds.
+/// - `Error(QueryError)`: The error of the query. When no database listens at
+///   the host and port, the password is wrong, the database does not exist or
+///   the pool size is 0, the error is
+///   `dream_postgres_client.ConnectionUnavailable`, after about 2 seconds.
 ///
 /// ## See Also
 ///
@@ -701,8 +709,8 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
 /// }
 /// ```
 pub fn check(connection: Connection) -> Result(Nil, QueryError) {
-  pog.query("SELECT 1")
-  |> pog.execute(connection)
+  dream_postgres_client.query("SELECT 1")
+  |> dream_postgres_client.execute(connection)
   |> result.replace(Nil)
 }
 
@@ -766,7 +774,7 @@ fn set_host_and_ip_version(config: Config, host_name: String) -> Config {
   case string.contains(host_name, ":") {
     True ->
       host(config, host_name)
-      |> pog.ip_version(pog.Ipv6)
+      |> dream_postgres_client.ip_version(dream_postgres_client.Ipv6)
     False -> host(config, host_name)
   }
 }
@@ -881,7 +889,7 @@ fn apply_query_string(
     apply_parameter,
   ))
   use ssl <- result.try(resolve_ssl(config.ssl, settings))
-  Ok(pog.ssl(config, ssl))
+  Ok(dream_postgres_client.ssl(config, ssl))
 }
 
 fn apply_parameter(
@@ -941,7 +949,7 @@ fn append_connection_parameter(
   name: String,
   value: String,
 ) -> Config {
-  pog.Config(
+  dream_postgres_client.Config(
     ..config,
     connection_parameters: list.append(config.connection_parameters, [
       #(name, value),
@@ -1035,31 +1043,34 @@ fn apply_ssl_mode(
 
 const ssl_modes = ["disable", "require", "verify-ca", "verify-full"]
 
-// The rules of `pog.url_config` in dream_pog, which are the rules of libpq:
-// a CA file makes `require` check the chain, as `verify-ca` does, and
-// `sslrootcert=system` needs `verify-full`. `apply_ssl_mode` let only the
-// four modes of `ssl_modes` through, so the last two branches are
-// `verify-full`.
+// The rules of `dream_postgres_client.url_config` in dream_postgres_client,
+// which are the rules of libpq: a CA file makes `require` check the chain, as
+// `verify-ca` does, and `sslrootcert=system` needs `verify-full`.
+// `apply_ssl_mode` let only the four modes of `ssl_modes` through, so the last
+// two branches are `verify-full`.
 fn resolve_ssl(
-  current: pog.Ssl,
+  current: dream_postgres_client.Ssl,
   settings: SslSettings,
-) -> Result(pog.Ssl, UrlError) {
+) -> Result(dream_postgres_client.Ssl, UrlError) {
   case settings.mode, settings.root_certificate {
     option.None, option.None -> Ok(current)
     option.Some("verify-full"), option.Some("system")
     | option.None, option.Some("system")
-    -> Ok(pog.SslVerified)
+    -> Ok(dream_postgres_client.SslVerified)
     option.Some(mode), option.Some("system") ->
       Error(SslRootCertSystemNeedsVerifyFull(mode))
     option.None, option.Some(_path) -> Error(SslRootCertWithoutSslMode)
-    option.Some("disable"), _ -> Ok(pog.SslDisabled)
-    option.Some("require"), option.None -> Ok(pog.SslUnverified)
+    option.Some("disable"), _ -> Ok(dream_postgres_client.SslDisabled)
+    option.Some("require"), option.None ->
+      Ok(dream_postgres_client.SslUnverified)
     option.Some("require"), option.Some(path)
     | option.Some("verify-ca"), option.Some(path)
-    -> Ok(pog.SslVerifiedChainOnlyCaFile(path))
-    option.Some("verify-ca"), option.None -> Ok(pog.SslVerifiedChainOnly)
-    option.Some(_verify_full), option.None -> Ok(pog.SslVerified)
+    -> Ok(dream_postgres_client.SslVerifiedChainOnlyCaFile(path))
+    option.Some("verify-ca"), option.None ->
+      Ok(dream_postgres_client.SslVerifiedChainOnly)
+    option.Some(_verify_full), option.None ->
+      Ok(dream_postgres_client.SslVerified)
     option.Some(_verify_full), option.Some(path) ->
-      Ok(pog.SslVerifiedCaFile(path))
+      Ok(dream_postgres_client.SslVerifiedCaFile(path))
   }
 }

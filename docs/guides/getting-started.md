@@ -27,10 +27,10 @@ In this guide you'll:
 
 ## Before you start
 
-Add the package, and `dream_pog` with it. dream_postgres sets up the pool and reads the results, but you write the queries with `dream_pog`, a fork of [Pog](https://hexdocs.pm/pog) with the same API, so your code imports it directly, as `import dream_pog as pog`:
+Add the package, and `dream_postgres_client` with it. dream_postgres sets up the pool and reads the results, but you write the queries with `dream_postgres_client`, a fork of [Pog](https://hexdocs.pm/pog) with the same API, so your code imports it directly, as `import dream_postgres_client`:
 
 ```sh
-gleam add dream_postgres dream_pog
+gleam add dream_postgres dream_postgres_client
 ```
 
 dream_postgres has no dependency on Dream or on any web framework, so it works in any Gleam project on the Erlang target.
@@ -101,7 +101,7 @@ pub fn connect(database_url: String) -> Result(postgres.Connection, String) {
 Here's what happens:
 
 - `from_url` reads the URL, sets a pool size of 15 and starts the pool. Each call registers its pool under a new name, so you don't have to pick one.
-- `Ok(connection)` holds a `postgres.Connection`. It's the same type as `pog.Connection`, so you pass it to `pog.execute` to run a query.
+- `Ok(connection)` holds a `postgres.Connection`. It's the same type as `dream_postgres_client.Connection`, so you pass it to `dream_postgres_client.execute` to run a query.
 - `InvalidUrl(error)` means the URL itself is wrong. The `UrlError` inside says what's wrong, for example `MissingDatabase` or `UnsupportedParameter("connect_timeout")`.
 - `PoolStartExited` means the pool process didn't start.
 
@@ -201,12 +201,12 @@ Now the program has a connection that works. Keep it in a context value that you
 ### Find a user and greet them <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_pog as pog
 import dream_postgres/query
+import dream_postgres_client
 import gleam/dynamic/decode
 
 pub type Context {
-  Context(db: pog.Connection)
+  Context(db: dream_postgres_client.Connection)
 }
 
 pub type User {
@@ -219,16 +219,24 @@ pub fn greet_user(context: Context, id: Int) -> String {
 }
 
 pub fn find_user(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   id: Int,
-) -> Result(pog.Returned(User), pog.QueryError) {
-  pog.query("SELECT id, name FROM users WHERE id = $1")
-  |> pog.parameter(pog.int(id))
-  |> pog.returning(user_decoder())
-  |> pog.execute(db)
+) -> Result(
+  dream_postgres_client.Returned(User),
+  dream_postgres_client.QueryError,
+) {
+  dream_postgres_client.query("SELECT id, name FROM users WHERE id = $1")
+  |> dream_postgres_client.parameter(dream_postgres_client.int(id))
+  |> dream_postgres_client.returning(user_decoder())
+  |> dream_postgres_client.execute(db)
 }
 
-pub fn greeting(result: Result(pog.Returned(User), pog.QueryError)) -> String {
+pub fn greeting(
+  result: Result(
+    dream_postgres_client.Returned(User),
+    dream_postgres_client.QueryError,
+  ),
+) -> String {
   case query.first_row(result) {
     Ok(user) -> "Hello, " <> user.name
     Error(query.NotFound) -> "No user with that id"
@@ -246,7 +254,7 @@ fn user_decoder() -> decode.Decoder(User) {
 Here's how the pieces fit:
 
 - `Context` is the value your program builds once at startup and passes to the code that needs the database. A web app usually keeps it in its request context, next to its other services.
-- `find_user` builds a Pog query. `$1` is a parameter, and `pog.parameter(pog.int(id))` fills it, so the value never becomes part of the SQL text. `pog.returning` decodes each row with `user_decoder`, and `pog.execute` runs it on the pool.
+- `find_user` builds a Pog query. `$1` is a parameter, and `dream_postgres_client.parameter(dream_postgres_client.int(id))` fills it, so the value never becomes part of the SQL text. `dream_postgres_client.returning` decodes each row with `user_decoder`, and `dream_postgres_client.execute` runs it on the pool.
 - `greeting` takes the result and nothing else. `query.first_row` turns it into one of three cases: the first row, `NotFound` when the query returned no rows, or `DatabaseError` when the query failed.
 - `greet_user` joins the two: `find_user(context.db, id) |> greeting`.
 
@@ -265,12 +273,12 @@ find_user(db, 2)
   -> Ok(Returned(1, [User(2, "Grace")]))
 ```
 
-`find_user` shows the result as `string.inspect` writes it, so `pog.Returned(count: 1, rows: [...])` shows as `Returned(1, [...])`. Splitting the query from the code that reads its result is what makes this easy to test. `greeting` doesn't need a database at all. Here's what it returns for a result with two rows, and what `greet_user` returns when no database listens:
+`find_user` shows the result as `string.inspect` writes it, so `dream_postgres_client.Returned(count: 1, rows: [...])` shows as `Returned(1, [...])`. Splitting the query from the code that reads its result is what makes this easy to test. `greeting` doesn't need a database at all. Here's what it returns for a result with two rows, and what `greet_user` returns when no database listens:
 
 ### What greeting returns, and greet_user with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_greeting.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-greeting(Ok(pog.Returned(count: 2, rows: [User(1, "Ada"), User(2, "Grace")])))
+greeting(Ok(dream_postgres_client.Returned(count: 2, rows: [User(1, "Ada"), User(2, "Grace")])))
   -> "Hello, Ada"
 
 greet_user(Context(db: <a pool where nothing listens>), 1)
@@ -288,7 +296,7 @@ greet_user(Context(db: <a pool where nothing listens>), 1)
 | Your platform gives you a `DATABASE_URL`, and a pool of 15 connections suits you | `postgres.from_url(url)` | One call reads the URL and starts the pool. |
 | You have a URL, but you want another pool size or other pool settings | `postgres.parse_config(pool_name, url)`, then the setters, then `postgres.connect(config)` | `parse_config` gives you the `Config` before anything starts. |
 | Your settings come as separate values, such as a host and a password from a secret store | `postgres.new(pool_name)` and the builder functions | No URL, so nothing to encode. |
-| The pool should run under your app's supervisor | A config, then `pog.supervised(config)` | The supervisor restarts the pool if it crashes. |
+| The pool should run under your app's supervisor | A config, then `dream_postgres_client.supervised(config)` | The supervisor restarts the pool if it crashes. |
 
 The [Connecting to PostgreSQL in production](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md) guide shows each of these.
 
@@ -297,19 +305,19 @@ The [Connecting to PostgreSQL in production](https://github.com/TrustBound/dream
 | What happened | What you see | What to do |
 |:---|:---|:---|
 | The URL has a typo, a missing part or a `libpq` keyword this package doesn't read | `Error(InvalidUrl(error))` from `from_url`, where `error` names the problem | Fix the URL. The [connecting guide](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md#step-1-say-exactly-whats-wrong-with-a-url) turns each `UrlError` into a message. |
-| The URL has a server parameter that the server doesn't know, such as `serach_path`, or a value it refuses, such as `timezone=Mars%2FPhobos` | `from_url` returns `Ok`. The first query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | The Step 2 check catches it. The PostgreSQL server log names the parameter. |
+| The URL has a server parameter that the server doesn't know, such as `serach_path`, or a value it refuses, such as `timezone=Mars%2FPhobos` | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after about 2 seconds. | The Step 2 check catches it. The PostgreSQL server log names the parameter. |
 | The password has an `@`, `/`, `:` or `#` that isn't encoded | `Error(InvalidUrl(MalformedUrl))` | Percent-encode it: `@` is `%40`, `/` is `%2F`, `:` is `%3A`, `#` is `%23`. |
-| No database listens at the host and port | `from_url` returns `Ok`. The first query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Check at startup, as Step 2 does. |
-| The password is wrong, the user doesn't exist, or the database doesn't exist | `from_url` returns `Ok`. The first query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds, the same as when nothing listens. | The Step 2 check catches it. The PostgreSQL server log names the cause. |
-| The table doesn't exist, or the SQL has an error | `Error(pog.PostgresqlError(..))` from `pog.execute` at once, for example `PostgresqlError("42P01", "undefined_table", "relation \"users\" does not exist")`. `first_row` turns it into `DatabaseError`. | Log the Pog error before you turn it into `DatabaseError`. The [queries guide](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md#step-5-keep-the-cause-of-a-failure) shows how. |
+| No database listens at the host and port | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after about 2 seconds. | Check at startup, as Step 2 does. |
+| The password is wrong, the user doesn't exist, or the database doesn't exist | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after about 2 seconds, the same as when nothing listens. | The Step 2 check catches it. The PostgreSQL server log names the cause. |
+| The table doesn't exist, or the SQL has an error | `Error(dream_postgres_client.PostgresqlError(..))` from `dream_postgres_client.execute` at once, for example `PostgresqlError("42P01", "undefined_table", "relation \"users\" does not exist")`. `first_row` turns it into `DatabaseError`. | Log the Pog error before you turn it into `DatabaseError`. The [queries guide](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md#step-5-keep-the-cause-of-a-failure) shows how. |
 
 ## Test your code
 
-The code that reads results is where your logic lives, and you can test it with results you build by hand: `pog.Returned(count: 1, rows: [...])` for a query that worked, and a `pog.QueryError` value for one that didn't. Startup code that fails on a bad URL needs no database either, because the URL is read before anything connects.
+The code that reads results is where your logic lives, and you can test it with results you build by hand: `dream_postgres_client.Returned(count: 1, rows: [...])` for a query that worked, and a `dream_postgres_client.QueryError` value for one that didn't. Startup code that fails on a bad URL needs no database either, because the URL is read before anything connects.
 
 The tests here use [dream_test](https://hexdocs.pm/dream_test). It isn't on Hex yet, so add it from GitHub, with the commit this package tests with:
 
-### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L31-L33"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L33-L35"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```toml
 [dev-dependencies]
@@ -320,7 +328,7 @@ dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "1639
 ### Test the greeting and the startup check <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_pog as pog
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -332,7 +340,12 @@ pub fn tests() -> TestSuite {
   describe("my app's database code", [
     it("greets the user of the first row", fn() {
       // Arrange
-      let result = Ok(pog.Returned(count: 1, rows: [User(id: 1, name: "Ada")]))
+      let result =
+        Ok(
+          dream_postgres_client.Returned(count: 1, rows: [
+            User(id: 1, name: "Ada"),
+          ]),
+        )
 
       // Act
       let text = greeting(result)
@@ -345,7 +358,7 @@ pub fn tests() -> TestSuite {
     }),
     it("says so when no user has the id", fn() {
       // Arrange
-      let result = Ok(pog.Returned(count: 0, rows: []))
+      let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
       // Act
       let text = greeting(result)
@@ -394,4 +407,4 @@ To test the queries themselves against a real database, run a test database (the
 - [Running queries and handling their results](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md): turn query results and their errors into responses, with tests.
 - [README](https://github.com/TrustBound/dream_postgres/blob/main/README.md): the package at a glance.
 - [API reference on HexDocs](https://hexdocs.pm/dream_postgres/): `dream_postgres/client` and `dream_postgres/query`.
-- [Pog on HexDocs](https://hexdocs.pm/pog/), which has the same API as `dream_pog`: queries, parameters, decoders and transactions.
+- [Pog on HexDocs](https://hexdocs.pm/pog/), which has the same API as `dream_postgres_client`: queries, parameters, decoders and transactions.

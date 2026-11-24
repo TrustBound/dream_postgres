@@ -4,10 +4,10 @@ index_users(db)                       // the table is empty
 index_users(db)                       // after Grace, then Ada, signed up
   -> Response(200, "Ada, Grace")
 
-users_response(Ok(pog.Returned(count: 2, rows: [ListUsersRow(1, "Ada"), ListUsersRow(2, "Grace")])))
+users_response(Ok(dream_postgres_client.Returned(count: 2, rows: [ListUsersRow(1, "Ada"), ListUsersRow(2, "Grace")])))
   -> Response(200, "Ada, Grace")
 
-users_response(Ok(pog.Returned(count: 0, rows: [])))
+users_response(Ok(dream_postgres_client.Returned(count: 0, rows: [])))
   -> Response(200, "No users yet")
 
 index_users(<a pool where nothing listens>)

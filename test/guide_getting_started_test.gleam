@@ -5,7 +5,7 @@
 //// guide's SQL makes. The other pools start on a local port where no
 //// database listens.
 
-import dream_pog as pog
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -75,7 +75,7 @@ pub fn tests() -> TestSuite {
         // Arrange
         let result =
           Ok(
-            pog.Returned(count: 2, rows: [
+            dream_postgres_client.Returned(count: 2, rows: [
               User(id: 1, name: "Ada"),
               User(id: 2, name: "Grace"),
             ]),
@@ -93,7 +93,7 @@ pub fn tests() -> TestSuite {
         // Assert
         output_file.calls([
           #(
-            "greeting(Ok(pog.Returned(count: 2, rows: [User(1, \"Ada\"), User(2, \"Grace\")])))",
+            "greeting(Ok(dream_postgres_client.Returned(count: 2, rows: [User(1, \"Ada\"), User(2, \"Grace\")])))",
             string.inspect(greeting),
           ),
           #(

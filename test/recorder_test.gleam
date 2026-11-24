@@ -3,10 +3,10 @@
 //// committed files of `test/fixtures/recordings`, which the playback tests
 //// play back with no database.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_postgres/recorder
 import dream_postgres/recording
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -23,7 +23,7 @@ import snippets/recorder_scrub
 fn describe_term(term: a) -> String
 
 @external(erlang, "recorder_ffi", "unsafe_value")
-fn unsafe_value(term: a) -> pog.Value
+fn unsafe_value(term: a) -> dream_postgres_client.Value
 
 pub fn tests() -> TestSuite {
   describe("recorder with a database", [
@@ -63,21 +63,24 @@ fn record_tests() {
       |> be_equal(recordings.read(recordings.fixtures <> "/users.json"))
       |> or_fail_with("Expected the committed recording")
     }),
-    it("records the queries in pog.transaction as transaction.json", fn() {
-      // Act
-      let file = {
-        use directory <- recordings.with_directory()
-        let _recorded =
-          record(directory, "transaction", user_queries.transaction_scenario)
-        recordings.read(directory <> "/transaction.json")
-      }
+    it(
+      "records the queries in dream_postgres_client.transaction as transaction.json",
+      fn() {
+        // Act
+        let file = {
+          use directory <- recordings.with_directory()
+          let _recorded =
+            record(directory, "transaction", user_queries.transaction_scenario)
+          recordings.read(directory <> "/transaction.json")
+        }
 
-      // Assert
-      file
-      |> should
-      |> be_equal(recordings.read(recordings.fixtures <> "/transaction.json"))
-      |> or_fail_with("Expected the committed recording")
-    }),
+        // Assert
+        file
+        |> should
+        |> be_equal(recordings.read(recordings.fixtures <> "/transaction.json"))
+        |> or_fail_with("Expected the committed recording")
+      },
+    ),
     it("a query returns only when its recording is on disk", fn() {
       // Act
       let recorded = {
@@ -133,7 +136,7 @@ fn record_tests() {
 fn record(
   directory: String,
   name: String,
-  run: fn(pog.Connection) -> a,
+  run: fn(dream_postgres_client.Connection) -> a,
 ) -> #(a, Result(Nil, String)) {
   recordings.record_in_schema(recordings.builder(directory, name), run)
 }
@@ -202,9 +205,9 @@ fn record_failure_tests() {
       let selected = {
         use directory <- recordings.with_directory()
         record(directory, "pid", fn(db) {
-          pog.query("SELECT $1::text")
-          |> pog.parameter(unsafe_value(pid))
-          |> pog.execute(db)
+          dream_postgres_client.query("SELECT $1::text")
+          |> dream_postgres_client.parameter(unsafe_value(pid))
+          |> dream_postgres_client.execute(db)
           |> result.map_error(recorder.error)
         }).0
       }
@@ -229,7 +232,7 @@ fn record_failure_tests() {
 // gives the result of the first and the result of `stop`.
 fn read_only_after_start(
   directory: String,
-) -> #(Result(Int, pog.QueryError), Result(Nil, String)) {
+) -> #(Result(Int, dream_postgres_client.QueryError), Result(Nil, String)) {
   let result =
     record(directory, "locked", fn(db) {
       recordings.make_read_only(directory)
@@ -241,12 +244,14 @@ fn read_only_after_start(
   result
 }
 
-fn count_tables(db: pog.Connection) -> Result(Int, pog.QueryError) {
-  pog.query(
+fn count_tables(
+  db: dream_postgres_client.Connection,
+) -> Result(Int, dream_postgres_client.QueryError) {
+  dream_postgres_client.query(
     "SELECT count(*)::int FROM pg_tables WHERE schemaname = current_schema()",
   )
-  |> pog.returning(decode.at([0], decode.int))
-  |> pog.execute(db)
+  |> dream_postgres_client.returning(decode.at([0], decode.int))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { list.fold(returned.rows, 0, fn(_, row) { row }) })
 }
 
@@ -287,7 +292,10 @@ fn passthrough_tests() {
 }
 
 // Runs `run` on a connection of a passthrough recorder, in a new schema.
-fn passthrough(directory: String, run: fn(pog.Connection) -> a) -> a {
+fn passthrough(
+  directory: String,
+  run: fn(dream_postgres_client.Connection) -> a,
+) -> a {
   recordings.in_schema(
     recordings.builder(directory, "passthrough"),
     recorder.Passthrough,
@@ -336,15 +344,21 @@ fn scrub_tests() {
 
 /// The queries of `scrubbed.json`.
 pub fn scrub_scenario(
-  db: pog.Connection,
-) -> Result(List(String), pog.QueryError) {
+  db: dream_postgres_client.Connection,
+) -> Result(List(String), dream_postgres_client.QueryError) {
   let assert Ok(_created) =
-    pog.query("CREATE TABLE sessions (user_name text, token text)")
-    |> pog.execute(db)
+    dream_postgres_client.query(
+      "CREATE TABLE sessions (user_name text, token text)",
+    )
+    |> dream_postgres_client.execute(db)
   let assert Ok(_inserted) =
-    pog.query("INSERT INTO sessions (user_name, token) VALUES ($1, $2)")
-    |> pog.parameter(pog.text("ada"))
-    |> pog.parameter(pog.text("s3cret-token"))
-    |> pog.execute(db)
+    dream_postgres_client.query(
+      "INSERT INTO sessions (user_name, token) VALUES ($1, $2)",
+    )
+    |> dream_postgres_client.parameter(dream_postgres_client.text("ada"))
+    |> dream_postgres_client.parameter(dream_postgres_client.text(
+      "s3cret-token",
+    ))
+    |> dream_postgres_client.execute(db)
   recorder_scrub.find_tokens(db, "ada")
 }

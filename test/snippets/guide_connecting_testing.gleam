@@ -3,8 +3,8 @@
 //// Tests the config that a URL gives, the message for a bad URL, and a pool
 //// on a port where no database listens.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -26,7 +26,7 @@ pub fn tests() -> TestSuite {
       config
       |> result.map(fn(config) { #(config.host, config.ssl, config.pool_size) })
       |> should
-      |> be_equal(Ok(#("db.internal", pog.SslVerified, 25)))
+      |> be_equal(Ok(#("db.internal", dream_postgres_client.SslVerified, 25)))
       |> or_fail_with("Expected the host, SSL and pool size")
     }),
     it("explains a URL with a parameter it does not support", fn() {
@@ -57,7 +57,7 @@ pub fn tests() -> TestSuite {
       // Assert
       answer
       |> should
-      |> be_equal(Error(pog.ConnectionUnavailable))
+      |> be_equal(Error(dream_postgres_client.ConnectionUnavailable))
       |> or_fail_with("Expected ConnectionUnavailable")
     }),
   ])

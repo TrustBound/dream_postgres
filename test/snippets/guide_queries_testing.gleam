@@ -3,8 +3,8 @@
 //// Tests the response functions with results built by hand, and a handler
 //// against a pool where no database listens.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -17,7 +17,7 @@ pub fn tests() -> TestSuite {
     it("answers 200 with the user of the first row", fn() {
       // Arrange
       let ada = FindUserRow(id: 1, name: "Ada", email: "ada@example.com")
-      let result = Ok(pog.Returned(count: 1, rows: [ada]))
+      let result = Ok(dream_postgres_client.Returned(count: 1, rows: [ada]))
 
       // Act
       let response = user_response(result)
@@ -30,7 +30,7 @@ pub fn tests() -> TestSuite {
     }),
     it("answers 404 when no row has the id", fn() {
       // Arrange
-      let result = Ok(pog.Returned(count: 0, rows: []))
+      let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
       // Act
       let response = user_response(result)
@@ -44,7 +44,7 @@ pub fn tests() -> TestSuite {
     it("answers 409 when the email is taken", fn() {
       // Arrange
       let result =
-        Error(pog.ConstraintViolated(
+        Error(dream_postgres_client.ConstraintViolated(
           message: "duplicate key value violates unique constraint \"users_email_key\"",
           constraint: "users_email_key",
           detail: "Key (email)=(ada@example.com) already exists.",

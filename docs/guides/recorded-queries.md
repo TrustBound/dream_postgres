@@ -33,10 +33,10 @@ In this guide you'll:
 
 ## Before you start
 
-You need the package and `dream_pog` (a fork of Pog, imported as `pog`):
+You need the package and `dream_postgres_client` (a fork of Pog):
 
 ```sh
-gleam add dream_postgres dream_pog
+gleam add dream_postgres dream_postgres_client
 ```
 
 The examples use the users table of [Running queries and handling their results](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md#before-you-start):
@@ -72,7 +72,7 @@ Here are two query functions: one inserts a user and gives the new id, the other
 ### Two queries on the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_pog as pog
+import dream_postgres_client
 import gleam/dynamic/decode
 import gleam/result
 
@@ -81,48 +81,60 @@ pub type User {
 }
 
 pub fn create_user(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   name: String,
   email: String,
-) -> Result(Int, pog.QueryError) {
-  pog.query("INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id")
-  |> pog.parameter(pog.text(name))
-  |> pog.parameter(pog.text(email))
-  |> pog.returning(decode.at([0], decode.int))
-  |> pog.execute(db)
+) -> Result(Int, dream_postgres_client.QueryError) {
+  dream_postgres_client.query(
+    "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
+  )
+  |> dream_postgres_client.parameter(dream_postgres_client.text(name))
+  |> dream_postgres_client.parameter(dream_postgres_client.text(email))
+  |> dream_postgres_client.returning(decode.at([0], decode.int))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
   |> result.try(first)
 }
 
-pub fn find_user(db: pog.Connection, id: Int) -> Result(User, pog.QueryError) {
-  pog.query("SELECT id, name, email FROM users WHERE id = $1")
-  |> pog.parameter(pog.int(id))
-  |> pog.returning({
+pub fn find_user(
+  db: dream_postgres_client.Connection,
+  id: Int,
+) -> Result(User, dream_postgres_client.QueryError) {
+  dream_postgres_client.query("SELECT id, name, email FROM users WHERE id = $1")
+  |> dream_postgres_client.parameter(dream_postgres_client.int(id))
+  |> dream_postgres_client.returning({
     use id <- decode.field(0, decode.int)
     use name <- decode.field(1, decode.string)
     use email <- decode.field(2, decode.string)
     decode.success(User(id:, name:, email:))
   })
-  |> pog.execute(db)
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
   |> result.try(first)
 }
 
 // No row is an error here, so a test sees it.
-fn first(rows: List(a)) -> Result(a, pog.QueryError) {
+fn first(rows: List(a)) -> Result(a, dream_postgres_client.QueryError) {
   case rows {
     [row, ..] -> Ok(row)
-    [] -> Error(pog.PostgresqlError("P0002", "no_data_found", "No row"))
+    [] ->
+      Error(dream_postgres_client.PostgresqlError(
+        "P0002",
+        "no_data_found",
+        "No row",
+      ))
   }
 }
 ```
 
 `find_user` gives an error for no row, so a test sees it. The code under test is a function that uses both:
 
-### The code under test <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L13-L16"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The code under test <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L13-L18"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-pub fn create_and_find(db: pog.Connection) -> Result(User, pog.QueryError) {
+pub fn create_and_find(
+  db: dream_postgres_client.Connection,
+) -> Result(User, dream_postgres_client.QueryError) {
   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
   find_user(db, id)
 }
@@ -135,9 +147,9 @@ A recorder keeps the queries of one test in one file, `<directory>/<name>.json`.
 ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_postgres/recorder
+import dream_postgres_client
 import gleam/erlang/process
 import gleam/result
 import gleam/string
@@ -158,7 +170,7 @@ pub fn start_recorder(
 pub fn connect(
   recording: recorder.Recorder,
   database_url: String,
-) -> Result(pog.Connection, String) {
+) -> Result(dream_postgres_client.Connection, String) {
   use config <- result.try(
     postgres.parse_config(process.new_name("test_database"), database_url)
     |> result.map_error(string.inspect),
@@ -178,7 +190,7 @@ How it works:
 
 `run_recorded` runs the code under test with a recorder in a mode, and stops the recorder:
 
-### Run the code under test with a recorder <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L18-L29"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Run the code under test with a recorder <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L20-L31"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 pub fn run_recorded(
@@ -257,7 +269,7 @@ create_and_find(a pool with no database)
 
 With the recorder, `create_and_find` gets the recorded answers, although nothing listens at the URL. Without it, the same function can't connect. The package's tests run this playback with both test servers stopped, to prove that playback never connects.
 
-A query in `pog.transaction` is recorded and played back the same way. In playback mode, a callback that returns `Error` gives `TransactionRolledBack`, as it did live.
+A query in `dream_postgres_client.transaction` is recorded and played back the same way. In playback mode, a callback that returns `Error` gives `TransactionRolledBack`, as it did live.
 
 ## Step 5: Read a query with no recording
 
@@ -270,7 +282,7 @@ find_user(db, 2) |> result.map_error(recorder.error)
   -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1", "[2]", "test/fixtures/recordings/create_and_find.json")))
 ```
 
-The query error is `pog.InterceptorFailed`. `recorder.error` reads the `recorder.RecorderError` back from it: `NoRecording(sql:, parameters:, path:)` names the SQL, the parameters and the file. For any other query error, `recorder.error` gives `Error(Nil)`. When the same query ran more times than the recording has results for it, the error is `PlayedAlready`, with the same fields.
+The query error is `dream_postgres_client.InterceptorFailed`. `recorder.error` reads the `recorder.RecorderError` back from it: `NoRecording(sql:, parameters:, path:)` names the SQL, the parameters and the file. For any other query error, `recorder.error` gives `Error(Nil)`. When the same query ran more times than the recording has results for it, the error is `PlayedAlready`, with the same fields.
 
 That's the error you see when a test runs a query you never recorded, or a query that changed since you recorded it. Record again, or fix the test.
 
@@ -281,11 +293,11 @@ A recording file goes into your repository, so it must not hold a secret. Here a
 ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_pog as pog
 import dream_postgres/recorder
 import dream_postgres/recording.{
   type RecordedQuery, type RecordedResult, RecordedQuery, Returned, Text, Tuple,
 }
+import dream_postgres_client
 import gleam/dynamic/decode
 import gleam/list
 import gleam/result
@@ -295,13 +307,13 @@ const insert_session = "INSERT INTO sessions (user_name, token) VALUES ($1, $2)"
 const select_tokens = "SELECT token FROM sessions WHERE user_name = $1"
 
 pub fn find_tokens(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   user_name: String,
-) -> Result(List(String), pog.QueryError) {
-  pog.query(select_tokens)
-  |> pog.parameter(pog.text(user_name))
-  |> pog.returning(decode.at([0], decode.string))
-  |> pog.execute(db)
+) -> Result(List(String), dream_postgres_client.QueryError) {
+  dream_postgres_client.query(select_tokens)
+  |> dream_postgres_client.parameter(dream_postgres_client.text(user_name))
+  |> dream_postgres_client.returning(decode.at([0], decode.string))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
@@ -394,24 +406,26 @@ Say `find_user` gets a `LIMIT 1`:
 ### find_user with new SQL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_changed.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_pog as pog
+import dream_postgres_client
 import gleam/dynamic/decode
 import gleam/result
 import snippets/guide_recording_users.{type User, User}
 
 pub fn find_user(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   id: Int,
-) -> Result(List(User), pog.QueryError) {
-  pog.query("SELECT id, name, email FROM users WHERE id = $1 LIMIT 1")
-  |> pog.parameter(pog.int(id))
-  |> pog.returning({
+) -> Result(List(User), dream_postgres_client.QueryError) {
+  dream_postgres_client.query(
+    "SELECT id, name, email FROM users WHERE id = $1 LIMIT 1",
+  )
+  |> dream_postgres_client.parameter(dream_postgres_client.int(id))
+  |> dream_postgres_client.returning({
     use id <- decode.field(0, decode.int)
     use name <- decode.field(1, decode.string)
     use email <- decode.field(2, decode.string)
     decode.success(User(id:, name:, email:))
   })
-  |> pog.execute(db)
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 ```

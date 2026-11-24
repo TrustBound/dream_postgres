@@ -4,11 +4,11 @@
 //// the parameters of the INSERT, and the result transformer hides it in
 //// the rows of the SELECT.
 
-import dream_pog as pog
 import dream_postgres/recorder
 import dream_postgres/recording.{
   type RecordedQuery, type RecordedResult, RecordedQuery, Returned, Text, Tuple,
 }
+import dream_postgres_client
 import gleam/dynamic/decode
 import gleam/list
 import gleam/result
@@ -18,13 +18,13 @@ const insert_session = "INSERT INTO sessions (user_name, token) VALUES ($1, $2)"
 const select_tokens = "SELECT token FROM sessions WHERE user_name = $1"
 
 pub fn find_tokens(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   user_name: String,
-) -> Result(List(String), pog.QueryError) {
-  pog.query(select_tokens)
-  |> pog.parameter(pog.text(user_name))
-  |> pog.returning(decode.at([0], decode.string))
-  |> pog.execute(db)
+) -> Result(List(String), dream_postgres_client.QueryError) {
+  dream_postgres_client.query(select_tokens)
+  |> dream_postgres_client.parameter(dream_postgres_client.text(user_name))
+  |> dream_postgres_client.returning(decode.at([0], decode.string))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 

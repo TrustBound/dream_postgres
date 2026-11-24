@@ -1,18 +1,21 @@
 //// Database query helpers
 ////
-//// Simple utilities for extracting rows from Pog query results. Use these after
-//// executing database queries to get your data out cleanly.
+//// Simple utilities for extracting rows from Pog query results. Use these
+//// after executing database queries to get your data out cleanly.
 ////
 //// ## Example
 ////
 //// ### Read the first row <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_first_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
-//// import dream_pog as pog
 //// import dream_postgres/query
+//// import dream_postgres_client
 ////
 //// pub fn find_name(
-////   result: Result(pog.Returned(String), pog.QueryError),
+////   result: Result(
+////     dream_postgres_client.Returned(String),
+////     dream_postgres_client.QueryError,
+////   ),
 //// ) -> Result(String, String) {
 ////   case query.first_row(result) {
 ////     Ok(name) -> Ok(name)
@@ -22,7 +25,7 @@
 //// }
 //// ```
 
-import dream_pog as pog
+import dream_postgres_client
 import gleam/list
 import gleam/result
 
@@ -70,11 +73,14 @@ pub type QueryError {
 /// ### Read the first row <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_first_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/query
+/// import dream_postgres_client
 ///
 /// pub fn find_name(
-///   result: Result(pog.Returned(String), pog.QueryError),
+///   result: Result(
+///     dream_postgres_client.Returned(String),
+///     dream_postgres_client.QueryError,
+///   ),
 /// ) -> Result(String, String) {
 ///   case query.first_row(result) {
 ///     Ok(name) -> Ok(name)
@@ -84,7 +90,10 @@ pub type QueryError {
 /// }
 /// ```
 pub fn first_row(
-  result: Result(pog.Returned(row), pog.QueryError),
+  result: Result(
+    dream_postgres_client.Returned(row),
+    dream_postgres_client.QueryError,
+  ),
 ) -> Result(row, QueryError) {
   case result {
     Ok(db_result) -> first_of_rows(db_result.rows)
@@ -123,12 +132,15 @@ fn first_of_rows(rows: List(row)) -> Result(row, QueryError) {
 /// ### Read all rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_all_rows.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/query
+/// import dream_postgres_client
 /// import gleam/string
 ///
 /// pub fn find_names(
-///   result: Result(pog.Returned(String), pog.QueryError),
+///   result: Result(
+///     dream_postgres_client.Returned(String),
+///     dream_postgres_client.QueryError,
+///   ),
 /// ) -> Result(List(String), String) {
 ///   case query.all_rows(result) {
 ///     Ok(names) -> Ok(names)
@@ -137,7 +149,10 @@ fn first_of_rows(rows: List(row)) -> Result(row, QueryError) {
 /// }
 /// ```
 pub fn all_rows(
-  result: Result(pog.Returned(row), pog.QueryError),
+  result: Result(
+    dream_postgres_client.Returned(row),
+    dream_postgres_client.QueryError,
+  ),
 ) -> Result(List(row), QueryError) {
   case result {
     Ok(db_result) -> Ok(db_result.rows)

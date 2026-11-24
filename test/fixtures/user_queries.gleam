@@ -1,27 +1,34 @@
 //// The queries of the recorder tests: a `users` table, recorded against
 //// the real server and played back with no database.
 
-import dream_pog as pog
+import dream_postgres_client
 import gleam/dynamic/decode
 import gleam/result
 import gleam/string
 
 pub fn create_table(
-  db: pog.Connection,
-) -> Result(pog.Returned(Nil), pog.QueryError) {
-  pog.query("CREATE TABLE users (id serial PRIMARY KEY, name text UNIQUE)")
-  |> pog.execute(db)
+  db: dream_postgres_client.Connection,
+) -> Result(
+  dream_postgres_client.Returned(Nil),
+  dream_postgres_client.QueryError,
+) {
+  dream_postgres_client.query(
+    "CREATE TABLE users (id serial PRIMARY KEY, name text UNIQUE)",
+  )
+  |> dream_postgres_client.execute(db)
 }
 
 /// Inserts a user and gives the new id.
 pub fn insert_user(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   name: String,
-) -> Result(Int, pog.QueryError) {
-  pog.query("INSERT INTO users (name) VALUES ($1) RETURNING id")
-  |> pog.parameter(pog.text(name))
-  |> pog.returning(decode.at([0], decode.int))
-  |> pog.execute(db)
+) -> Result(Int, dream_postgres_client.QueryError) {
+  dream_postgres_client.query(
+    "INSERT INTO users (name) VALUES ($1) RETURNING id",
+  )
+  |> dream_postgres_client.parameter(dream_postgres_client.text(name))
+  |> dream_postgres_client.returning(decode.at([0], decode.int))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
   |> result.map(first_or_zero)
 }
@@ -33,24 +40,28 @@ fn first_or_zero(ids: List(Int)) -> Int {
   }
 }
 
-pub fn user_names(db: pog.Connection) -> Result(List(String), pog.QueryError) {
-  pog.query("SELECT name FROM users ORDER BY id")
-  |> pog.returning(decode.at([0], decode.string))
-  |> pog.execute(db)
+pub fn user_names(
+  db: dream_postgres_client.Connection,
+) -> Result(List(String), dream_postgres_client.QueryError) {
+  dream_postgres_client.query("SELECT name FROM users ORDER BY id")
+  |> dream_postgres_client.returning(decode.at([0], decode.string))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
-pub fn count_users(db: pog.Connection) -> Result(Int, pog.QueryError) {
-  pog.query("SELECT count(*)::int FROM users")
-  |> pog.returning(decode.at([0], decode.int))
-  |> pog.execute(db)
+pub fn count_users(
+  db: dream_postgres_client.Connection,
+) -> Result(Int, dream_postgres_client.QueryError) {
+  dream_postgres_client.query("SELECT count(*)::int FROM users")
+  |> dream_postgres_client.returning(decode.at([0], decode.int))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
   |> result.map(first_or_zero)
 }
 
 /// Runs the queries of `users.json` in order, and gives each result as
 /// text.
-pub fn scenario(db: pog.Connection) -> List(String) {
+pub fn scenario(db: dream_postgres_client.Connection) -> List(String) {
   [
     string.inspect(create_table(db)),
     string.inspect(insert_user(db, "Ada")),
@@ -76,11 +87,14 @@ pub const scenario_results = [
 /// Inserts two users in one transaction, and gives the error of the
 /// transaction when one insert fails.
 pub fn insert_two(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   first: String,
   second: String,
-) -> Result(#(Int, Int), pog.TransactionError(pog.QueryError)) {
-  use transaction <- pog.transaction(db)
+) -> Result(
+  #(Int, Int),
+  dream_postgres_client.TransactionError(dream_postgres_client.QueryError),
+) {
+  use transaction <- dream_postgres_client.transaction(db)
   use first_id <- result.try(insert_user(transaction, first))
   use second_id <- result.map(insert_user(transaction, second))
   #(first_id, second_id)
@@ -88,7 +102,9 @@ pub fn insert_two(
 
 /// Runs the queries of `transaction.json` in order, and gives each result
 /// as text.
-pub fn transaction_scenario(db: pog.Connection) -> List(String) {
+pub fn transaction_scenario(
+  db: dream_postgres_client.Connection,
+) -> List(String) {
   [
     string.inspect(create_table(db)),
     string.inspect(insert_two(db, "Ada", "Ada")),

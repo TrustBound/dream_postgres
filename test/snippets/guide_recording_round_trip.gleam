@@ -3,14 +3,16 @@
 //// `create_and_find` is the code under test. `run_recorded` runs it with a
 //// recorder in a mode, and stops the recorder.
 
-import dream_pog as pog
 import dream_postgres/recorder
+import dream_postgres_client
 import gleam/result
 import gleam/string
 import snippets/guide_recording_setup.{connect, start_recorder}
 import snippets/guide_recording_users.{type User, create_user, find_user}
 
-pub fn create_and_find(db: pog.Connection) -> Result(User, pog.QueryError) {
+pub fn create_and_find(
+  db: dream_postgres_client.Connection,
+) -> Result(User, dream_postgres_client.QueryError) {
   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
   find_user(db, id)
 }

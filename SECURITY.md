@@ -14,7 +14,7 @@ dream_postgres is a library that provides:
 - **Connection URL parsing** - `parse_config` and `from_url`
 - **Query result helpers** - `query.first_row` and `query.all_rows`
 
-dream_postgres is **not a framework** and **not an ORM**. You write the SQL. [Pog](https://hex.pm/packages/pog) runs it.
+dream_postgres is **not a framework** and **not an ORM**. You write the SQL. `dream_postgres_client`, a fork of [Pog](https://hex.pm/packages/pog), runs it.
 
 This means dream_postgres's security surface is small:
 - URL parsing bugs (a URL read into the wrong host, user, database or SSL mode)
@@ -24,7 +24,7 @@ This means dream_postgres's security surface is small:
 ## What You're Responsible For
 
 Your application code handles:
-- **SQL injection** - You write queries (use parameterized queries with `pog.parameter`)
+- **SQL injection** - You write queries (use parameterized queries with `dream_postgres_client.parameter`)
 - **Credentials** - Keep connection URLs and passwords out of your logs and your repository
 - **TLS** - Choose the `sslmode` your deployment needs
 - **Authentication** - You implement it
@@ -91,7 +91,7 @@ These are not dream_postgres vulnerabilities (they're your application's respons
 ## Dependencies
 
 dream_postgres's dependencies:
-- **Pog** - PostgreSQL client (wraps the Erlang `pgo` library)
+- **dream_postgres_client** - PostgreSQL client, a fork of Pog (wraps `dream_postgres_driver`, a fork of the Erlang `pgo` library)
 - **Gleam stdlib** - Type-safe, battle-tested
 - **BEAM/OTP** - 30+ years of production use
 

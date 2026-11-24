@@ -6,9 +6,9 @@
 //// the playback tests read with no database are in
 //// `test/fixtures/recordings`.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_postgres/recorder
+import dream_postgres_client
 import fixtures/database_url
 import fixtures/test_database
 import gleam/dynamic.{type Dynamic}
@@ -33,7 +33,7 @@ fn delete_directory(path: String) -> Nil
 pub fn make_read_only(path: String) -> Nil
 
 @external(erlang, "recorder_ffi", "is_registered")
-fn is_registered_ffi(name: process.Name(pog.Message)) -> Bool
+fn is_registered_ffi(name: process.Name(dream_postgres_client.Message)) -> Bool
 
 /// Gives `run` a new directory path that does not exist yet, and deletes
 /// the directory after `run` returns.
@@ -51,7 +51,9 @@ pub fn read(path: String) -> String {
 }
 
 /// True when a pool runs under the name.
-pub fn is_registered(name: process.Name(pog.Message)) -> Bool {
+pub fn is_registered(
+  name: process.Name(dream_postgres_client.Message),
+) -> Bool {
   is_registered_ffi(name)
 }
 
@@ -70,12 +72,12 @@ pub fn start(
 
 /// Runs `sql` and gives its rows before they are decoded.
 pub fn rows(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   sql: String,
-) -> Result(List(Dynamic), pog.QueryError) {
-  pog.query(sql)
-  |> pog.returning(decode.dynamic)
-  |> pog.execute(db)
+) -> Result(List(Dynamic), dream_postgres_client.QueryError) {
+  dream_postgres_client.query(sql)
+  |> dream_postgres_client.returning(decode.dynamic)
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
@@ -88,7 +90,7 @@ pub fn make_writable(path: String) -> Nil
 /// of `recorder.stop`.
 pub fn record_in_schema(
   builder: recorder.RecorderBuilder,
-  run: fn(pog.Connection) -> a,
+  run: fn(dream_postgres_client.Connection) -> a,
 ) -> #(a, Result(Nil, String)) {
   in_schema(builder, recorder.Record, run)
 }
@@ -98,7 +100,7 @@ pub fn record_in_schema(
 pub fn in_schema(
   builder: recorder.RecorderBuilder,
   mode: recorder.Mode,
-  run: fn(pog.Connection) -> a,
+  run: fn(dream_postgres_client.Connection) -> a,
 ) -> #(a, Result(Nil, String)) {
   use <- test_database.with_own_pools()
   let schema = "recorder_" <> int.to_string(unique_integer())
@@ -114,7 +116,10 @@ pub fn in_schema(
       recording,
       test_database.config()
         |> postgres.pool_size(1)
-        |> pog.connection_parameter(name: "search_path", value: schema),
+        |> dream_postgres_client.connection_parameter(
+          name: "search_path",
+          value: schema,
+        ),
     )
   let value = run(db)
   let stopped = recorder.stop(recording)
@@ -128,7 +133,7 @@ pub fn in_schema(
 /// nothing listens.
 pub fn play(
   builder: recorder.RecorderBuilder,
-  run: fn(pog.Connection) -> a,
+  run: fn(dream_postgres_client.Connection) -> a,
 ) -> a {
   let assert Ok(playback) =
     recorder.start(builder |> recorder.mode(recorder.Playback))

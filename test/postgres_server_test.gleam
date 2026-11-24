@@ -1,11 +1,11 @@
-//// Tests for what the guides say a real PostgreSQL server does: the
-//// errors for a wrong login, a bad query and a slow query, the pool size,
-//// the application name, the client encoding and the SSL modes on a server with SSL off. Each
-//// test runs against the server of `fixtures/test_database`. The tests for
-//// a server with SSL on are in `postgres_ssl_test`.
+//// Tests for what the guides say a real PostgreSQL server does: the errors for
+//// a wrong login, a bad query and a slow query, the pool size, the application
+//// name, the client encoding and the SSL modes on a server with SSL off. Each
+//// test runs against the server of `fixtures/test_database`. The tests for a
+//// server with SSL on are in `postgres_ssl_test`.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import dream_test/matchers.{be_between, be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -160,7 +160,7 @@ fn check_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected ConnectionUnavailable for a wrong password")
     }),
     it("gives the wrong-password error after about 2 seconds", fn() {
@@ -180,7 +180,7 @@ fn check_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected ConnectionUnavailable for a wrong database")
     }),
     it("gives the missing-database error after about 2 seconds", fn() {
@@ -200,7 +200,7 @@ fn check_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with(
         "Expected ConnectionUnavailable for a port with no listener",
       )
@@ -222,7 +222,7 @@ fn check_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected ConnectionUnavailable for pool_size(0)")
     }),
     it("gives the pool_size(0) error after about 2 seconds", fn() {
@@ -251,7 +251,7 @@ fn query_error_tests() {
       answer
       |> should
       |> be_equal(
-        Error(pog.PostgresqlError(
+        Error(dream_postgres_client.PostgresqlError(
           code: "42601",
           name: "syntax_error",
           message: "syntax error at or near \"SELEC\"",
@@ -259,40 +259,46 @@ fn query_error_tests() {
       )
       |> or_fail_with("Expected the syntax error")
     }),
-    it("a query that runs past pog.timeout gives QueryTimeout", fn() {
-      // Act
-      let answer =
-        test_database.with_schema(fn(db) {
-          pog.query("SELECT pg_sleep(1)")
-          |> pog.timeout(200)
-          |> pog.execute(db)
-        })
+    it(
+      "a query that runs past dream_postgres_client.timeout gives QueryTimeout",
+      fn() {
+        // Act
+        let answer =
+          test_database.with_schema(fn(db) {
+            dream_postgres_client.query("SELECT pg_sleep(1)")
+            |> dream_postgres_client.timeout(200)
+            |> dream_postgres_client.execute(db)
+          })
 
-      // Assert
-      answer
-      |> should
-      |> be_equal(Error(pog.QueryTimeout))
-      |> or_fail_with("Expected QueryTimeout")
-    }),
-    it("QueryTimeout comes back when the pog.timeout runs out", fn() {
-      // Arrange
-      let started_at = clock.now_in_milliseconds()
+        // Assert
+        answer
+        |> should
+        |> be_equal(Error(dream_postgres_client.QueryTimeout))
+        |> or_fail_with("Expected QueryTimeout")
+      },
+    ),
+    it(
+      "QueryTimeout comes back when the dream_postgres_client.timeout runs out",
+      fn() {
+        // Arrange
+        let started_at = clock.now_in_milliseconds()
 
-      // Act
-      let _answer =
-        test_database.with_schema(fn(db) {
-          pog.query("SELECT pg_sleep(1)")
-          |> pog.timeout(200)
-          |> pog.execute(db)
-        })
-      let elapsed = clock.now_in_milliseconds() - started_at
+        // Act
+        let _answer =
+          test_database.with_schema(fn(db) {
+            dream_postgres_client.query("SELECT pg_sleep(1)")
+            |> dream_postgres_client.timeout(200)
+            |> dream_postgres_client.execute(db)
+          })
+        let elapsed = clock.now_in_milliseconds() - started_at
 
-      // Assert
-      elapsed
-      |> should
-      |> be_between(200, 1000)
-      |> or_fail_with("Expected the timeout before the 1 second sleep ends")
-    }),
+        // Assert
+        elapsed
+        |> should
+        |> be_between(200, 1000)
+        |> or_fail_with("Expected the timeout before the 1 second sleep ends")
+      },
+    ),
   ])
 }
 
@@ -345,7 +351,7 @@ fn pool_tests() {
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok from connect and ConnectionUnavailable")
     }),
     it("connect returns Ok for a wrong password, and the query fails", fn() {
@@ -362,7 +368,7 @@ fn pool_tests() {
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok from connect and ConnectionUnavailable")
     }),
   ])
@@ -400,7 +406,7 @@ fn connection_setting_tests() {
         // Assert
         answer
         |> should
-        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
         |> or_fail_with("Expected ConnectionUnavailable")
       },
     ),
@@ -417,7 +423,7 @@ fn connection_setting_tests() {
         // Assert
         answer
         |> should
-        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
         |> or_fail_with("Expected ConnectionUnavailable")
       },
     ),
@@ -434,7 +440,7 @@ fn connection_setting_tests() {
         // Assert
         answer
         |> should
-        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
         |> or_fail_with("Expected ConnectionUnavailable")
       },
     ),
@@ -463,12 +469,12 @@ fn application_name_tests() {
       |> or_fail_with("Expected the application name from the URL")
     }),
     it(
-      "application_name from pog.connection_parameter reaches the server",
+      "application_name from dream_postgres_client.connection_parameter reaches the server",
       fn() {
         // Arrange
         let config =
           test_database.config()
-          |> pog.connection_parameter(
+          |> dream_postgres_client.connection_parameter(
             name: "application_name",
             value: "billing",
           )
@@ -489,8 +495,11 @@ fn application_name_tests() {
         // Arrange
         let config =
           test_database.config()
-          |> pog.connection_parameter(name: "search_path", value: "public")
-          |> pog.connection_parameter(
+          |> dream_postgres_client.connection_parameter(
+            name: "search_path",
+            value: "public",
+          )
+          |> dream_postgres_client.connection_parameter(
             name: "application_name",
             value: "billing",
           )
@@ -511,11 +520,14 @@ fn application_name_tests() {
         // Arrange
         let config =
           test_database.config()
-          |> pog.connection_parameter(
+          |> dream_postgres_client.connection_parameter(
             name: "application_name",
             value: "billing",
           )
-          |> pog.connection_parameter(name: "search_path", value: "public")
+          |> dream_postgres_client.connection_parameter(
+            name: "search_path",
+            value: "public",
+          )
 
         // Act
         let name = connect_and_select(config, application_name_query)
@@ -533,7 +545,10 @@ fn application_name_tests() {
         // Arrange
         let config =
           url_config("?application_name=billing")
-          |> pog.connection_parameter(name: "timezone", value: "UTC")
+          |> dream_postgres_client.connection_parameter(
+            name: "timezone",
+            value: "UTC",
+          )
 
         // Act
         let name = connect_and_select(config, application_name_query)
@@ -551,8 +566,11 @@ fn application_name_tests() {
         // Arrange
         let config =
           test_database.config()
-          |> pog.connection_parameter(name: "client_encoding", value: "UTF8")
-          |> pog.connection_parameter(
+          |> dream_postgres_client.connection_parameter(
+            name: "client_encoding",
+            value: "UTF8",
+          )
+          |> dream_postgres_client.connection_parameter(
             name: "application_name",
             value: "billing",
           )
@@ -573,11 +591,11 @@ fn application_name_tests() {
         // Arrange
         let config =
           test_database.config()
-          |> pog.connection_parameter(
+          |> dream_postgres_client.connection_parameter(
             name: "application_name",
             value: "billing",
           )
-          |> pog.connection_parameter(
+          |> dream_postgres_client.connection_parameter(
             name: "client_encoding",
             value: "SQL_ASCII",
           )
@@ -592,14 +610,17 @@ fn application_name_tests() {
         |> or_fail_with("Expected the client_encoding of the caller")
       },
     ),
-    // PostgreSQL reads parameter names without case, and so does dream_pgo:
-    // it sees `Application_Name` as the caller's name and does not send the
-    // Erlang node name too.
+    // PostgreSQL reads parameter names without case, and so does
+    // dream_postgres_driver: it sees `Application_Name` as the caller's name
+    // and does not send the Erlang node name too.
     it("Application_Name in mixed case reaches the server", fn() {
       // Arrange
       let config =
         test_database.config()
-        |> pog.connection_parameter(name: "Application_Name", value: "billing")
+        |> dream_postgres_client.connection_parameter(
+          name: "Application_Name",
+          value: "billing",
+        )
 
       // Act
       let name = connect_and_select(config, application_name_query)
@@ -611,7 +632,7 @@ fn application_name_tests() {
       |> or_fail_with("Expected the application name in mixed case")
     }),
     it(
-      "application_name from the URL reaches the server under pog.supervised",
+      "application_name from the URL reaches the server under dream_postgres_client.supervised",
       fn() {
         // Act
         let name = {
@@ -627,35 +648,44 @@ fn application_name_tests() {
         |> or_fail_with("Expected the application name from the URL")
       },
     ),
-    it("pog.start of a builder config shows the application_name", fn() {
-      // Arrange
-      let config =
-        test_database.config()
-        |> pog.connection_parameter(name: "application_name", value: "billing")
-
-      // Act
-      let name = pog_start_and_select(config, application_name_query)
-
-      // Assert
-      name
-      |> should
-      |> be_equal(Ok(Ok(["billing"])))
-      |> or_fail_with("Expected the application name from the config")
-    }),
     it(
-      "pog.start of a builder config with client_encoding after application_name shows the name",
+      "dream_postgres_client.start of a builder config shows the application_name",
       fn() {
         // Arrange
         let config =
           test_database.config()
-          |> pog.connection_parameter(
+          |> dream_postgres_client.connection_parameter(
             name: "application_name",
             value: "billing",
           )
-          |> pog.connection_parameter(name: "client_encoding", value: "UTF8")
 
         // Act
-        let name = pog_start_and_select(config, application_name_query)
+        let name = client_start_and_select(config, application_name_query)
+
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["billing"])))
+        |> or_fail_with("Expected the application name from the config")
+      },
+    ),
+    it(
+      "dream_postgres_client.start of a builder config with client_encoding after application_name shows the name",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> dream_postgres_client.connection_parameter(
+            name: "application_name",
+            value: "billing",
+          )
+          |> dream_postgres_client.connection_parameter(
+            name: "client_encoding",
+            value: "UTF8",
+          )
+
+        // Act
+        let name = client_start_and_select(config, application_name_query)
 
         // Assert
         name
@@ -697,7 +727,9 @@ fn application_name_tests() {
       name
       |> should
       |> be_equal(Ok(Ok(["nonode@nohost"])))
-      |> or_fail_with("Expected the Erlang node name, which dream_pgo sends")
+      |> or_fail_with(
+        "Expected the Erlang node name, which dream_postgres_driver sends",
+      )
     }),
     it(
       "non-ASCII text goes to the server and back with an application_name",
@@ -831,7 +863,7 @@ fn url_parameter_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
     }),
     it("an unknown parameter gives the error after about 2 seconds", fn() {
@@ -852,7 +884,7 @@ fn url_parameter_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
     }),
     it("statement_timeout=abc gives ConnectionUnavailable", fn() {
@@ -863,7 +895,7 @@ fn url_parameter_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
     }),
     it("an empty timezone gives ConnectionUnavailable", fn() {
@@ -873,7 +905,7 @@ fn url_parameter_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
     }),
     it("no server parameter of the server is one edit from a keyword", fn() {
@@ -921,7 +953,7 @@ fn parameter_permission_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
     }),
     it("a role without superuser cannot set the role of a superuser", fn() {
@@ -934,7 +966,7 @@ fn parameter_permission_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
     }),
     it("a role without superuser cannot set session_authorization", fn() {
@@ -949,7 +981,7 @@ fn parameter_permission_tests() {
       // Assert
       checked
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
     }),
     it(
@@ -964,7 +996,7 @@ fn parameter_permission_tests() {
         // Assert
         checked
         |> should
-        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
         |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
       },
     ),
@@ -1106,7 +1138,7 @@ fn null_byte_tests() {
       // Arrange
       let config =
         test_database.config()
-        |> pog.connection_parameter(
+        |> dream_postgres_client.connection_parameter(
           name: "application_name",
           value: "billing\u{0}search_path\u{0}evil",
         )
@@ -1197,7 +1229,10 @@ fn protocol_option_tests() {
 fn from_full_url_and_select(
   url: String,
   sql: String,
-) -> Result(Result(List(String), pog.QueryError), postgres.FromUrlError) {
+) -> Result(
+  Result(List(String), dream_postgres_client.QueryError),
+  postgres.FromUrlError,
+) {
   use <- test_database.with_own_pools()
   postgres.from_url(url)
   |> result.map(test_database.texts(_, sql))
@@ -1208,7 +1243,10 @@ fn from_full_url_and_select(
 fn from_url_and_select(
   query: String,
   sql: String,
-) -> Result(Result(List(String), pog.QueryError), postgres.FromUrlError) {
+) -> Result(
+  Result(List(String), dream_postgres_client.QueryError),
+  postgres.FromUrlError,
+) {
   use <- test_database.with_own_pools()
   postgres.from_url(test_database.url() <> query)
   |> result.map(test_database.texts(_, sql))
@@ -1259,7 +1297,10 @@ fn with_plain_role(run: fn(String) -> a) -> a {
 fn connect_and_select(
   config: postgres.Config,
   sql: String,
-) -> Result(Result(List(String), pog.QueryError), actor.StartError) {
+) -> Result(
+  Result(List(String), dream_postgres_client.QueryError),
+  actor.StartError,
+) {
   use <- test_database.with_own_pools()
   config
   |> postgres.pool_size(1)
@@ -1267,16 +1308,20 @@ fn connect_and_select(
   |> result.map(test_database.texts(_, sql))
 }
 
-// Starts a pool of 1 connection from `config` with `pog.start`, which
-// does not go through `connect`, runs `sql` and stops the pool.
-fn pog_start_and_select(
+// Starts a pool of 1 connection from `config` with
+// `dream_postgres_client.start`, which does not go through `connect`, runs
+// `sql` and stops the pool.
+fn client_start_and_select(
   config: postgres.Config,
   sql: String,
-) -> Result(Result(List(String), pog.QueryError), actor.StartError) {
+) -> Result(
+  Result(List(String), dream_postgres_client.QueryError),
+  actor.StartError,
+) {
   use <- test_database.with_own_pools()
   config
   |> postgres.pool_size(1)
-  |> pog.start()
+  |> dream_postgres_client.start()
   |> result.map(fn(started) { test_database.texts(started.data, sql) })
 }
 
@@ -1294,13 +1339,15 @@ fn url_config(query: String) -> postgres.Config {
 // Sends `text` as a query parameter, and gives back the text that the
 // server returns and its length in characters, as the server counts them.
 fn text_and_length(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   text: String,
-) -> Result(List(String), pog.QueryError) {
-  pog.query("SELECT $1::text || ' ' || length($1::text)::text")
-  |> pog.parameter(pog.text(text))
-  |> pog.returning(decode.at([0], decode.string))
-  |> pog.execute(db)
+) -> Result(List(String), dream_postgres_client.QueryError) {
+  dream_postgres_client.query(
+    "SELECT $1::text || ' ' || length($1::text)::text",
+  )
+  |> dream_postgres_client.parameter(dream_postgres_client.text(text))
+  |> dream_postgres_client.returning(decode.at([0], decode.string))
+  |> dream_postgres_client.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
@@ -1313,7 +1360,7 @@ fn start_and_describe(url: String) -> Result(Nil, String) {
 
 type TimedCheck(start_error) {
   TimedCheck(
-    result: Result(Result(Nil, pog.QueryError), start_error),
+    result: Result(Result(Nil, dream_postgres_client.QueryError), start_error),
     elapsed: Int,
   )
 }
@@ -1362,7 +1409,10 @@ fn missing_database_url() -> String {
 }
 
 type SlowAnswer {
-  SlowAnswer(backend: Result(List(Int), pog.QueryError), elapsed: Int)
+  SlowAnswer(
+    backend: Result(List(Int), dream_postgres_client.QueryError),
+    elapsed: Int,
+  )
 }
 
 // Starts a pool of 1 connection and runs two queries of 0.5 seconds at the
@@ -1378,9 +1428,11 @@ fn run_two_slow_queries_on_a_pool_of_one() -> List(SlowAnswer) {
   let started_at = clock.now_in_milliseconds()
   let run_slow_query = fn() {
     let backend =
-      pog.query("SELECT pg_backend_pid(), pg_sleep(0.5)::text")
-      |> pog.returning(decode.at([0], decode.int))
-      |> pog.execute(db)
+      dream_postgres_client.query(
+        "SELECT pg_backend_pid(), pg_sleep(0.5)::text",
+      )
+      |> dream_postgres_client.returning(decode.at([0], decode.int))
+      |> dream_postgres_client.execute(db)
       |> result.map(fn(returned) { returned.rows })
     process.send(
       answers,

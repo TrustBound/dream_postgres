@@ -48,12 +48,13 @@
 ////
 //// The `result` is `{"count":...,"rows":[...]}` for a query that worked, or
 //// `{"error":...}` for one that failed, with the fields of the
-//// `pog.QueryError`. The `reason` of a `pog.InterceptorFailed` error is a
-//// value as above. A reason that no value can hold, such as a process, is
-//// written as its text. `version` is 1. A later version of this package that
-//// changes the format gives the files a new version, and reads version 1.
+//// `dream_postgres_client.QueryError`. The `reason` of a
+//// `dream_postgres_client.InterceptorFailed` error is a value as above. A
+//// reason that no value can hold, such as a process, is written as its text.
+//// `version` is 1. A later version of this package that changes the format
+//// gives the files a new version, and reads version 1.
 
-import dream_pog as pog
+import dream_postgres_client
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -94,8 +95,8 @@ pub type RecordedValue {
   /// A row, a `date` (year, month, day), a `time` (hours, minutes,
   /// seconds), a `timestamptz` or an `interval`.
   Tuple(List(RecordedValue))
-  /// A row of a pool with `pog.rows_as_map`, or a `point`. The pairs are in
-  /// the order of their keys.
+  /// A row of a pool with `dream_postgres_client.rows_as_map`, or a `point`.
+  /// The pairs are in the order of their keys.
   Map(List(#(RecordedValue, RecordedValue)))
   /// Another atom, such as `infinity` or `NaN` for a float.
   Atom(String)
@@ -114,7 +115,7 @@ pub type RecordedResult {
   /// a live result.
   Returned(count: Int, rows: List(RecordedValue))
   /// The query failed with this error.
-  Failed(error: pog.QueryError)
+  Failed(error: dream_postgres_client.QueryError)
 }
 
 /// One recorded query and its result.
@@ -133,8 +134,8 @@ pub type Recording {
 /// ### Write a recording by hand <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recording_by_hand.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/recording.{Failed, Integer, RecordedQuery, Recording}
+/// import dream_postgres_client
 ///
 /// pub fn timeout_recording() -> String {
 ///   recording.to_json([
@@ -143,7 +144,7 @@ pub type Recording {
 ///         sql: "SELECT id, name, email FROM users WHERE id = $1",
 ///         parameters: [Integer(1)],
 ///       ),
-///       result: Failed(pog.QueryTimeout),
+///       result: Failed(dream_postgres_client.QueryTimeout),
 ///     ),
 ///   ])
 /// }
@@ -312,43 +313,44 @@ fn bits_to_hex(bits: BitArray) -> #(Int, String)
 @external(erlang, "dream_postgres_recorder_ffi", "hex_to_bits")
 fn hex_to_bits(size: Int, hex: String) -> Result(BitArray, Nil)
 
-fn error_to_json(error: pog.QueryError) -> json.Json {
+fn error_to_json(error: dream_postgres_client.QueryError) -> json.Json {
   case error {
-    pog.ConstraintViolated(message:, constraint:, detail:) ->
+    dream_postgres_client.ConstraintViolated(message:, constraint:, detail:) ->
       json.object([
         #("error", json.string("constraint_violated")),
         #("message", json.string(message)),
         #("constraint", json.string(constraint)),
         #("detail", json.string(detail)),
       ])
-    pog.PostgresqlError(code:, name:, message:) ->
+    dream_postgres_client.PostgresqlError(code:, name:, message:) ->
       json.object([
         #("error", json.string("postgresql_error")),
         #("code", json.string(code)),
         #("name", json.string(name)),
         #("message", json.string(message)),
       ])
-    pog.UnexpectedArgumentCount(expected:, got:) ->
+    dream_postgres_client.UnexpectedArgumentCount(expected:, got:) ->
       json.object([
         #("error", json.string("unexpected_argument_count")),
         #("expected", json.int(expected)),
         #("got", json.int(got)),
       ])
-    pog.UnexpectedArgumentType(expected:, got:) ->
+    dream_postgres_client.UnexpectedArgumentType(expected:, got:) ->
       json.object([
         #("error", json.string("unexpected_argument_type")),
         #("expected", json.string(expected)),
         #("got", json.string(got)),
       ])
-    pog.UnexpectedResultType(errors) ->
+    dream_postgres_client.UnexpectedResultType(errors) ->
       json.object([
         #("error", json.string("unexpected_result_type")),
         #("errors", json.array(errors, decode_error_to_json)),
       ])
-    pog.QueryTimeout -> json.object([#("error", json.string("query_timeout"))])
-    pog.ConnectionUnavailable ->
+    dream_postgres_client.QueryTimeout ->
+      json.object([#("error", json.string("query_timeout"))])
+    dream_postgres_client.ConnectionUnavailable ->
       json.object([#("error", json.string("connection_unavailable"))])
-    pog.InterceptorFailed(reason:) ->
+    dream_postgres_client.InterceptorFailed(reason:) ->
       json.object([
         #("error", json.string("interceptor_failed")),
         #("reason", value_to_json(reason_to_recorded(reason))),
@@ -356,8 +358,8 @@ fn error_to_json(error: pog.QueryError) -> json.Json {
   }
 }
 
-// The reason of `pog.InterceptorFailed` can be any term. A term that no
-// `RecordedValue` holds, such as a process, is kept as its text.
+// The reason of `dream_postgres_client.InterceptorFailed` can be any term. A
+// term that no `RecordedValue` holds, such as a process, is kept as its text.
 fn reason_to_recorded(reason: Dynamic) -> RecordedValue {
   case to_recorded(reason) {
     Ok(value) -> value
@@ -412,41 +414,64 @@ fn failed_decoder() -> decode.Decoder(RecordedResult) {
   decode.map(error_decoder(kind), Failed)
 }
 
-fn error_decoder(kind: String) -> decode.Decoder(pog.QueryError) {
+fn error_decoder(
+  kind: String,
+) -> decode.Decoder(dream_postgres_client.QueryError) {
   case kind {
     "constraint_violated" -> {
       use message <- decode.field("message", decode.string)
       use constraint <- decode.field("constraint", decode.string)
       use detail <- decode.field("detail", decode.string)
-      decode.success(pog.ConstraintViolated(message:, constraint:, detail:))
+      decode.success(dream_postgres_client.ConstraintViolated(
+        message:,
+        constraint:,
+        detail:,
+      ))
     }
     "postgresql_error" -> {
       use code <- decode.field("code", decode.string)
       use name <- decode.field("name", decode.string)
       use message <- decode.field("message", decode.string)
-      decode.success(pog.PostgresqlError(code:, name:, message:))
+      decode.success(dream_postgres_client.PostgresqlError(
+        code:,
+        name:,
+        message:,
+      ))
     }
     "unexpected_argument_count" -> {
       use expected <- decode.field("expected", decode.int)
       use got <- decode.field("got", decode.int)
-      decode.success(pog.UnexpectedArgumentCount(expected:, got:))
+      decode.success(dream_postgres_client.UnexpectedArgumentCount(
+        expected:,
+        got:,
+      ))
     }
     "unexpected_argument_type" -> {
       use expected <- decode.field("expected", decode.string)
       use got <- decode.field("got", decode.string)
-      decode.success(pog.UnexpectedArgumentType(expected:, got:))
+      decode.success(dream_postgres_client.UnexpectedArgumentType(
+        expected:,
+        got:,
+      ))
     }
     "unexpected_result_type" -> {
       use errors <- decode.field("errors", decode.list(decode_error_decoder()))
-      decode.success(pog.UnexpectedResultType(errors))
+      decode.success(dream_postgres_client.UnexpectedResultType(errors))
     }
-    "query_timeout" -> decode.success(pog.QueryTimeout)
-    "connection_unavailable" -> decode.success(pog.ConnectionUnavailable)
+    "query_timeout" -> decode.success(dream_postgres_client.QueryTimeout)
+    "connection_unavailable" ->
+      decode.success(dream_postgres_client.ConnectionUnavailable)
     "interceptor_failed" -> {
       use reason <- decode.field("reason", value_decoder())
-      decode.success(pog.InterceptorFailed(from_recorded(reason)))
+      decode.success(
+        dream_postgres_client.InterceptorFailed(from_recorded(reason)),
+      )
     }
-    _ -> decode.failure(pog.ConnectionUnavailable, "a pog.QueryError")
+    _ ->
+      decode.failure(
+        dream_postgres_client.ConnectionUnavailable,
+        "a dream_postgres_client.QueryError",
+      )
   }
 }
 

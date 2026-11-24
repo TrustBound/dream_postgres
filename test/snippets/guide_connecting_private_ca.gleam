@@ -1,10 +1,10 @@
 //// Connecting guide: trust a private certificate authority
 ////
 //// Starts a pool that trusts the CA certificates of one PEM file, with
-//// `pog.SslVerifiedCaFile` in the config.
+//// `dream_postgres_client.SslVerifiedCaFile` in the config.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import gleam/otp/actor
 
 pub fn connect_with_private_ca(
@@ -12,6 +12,6 @@ pub fn connect_with_private_ca(
   ca_file: String,
 ) -> Result(postgres.Connection, actor.StartError) {
   config
-  |> pog.ssl(pog.SslVerifiedCaFile(ca_file))
+  |> dream_postgres_client.ssl(dream_postgres_client.SslVerifiedCaFile(ca_file))
   |> postgres.connect()
 }

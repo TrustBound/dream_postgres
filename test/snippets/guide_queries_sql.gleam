@@ -2,9 +2,9 @@
 ////
 //// Query functions in the same shape as the ones Squirrel generates: each
 //// takes a connection and the parameters, and returns
-//// `Result(pog.Returned(Row), pog.QueryError)`.
+//// `Result(dream_postgres_client.Returned(Row), dream_postgres_client.QueryError)`.
 
-import dream_pog as pog
+import dream_postgres_client
 import gleam/dynamic/decode
 
 pub type FindUserRow {
@@ -12,9 +12,12 @@ pub type FindUserRow {
 }
 
 pub fn find_user(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   id: Int,
-) -> Result(pog.Returned(FindUserRow), pog.QueryError) {
+) -> Result(
+  dream_postgres_client.Returned(FindUserRow),
+  dream_postgres_client.QueryError,
+) {
   let decoder = {
     use id <- decode.field(0, decode.int)
     use name <- decode.field(1, decode.string)
@@ -22,10 +25,10 @@ pub fn find_user(
     decode.success(FindUserRow(id:, name:, email:))
   }
   "SELECT id, name, email FROM users WHERE id = $1"
-  |> pog.query
-  |> pog.parameter(pog.int(id))
-  |> pog.returning(decoder)
-  |> pog.execute(db)
+  |> dream_postgres_client.query
+  |> dream_postgres_client.parameter(dream_postgres_client.int(id))
+  |> dream_postgres_client.returning(decoder)
+  |> dream_postgres_client.execute(db)
 }
 
 pub type ListUsersRow {
@@ -33,17 +36,20 @@ pub type ListUsersRow {
 }
 
 pub fn list_users(
-  db: pog.Connection,
-) -> Result(pog.Returned(ListUsersRow), pog.QueryError) {
+  db: dream_postgres_client.Connection,
+) -> Result(
+  dream_postgres_client.Returned(ListUsersRow),
+  dream_postgres_client.QueryError,
+) {
   let decoder = {
     use id <- decode.field(0, decode.int)
     use name <- decode.field(1, decode.string)
     decode.success(ListUsersRow(id:, name:))
   }
   "SELECT id, name FROM users ORDER BY name"
-  |> pog.query
-  |> pog.returning(decoder)
-  |> pog.execute(db)
+  |> dream_postgres_client.query
+  |> dream_postgres_client.returning(decoder)
+  |> dream_postgres_client.execute(db)
 }
 
 pub type CreateUserRow {
@@ -51,18 +57,21 @@ pub type CreateUserRow {
 }
 
 pub fn create_user(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   name: String,
   email: String,
-) -> Result(pog.Returned(CreateUserRow), pog.QueryError) {
+) -> Result(
+  dream_postgres_client.Returned(CreateUserRow),
+  dream_postgres_client.QueryError,
+) {
   let decoder = {
     use id <- decode.field(0, decode.int)
     decode.success(CreateUserRow(id:))
   }
   "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id"
-  |> pog.query
-  |> pog.parameter(pog.text(name))
-  |> pog.parameter(pog.text(email))
-  |> pog.returning(decoder)
-  |> pog.execute(db)
+  |> dream_postgres_client.query
+  |> dream_postgres_client.parameter(dream_postgres_client.text(name))
+  |> dream_postgres_client.parameter(dream_postgres_client.text(email))
+  |> dream_postgres_client.returning(decoder)
+  |> dream_postgres_client.execute(db)
 }

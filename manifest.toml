@@ -8,8 +8,8 @@
 
 packages = [
   { name = "backoff", version = "1.1.6", build_tools = ["rebar3"], requirements = [], otp_app = "backoff", source = "hex", outer_checksum = "CF0CFFF8995FB20562F822E5CC47D8CCF664C5ECDC26A684CBE85C225F9D7C39" },
-  { name = "dream_pgo", version = "0.20.0", build_tools = ["gleam"], requirements = ["backoff", "opentelemetry_api", "pg_types"], source = "local", path = "../../dream_pgo" },
-  { name = "dream_pog", version = "4.1.0", build_tools = ["gleam"], requirements = ["dream_pgo", "exception", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time"], source = "local", path = "../../dream_pog" },
+  { name = "dream_postgres_client", version = "4.1.0", build_tools = ["gleam"], requirements = ["dream_postgres_driver", "exception", "gleam_erlang", "gleam_otp", "gleam_stdlib", "gleam_time"], source = "local", path = "../../dream_pog" },
+  { name = "dream_postgres_driver", version = "0.20.0", build_tools = ["gleam"], requirements = ["backoff", "opentelemetry_api", "pg_types"], source = "local", path = "../../dream_pgo" },
   { name = "dream_snippets", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "simplifile", "tom"], source = "git", repo = "https://github.com/TrustBound/dream_snippets.git", commit = "6c2bf3e4d19bf023b09822def9cf04c72037b7e4" },
   { name = "dream_test", version = "3.0.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_json", "gleam_otp", "gleam_regexp", "gleam_stdlib"], source = "git", repo = "https://github.com/TrustBound/dream_test.git", commit = "1639959578a14ae3577f8e3ae5cac058f933aa53" },
   { name = "exception", version = "2.1.1", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "exception", source = "hex", outer_checksum = "6BDEA95248093599391C3B5DF1835C5C6A86C353C2F99CE539B450E3432FE117" },
@@ -27,7 +27,7 @@ packages = [
 ]
 
 [requirements]
-dream_pog = { path = "../../dream_pog" }
+dream_postgres_client = { path = "../../dream_pog" }
 dream_snippets = { git = "https://github.com/TrustBound/dream_snippets.git", ref = "6c2bf3e4d19bf023b09822def9cf04c72037b7e4" }
 dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "1639959578a14ae3577f8e3ae5cac058f933aa53" }
 gleam_erlang = { version = ">= 0.30.0 and < 2.0.0" }

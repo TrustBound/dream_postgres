@@ -1,4 +1,4 @@
-greeting(Ok(pog.Returned(count: 2, rows: [User(1, "Ada"), User(2, "Grace")])))
+greeting(Ok(dream_postgres_client.Returned(count: 2, rows: [User(1, "Ada"), User(2, "Grace")])))
   -> "Hello, Ada"
 
 greet_user(Context(db: <a pool where nothing listens>), 1)

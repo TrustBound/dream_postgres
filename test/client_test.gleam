@@ -5,8 +5,8 @@
 //// tests run a query on the test PostgreSQL server, or start a pool on a
 //// local port that has no listener.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import dream_test/matchers.{
   be_equal, be_false, be_less_than, or_fail_with, should,
 }
@@ -46,7 +46,7 @@ fn builder_tests() {
       // Assert
       config
       |> should
-      |> be_equal(pog.default_config(pool_name: pool_name))
+      |> be_equal(dream_postgres_client.default_config(pool_name: pool_name))
       |> or_fail_with("Expected the default Pog config")
     }),
     it("host sets the host", fn() {
@@ -169,7 +169,7 @@ fn connect_tests() {
       // Assert
       result
       |> should
-      |> be_equal(Ok(pog.named_connection(pool_name)))
+      |> be_equal(Ok(dream_postgres_client.named_connection(pool_name)))
       |> or_fail_with("Expected a connection to the named pool")
     }),
   ])
@@ -290,13 +290,13 @@ fn parse_config_value_tests() {
       // Arrange
       let pool_name = process.new_name("client_test_pool")
       let expected =
-        pog.Config(
+        dream_postgres_client.Config(
           ..postgres.new(pool_name)
           |> postgres.host("localhost")
           |> postgres.database("myapp")
           |> postgres.user("user")
           |> postgres.password("pass")
-          |> pog.ssl(pog.SslVerified),
+          |> dream_postgres_client.ssl(dream_postgres_client.SslVerified),
           connection_parameters: [#("application_name", "my app")],
         )
 
@@ -320,7 +320,7 @@ fn parse_config_value_tests() {
         postgres.new(pool_name)
         |> postgres.host("localhost")
         |> postgres.database("myapp")
-        |> pog.ssl(pog.SslDisabled)
+        |> dream_postgres_client.ssl(dream_postgres_client.SslDisabled)
 
       // Act
       let config =
@@ -342,7 +342,7 @@ fn parse_config_value_tests() {
         postgres.new(pool_name)
         |> postgres.host("localhost")
         |> postgres.database("myapp")
-        |> pog.ssl(pog.SslUnverified)
+        |> dream_postgres_client.ssl(dream_postgres_client.SslUnverified)
 
       // Act
       let config =
@@ -364,7 +364,7 @@ fn parse_config_value_tests() {
         postgres.new(pool_name)
         |> postgres.host("localhost")
         |> postgres.database("myapp")
-        |> pog.ssl(pog.SslVerifiedChainOnly)
+        |> dream_postgres_client.ssl(dream_postgres_client.SslVerifiedChainOnly)
 
       // Act
       let config =
@@ -386,7 +386,7 @@ fn parse_config_value_tests() {
         postgres.new(pool_name)
         |> postgres.host("localhost")
         |> postgres.database("myapp")
-        |> pog.ssl(pog.SslVerified)
+        |> dream_postgres_client.ssl(dream_postgres_client.SslVerified)
 
       // Act
       let config =
@@ -409,7 +409,7 @@ fn parse_config_value_tests() {
         |> postgres.host("::1")
         |> postgres.port(5433)
         |> postgres.database("myapp")
-        |> pog.ip_version(pog.Ipv6)
+        |> dream_postgres_client.ip_version(dream_postgres_client.Ipv6)
 
       // Act
       let config =
@@ -912,7 +912,7 @@ fn query_parameter_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslUnverified))
+      |> be_equal(Ok(dream_postgres_client.SslUnverified))
       |> or_fail_with("Expected Ok(SslUnverified)")
     }),
     it("passes a server parameter name with upper-case letters unchanged", fn() {
@@ -974,7 +974,9 @@ fn query_parameter_tests() {
 
 // Returns the SSL mode that `parse_config` gives for the query string
 // `query`.
-fn ssl_of(query: String) -> Result(pog.Ssl, postgres.UrlError) {
+fn ssl_of(
+  query: String,
+) -> Result(dream_postgres_client.Ssl, postgres.UrlError) {
   parse_query(query)
   |> result.map(fn(config) { config.ssl })
 }
@@ -990,8 +992,8 @@ fn ssl_root_certificate_tests() {
         // Assert
         ssl
         |> should
-        |> be_equal(Ok(pog.SslDisabled))
-        |> or_fail_with("Expected Ok(pog.SslDisabled)")
+        |> be_equal(Ok(dream_postgres_client.SslDisabled))
+        |> or_fail_with("Expected Ok(dream_postgres_client.SslDisabled)")
       },
     ),
     it(
@@ -1003,8 +1005,12 @@ fn ssl_root_certificate_tests() {
         // Assert
         ssl
         |> should
-        |> be_equal(Ok(pog.SslVerifiedChainOnlyCaFile("ca.pem")))
-        |> or_fail_with("Expected Ok(pog.SslVerifiedChainOnlyCaFile(ca.pem))")
+        |> be_equal(
+          Ok(dream_postgres_client.SslVerifiedChainOnlyCaFile("ca.pem")),
+        )
+        |> or_fail_with(
+          "Expected Ok(dream_postgres_client.SslVerifiedChainOnlyCaFile(ca.pem))",
+        )
       },
     ),
     it(
@@ -1016,8 +1022,12 @@ fn ssl_root_certificate_tests() {
         // Assert
         ssl
         |> should
-        |> be_equal(Ok(pog.SslVerifiedChainOnlyCaFile("ca.pem")))
-        |> or_fail_with("Expected Ok(pog.SslVerifiedChainOnlyCaFile(ca.pem))")
+        |> be_equal(
+          Ok(dream_postgres_client.SslVerifiedChainOnlyCaFile("ca.pem")),
+        )
+        |> or_fail_with(
+          "Expected Ok(dream_postgres_client.SslVerifiedChainOnlyCaFile(ca.pem))",
+        )
       },
     ),
     it("gives SslVerifiedCaFile for sslmode=verify-full with a CA file", fn() {
@@ -1027,8 +1037,10 @@ fn ssl_root_certificate_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslVerifiedCaFile("ca.pem")))
-      |> or_fail_with("Expected Ok(pog.SslVerifiedCaFile(ca.pem))")
+      |> be_equal(Ok(dream_postgres_client.SslVerifiedCaFile("ca.pem")))
+      |> or_fail_with(
+        "Expected Ok(dream_postgres_client.SslVerifiedCaFile(ca.pem))",
+      )
     }),
     it("gives SslVerifiedCaFile when sslrootcert comes before sslmode", fn() {
       // Act
@@ -1037,8 +1049,10 @@ fn ssl_root_certificate_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslVerifiedCaFile("ca.pem")))
-      |> or_fail_with("Expected Ok(pog.SslVerifiedCaFile(ca.pem))")
+      |> be_equal(Ok(dream_postgres_client.SslVerifiedCaFile("ca.pem")))
+      |> or_fail_with(
+        "Expected Ok(dream_postgres_client.SslVerifiedCaFile(ca.pem))",
+      )
     }),
     it("percent-decodes the path of the CA file", fn() {
       // Act
@@ -1047,8 +1061,10 @@ fn ssl_root_certificate_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslVerifiedCaFile("/etc/my ca.pem")))
-      |> or_fail_with("Expected Ok(pog.SslVerifiedCaFile(/etc/my ca.pem))")
+      |> be_equal(Ok(dream_postgres_client.SslVerifiedCaFile("/etc/my ca.pem")))
+      |> or_fail_with(
+        "Expected Ok(dream_postgres_client.SslVerifiedCaFile(/etc/my ca.pem))",
+      )
     }),
     it("uses the last sslrootcert of the URL", fn() {
       // Act
@@ -1058,8 +1074,10 @@ fn ssl_root_certificate_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslVerifiedCaFile("b.pem")))
-      |> or_fail_with("Expected Ok(pog.SslVerifiedCaFile(b.pem))")
+      |> be_equal(Ok(dream_postgres_client.SslVerifiedCaFile("b.pem")))
+      |> or_fail_with(
+        "Expected Ok(dream_postgres_client.SslVerifiedCaFile(b.pem))",
+      )
     }),
     it(
       "gives SslVerified for sslrootcert=system with sslmode=verify-full",
@@ -1070,8 +1088,8 @@ fn ssl_root_certificate_tests() {
         // Assert
         ssl
         |> should
-        |> be_equal(Ok(pog.SslVerified))
-        |> or_fail_with("Expected Ok(pog.SslVerified)")
+        |> be_equal(Ok(dream_postgres_client.SslVerified))
+        |> or_fail_with("Expected Ok(dream_postgres_client.SslVerified)")
       },
     ),
     it("gives SslVerified for sslrootcert=system without sslmode", fn() {
@@ -1081,8 +1099,8 @@ fn ssl_root_certificate_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslVerified))
-      |> or_fail_with("Expected Ok(pog.SslVerified)")
+      |> be_equal(Ok(dream_postgres_client.SslVerified))
+      |> or_fail_with("Expected Ok(dream_postgres_client.SslVerified)")
     }),
     it(
       "returns SslRootCertSystemNeedsVerifyFull for sslrootcert=system with verify-ca",
@@ -1147,8 +1165,8 @@ fn ssl_root_certificate_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslDisabled))
-      |> or_fail_with("Expected Ok(pog.SslDisabled)")
+      |> be_equal(Ok(dream_postgres_client.SslDisabled))
+      |> or_fail_with("Expected Ok(dream_postgres_client.SslDisabled)")
     }),
   ])
 }
@@ -1259,7 +1277,7 @@ fn from_url_tests() {
         // Assert
         result
         |> should
-        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
         |> or_fail_with("Expected Ok(Error(ConnectionUnavailable))")
       },
     ),

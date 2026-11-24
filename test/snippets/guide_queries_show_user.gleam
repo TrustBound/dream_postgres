@@ -2,8 +2,8 @@
 ////
 //// Turns the result of `find_user` into a response with `query.first_row`.
 
-import dream_pog as pog
 import dream_postgres/query
+import dream_postgres_client
 import gleam/int
 import snippets/guide_queries_sql as sql
 
@@ -11,13 +11,16 @@ pub type Response {
   Response(status: Int, body: String)
 }
 
-pub fn show_user(db: pog.Connection, id: Int) -> Response {
+pub fn show_user(db: dream_postgres_client.Connection, id: Int) -> Response {
   sql.find_user(db, id)
   |> user_response
 }
 
 pub fn user_response(
-  result: Result(pog.Returned(sql.FindUserRow), pog.QueryError),
+  result: Result(
+    dream_postgres_client.Returned(sql.FindUserRow),
+    dream_postgres_client.QueryError,
+  ),
 ) -> Response {
   case query.first_row(result) {
     Ok(user) ->

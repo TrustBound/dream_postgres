@@ -11,7 +11,7 @@ fn free_port() -> Int
 /// Each call gives a port that no other test in this run got, so tests that
 /// run at the same time do not share a port. A pool that starts on this
 /// port never connects, and each query on it returns
-/// `Error(pog.ConnectionUnavailable)`.
+/// `Error(dream_postgres_client.ConnectionUnavailable)`.
 pub fn unused_port() -> Int {
   free_port()
 }

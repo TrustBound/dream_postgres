@@ -3,7 +3,7 @@
 //// Tests `greeting` with results built by hand, and `start` with a URL
 //// that is not valid. Neither test needs a database.
 
-import dream_pog as pog
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -15,7 +15,12 @@ pub fn tests() -> TestSuite {
   describe("my app's database code", [
     it("greets the user of the first row", fn() {
       // Arrange
-      let result = Ok(pog.Returned(count: 1, rows: [User(id: 1, name: "Ada")]))
+      let result =
+        Ok(
+          dream_postgres_client.Returned(count: 1, rows: [
+            User(id: 1, name: "Ada"),
+          ]),
+        )
 
       // Act
       let text = greeting(result)
@@ -28,7 +33,7 @@ pub fn tests() -> TestSuite {
     }),
     it("says so when no user has the id", fn() {
       // Arrange
-      let result = Ok(pog.Returned(count: 0, rows: []))
+      let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
       // Act
       let text = greeting(result)

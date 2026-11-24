@@ -6,7 +6,7 @@
 //// in the background, so pool start returns Ok with no database.
 //// find_user_name runs its query on the test PostgreSQL server.
 
-import dream_pog as pog
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -88,7 +88,7 @@ pub fn tests() -> TestSuite {
     group("describe_user_name", [
       it("returns the name when the result has a row", fn() {
         // Arrange
-        let result = Ok(pog.Returned(count: 1, rows: ["Ada"]))
+        let result = Ok(dream_postgres_client.Returned(count: 1, rows: ["Ada"]))
 
         // Act
         let description = architecture_postgres.describe_user_name(result)
@@ -101,7 +101,7 @@ pub fn tests() -> TestSuite {
       }),
       it("returns No such user when the result has no rows", fn() {
         // Arrange
-        let result = Ok(pog.Returned(count: 0, rows: []))
+        let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
         // Act
         let description = architecture_postgres.describe_user_name(result)
@@ -114,7 +114,7 @@ pub fn tests() -> TestSuite {
       }),
       it("returns a failure message when the query failed", fn() {
         // Arrange
-        let result = Error(pog.ConnectionUnavailable)
+        let result = Error(dream_postgres_client.ConnectionUnavailable)
 
         // Act
         let description = architecture_postgres.describe_user_name(result)
@@ -131,7 +131,7 @@ pub fn tests() -> TestSuite {
 
 // Runs `run` on a schema of its own with a users table that holds Ada with
 // id 1.
-fn with_one_user(run: fn(pog.Connection) -> a) -> a {
+fn with_one_user(run: fn(dream_postgres_client.Connection) -> a) -> a {
   test_database.with_schema(fn(db) {
     let assert Ok(_created) =
       test_database.execute(

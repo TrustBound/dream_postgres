@@ -3,14 +3,14 @@
 //// Reads a DATABASE_URL into a config, sets the pool size, and starts the
 //// pool.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import gleam/erlang/process
 import gleam/result
 import snippets/guide_connecting_explain_url_error.{explain}
 
 pub fn pool_config(
-  pool_name: process.Name(pog.Message),
+  pool_name: process.Name(dream_postgres_client.Message),
   database_url: String,
   pool_size: Int,
 ) -> Result(postgres.Config, postgres.UrlError) {

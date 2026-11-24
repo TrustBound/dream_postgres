@@ -7,8 +7,8 @@
 //// the certificate, and a URL with `127.0.0.1` does not. The operating
 //// system does not trust the test CA.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import fixtures/test_database
 import gleam/int
 import gleam/result
@@ -56,7 +56,10 @@ pub fn tls_alerts(run: fn() -> a) -> List(#(String, String)) {
 pub fn query_texts(
   url: String,
   sql: String,
-) -> Result(Result(List(String), pog.QueryError), postgres.FromUrlError) {
+) -> Result(
+  Result(List(String), dream_postgres_client.QueryError),
+  postgres.FromUrlError,
+) {
   use <- test_database.with_own_pools()
   postgres.from_url(url)
   |> result.map(test_database.texts(_, sql))
@@ -66,7 +69,10 @@ pub fn query_texts(
 /// from the server's `pg_stat_ssl` view.
 pub fn ssl_in_use(
   url: String,
-) -> Result(Result(List(String), pog.QueryError), postgres.FromUrlError) {
+) -> Result(
+  Result(List(String), dream_postgres_client.QueryError),
+  postgres.FromUrlError,
+) {
   query_texts(
     url,
     "SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid()",

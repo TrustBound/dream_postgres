@@ -1,7 +1,7 @@
-import dream_pog as pog
 import dream_postgres/recorder
+import dream_postgres_client
 
-pub fn explain(query_error: pog.QueryError) -> String {
+pub fn explain(query_error: dream_postgres_client.QueryError) -> String {
   case recorder.error(query_error) {
     Ok(recorder.NoRecording(sql:, parameters:, path:)) ->
       "Record again: " <> path <> " has no " <> sql <> " with " <> parameters

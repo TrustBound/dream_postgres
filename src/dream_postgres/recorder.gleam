@@ -15,8 +15,9 @@
 //// - `Passthrough`: each query runs on the real database, and nothing is
 ////   recorded.
 ////
-//// A query that the recorder fails returns `pog.InterceptorFailed`, and
-//// `error` reads the `RecorderError` back from it.
+//// A query that the recorder fails returns
+//// `dream_postgres_client.InterceptorFailed`, and `error` reads the
+//// `RecorderError` back from it.
 ////
 //// `recording` documents the file format.
 ////
@@ -25,14 +26,16 @@
 //// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
-//// import dream_pog as pog
 //// import dream_postgres/recorder
+//// import dream_postgres_client
 //// import gleam/result
 //// import gleam/string
 //// import snippets/guide_recording_setup.{connect, start_recorder}
 //// import snippets/guide_recording_users.{type User, create_user, find_user}
 ////
-//// pub fn create_and_find(db: pog.Connection) -> Result(User, pog.QueryError) {
+//// pub fn create_and_find(
+////   db: dream_postgres_client.Connection,
+//// ) -> Result(User, dream_postgres_client.QueryError) {
 ////   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
 ////   find_user(db, id)
 //// }
@@ -51,12 +54,12 @@
 //// }
 //// ```
 
-import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_postgres/recording.{
   type RecordedQuery, type RecordedResult, type RecordedValue, type Recording,
   Failed, RecordedQuery, Recording, Returned,
 }
+import dream_postgres_client
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
@@ -69,8 +72,8 @@ import gleam/string
 
 /// Why the recorder failed a query.
 ///
-/// The query returns `pog.InterceptorFailed`, and `error` reads the
-/// `RecorderError` back from it.
+/// The query returns `dream_postgres_client.InterceptorFailed`, and `error`
+/// reads the `RecorderError` back from it.
 ///
 /// - `NoRecording`: in playback mode, no recording in the file at `path`
 ///   matches the query. `parameters` is the text of the parameters, as
@@ -92,8 +95,9 @@ pub type RecorderError {
   RecorderStopped(sql: String)
 }
 
-// The reason that the recorder gives to `pog.InterceptorFailed`. The tag
-// keeps it apart from the reason of any other interceptor.
+// The reason that the recorder gives to
+// `dream_postgres_client.InterceptorFailed`. The tag keeps it apart from the
+// reason of any other interceptor.
 type Failure {
   DreamPostgresRecorderError(error: RecorderError)
 }
@@ -186,9 +190,9 @@ type Settings {
 /// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/client as postgres
 /// import dream_postgres/recorder
+/// import dream_postgres_client
 /// import gleam/erlang/process
 /// import gleam/result
 /// import gleam/string
@@ -209,7 +213,7 @@ type Settings {
 /// pub fn connect(
 ///   recording: recorder.Recorder,
 ///   database_url: String,
-/// ) -> Result(pog.Connection, String) {
+/// ) -> Result(dream_postgres_client.Connection, String) {
 ///   use config <- result.try(
 ///     postgres.parse_config(process.new_name("test_database"), database_url)
 ///     |> result.map_error(string.inspect),
@@ -248,9 +252,9 @@ fn keep_result(
 /// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/client as postgres
 /// import dream_postgres/recorder
+/// import dream_postgres_client
 /// import gleam/erlang/process
 /// import gleam/result
 /// import gleam/string
@@ -271,7 +275,7 @@ fn keep_result(
 /// pub fn connect(
 ///   recording: recorder.Recorder,
 ///   database_url: String,
-/// ) -> Result(pog.Connection, String) {
+/// ) -> Result(dream_postgres_client.Connection, String) {
 ///   use config <- result.try(
 ///     postgres.parse_config(process.new_name("test_database"), database_url)
 ///     |> result.map_error(string.inspect),
@@ -298,9 +302,9 @@ pub fn directory(
 /// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/client as postgres
 /// import dream_postgres/recorder
+/// import dream_postgres_client
 /// import gleam/erlang/process
 /// import gleam/result
 /// import gleam/string
@@ -321,7 +325,7 @@ pub fn directory(
 /// pub fn connect(
 ///   recording: recorder.Recorder,
 ///   database_url: String,
-/// ) -> Result(pog.Connection, String) {
+/// ) -> Result(dream_postgres_client.Connection, String) {
 ///   use config <- result.try(
 ///     postgres.parse_config(process.new_name("test_database"), database_url)
 ///     |> result.map_error(string.inspect),
@@ -344,9 +348,9 @@ pub fn name(builder: RecorderBuilder, name: String) -> RecorderBuilder {
 /// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/client as postgres
 /// import dream_postgres/recorder
+/// import dream_postgres_client
 /// import gleam/erlang/process
 /// import gleam/result
 /// import gleam/string
@@ -367,7 +371,7 @@ pub fn name(builder: RecorderBuilder, name: String) -> RecorderBuilder {
 /// pub fn connect(
 ///   recording: recorder.Recorder,
 ///   database_url: String,
-/// ) -> Result(pog.Connection, String) {
+/// ) -> Result(dream_postgres_client.Connection, String) {
 ///   use config <- result.try(
 ///     postgres.parse_config(process.new_name("test_database"), database_url)
 ///     |> result.map_error(string.inspect),
@@ -385,7 +389,8 @@ pub fn mode(builder: RecorderBuilder, mode: Mode) -> RecorderBuilder {
 ///
 /// The texts are `"record"`, `"playback"` and `"passthrough"`. They are
 /// case-sensitive. Any other text gives an error that names it, such as
-/// `Error("The recorder mode \"replay\" is not known. Use \"record\", \"playback\" or \"passthrough\".")`.
+/// `Error("The recorder mode \"replay\" is not known. Use \"record\",
+/// \"playback\" or \"passthrough\".")`.
 ///
 /// ## Example
 ///
@@ -456,11 +461,11 @@ pub fn key(builder: RecorderBuilder, key: MatchKey) -> RecorderBuilder {
 /// ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/recorder
 /// import dream_postgres/recording.{
 ///   type RecordedQuery, type RecordedResult, RecordedQuery, Returned, Text, Tuple,
 /// }
+/// import dream_postgres_client
 /// import gleam/dynamic/decode
 /// import gleam/list
 /// import gleam/result
@@ -470,13 +475,13 @@ pub fn key(builder: RecorderBuilder, key: MatchKey) -> RecorderBuilder {
 /// const select_tokens = "SELECT token FROM sessions WHERE user_name = $1"
 ///
 /// pub fn find_tokens(
-///   db: pog.Connection,
+///   db: dream_postgres_client.Connection,
 ///   user_name: String,
-/// ) -> Result(List(String), pog.QueryError) {
-///   pog.query(select_tokens)
-///   |> pog.parameter(pog.text(user_name))
-///   |> pog.returning(decode.at([0], decode.string))
-///   |> pog.execute(db)
+/// ) -> Result(List(String), dream_postgres_client.QueryError) {
+///   dream_postgres_client.query(select_tokens)
+///   |> dream_postgres_client.parameter(dream_postgres_client.text(user_name))
+///   |> dream_postgres_client.returning(decode.at([0], decode.string))
+///   |> dream_postgres_client.execute(db)
 ///   |> result.map(fn(returned) { returned.rows })
 /// }
 ///
@@ -531,11 +536,11 @@ pub fn query_transformer(
 /// ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/recorder
 /// import dream_postgres/recording.{
 ///   type RecordedQuery, type RecordedResult, RecordedQuery, Returned, Text, Tuple,
 /// }
+/// import dream_postgres_client
 /// import gleam/dynamic/decode
 /// import gleam/list
 /// import gleam/result
@@ -545,13 +550,13 @@ pub fn query_transformer(
 /// const select_tokens = "SELECT token FROM sessions WHERE user_name = $1"
 ///
 /// pub fn find_tokens(
-///   db: pog.Connection,
+///   db: dream_postgres_client.Connection,
 ///   user_name: String,
-/// ) -> Result(List(String), pog.QueryError) {
-///   pog.query(select_tokens)
-///   |> pog.parameter(pog.text(user_name))
-///   |> pog.returning(decode.at([0], decode.string))
-///   |> pog.execute(db)
+/// ) -> Result(List(String), dream_postgres_client.QueryError) {
+///   dream_postgres_client.query(select_tokens)
+///   |> dream_postgres_client.parameter(dream_postgres_client.text(user_name))
+///   |> dream_postgres_client.returning(decode.at([0], decode.string))
+///   |> dream_postgres_client.execute(db)
 ///   |> result.map(fn(returned) { returned.rows })
 /// }
 ///
@@ -609,22 +614,25 @@ pub fn result_transformer(
 /// ## Returns
 ///
 /// - `Ok(Recorder)`: the recorder runs
-/// - `Error(message)`: the directory or the name is missing or not valid, the file cannot be written (record mode), or the
-///   file cannot be read or is not a recording file (playback mode)
+/// - `Error(message)`: the directory or the name is missing or not valid, the
+///   file cannot be written (record mode), or the file cannot be read or is not
+///   a recording file (playback mode)
 ///
 /// ## Example
 ///
 /// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/recorder
+/// import dream_postgres_client
 /// import gleam/result
 /// import gleam/string
 /// import snippets/guide_recording_setup.{connect, start_recorder}
 /// import snippets/guide_recording_users.{type User, create_user, find_user}
 ///
-/// pub fn create_and_find(db: pog.Connection) -> Result(User, pog.QueryError) {
+/// pub fn create_and_find(
+///   db: dream_postgres_client.Connection,
+/// ) -> Result(User, dream_postgres_client.QueryError) {
 ///   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
 ///   find_user(db, id)
 /// }
@@ -733,11 +741,12 @@ fn is_name_character(character: String) -> Bool {
 /// with no pool.
 ///
 /// - Record mode starts the pool of `config` with `client.connect`, with an
-///   interceptor that records each query. A query in `pog.transaction` is
-///   recorded too.
+///   interceptor that records each query. A query in
+///   `dream_postgres_client.transaction` is recorded too.
 /// - Playback mode starts no pool and opens no connection: it returns
-///   `pog.disconnected`, and every query gets the result of its recording.
-///   `config` is not used, so the database does not have to exist.
+///   `dream_postgres_client.disconnected`, and every query gets the result of
+///   its recording. `config` is not used, so the database does not have to
+///   exist.
 /// - Passthrough mode starts the pool of `config` with `client.connect`.
 ///
 /// ## Returns
@@ -751,14 +760,16 @@ fn is_name_character(character: String) -> Bool {
 /// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/recorder
+/// import dream_postgres_client
 /// import gleam/result
 /// import gleam/string
 /// import snippets/guide_recording_setup.{connect, start_recorder}
 /// import snippets/guide_recording_users.{type User, create_user, find_user}
 ///
-/// pub fn create_and_find(db: pog.Connection) -> Result(User, pog.QueryError) {
+/// pub fn create_and_find(
+///   db: dream_postgres_client.Connection,
+/// ) -> Result(User, dream_postgres_client.QueryError) {
 ///   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
 ///   find_user(db, id)
 /// }
@@ -784,10 +795,17 @@ pub fn connect(
     PassthroughMode -> postgres.connect(config)
     RecordMode(server:, settings:) ->
       config
-      |> pog.interceptor(Some(record_interceptor(server, settings)))
+      |> dream_postgres_client.interceptor(
+        Some(record_interceptor(server, settings)),
+      )
       |> postgres.connect()
     PlaybackMode(server:, settings:) ->
-      Ok(pog.disconnected(playback_interceptor(server, settings)))
+      Ok(
+        dream_postgres_client.disconnected(playback_interceptor(
+          server,
+          settings,
+        )),
+      )
   }
 }
 
@@ -807,14 +825,16 @@ pub fn connect(
 /// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/recorder
+/// import dream_postgres_client
 /// import gleam/result
 /// import gleam/string
 /// import snippets/guide_recording_setup.{connect, start_recorder}
 /// import snippets/guide_recording_users.{type User, create_user, find_user}
 ///
-/// pub fn create_and_find(db: pog.Connection) -> Result(User, pog.QueryError) {
+/// pub fn create_and_find(
+///   db: dream_postgres_client.Connection,
+/// ) -> Result(User, dream_postgres_client.QueryError) {
 ///   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
 ///   find_user(db, id)
 /// }
@@ -977,9 +997,9 @@ fn is_whitespace(character: String) -> Bool {
 fn record_interceptor(
   server: Server(RecordMessage),
   settings: Settings,
-) -> pog.Interceptor {
-  pog.Interceptor(fn(request) {
-    pog.Capture(on_result: fn(result) {
+) -> dream_postgres_client.Interceptor {
+  dream_postgres_client.Interceptor(fn(request) {
+    dream_postgres_client.Capture(on_result: fn(result) {
       add(server, settings, request, result)
       |> result.map_error(to_reason)
     })
@@ -991,8 +1011,8 @@ fn record_interceptor(
 fn add(
   server: Server(RecordMessage),
   settings: Settings,
-  request: pog.InterceptRequest,
-  result: Result(#(Int, List(Dynamic)), pog.QueryError),
+  request: dream_postgres_client.InterceptRequest,
+  result: Result(#(Int, List(Dynamic)), dream_postgres_client.QueryError),
 ) -> Result(Nil, RecorderError) {
   use recording <- result.try(to_recording(settings, request, result))
   call(server, Add(recording, _))
@@ -1002,8 +1022,8 @@ fn add(
 
 fn to_recording(
   settings: Settings,
-  request: pog.InterceptRequest,
-  result: Result(#(Int, List(Dynamic)), pog.QueryError),
+  request: dream_postgres_client.InterceptRequest,
+  result: Result(#(Int, List(Dynamic)), dream_postgres_client.QueryError),
 ) -> Result(Recording, RecorderError) {
   use query <- result.try(to_query(settings, request))
   use recorded <- result.map(
@@ -1015,7 +1035,7 @@ fn to_recording(
 
 fn to_query(
   settings: Settings,
-  request: pog.InterceptRequest,
+  request: dream_postgres_client.InterceptRequest,
 ) -> Result(RecordedQuery, RecorderError) {
   use parameters <- result.map(
     list.try_map(request.parameters, fn(parameter) {
@@ -1031,7 +1051,7 @@ fn not_recordable(sql: String, what: String, term: String) -> RecorderError {
 }
 
 fn to_result(
-  result: Result(#(Int, List(Dynamic)), pog.QueryError),
+  result: Result(#(Int, List(Dynamic)), dream_postgres_client.QueryError),
 ) -> Result(RecordedResult, String) {
   case result {
     Error(error) -> Ok(Failed(error))
@@ -1050,15 +1070,17 @@ fn to_returned(
 fn playback_interceptor(
   server: Server(PlaybackMessage),
   settings: Settings,
-) -> pog.Interceptor {
-  pog.Interceptor(fn(request) { play(server, settings, request) })
+) -> dream_postgres_client.Interceptor {
+  dream_postgres_client.Interceptor(fn(request) {
+    play(server, settings, request)
+  })
 }
 
 fn play(
   server: Server(PlaybackMessage),
   settings: Settings,
-  request: pog.InterceptRequest,
-) -> pog.InterceptResult {
+  request: dream_postgres_client.InterceptRequest,
+) -> dream_postgres_client.InterceptResult {
   let answer = {
     use query <- result.try(to_query(settings, request))
     call(server, Play(settings.key(query), query, _))
@@ -1067,10 +1089,12 @@ fn play(
   }
   case answer {
     Ok(Returned(count:, rows:)) ->
-      pog.Respond(count:, rows: list.map(rows, from_recorded))
-    Ok(Failed(query_error)) -> pog.Fail(query_error)
+      dream_postgres_client.Respond(count:, rows: list.map(rows, from_recorded))
+    Ok(Failed(query_error)) -> dream_postgres_client.Fail(query_error)
     Error(recorder_error) ->
-      pog.Fail(pog.InterceptorFailed(to_reason(recorder_error)))
+      dream_postgres_client.Fail(
+        dream_postgres_client.InterceptorFailed(to_reason(recorder_error)),
+      )
   }
 }
 
@@ -1084,17 +1108,18 @@ fn to_reason(recorder_error: RecorderError) -> Dynamic {
 ///
 /// - `Ok(RecorderError)`: the recorder failed the query
 /// - `Error(Nil)`: the error is not from this recorder: an error of the
-///   database, or the `pog.InterceptorFailed` of another interceptor
+///   database, or the `dream_postgres_client.InterceptorFailed` of another
+///   interceptor
 ///
 /// ## Example
 ///
 /// ### Explain a query error <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_pog as pog
 /// import dream_postgres/recorder
+/// import dream_postgres_client
 ///
-/// pub fn explain(query_error: pog.QueryError) -> String {
+/// pub fn explain(query_error: dream_postgres_client.QueryError) -> String {
 ///   case recorder.error(query_error) {
 ///     Ok(recorder.NoRecording(sql:, parameters:, path:)) ->
 ///       "Record again: " <> path <> " has no " <> sql <> " with " <> parameters
@@ -1103,9 +1128,11 @@ fn to_reason(recorder_error: RecorderError) -> Dynamic {
 ///   }
 /// }
 /// ```
-pub fn error(query_error: pog.QueryError) -> Result(RecorderError, Nil) {
+pub fn error(
+  query_error: dream_postgres_client.QueryError,
+) -> Result(RecorderError, Nil) {
   case query_error {
-    pog.InterceptorFailed(reason:) ->
+    dream_postgres_client.InterceptorFailed(reason:) ->
       decode.run(reason, failure_decoder())
       |> result.replace_error(Nil)
     _ -> Error(Nil)
@@ -1171,7 +1198,7 @@ fn to_recorded(term: Dynamic) -> Result(RecordedValue, String)
 fn from_recorded(value: RecordedValue) -> Dynamic
 
 @external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
-fn to_dynamic(value: pog.Value) -> Dynamic
+fn to_dynamic(value: dream_postgres_client.Value) -> Dynamic
 
 @external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
 fn failure_to_dynamic(failure: Failure) -> Dynamic

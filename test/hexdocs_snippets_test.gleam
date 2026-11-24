@@ -4,8 +4,8 @@
 //// The `connect` example starts a pool for localhost:5432. The pool
 //// connects in the background, so the test needs no database.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -134,7 +134,7 @@ fn client_tests() {
         // Assert
         result
         |> should
-        |> be_equal(Ok(pog.named_connection(pool_name)))
+        |> be_equal(Ok(dream_postgres_client.named_connection(pool_name)))
         |> or_fail_with("Expected a connection to the named pool")
       },
     ),
@@ -219,7 +219,8 @@ fn query_tests() {
   group("dream_postgres/query", [
     it("query_first_row.find_name returns the first name", fn() {
       // Arrange
-      let result = Ok(pog.Returned(count: 2, rows: ["Ada", "Grace"]))
+      let result =
+        Ok(dream_postgres_client.Returned(count: 2, rows: ["Ada", "Grace"]))
 
       // Act
       let name = query_first_row.find_name(result)
@@ -232,7 +233,7 @@ fn query_tests() {
     }),
     it("query_first_row.find_name returns User not found for no rows", fn() {
       // Arrange
-      let result = Ok(pog.Returned(count: 0, rows: []))
+      let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
       // Act
       let name = query_first_row.find_name(result)
@@ -247,7 +248,7 @@ fn query_tests() {
       "query_first_row.find_name returns Database error for a query error",
       fn() {
         // Arrange
-        let result = Error(pog.ConnectionUnavailable)
+        let result = Error(dream_postgres_client.ConnectionUnavailable)
 
         // Act
         let name = query_first_row.find_name(result)
@@ -261,7 +262,8 @@ fn query_tests() {
     ),
     it("query_all_rows.find_names returns every name", fn() {
       // Arrange
-      let result = Ok(pog.Returned(count: 2, rows: ["Ada", "Grace"]))
+      let result =
+        Ok(dream_postgres_client.Returned(count: 2, rows: ["Ada", "Grace"]))
 
       // Act
       let names = query_all_rows.find_names(result)
@@ -274,7 +276,7 @@ fn query_tests() {
     }),
     it("query_all_rows.find_names returns the error for a query error", fn() {
       // Arrange
-      let result = Error(pog.ConnectionUnavailable)
+      let result = Error(dream_postgres_client.ConnectionUnavailable)
 
       // Act
       let names = query_all_rows.find_names(result)

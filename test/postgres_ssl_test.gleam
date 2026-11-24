@@ -4,8 +4,8 @@
 //// Some tests read the TLS alert reports that OTP's `ssl` application logs
 //// for every pool of the BEAM, so this suite runs one test at a time.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import dream_test/matchers.{be_between, be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -129,7 +129,7 @@ fn untrusted_ca_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected ConnectionUnavailable")
     }),
     it("verify-ca gives ConnectionUnavailable", fn() {
@@ -140,7 +140,7 @@ fn untrusted_ca_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected ConnectionUnavailable")
     }),
     it("verify-full logs the reason as a notice", fn() {
@@ -201,7 +201,7 @@ fn trusted_ca_tests() {
         // Assert
         ssl
         |> should
-        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+        |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
         |> or_fail_with("Expected ConnectionUnavailable")
       },
     ),
@@ -269,7 +269,7 @@ fn trusted_ca_tests() {
       // Assert
       connected
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected ConnectionUnavailable without the CA file")
     }),
     it(
@@ -353,7 +353,10 @@ fn trusted_ca_tests() {
 // server whether the connection uses TLS, and stops the pool.
 fn ssl_with_test_ca(
   url: String,
-) -> Result(Result(List(String), pog.QueryError), postgres.FromUrlError) {
+) -> Result(
+  Result(List(String), dream_postgres_client.QueryError),
+  postgres.FromUrlError,
+) {
   ssl_database.ssl_in_use(url <> "&sslrootcert=" <> ssl_database.ca_file)
 }
 

@@ -3,9 +3,9 @@
 //// against the real PostgreSQL 16 server, plays it back with no database,
 //// and compares both results with the exact term of the driver.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_postgres/recorder
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -588,7 +588,7 @@ pub fn tests() -> TestSuite {
       let results =
         round_trip_with(
           "SELECT 1 AS id, 'Ada' AS name",
-          test_database.config() |> pog.rows_as_map(True),
+          test_database.config() |> dream_postgres_client.rows_as_map(True),
         )
 
       // Assert
@@ -635,8 +635,8 @@ fn atom_value(name: String) -> Dynamic {
 fn round_trip(
   sql: String,
 ) -> #(
-  Result(List(Dynamic), pog.QueryError),
-  Result(List(Dynamic), pog.QueryError),
+  Result(List(Dynamic), dream_postgres_client.QueryError),
+  Result(List(Dynamic), dream_postgres_client.QueryError),
 ) {
   round_trip_with(sql, test_database.config())
 }
@@ -645,8 +645,8 @@ fn round_trip_with(
   sql: String,
   config: postgres.Config,
 ) -> #(
-  Result(List(Dynamic), pog.QueryError),
-  Result(List(Dynamic), pog.QueryError),
+  Result(List(Dynamic), dream_postgres_client.QueryError),
+  Result(List(Dynamic), dream_postgres_client.QueryError),
 ) {
   use directory <- recordings.with_directory()
   use <- test_database.with_own_pools()

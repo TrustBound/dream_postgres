@@ -4,9 +4,9 @@
 //// wrote with the output files of the guide. `playback_tests` need no
 //// database, and `recorder_playback_main` runs them too.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_postgres/recorder
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -183,7 +183,7 @@ fn playback_group() {
 }
 
 // Plays back the committed recording of create_and_find.
-fn play(run: fn(pog.Connection) -> a) -> a {
+fn play(run: fn(dream_postgres_client.Connection) -> a) -> a {
   let assert Ok(recording) =
     start_recorder(recorder.Playback, recordings.fixtures, "create_and_find")
   let assert Ok(db) = connect(recording, no_database)

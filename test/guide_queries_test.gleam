@@ -5,8 +5,8 @@
 //// table that the guide's SQL makes. The other tests build the results by
 //// hand, or run the handlers on a pool where no database listens.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -31,18 +31,21 @@ pub fn tests() -> TestSuite {
       // Arrange
       let results = [
         #(
-          "user_response(Ok(pog.Returned(count: 1, rows: [FindUserRow(1, \"Ada\", \"ada@example.com\")])))",
+          "user_response(Ok(dream_postgres_client.Returned(count: 1, rows: [FindUserRow(1, \"Ada\", \"ada@example.com\")])))",
           Ok(
-            pog.Returned(count: 1, rows: [
+            dream_postgres_client.Returned(count: 1, rows: [
               FindUserRow(id: 1, name: "Ada", email: "ada@example.com"),
             ]),
           ),
         ),
         #(
-          "user_response(Ok(pog.Returned(count: 0, rows: [])))",
-          Ok(pog.Returned(count: 0, rows: [])),
+          "user_response(Ok(dream_postgres_client.Returned(count: 0, rows: [])))",
+          Ok(dream_postgres_client.Returned(count: 0, rows: [])),
         ),
-        #("user_response(Error(pog.QueryTimeout))", Error(pog.QueryTimeout)),
+        #(
+          "user_response(Error(dream_postgres_client.QueryTimeout))",
+          Error(dream_postgres_client.QueryTimeout),
+        ),
       ]
 
       // Act
@@ -64,20 +67,24 @@ pub fn tests() -> TestSuite {
       // Arrange
       let results = [
         #(
-          "created_response(Ok(pog.Returned(count: 1, rows: [CreateUserRow(7)])))",
-          Ok(pog.Returned(count: 1, rows: [CreateUserRow(id: 7)])),
+          "created_response(Ok(dream_postgres_client.Returned(count: 1, rows: [CreateUserRow(7)])))",
+          Ok(
+            dream_postgres_client.Returned(count: 1, rows: [
+              CreateUserRow(id: 7),
+            ]),
+          ),
         ),
         #(
-          "created_response(Error(pog.ConstraintViolated(constraint: \"users_email_key\", ..)))",
-          Error(pog.ConstraintViolated(
+          "created_response(Error(dream_postgres_client.ConstraintViolated(constraint: \"users_email_key\", ..)))",
+          Error(dream_postgres_client.ConstraintViolated(
             message: "duplicate key value violates unique constraint \"users_email_key\"",
             constraint: "users_email_key",
             detail: "Key (email)=(ada@example.com) already exists.",
           )),
         ),
         #(
-          "created_response(Error(pog.ConstraintViolated(constraint: \"users_name_check\", ..)))",
-          Error(pog.ConstraintViolated(
+          "created_response(Error(dream_postgres_client.ConstraintViolated(constraint: \"users_name_check\", ..)))",
+          Error(dream_postgres_client.ConstraintViolated(
             message: "new row violates check constraint \"users_name_check\"",
             constraint: "users_name_check",
             detail: "",
@@ -102,13 +109,18 @@ pub fn tests() -> TestSuite {
     }),
     it("step 5: log_failure gives back the result it gets", fn() {
       // Act
-      let result: Result(pog.Returned(Int), pog.QueryError) =
-        guide_queries_log_failure.log_failure(Error(pog.QueryTimeout))
+      let result: Result(
+        dream_postgres_client.Returned(Int),
+        dream_postgres_client.QueryError,
+      ) =
+        guide_queries_log_failure.log_failure(Error(
+          dream_postgres_client.QueryTimeout,
+        ))
 
       // Assert
       result
       |> should
-      |> be_equal(Error(pog.QueryTimeout))
+      |> be_equal(Error(dream_postgres_client.QueryTimeout))
       |> or_fail_with("Expected the same error")
     }),
     it("step 5: show_user answers 500 when the database is not there", fn() {
@@ -139,7 +151,11 @@ fn with_database_tests() {
       // Assert
       created
       |> should
-      |> be_equal(Ok(pog.Returned(count: 1, rows: [CreateUserRow(id: 1)])))
+      |> be_equal(
+        Ok(
+          dream_postgres_client.Returned(count: 1, rows: [CreateUserRow(id: 1)]),
+        ),
+      )
       |> or_fail_with("Expected the new id 1")
     }),
     it("step 1: find_user returns every column of the row", fn() {
@@ -156,7 +172,7 @@ fn with_database_tests() {
       |> should
       |> be_equal(
         Ok(
-          pog.Returned(count: 1, rows: [
+          dream_postgres_client.Returned(count: 1, rows: [
             FindUserRow(id: 1, name: "Ada", email: "ada@example.com"),
           ]),
         ),
@@ -179,7 +195,7 @@ fn with_database_tests() {
       |> should
       |> be_equal(
         Ok(
-          pog.Returned(count: 2, rows: [
+          dream_postgres_client.Returned(count: 2, rows: [
             ListUsersRow(id: 2, name: "Ada"),
             ListUsersRow(id: 1, name: "Grace"),
           ]),
@@ -200,7 +216,7 @@ fn with_database_tests() {
         found
         |> should
         |> be_equal(
-          Error(pog.PostgresqlError(
+          Error(dream_postgres_client.PostgresqlError(
             code: "42P01",
             name: "undefined_table",
             message: "relation \"users\" does not exist",
@@ -246,7 +262,7 @@ fn with_database_tests() {
           let both =
             guide_queries_list_users.users_response(
               Ok(
-                pog.Returned(count: 2, rows: [
+                dream_postgres_client.Returned(count: 2, rows: [
                   ListUsersRow(id: 1, name: "Ada"),
                   ListUsersRow(id: 2, name: "Grace"),
                 ]),
@@ -254,7 +270,7 @@ fn with_database_tests() {
             )
           let none =
             guide_queries_list_users.users_response(
-              Ok(pog.Returned(count: 0, rows: [])),
+              Ok(dream_postgres_client.Returned(count: 0, rows: [])),
             )
           let assert Ok(unavailable_db) =
             postgres.from_url(database_url.unused_database_url())
@@ -269,11 +285,11 @@ fn with_database_tests() {
               string.inspect(full),
             ),
             #(
-              "users_response(Ok(pog.Returned(count: 2, rows: [ListUsersRow(1, \"Ada\"), ListUsersRow(2, \"Grace\")])))",
+              "users_response(Ok(dream_postgres_client.Returned(count: 2, rows: [ListUsersRow(1, \"Ada\"), ListUsersRow(2, \"Grace\")])))",
               string.inspect(both),
             ),
             #(
-              "users_response(Ok(pog.Returned(count: 0, rows: [])))",
+              "users_response(Ok(dream_postgres_client.Returned(count: 0, rows: [])))",
               string.inspect(none),
             ),
             #(
@@ -354,7 +370,7 @@ fn with_database_tests() {
 
 // Runs `run` on a schema of its own that has the users table of the
 // guide's SQL, with no rows.
-fn with_users_table(run: fn(pog.Connection) -> a) -> a {
+fn with_users_table(run: fn(dream_postgres_client.Connection) -> a) -> a {
   test_database.with_schema(fn(db) {
     test_database.run_sql_file(db, users_sql)
     run(db)
@@ -363,9 +379,15 @@ fn with_users_table(run: fn(pog.Connection) -> a) -> a {
 
 // Writes a unique violation as the guide shows it, one field on a line.
 // Any other result is written with `string.inspect`.
-fn constraint_text(result: Result(a, pog.QueryError)) -> String {
+fn constraint_text(
+  result: Result(a, dream_postgres_client.QueryError),
+) -> String {
   case result {
-    Error(pog.ConstraintViolated(message:, constraint:, detail:)) ->
+    Error(dream_postgres_client.ConstraintViolated(
+      message:,
+      constraint:,
+      detail:,
+    )) ->
       "Error(ConstraintViolated(\n       message: "
       <> string.inspect(message)
       <> ",\n       constraint: "

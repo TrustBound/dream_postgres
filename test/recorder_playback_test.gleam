@@ -3,12 +3,12 @@
 //// keys, and the file format. `recorder_playback_main` runs them alone,
 //// with both test servers stopped.
 
-import dream_pog as pog
 import dream_postgres/recorder
 import dream_postgres/recording.{
   Array, Atom, Boolean, Bytes, Failed, Integer, Map, Null, Real, RecordedQuery,
   Recording, Returned, Text, Tuple,
 }
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -28,7 +28,7 @@ import snippets/recorder_scrub
 fn describe_term(term: a) -> String
 
 @external(erlang, "recorder_ffi", "unsafe_value")
-fn unsafe_value(term: a) -> pog.Value
+fn unsafe_value(term: a) -> dream_postgres_client.Value
 
 @external(erlang, "recorder_ffi", "unsafe_value")
 fn any_to_dynamic(term: a) -> dynamic.Dynamic
@@ -100,7 +100,7 @@ fn playback_tests() {
       inserted
       |> should
       |> be_equal(
-        Error(pog.ConstraintViolated(
+        Error(dream_postgres_client.ConstraintViolated(
           message: "duplicate key value violates unique constraint \"users_name_key\"",
           constraint: "users_name_key",
           detail: "Key (name)=(Ada) already exists.",
@@ -212,9 +212,9 @@ fn miss_tests() {
       // Act
       let selected =
         recordings.play(users(), fn(db) {
-          pog.query("SELECT $1::text")
-          |> pog.parameter(unsafe_value(pid))
-          |> pog.execute(db)
+          dream_postgres_client.query("SELECT $1::text")
+          |> dream_postgres_client.parameter(unsafe_value(pid))
+          |> dream_postgres_client.execute(db)
           |> result.map_error(recorder.error)
         })
 
@@ -241,9 +241,9 @@ fn miss_tests() {
           [unsafe_value([pid]), unsafe_value(dict.from_list([#(1, pid)]))],
           fn(value) {
             recordings.play(users(), fn(db) {
-              pog.query("SELECT $1")
-              |> pog.parameter(value)
-              |> pog.execute(db)
+              dream_postgres_client.query("SELECT $1")
+              |> dream_postgres_client.parameter(value)
+              |> dream_postgres_client.execute(db)
               |> result.replace(Nil)
               |> result.map_error(recorder.error)
             })
@@ -293,7 +293,7 @@ fn error_tests() {
     it("gives Error(Nil) for a PostgresqlError", fn() {
       // Act
       let read =
-        recorder.error(pog.PostgresqlError(
+        recorder.error(dream_postgres_client.PostgresqlError(
           code: "42601",
           name: "syntax_error",
           message: "syntax error",
@@ -310,7 +310,11 @@ fn error_tests() {
       fn() {
         // Act
         let read =
-          recorder.error(pog.InterceptorFailed(dynamic.string("no_recording")))
+          recorder.error(
+            dream_postgres_client.InterceptorFailed(dynamic.string(
+              "no_recording",
+            )),
+          )
 
         // Assert
         read
@@ -330,7 +334,8 @@ fn error_tests() {
           ))
 
         // Act
-        let read = recorder.error(pog.InterceptorFailed(reason))
+        let read =
+          recorder.error(dream_postgres_client.InterceptorFailed(reason))
 
         // Assert
         read
@@ -343,7 +348,7 @@ fn error_tests() {
 }
 
 fn transaction_tests() {
-  group("pog.transaction in playback mode", [
+  group("dream_postgres_client.transaction in playback mode", [
     it("gives each query of transaction.json its recorded result", fn() {
       // Act
       let results =
@@ -387,10 +392,14 @@ fn scrub_tests() {
         recordings.play(
           recorder_scrub.scrubbing_builder(recordings.fixtures, "scrubbed"),
           fn(db) {
-            pog.query("INSERT INTO sessions (user_name, token) VALUES ($1, $2)")
-            |> pog.parameter(pog.text("ada"))
-            |> pog.parameter(pog.text("s3cret-token"))
-            |> pog.execute(db)
+            dream_postgres_client.query(
+              "INSERT INTO sessions (user_name, token) VALUES ($1, $2)",
+            )
+            |> dream_postgres_client.parameter(dream_postgres_client.text("ada"))
+            |> dream_postgres_client.parameter(dream_postgres_client.text(
+              "s3cret-token",
+            ))
+            |> dream_postgres_client.execute(db)
             |> result.map(fn(returned) { returned.count })
           },
         )
@@ -817,16 +826,23 @@ fn file_format_tests() {
       let recorded =
         list.map(
           [
-            pog.ConstraintViolated("m", "c", "d"),
-            pog.PostgresqlError("42P01", "undefined_table", "m"),
-            pog.UnexpectedArgumentCount(expected: 1, got: 2),
-            pog.UnexpectedArgumentType(expected: "int4", got: "\"a\""),
-            pog.UnexpectedResultType([
+            dream_postgres_client.ConstraintViolated("m", "c", "d"),
+            dream_postgres_client.PostgresqlError(
+              "42P01",
+              "undefined_table",
+              "m",
+            ),
+            dream_postgres_client.UnexpectedArgumentCount(expected: 1, got: 2),
+            dream_postgres_client.UnexpectedArgumentType(
+              expected: "int4",
+              got: "\"a\"",
+            ),
+            dream_postgres_client.UnexpectedResultType([
               decode.DecodeError(expected: "Int", found: "String", path: ["0"]),
             ]),
-            pog.QueryTimeout,
-            pog.ConnectionUnavailable,
-            pog.InterceptorFailed(
+            dream_postgres_client.QueryTimeout,
+            dream_postgres_client.ConnectionUnavailable,
+            dream_postgres_client.InterceptorFailed(
               any_to_dynamic(#(atom.create("tag"), "reason", [1, 2])),
             ),
           ],
@@ -850,7 +866,7 @@ fn file_format_tests() {
         let recorded = [
           Recording(
             RecordedQuery("SELECT 1", []),
-            Failed(pog.InterceptorFailed(any_to_dynamic(pid))),
+            Failed(dream_postgres_client.InterceptorFailed(any_to_dynamic(pid))),
           ),
         ]
 
@@ -864,7 +880,11 @@ fn file_format_tests() {
           Ok([
             Recording(
               RecordedQuery("SELECT 1", []),
-              Failed(pog.InterceptorFailed(dynamic.string(describe_term(pid)))),
+              Failed(
+                dream_postgres_client.InterceptorFailed(
+                  dynamic.string(describe_term(pid)),
+                ),
+              ),
             ),
           ]),
         )

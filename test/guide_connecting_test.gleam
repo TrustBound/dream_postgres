@@ -4,8 +4,8 @@
 //// queries on the test PostgreSQL server. The other pools start on a local
 //// port where no database listens.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -158,9 +158,16 @@ fn pool_tests() {
       )
       |> should
       |> be_equal(
-        #("db.internal", "myapp", Some("secret"), 20, pog.SslVerified, [
-          #("application_name", "myapp-web"),
-        ]),
+        #(
+          "db.internal",
+          "myapp",
+          Some("secret"),
+          20,
+          dream_postgres_client.SslVerified,
+          [
+            #("application_name", "myapp-web"),
+          ],
+        ),
       )
       |> or_fail_with("Expected every value of the builder")
     }),
@@ -175,7 +182,7 @@ fn pool_tests() {
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> be_equal(Ok(Error(dream_postgres_client.ConnectionUnavailable)))
       |> or_fail_with("Expected a query on the named pool")
     }),
     it("start_supervised explains a bad URL", fn() {
@@ -218,8 +225,8 @@ fn pitfall_tests() {
         "postgres",
         option.None,
         10,
-        pog.SslDisabled,
-        pog.Ipv4,
+        dream_postgres_client.SslDisabled,
+        dream_postgres_client.Ipv4,
       ))
       |> or_fail_with("Expected the Pog defaults")
     }),
@@ -235,7 +242,7 @@ fn pitfall_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslVerifiedChainOnly))
+      |> be_equal(Ok(dream_postgres_client.SslVerifiedChainOnly))
       |> or_fail_with("Expected SslVerifiedChainOnly")
     }),
     it("host does not set IPv6 for an IPv6 address", fn() {
@@ -247,7 +254,7 @@ fn pitfall_tests() {
       // Assert
       config.ip_version
       |> should
-      |> be_equal(pog.Ipv4)
+      |> be_equal(dream_postgres_client.Ipv4)
       |> or_fail_with("Expected the builder to keep Ipv4")
     }),
     it("connect with a pool name in use returns an error", fn() {

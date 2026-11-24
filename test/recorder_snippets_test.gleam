@@ -1,8 +1,8 @@
 //// Tests for the snippets of the doc comments of `dream_postgres/recorder`
 //// and `dream_postgres/recording`. None needs a database.
 
-import dream_pog as pog
 import dream_postgres/recorder
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -79,10 +79,12 @@ pub fn tests() -> TestSuite {
         let assert Ok(db) =
           recorder.connect(playback, recordings.unreachable_config())
         let names =
-          pog.query("SELECT id, name, email\n  FROM users\n  WHERE id = $1")
-          |> pog.parameter(pog.int(1))
-          |> pog.returning(decode.at([1], decode.string))
-          |> pog.execute(db)
+          dream_postgres_client.query(
+            "SELECT id, name, email\n  FROM users\n  WHERE id = $1",
+          )
+          |> dream_postgres_client.parameter(dream_postgres_client.int(1))
+          |> dream_postgres_client.returning(decode.at([1], decode.string))
+          |> dream_postgres_client.execute(db)
           |> result.map(fn(returned) { returned.rows })
         let assert Ok(Nil) = recorder.stop(playback)
         names
@@ -113,7 +115,7 @@ pub fn tests() -> TestSuite {
       // Assert
       found
       |> should
-      |> be_equal(Error(pog.QueryTimeout))
+      |> be_equal(Error(dream_postgres_client.QueryTimeout))
       |> or_fail_with("Expected the recorded timeout")
     }),
     it("recorded_sql reads the SQL of a recording file", fn() {
@@ -168,7 +170,7 @@ pub fn tests() -> TestSuite {
     it("explain tells a database error from a recorder error", fn() {
       // Act
       let explained =
-        recorder_error.explain(pog.PostgresqlError(
+        recorder_error.explain(dream_postgres_client.PostgresqlError(
           code: "42601",
           name: "syntax_error",
           message: "syntax error",

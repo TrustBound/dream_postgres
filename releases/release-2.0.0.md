@@ -4,7 +4,7 @@
 
 This release makes `postgres.from_url()` read a connection URL correctly and tell you when it cannot. Before, it read the user and the password wrongly, kept the query string in the database name, and stopped the calling process when the pool did not start.
 
-It is a major version because `from_url()` now returns a `Result`, the package now uses `dream_pog` in place of `pog`, and `sslmode=verify-ca` now has the meaning of `libpq`. Read the Migration Guide before you upgrade. The release also adds query recording, and the package moved to its own repository.
+It is a major version because `from_url()` now returns a `Result`, the package now uses `dream_postgres_client` in place of `pog`, and `sslmode=verify-ca` now has the meaning of `libpq`. Read the Migration Guide before you upgrade. The release also adds query recording, and the package moved to its own repository.
 
 ## Key Highlights
 
@@ -14,7 +14,7 @@ It is a major version because `from_url()` now returns a `Result`, the package n
 - **New `parse_config`**: read a URL into a `Config` and do not connect
 - **New `check`**: stop at startup when the database does not answer
 - **Query recording (new)**: record the queries of a test once against PostgreSQL, then play them back with no database
-- **`dream_pog` (breaking)**: the package uses `dream_pog`, a fork of Pog. Import it as `import dream_pog as pog`
+- **`dream_postgres_client` (breaking)**: the package uses `dream_postgres_client`, a fork of Pog. Import it as `import dream_postgres_client`, and call `dream_postgres_client.query` where you called `pog.query`
 - **`sslmode` as in `libpq` (breaking for `verify-ca`)**: `verify-ca` checks the certificate chain but not the host name, and `sslrootcert` trusts the CA file of one pool
 - **Its own repository**: `dream_postgres` now lives at [TrustBound/dream_postgres](https://github.com/TrustBound/dream_postgres), with its own version and its own releases
 
@@ -24,13 +24,13 @@ It is a major version because `from_url()` now returns a `Result`, the package n
 
 The new module `dream_postgres/recorder` records each query of a test, with its parameters and its result, to one JSON file, and plays the file back with no database. It has the three modes of the HTTP recorder of `dream_http_client`, the constructors of the type `recorder.Mode`:
 
-- `Record`: each query runs on the database. The recorder writes the query and its result (the count and the rows, or the error) to the file before the query returns. A query in `pog.transaction` is recorded too.
-- `Playback`: no pool starts and nothing connects. Each query gets the result of its recording. A query with no recording fails with `pog.InterceptorFailed`, and never reaches a database. `recorder.error` reads the `recorder.NoRecording(sql:, parameters:, path:)` error back from it.
+- `Record`: each query runs on the database. The recorder writes the query and its result (the count and the rows, or the error) to the file before the query returns. A query in `dream_postgres_client.transaction` is recorded too.
+- `Playback`: no pool starts and nothing connects. Each query gets the result of its recording. A query with no recording fails with `dream_postgres_client.InterceptorFailed`, and never reaches a database. `recorder.error` reads the `recorder.NoRecording(sql:, parameters:, path:)` error back from it.
 - `Passthrough`: each query runs on the database, and nothing is recorded.
 
 Set the mode with `recorder.mode(recorder.Playback)`. A wrong mode name is a compile error. For a mode in a text, for example from an environment variable, `recorder.parse_mode(text)` accepts `"record"`, `"playback"` and `"passthrough"`, and gives an `Error` that names any other text.
 
-#### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L18-L29"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+#### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L20-L31"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 pub fn run_recorded(
@@ -53,9 +53,9 @@ The new guide [Test database code with recorded queries](https://github.com/Trus
 
 In record mode, a query that the recorder cannot record fails: the file cannot be written (`WriteFailed`), a value cannot be recorded (`NotRecordable`), or the recorder stopped (`RecorderStopped`). `recorder.error` reads the `recorder.RecorderError` back from the query error, and gives `Error(Nil)` for an error of the database or of another interceptor. `recorder.stop` gives an `Error` only when the recorder had stopped already.
 
-### `dream_pog` in Place of `pog`
+### `dream_postgres_client` in Place of `pog`
 
-The package uses `dream_pog`, a fork of Pog 4.1.0, on the driver `dream_pgo`, a fork of pgo 0.20.0. The API is the same, but the module is `dream_pog`, so your code imports it as `import dream_pog as pog`. The fork adds the query interceptor that the recorder uses, the chain-only and CA file SSL modes, and a fix for `application_name`.
+The package uses `dream_postgres_client`, a fork of Pog 4.1.0, on the driver `dream_postgres_driver`, a fork of pgo 0.20.0. The API is the same, but the module is `dream_postgres_client`, so your code imports it as `import dream_postgres_client` and calls `dream_postgres_client.query` in place of `pog.query`. The fork adds the query interceptor that the recorder uses, the chain-only and CA file SSL modes, and a fix for `application_name`.
 
 ### `from_url()` Returns a `Result`
 
@@ -94,17 +94,17 @@ pub fn describe_connection(url: String) -> String {
 
 ### `check`
 
-`postgres.check(connection) -> Result(Nil, QueryError)` runs `SELECT 1` on the connection. It gives `Ok(Nil)` when the database answers, or the error of the query when it does not. `connect` and `from_url` return `Ok` before the pool connects, so an app calls `check` after them to stop at startup, not at the first request. When no database listens, the password is wrong, the database does not exist or the pool size is 0, the error is `pog.ConnectionUnavailable`, after about 2 seconds. The getting started guide shows how to combine the errors of `from_url` and `check` in one startup error type.
+`postgres.check(connection) -> Result(Nil, QueryError)` runs `SELECT 1` on the connection. It gives `Ok(Nil)` when the database answers, or the error of the query when it does not. `connect` and `from_url` return `Ok` before the pool connects, so an app calls `check` after them to stop at startup, not at the first request. When no database listens, the password is wrong, the database does not exist or the pool size is 0, the error is `dream_postgres_client.ConnectionUnavailable`, after about 2 seconds. The getting started guide shows how to combine the errors of `from_url` and `check` in one startup error type.
 
 ### `sslmode`, `sslrootcert`, `application_name` and IPv6
 
-The `sslmode` query parameter sets the SSL mode, with the meaning of `libpq`. The values are `disable`, `require`, `verify-ca` and `verify-full`. `verify-ca` gives `pog.SslVerifiedChainOnly`: it checks that a trusted CA signed the certificate, but not the host name. `verify-full` gives `pog.SslVerified`, which also checks the host name. Without `sslrootcert`, the client trusts the CA certificates of the operating system. `sslrootcert=<path>` makes the pool trust the CA certificates of that PEM file only: it gives `pog.SslVerifiedCaFile(path)` with `verify-full`, and `pog.SslVerifiedChainOnlyCaFile(path)` with `verify-ca` or `require`. `sslrootcert=system` needs `verify-full`. These are the rules of `pog.url_config` in `dream_pog`. Tests on a real PostgreSQL 16 server, whose certificate names only `localhost`, prove each mode: with the test CA file, `verify-ca` connects to `127.0.0.1` and `verify-full` does not.
+The `sslmode` query parameter sets the SSL mode, with the meaning of `libpq`. The values are `disable`, `require`, `verify-ca` and `verify-full`. `verify-ca` gives `dream_postgres_client.SslVerifiedChainOnly`: it checks that a trusted CA signed the certificate, but not the host name. `verify-full` gives `dream_postgres_client.SslVerified`, which also checks the host name. Without `sslrootcert`, the client trusts the CA certificates of the operating system. `sslrootcert=<path>` makes the pool trust the CA certificates of that PEM file only: it gives `dream_postgres_client.SslVerifiedCaFile(path)` with `verify-full`, and `dream_postgres_client.SslVerifiedChainOnlyCaFile(path)` with `verify-ca` or `require`. `sslrootcert=system` needs `verify-full`. These are the rules of `dream_postgres_client.url_config` in `dream_postgres_client`. Tests on a real PostgreSQL 16 server, whose certificate names only `localhost`, prove each mode: with the test CA file, `verify-ca` connects to `127.0.0.1` and `verify-full` does not.
 
 `application_name` sets the PostgreSQL connection parameter with that name in the config, and the server shows that name. Tests on a real PostgreSQL 16 server, with SSL off and with SSL on, assert it. An IPv6 host such as `[::1]` sets IPv6.
 
-Any other name in the query string goes to the server as a run-time parameter, with its percent-decoded value, in the order of the URL: `?search_path=app&timezone=UTC` sets `search_path` and `timezone` on each connection, and `options` goes to the server as `libpq` sends it. The other `libpq` connection keywords, such as `connect_timeout`, and `database` give `UnsupportedParameter`, because the server cannot apply them. A name one edit from a keyword, such as `sslmod` or `SSLMODE`, gives `UnknownParameterLooksLike(name, keyword)`, so a misspelled `sslmode` never connects without TLS. A name or a value that the server refuses fails at connection time: `from_url` returns `Ok`, and each query returns `pog.ConnectionUnavailable` after about 2 seconds. Only the server log says why. A name that starts with `_pq_.` is a protocol option of PostgreSQL, not a setting, so it gives `UnsupportedParameter`. An `application_name` in `options` (`-c application_name=x`) does not show: the server applies the separate parameters after `options`, so it shows the `application_name` parameter or the Erlang node name.
+Any other name in the query string goes to the server as a run-time parameter, with its percent-decoded value, in the order of the URL: `?search_path=app&timezone=UTC` sets `search_path` and `timezone` on each connection, and `options` goes to the server as `libpq` sends it. The other `libpq` connection keywords, such as `connect_timeout`, and `database` give `UnsupportedParameter`, because the server cannot apply them. A name one edit from a keyword, such as `sslmod` or `SSLMODE`, gives `UnknownParameterLooksLike(name, keyword)`, so a misspelled `sslmode` never connects without TLS. A name or a value that the server refuses fails at connection time: `from_url` returns `Ok`, and each query returns `dream_postgres_client.ConnectionUnavailable` after about 2 seconds. Only the server log says why. A name that starts with `_pq_.` is a protocol option of PostgreSQL, not a setting, so it gives `UnsupportedParameter`. An `application_name` in `options` (`-c application_name=x`) does not show: the server applies the separate parameters after `options`, so it shows the `application_name` parameter or the Erlang node name.
 
-A null byte never reaches the server. pgo writes the user, the database name and the connection parameters as strings that end with a null byte, so the text after a null byte would reach the server as another parameter: the database name `dream_test%00search_path%00evil` connected to `dream_test` with `search_path` set to `evil`. `%00` in a query parameter gives `MalformedUrl`, and `%00` in the user, the password or the database name gives `InvalidUserEncoding`, `InvalidPasswordEncoding` or `InvalidDatabaseEncoding`. `connect` refuses a config with a null byte in the user, the database name, the password or a connection parameter with `actor.InitFailed`, and starts no pool.
+A null byte never reaches the server. The driver writes the user, the database name and the connection parameters as strings that end with a null byte, so the text after a null byte would reach the server as another parameter: the database name `dream_test%00search_path%00evil` connected to `dream_test` with `search_path` set to `evil`. `%00` in a query parameter gives `MalformedUrl`, and `%00` in the user, the password or the database name gives `InvalidUserEncoding`, `InvalidPasswordEncoding` or `InvalidDatabaseEncoding`. `connect` refuses a config with a null byte in the user, the database name, the password or a connection parameter with `actor.InitFailed`, and starts no pool.
 
 ### Its Own Repository
 
@@ -157,9 +157,9 @@ gleam deps update dream_postgres
 
 Steps 1 and 2 apply to every project. Steps 3 to 6 apply only in the cases they name.
 
-#### 1. Replace `pog` with `dream_pog`
+#### 1. Replace `pog` with `dream_postgres_client`
 
-Remove `pog` from `[dependencies]` and add `dream_pog` (`gleam add dream_pog`). Replace each `import pog` with `import dream_pog as pog`. The rest of your code stays the same. Two copies of the same types do not mix, so a project that keeps `pog` too cannot pass a `pog.Config` to this package.
+Remove `pog` from `[dependencies]` and add `dream_postgres_client` (`gleam add dream_postgres_client`). Replace each `import pog` with `import dream_postgres_client`, and each `pog.` with `dream_postgres_client.`, for example `pog.query(sql)` with `dream_postgres_client.query(sql)`. Two copies of the same types do not mix, so a project that keeps `pog` too cannot pass a `dream_postgres_client.Config` to this package.
 
 #### 2. Your code calls `postgres.from_url()`
 
@@ -179,7 +179,7 @@ Before, the user was always `postgres` with no password, whatever the URL said. 
 
 #### 6. Your code reads `config.connection_parameters`, or loads a CA file with `public_key:cacerts_load`
 
-`parse_config` no longer adds `client_encoding` before an `application_name`, and keeps every `application_name` of the URL in order. To trust a private CA, put `sslrootcert=<path>` in the URL, or use `pog.SslVerifiedCaFile(path)`, in place of `public_key:cacerts_load`, which changed the CA list of the whole BEAM.
+`parse_config` no longer adds `client_encoding` before an `application_name`, and keeps every `application_name` of the URL in order. To trust a private CA, put `sslrootcert=<path>` in the URL, or use `dream_postgres_client.SslVerifiedCaFile(path)`, in place of `public_key:cacerts_load`, which changed the CA list of the whole BEAM.
 
 ## Documentation
 

@@ -2,20 +2,23 @@
 ////
 //// Turns the result of `list_users` into a response with `query.all_rows`.
 
-import dream_pog as pog
 import dream_postgres/query
+import dream_postgres_client
 import gleam/list
 import gleam/string
 import snippets/guide_queries_show_user.{type Response, Response}
 import snippets/guide_queries_sql as sql
 
-pub fn index_users(db: pog.Connection) -> Response {
+pub fn index_users(db: dream_postgres_client.Connection) -> Response {
   sql.list_users(db)
   |> users_response
 }
 
 pub fn users_response(
-  result: Result(pog.Returned(sql.ListUsersRow), pog.QueryError),
+  result: Result(
+    dream_postgres_client.Returned(sql.ListUsersRow),
+    dream_postgres_client.QueryError,
+  ),
 ) -> Response {
   case query.all_rows(result) {
     Ok([]) -> Response(200, "No users yet")

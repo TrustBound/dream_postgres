@@ -3,8 +3,8 @@
 //// Starts the pool as a child of a supervisor, and makes a connection from
 //// the pool name.
 
-import dream_pog as pog
 import dream_postgres/client as postgres
+import dream_postgres_client
 import gleam/erlang/process
 import gleam/otp/static_supervisor as supervisor
 import gleam/result
@@ -20,9 +20,11 @@ pub fn start_supervised(
   )
   use _supervisor <- result.try(
     supervisor.new(supervisor.OneForOne)
-    |> supervisor.add(pog.supervised(postgres.pool_size(config, 15)))
+    |> supervisor.add(
+      dream_postgres_client.supervised(postgres.pool_size(config, 15)),
+    )
     |> supervisor.start()
     |> result.replace_error("The supervisor did not start"),
   )
-  Ok(pog.named_connection(pool_name))
+  Ok(dream_postgres_client.named_connection(pool_name))
 }

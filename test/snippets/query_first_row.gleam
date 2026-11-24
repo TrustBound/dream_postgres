@@ -1,8 +1,11 @@
-import dream_pog as pog
 import dream_postgres/query
+import dream_postgres_client
 
 pub fn find_name(
-  result: Result(pog.Returned(String), pog.QueryError),
+  result: Result(
+    dream_postgres_client.Returned(String),
+    dream_postgres_client.QueryError,
+  ),
 ) -> Result(String, String) {
   case query.first_row(result) {
     Ok(name) -> Ok(name)

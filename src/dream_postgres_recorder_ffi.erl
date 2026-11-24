@@ -57,7 +57,7 @@ from_recorded({map, Pairs}) ->
     maps:from_list([{from_recorded(K), from_recorded(V)} || {K, V} <- Pairs]);
 from_recorded({atom, Name}) -> binary_to_atom(Name, utf8).
 
-%% A `pog.Value` is the term that the driver sends.
+%% A `dream_postgres_client.Value` is the term that the driver sends.
 to_dynamic(Value) -> Value.
 
 %% `json:decode/1` gives the atom `null` for a JSON null.

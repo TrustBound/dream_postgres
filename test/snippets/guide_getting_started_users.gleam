@@ -3,12 +3,12 @@
 //// Runs a first query with the connection from the context of the program,
 //// and turns the result into a greeting.
 
-import dream_pog as pog
 import dream_postgres/query
+import dream_postgres_client
 import gleam/dynamic/decode
 
 pub type Context {
-  Context(db: pog.Connection)
+  Context(db: dream_postgres_client.Connection)
 }
 
 pub type User {
@@ -21,16 +21,24 @@ pub fn greet_user(context: Context, id: Int) -> String {
 }
 
 pub fn find_user(
-  db: pog.Connection,
+  db: dream_postgres_client.Connection,
   id: Int,
-) -> Result(pog.Returned(User), pog.QueryError) {
-  pog.query("SELECT id, name FROM users WHERE id = $1")
-  |> pog.parameter(pog.int(id))
-  |> pog.returning(user_decoder())
-  |> pog.execute(db)
+) -> Result(
+  dream_postgres_client.Returned(User),
+  dream_postgres_client.QueryError,
+) {
+  dream_postgres_client.query("SELECT id, name FROM users WHERE id = $1")
+  |> dream_postgres_client.parameter(dream_postgres_client.int(id))
+  |> dream_postgres_client.returning(user_decoder())
+  |> dream_postgres_client.execute(db)
 }
 
-pub fn greeting(result: Result(pog.Returned(User), pog.QueryError)) -> String {
+pub fn greeting(
+  result: Result(
+    dream_postgres_client.Returned(User),
+    dream_postgres_client.QueryError,
+  ),
+) -> String {
   case query.first_row(result) {
     Ok(user) -> "Hello, " <> user.name
     Error(query.NotFound) -> "No user with that id"

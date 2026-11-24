@@ -20,14 +20,14 @@
 
 # dream_postgres
 
-A standalone module with clean interfaces for PostgreSQL operations that use `dream_pog`, a fork of [Pog](https://hex.pm/packages/pog). Import it as `import dream_pog as pog`. It includes query result helpers and a builder pattern for connection management. It is built with the same quality standards as [Dream](https://github.com/TrustBound/dream), but it is completely independent. Use it in any Gleam project.
+A standalone module with clean interfaces for PostgreSQL operations that use `dream_postgres_client`, a fork of [Pog](https://hex.pm/packages/pog). Import it as `import dream_postgres_client`. It includes query result helpers and a builder pattern for connection management. It is built with the same quality standards as [Dream](https://github.com/TrustBound/dream), but it is completely independent. Use it in any Gleam project.
 
 ## Features
 
 - ✅ Builder pattern for connection configuration
 - ✅ Type-safe query result extraction
 - ✅ Simplified error handling
-- ✅ Connection pooling via `dream_pog`
+- ✅ Connection pooling via `dream_postgres_client`
 - ✅ Query recording: record the queries of a test once, then play them back with no database
 - ✅ Zero dependencies on Dream or other frameworks
 
@@ -67,7 +67,7 @@ pub fn connect_database() -> Result(postgres.Connection, actor.StartError) {
 
 `dream_postgres/recorder` records each query of a test, with its parameters and its result, to one JSON file. Later runs play the file back with no database. A query with no recording fails, and never reaches a database. `recorder.error` reads the `recorder.RecorderError` back from the query error, with the SQL, the parameters and the file. The modes are the values `recorder.Record`, `recorder.Playback` and `recorder.Passthrough`, as in the HTTP recorder of `dream_http_client`. `recorder.parse_mode` reads a mode from a text, such as an environment variable.
 
-### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L18-L29"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/docs/guides/recorded-queries.md#step-3-record-once-against-the-real-database"><img align="right" alt="Guide" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L20-L31"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/docs/guides/recorded-queries.md#step-3-record-once-against-the-real-database"><img align="right" alt="Guide" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
 pub fn run_recorded(

@@ -3,8 +3,8 @@
 //// The query helpers take a Pog result value, so these tests build the
 //// results by hand and need no database.
 
-import dream_pog as pog
 import dream_postgres/query
+import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -14,7 +14,8 @@ pub fn tests() -> TestSuite {
     group("first_row", [
       it("returns the first row when the result has rows", fn() {
         // Arrange
-        let result = Ok(pog.Returned(count: 2, rows: [42, 43]))
+        let result =
+          Ok(dream_postgres_client.Returned(count: 2, rows: [42, 43]))
 
         // Act
         let row = query.first_row(result)
@@ -27,7 +28,7 @@ pub fn tests() -> TestSuite {
       }),
       it("returns NotFound when the result has no rows", fn() {
         // Arrange
-        let result = Ok(pog.Returned(count: 0, rows: []))
+        let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
         // Act
         let row: Result(Int, query.QueryError) = query.first_row(result)
@@ -40,7 +41,7 @@ pub fn tests() -> TestSuite {
       }),
       it("returns DatabaseError when the query failed", fn() {
         // Arrange
-        let result = Error(pog.ConnectionUnavailable)
+        let result = Error(dream_postgres_client.ConnectionUnavailable)
 
         // Act
         let row: Result(Int, query.QueryError) = query.first_row(result)
@@ -55,7 +56,8 @@ pub fn tests() -> TestSuite {
     group("all_rows", [
       it("returns every row when the result has rows", fn() {
         // Arrange
-        let result = Ok(pog.Returned(count: 3, rows: [1, 2, 3]))
+        let result =
+          Ok(dream_postgres_client.Returned(count: 3, rows: [1, 2, 3]))
 
         // Act
         let rows = query.all_rows(result)
@@ -68,7 +70,7 @@ pub fn tests() -> TestSuite {
       }),
       it("returns an empty list when the result has no rows", fn() {
         // Arrange
-        let result = Ok(pog.Returned(count: 0, rows: []))
+        let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
         // Act
         let rows: Result(List(Int), query.QueryError) = query.all_rows(result)
@@ -81,7 +83,7 @@ pub fn tests() -> TestSuite {
       }),
       it("returns DatabaseError when the query failed", fn() {
         // Arrange
-        let result = Error(pog.ConnectionUnavailable)
+        let result = Error(dream_postgres_client.ConnectionUnavailable)
 
         // Act
         let rows: Result(List(Int), query.QueryError) = query.all_rows(result)
