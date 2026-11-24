@@ -2,18 +2,34 @@ name = "dream_postgres"
 version = "2.0.0"
 description = "PostgreSQL utilities for Gleam with type-safe query helpers"
 licences = ["MIT"]
-repository = { type = "github", user = "TrustBound", repo = "dream" }
+repository = { type = "github", user = "TrustBound", repo = "dream_postgres" }
 links = [
     { title = "Documentation", href = "https://hexdocs.pm/dream_postgres" },
-    { title = "GitHub", href = "https://github.com/TrustBound/dream" },
+    { title = "GitHub", href = "https://github.com/TrustBound/dream_postgres" },
+]
+
+[documentation]
+pages = [
+    { title = "Getting started", path = "guides/getting-started.html", source = "./docs/guides/getting-started.md" },
+    { title = "Connecting to PostgreSQL in production", path = "guides/connecting.html", source = "./docs/guides/connecting.md" },
+    { title = "Running queries and handling their results", path = "guides/queries.html", source = "./docs/guides/queries.md" },
+    { title = "Test database code with recorded queries", path = "guides/recorded-queries.html", source = "./docs/guides/recorded-queries.md" },
 ]
 
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_erlang = ">= 0.30.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
-pog = ">= 4.0.0 and < 5.0.0"
+dream_postgres_client = ">= 1.0.0 and < 2.0.0"
+gleam_json = ">= 3.0.0 and < 4.0.0"
 
 [dev-dependencies]
-gleeunit = ">= 1.0.0 and < 2.0.0"
+dream_test = ">= 3.0.0 and < 4.0.0"
+dream_snippets = ">= 1.0.0 and < 2.0.0"
 
+[tools.dream_snippets]
+# Changelog sections and release notes before this version are history. They are not checked.
+checked_from_version = "2.0.0"
+# The files that the tests or CI use. A file, command or output block of the
+# docs must copy one of them.
+tested_files = ["test", ".github", "scripts", "gleam.toml", "docker-compose.yml"]

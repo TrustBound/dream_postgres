@@ -1,0 +1,2 @@
+connect("postgresql://app:secret@db.example.com/app?sslmode=prefer")
+  -> Error("DATABASE_URL is not valid: UnsupportedSslMode(\"prefer\")")

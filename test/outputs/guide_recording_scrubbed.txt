@@ -1,0 +1,32 @@
+{
+  "format": "dream_postgres query recording",
+  "version": 1,
+  "queries": [
+    {
+      "sql": "CREATE TABLE sessions (user_name text, token text)",
+      "parameters": [],
+      "result": {
+        "count": 0,
+        "rows": []
+      }
+    },
+    {
+      "sql": "INSERT INTO sessions (user_name, token) VALUES ($1, $2)",
+      "parameters": ["ada","[hidden]"],
+      "result": {
+        "count": 1,
+        "rows": []
+      }
+    },
+    {
+      "sql": "SELECT token FROM sessions WHERE user_name = $1",
+      "parameters": ["ada"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":["[hidden]"]}
+        ]
+      }
+    }
+  ]
+}

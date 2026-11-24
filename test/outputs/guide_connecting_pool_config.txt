@@ -1,0 +1,7 @@
+pool_config(name, "postgresql://app:secret@[2001:db8::10]:6432/app?sslmode=verify-full&application_name=billing", 30)
+  host:                  "2001:db8::10"
+  port:                  6432
+  ssl:                   SslVerified
+  ip_version:            Ipv6
+  connection_parameters: [#("application_name", "billing")]
+  pool_size:             30

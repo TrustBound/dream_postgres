@@ -1,0 +1,5 @@
+connect_with_private_ca(config, "test/fixtures/ssl/missing.crt")
+  -> Error(InitExited(Abnormal("dream_postgres_client: the CA file test/fixtures/ssl/missing.crt cannot be read: enoent")))
+
+connect_with_private_ca(config, "README.md")
+  -> Error(InitExited(Abnormal("dream_postgres_client: the CA file README.md holds no PEM certificate")))

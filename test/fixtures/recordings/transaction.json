@@ -1,0 +1,70 @@
+{
+  "format": "dream_postgres query recording",
+  "version": 1,
+  "queries": [
+    {
+      "sql": "CREATE TABLE users (id serial PRIMARY KEY, name text UNIQUE)",
+      "parameters": [],
+      "result": {
+        "count": 0,
+        "rows": []
+      }
+    },
+    {
+      "sql": "INSERT INTO users (name) VALUES ($1) RETURNING id",
+      "parameters": ["Ada"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1]}
+        ]
+      }
+    },
+    {
+      "sql": "INSERT INTO users (name) VALUES ($1) RETURNING id",
+      "parameters": ["Ada"],
+      "result": {"error":"constraint_violated","message":"duplicate key value violates unique constraint \"users_name_key\"","constraint":"users_name_key","detail":"Key (name)=(Ada) already exists."}
+    },
+    {
+      "sql": "SELECT count(*)::int FROM users",
+      "parameters": [],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[0]}
+        ]
+      }
+    },
+    {
+      "sql": "INSERT INTO users (name) VALUES ($1) RETURNING id",
+      "parameters": ["Ada"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[3]}
+        ]
+      }
+    },
+    {
+      "sql": "INSERT INTO users (name) VALUES ($1) RETURNING id",
+      "parameters": ["Grace"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[4]}
+        ]
+      }
+    },
+    {
+      "sql": "SELECT name FROM users ORDER BY id",
+      "parameters": [],
+      "result": {
+        "count": 2,
+        "rows": [
+          {"tuple":["Ada"]},
+          {"tuple":["Grace"]}
+        ]
+      }
+    }
+  ]
+}

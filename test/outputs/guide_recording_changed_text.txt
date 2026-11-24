@@ -1,0 +1,2 @@
+No recording matches SELECT id, name, email FROM users WHERE id = $1 LIMIT 1 with [1]
+No recording in test/fixtures/recordings/create_and_find.json has this SQL

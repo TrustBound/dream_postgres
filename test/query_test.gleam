@@ -1,80 +1,99 @@
+//// Tests for `dream_postgres/query`.
+////
+//// The query helpers take a Pog result value, so these tests build the
+//// results by hand and need no database.
+
 import dream_postgres/query
-import gleeunit
-import gleeunit/should
-import pog
+import dream_postgres_client
+import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/suite.{type TestSuite}
+import dream_test/unit.{describe, group, it}
 
-pub fn main() {
-  gleeunit.main()
-}
+pub fn tests() -> TestSuite {
+  describe("dream_postgres/query", [
+    group("first_row", [
+      it("returns the first row when the result has rows", fn() {
+        // Arrange
+        let result =
+          Ok(dream_postgres_client.Returned(count: 2, rows: [42, 43]))
 
-pub fn first_row_with_single_row_returns_row_test() {
-  // Arrange
-  let returned = pog.Returned(count: 1, rows: [42])
+        // Act
+        let row = query.first_row(result)
 
-  // Act
-  let result = query.first_row(Ok(returned))
+        // Assert
+        row
+        |> should
+        |> be_equal(Ok(42))
+        |> or_fail_with("Expected the first row, 42")
+      }),
+      it("returns NotFound when the result has no rows", fn() {
+        // Arrange
+        let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
-  // Assert
-  case result {
-    Ok(value) -> value |> should.equal(42)
-    Error(_) -> should.fail()
-  }
-}
+        // Act
+        let row: Result(Int, query.QueryError) = query.first_row(result)
 
-pub fn first_row_with_no_rows_returns_not_found_test() {
-  // Arrange
-  let returned = pog.Returned(count: 0, rows: [])
+        // Assert
+        row
+        |> should
+        |> be_equal(Error(query.NotFound))
+        |> or_fail_with("Expected Error(NotFound)")
+      }),
+      it("returns DatabaseError when the query failed", fn() {
+        // Arrange
+        let result = Error(dream_postgres_client.ConnectionUnavailable)
 
-  // Act
-  let result = query.first_row(Ok(returned))
+        // Act
+        let row: Result(Int, query.QueryError) = query.first_row(result)
 
-  // Assert
-  case result {
-    Ok(_) -> should.fail()
-    Error(query.NotFound) -> Nil
-    Error(_) -> should.fail()
-  }
-}
+        // Assert
+        row
+        |> should
+        |> be_equal(Error(query.DatabaseError))
+        |> or_fail_with("Expected Error(DatabaseError)")
+      }),
+    ]),
+    group("all_rows", [
+      it("returns every row when the result has rows", fn() {
+        // Arrange
+        let result =
+          Ok(dream_postgres_client.Returned(count: 3, rows: [1, 2, 3]))
 
-pub fn first_row_with_query_error_returns_database_error_test() {
-  // Arrange
-  let query_error = Error(pog.ConnectionUnavailable)
+        // Act
+        let rows = query.all_rows(result)
 
-  // Act
-  let result = query.first_row(query_error)
+        // Assert
+        rows
+        |> should
+        |> be_equal(Ok([1, 2, 3]))
+        |> or_fail_with("Expected all three rows")
+      }),
+      it("returns an empty list when the result has no rows", fn() {
+        // Arrange
+        let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
 
-  // Assert
-  case result {
-    Ok(_) -> should.fail()
-    Error(query.DatabaseError) -> Nil
-    Error(_) -> should.fail()
-  }
-}
+        // Act
+        let rows: Result(List(Int), query.QueryError) = query.all_rows(result)
 
-pub fn all_rows_with_multiple_rows_returns_list_test() {
-  // Arrange
-  let returned = pog.Returned(count: 3, rows: [1, 2, 3])
+        // Assert
+        rows
+        |> should
+        |> be_equal(Ok([]))
+        |> or_fail_with("Expected Ok([])")
+      }),
+      it("returns DatabaseError when the query failed", fn() {
+        // Arrange
+        let result = Error(dream_postgres_client.ConnectionUnavailable)
 
-  // Act
-  let result = query.all_rows(Ok(returned))
+        // Act
+        let rows: Result(List(Int), query.QueryError) = query.all_rows(result)
 
-  // Assert
-  case result {
-    Ok(rows) -> rows |> should.equal([1, 2, 3])
-    Error(_) -> should.fail()
-  }
-}
-
-pub fn all_rows_with_empty_returns_empty_list_test() {
-  // Arrange
-  let returned = pog.Returned(count: 0, rows: [])
-
-  // Act
-  let result = query.all_rows(Ok(returned))
-
-  // Assert
-  case result {
-    Ok(rows) -> rows |> should.equal([])
-    Error(_) -> should.fail()
-  }
+        // Assert
+        rows
+        |> should
+        |> be_equal(Error(query.DatabaseError))
+        |> or_fail_with("Expected Error(DatabaseError)")
+      }),
+    ]),
+  ])
 }

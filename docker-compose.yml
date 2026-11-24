@@ -1,0 +1,60 @@
+# The PostgreSQL servers for the tests. Start both with `make db-up` and stop
+# both with `make db-down`. They keep no data: each start gives an empty
+# database.
+#
+# CI starts both servers with scripts/db-up.sh, the script of
+# `make db-up` (see .github/workflows/ci.yml). A service container of
+# GitHub Actions can't do it: it starts before the checkout, so it can't
+# mount the certificates of test/fixtures/ssl, and it can't change the
+# command that starts PostgreSQL.
+
+services:
+  # The server for most tests. SSL is off.
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dream
+      POSTGRES_PASSWORD: dream
+      POSTGRES_DB: dream_test
+    ports:
+      # Port 5436 on this machine, so the tests do not use a PostgreSQL
+      # server that already listens on 5432.
+      - "5436:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  # The server for the SSL tests. SSL is on, with the server certificate of
+  # test/fixtures/ssl: the test CA signed it, and its only name is
+  # `localhost`. So `localhost` matches the certificate and `127.0.0.1`
+  # does not. The server also accepts connections without SSL.
+  postgres-ssl:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dream
+      POSTGRES_PASSWORD: dream
+      POSTGRES_DB: dream_test
+    ports:
+      - "5437:5432"
+    volumes:
+      - ./test/fixtures/ssl:/certs:ro
+    # PostgreSQL refuses a key file that the user `postgres` does not own,
+    # or that others can read. A mounted file has the owner and the mode of
+    # the checkout, so the entrypoint copies the files first.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        install -o postgres -g postgres -m 0600 /certs/server.key /var/lib/postgresql/server.key &&
+        install -o postgres -g postgres -m 0644 /certs/server.crt /var/lib/postgresql/server.crt &&
+        exec docker-entrypoint.sh postgres
+        -c ssl=on
+        -c ssl_cert_file=/var/lib/postgresql/server.crt
+        -c ssl_key_file=/var/lib/postgresql/server.key
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30

@@ -1,0 +1,8 @@
+user_response(Ok(dream_postgres_client.Returned(count: 1, rows: [FindUserRow(1, "Ada", "ada@example.com")])))
+  -> Response(200, "1: Ada <ada@example.com>")
+
+user_response(Ok(dream_postgres_client.Returned(count: 0, rows: [])))
+  -> Response(404, "No user with that id")
+
+user_response(Error(dream_postgres_client.QueryTimeout))
+  -> Response(500, "Internal server error")

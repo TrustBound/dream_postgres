@@ -1,18 +1,25 @@
-//// Tests for the connection pool snippet in docs/guides/deployment.md.
+//// Tests for the connection pool snippet in Dream's
+//// docs/guides/deployment.md.
 ////
 //// The test needs no database: it checks the config that the snippet
 //// makes.
 
-import gleeunit/should
+import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/suite.{type TestSuite}
+import dream_test/unit.{describe, it}
 import snippets/deployment_guide_postgres
 
-pub fn create_database_config_sets_pool_size_15_test() {
-  // Arrange
-  let config = deployment_guide_postgres.create_database_config()
+pub fn tests() -> TestSuite {
+  describe("deployment guide snippets", [
+    it("create_database_config sets pool size 15", fn() {
+      // Act
+      let config = deployment_guide_postgres.create_database_config()
 
-  // Act
-  let pool_size = config.pool_size
-
-  // Assert
-  pool_size |> should.equal(15)
+      // Assert
+      config.pool_size
+      |> should
+      |> be_equal(15)
+      |> or_fail_with("Expected pool size 15")
+    }),
+  ])
 }

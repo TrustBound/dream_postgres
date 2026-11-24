@@ -1,33 +1,54 @@
-# dream_postgres Module Makefile
+# dream_postgres Makefile
 
-.PHONY: test clean build format docs check
+.PHONY: test test-playback build format check check-snippets docs clean db-up db-down
 
-# Run the test suite
+# Run the tests with line coverage (fails below 100%). The tests need the
+# two PostgreSQL servers of docker-compose.yml: start them with `make db-up`.
+# The test run stops at once with a message when a server does not answer.
 test:
 	@gleam test
 
-# Clean build artifacts
-clean:
-	@gleam clean
-	@rm -rf coverage
-	@rm -f erl_crash.dump
-	@find build -name "*.beam" -type f -delete 2>/dev/null || true
+# Run only the recorder tests that need no database. They pass with both
+# test servers stopped (`make db-down`), which proves that playback mode
+# opens no connection.
+test-playback:
+	@gleam run -m recorder_playback_main
 
-# Build the module
+# Build the package
 build:
 	@gleam build
 
 # Format code
 format:
-	@gleam format
+	@gleam format src test
+
+# Run everything CI runs: format check, build, tests and docs build
+check:
+	@gleam format --check src test
+	@gleam build
+	@gleam test
+	@gleam docs build
+	@gleam run -m dream_snippets
+
+# Check that each code block in the docs matches a tested snippet
+check-snippets:
+	@gleam run -m dream_snippets
 
 # Generate documentation
 docs:
 	@gleam docs build
 
-# Run format check and build (useful for CI)
-check:
-	@gleam format --check
-	@gleam build
-	@gleam test
+# Start the two test PostgreSQL servers and wait until they accept
+# connections: one with SSL off, one with SSL on (CI runs the same script)
+db-up:
+	@sh scripts/db-up.sh
 
+# Stop the two test PostgreSQL servers and remove their containers (they keep
+# no data)
+db-down:
+	@docker compose down
+
+# Clean build artifacts
+clean:
+	@gleam clean
+	@rm -f erl_crash.dump
