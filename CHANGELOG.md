@@ -93,10 +93,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `dream_postgres_client.InterceptorFailed`, and never reaches a database.
   - `recorder.error(query_error)` reads a `recorder.RecorderError` back from
     a query error that the recorder made: `NoRecording(sql, parameters,
-    path)`, `PlayedAlready(sql, parameters, path)`, `WriteFailed(path,
-    reason)`, `NotRecordable(sql, reason)` or `RecorderStopped(sql)`. It
-    gives `Error(Nil)` for any other query error, also for the
-    `dream_postgres_client.InterceptorFailed` of another interceptor.
+    path, nearest)`, `PlayedAlready(sql, parameters, path)`,
+    `WriteFailed(path, reason)`, `NotRecordable(sql, reason)` or
+    `RecorderStopped(sql)`. It gives `Error(Nil)` for any other query
+    error, also for the `dream_postgres_client.InterceptorFailed` of
+    another interceptor.
+  - A `NoRecording` names the nearest recordings in the file and what
+    differs. `nearest` holds up to 3 `recorder.NearestRecording(position,
+    recorded, requested)`: recordings that the key would match with their
+    parameters, fewest differing parameters first, then in file order. The
+    recorder compares after the query transformer, so a hidden value never
+    shows.
+  - `recorder.describe_error(error)` gives the text of a recorder error.
+    For a `NoRecording`, each nearest recording shows its parameters on a
+    `-` line and the query's on a `+` line. With no recording of the SQL,
+    the text names the file that the recorder searched.
   - In record mode, a query fails when the recorder cannot record it: the
     file cannot be written, a parameter or a value of the result cannot be
     recorded, or the recorder stopped. `recorder.stop` gives an `Error` only
@@ -202,12 +213,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 369 tests, 0 failed, 100.0% line coverage of `src/` (509 of 509 lines),
-  the Erlang file of the recorder too. `make test` takes about 62 seconds,
-  and the test times add up to about 107 seconds, because 4 tests run at a
-  time. The 20 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB,
+- 384 tests, 0 failed, 100.0% line coverage of `src/` (557 of 557 lines),
+  the Erlang file of the recorder too. The test times add up to about 108
+  seconds, and 4 tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB,
   macOS 26.5.1, OTP 29, Gleam 1.19.2.
-- `make test-playback` runs the 59 recorder tests that need no database.
+- `make test-playback` runs the 74 recorder tests that need no database.
   They pass with both test servers stopped, which proves that playback mode
   opens no connection.
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine`

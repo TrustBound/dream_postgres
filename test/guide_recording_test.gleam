@@ -161,6 +161,45 @@ fn playback_group() {
         |> or_fail_with("Expected the output file")
       },
     ),
+    it("step 5: the text of a miss shows the nearest recording", fn() {
+      // Act
+      let text =
+        play(fn(db) {
+          case find_user(db, 2) {
+            Ok(_user) -> "The query did not miss"
+            Error(query_error) ->
+              recorder.error(query_error)
+              |> result.map(recorder.describe_error)
+              |> result.unwrap("Not a recorder error")
+          }
+        })
+
+      // Assert
+      { text <> "\n" }
+      |> should
+      |> be_equal(output_file.read("guide_recording_miss_text"))
+      |> or_fail_with("Expected the output file")
+    }),
+    it("step 7: the text of a changed query names the file", fn() {
+      // Act
+      let text =
+        play(fn(db) {
+          let _created = create_user(db, "Ada", "ada@example.com")
+          case guide_recording_changed.find_user(db, 1) {
+            Ok(_user) -> "The query did not miss"
+            Error(query_error) ->
+              recorder.error(query_error)
+              |> result.map(recorder.describe_error)
+              |> result.unwrap("Not a recorder error")
+          }
+        })
+
+      // Assert
+      { text <> "\n" }
+      |> should
+      |> be_equal(output_file.read("guide_recording_changed_text"))
+      |> or_fail_with("Expected the output file")
+    }),
     it("step 7: a changed query answers as the output file shows", fn() {
       // Act
       let missed =

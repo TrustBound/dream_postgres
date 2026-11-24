@@ -64,8 +64,10 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
 import gleam/erlang/process.{type Pid, type Subject}
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/order
 import gleam/otp/actor
 import gleam/result
 import gleam/string
@@ -77,7 +79,9 @@ import gleam/string
 ///
 /// - `NoRecording`: in playback mode, no recording in the file at `path`
 ///   matches the query. `parameters` is the text of the parameters, as
-///   `recording.values_to_json` writes them.
+///   `recording.values_to_json` writes them. `sql` and `parameters` are
+///   those after the query transformer. `nearest` holds at most 3
+///   recordings of the same SQL, nearest first: see `NearestRecording`.
 /// - `PlayedAlready`: in playback mode, each recording in the file at
 ///   `path` that matches the query was played already.
 /// - `WriteFailed`: in record mode, the recorder could not write the file
@@ -88,11 +92,35 @@ import gleam/string
 /// - `RecorderStopped`: the recorder had stopped already, so it could not
 ///   record or play the query.
 pub type RecorderError {
-  NoRecording(sql: String, parameters: String, path: String)
+  NoRecording(
+    sql: String,
+    parameters: String,
+    path: String,
+    nearest: List(NearestRecording),
+  )
   PlayedAlready(sql: String, parameters: String, path: String)
   WriteFailed(path: String, reason: String)
   NotRecordable(sql: String, reason: String)
   RecorderStopped(sql: String)
+}
+
+/// A recording near a query that no recording matches.
+///
+/// - `position`: the place of the recording in the file, 1 for the first.
+/// - `recorded`: the parameters of the recording, as
+///   `recording.values_to_json` writes them.
+/// - `requested`: the parameters of the query, after the query transformer.
+///
+/// A candidate is a recording that the key would match if the query had
+/// the recording's parameters: so with `sql_and_parameters` it has the same
+/// SQL, and with `normalized_sql_and_parameters` the same SQL apart from
+/// whitespace. The SQL is the same, so the parameters are the part that
+/// differs. The nearest candidates have the fewest parameters that differ,
+/// where each value that one list has and the other has not counts too.
+/// Candidates with the same count are in file order. A recording with the
+/// same parameters as a nearer one is left out. A miss names at most 3.
+pub type NearestRecording {
+  NearestRecording(position: Int, recorded: String, requested: String)
 }
 
 // The reason that the recorder gives to
@@ -695,7 +723,7 @@ fn start_playback(
       Entry(key: settings.key(recording.query), recording:, played: False)
     })
   use server <- result.map(start_server(
-    PlaybackState(path:, entries:),
+    PlaybackState(path:, key_of: settings.key, entries:),
     handle_playback,
   ))
   PlaybackMode(server:, settings:)
@@ -1121,7 +1149,7 @@ fn to_reason(recorder_error: RecorderError) -> Dynamic {
 ///
 /// pub fn explain(query_error: dream_postgres_client.QueryError) -> String {
 ///   case recorder.error(query_error) {
-///     Ok(recorder.NoRecording(sql:, parameters:, path:)) ->
+///     Ok(recorder.NoRecording(sql:, parameters:, path:, ..)) ->
 ///       "Record again: " <> path <> " has no " <> sql <> " with " <> parameters
 ///     Ok(_other) -> "The recorder failed the query"
 ///     Error(Nil) -> "The database failed the query"
@@ -1139,29 +1167,114 @@ pub fn error(
   }
 }
 
+/// The text of a recorder error, for a test failure or a log line.
+///
+/// A `NoRecording` names the query, then each nearest recording with its
+/// parameters on a `-` line and the query's parameters on a `+` line.
+///
+/// ### The text of a query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```text
+/// No recording matches SELECT id, name, email FROM users WHERE id = $1 with [2]
+/// Nearest recording in test/fixtures/recordings/create_and_find.json:
+///   parameters:
+///   - [1]
+///   + [2]
+/// ```
+///
+/// When no recording has the SQL, the second line names the file that the
+/// recorder searched: `No recording in <path> has this SQL`.
+pub fn describe_error(error: RecorderError) -> String {
+  case error {
+    NoRecording(sql:, parameters:, path:, nearest:) ->
+      "No recording matches "
+      <> sql
+      <> " with "
+      <> parameters
+      <> "\n"
+      <> describe_nearest(path, nearest)
+    PlayedAlready(sql:, parameters:, path:) ->
+      "Each recording of "
+      <> sql
+      <> " with "
+      <> parameters
+      <> " in "
+      <> path
+      <> " was played already"
+    WriteFailed(path:, reason:) -> "Could not write " <> path <> ": " <> reason
+    NotRecordable(sql:, reason:) -> "Cannot record " <> sql <> ": " <> reason
+    RecorderStopped(sql:) -> "The recorder stopped before " <> sql
+  }
+}
+
+fn describe_nearest(path: String, nearest: List(NearestRecording)) -> String {
+  case nearest {
+    [] -> "No recording in " <> path <> " has this SQL"
+    [first, ..rest] ->
+      [
+        describe_candidate("Nearest recording in ", path, first),
+        ..list.map(rest, describe_candidate(
+          "Next nearest recording in ",
+          path,
+          _,
+        ))
+      ]
+      |> string.join("\n")
+  }
+}
+
+fn describe_candidate(
+  label: String,
+  path: String,
+  candidate: NearestRecording,
+) -> String {
+  label
+  <> path
+  <> ":\n  parameters:\n  - "
+  <> candidate.recorded
+  <> "\n  + "
+  <> candidate.requested
+}
+
 fn failure_decoder() -> decode.Decoder(RecorderError) {
   use Nil <- decode.then(tag("dream_postgres_recorder_error"))
   decode.at([1], recorder_error_decoder())
 }
 
 fn recorder_error_decoder() -> decode.Decoder(RecorderError) {
-  decode.one_of(variant("no_recording", miss_decoder(NoRecording)), [
-    variant("played_already", miss_decoder(PlayedAlready)),
-    variant("write_failed", {
-      use path <- decode.field(1, decode.string)
-      use reason <- decode.field(2, decode.string)
-      decode.success(WriteFailed(path:, reason:))
-    }),
-    variant("not_recordable", {
+  decode.one_of(
+    variant("no_recording", {
       use sql <- decode.field(1, decode.string)
-      use reason <- decode.field(2, decode.string)
-      decode.success(NotRecordable(sql:, reason:))
+      use parameters <- decode.field(2, decode.string)
+      use path <- decode.field(3, decode.string)
+      use nearest <- decode.field(4, decode.list(nearest_decoder()))
+      decode.success(NoRecording(sql:, parameters:, path:, nearest:))
     }),
-    variant("recorder_stopped", {
-      use sql <- decode.field(1, decode.string)
-      decode.success(RecorderStopped(sql:))
-    }),
-  ])
+    [
+      variant("played_already", miss_decoder(PlayedAlready)),
+      variant("write_failed", {
+        use path <- decode.field(1, decode.string)
+        use reason <- decode.field(2, decode.string)
+        decode.success(WriteFailed(path:, reason:))
+      }),
+      variant("not_recordable", {
+        use sql <- decode.field(1, decode.string)
+        use reason <- decode.field(2, decode.string)
+        decode.success(NotRecordable(sql:, reason:))
+      }),
+      variant("recorder_stopped", {
+        use sql <- decode.field(1, decode.string)
+        decode.success(RecorderStopped(sql:))
+      }),
+    ],
+  )
+}
+
+fn nearest_decoder() -> decode.Decoder(NearestRecording) {
+  use position <- decode.field(1, decode.int)
+  use recorded <- decode.field(2, decode.string)
+  use requested <- decode.field(3, decode.string)
+  decode.success(NearestRecording(position:, recorded:, requested:))
 }
 
 fn miss_decoder(
@@ -1232,7 +1345,7 @@ type PlaybackMessage {
 }
 
 type PlaybackState {
-  PlaybackState(path: String, entries: List(Entry))
+  PlaybackState(path: String, key_of: MatchKey, entries: List(Entry))
 }
 
 type Entry {
@@ -1288,7 +1401,8 @@ fn handle_playback(
 ) -> actor.Next(PlaybackState, PlaybackMessage) {
   case message {
     Play(key, query, reply) -> {
-      let #(answer, entries) = take(state.entries, key, query, state.path)
+      let #(answer, entries) =
+        take(state.entries, key, query, state.path, state.key_of)
       process.send(reply, answer)
       actor.continue(PlaybackState(..state, entries:))
     }
@@ -1308,6 +1422,7 @@ fn take(
   key: String,
   query: RecordedQuery,
   path: String,
+  key_of: MatchKey,
 ) -> #(Result(RecordedResult, RecorderError), List(Entry)) {
   let #(before, rest) =
     list.split_while(entries, fn(entry) { entry.played || entry.key != key })
@@ -1316,7 +1431,7 @@ fn take(
       Ok(entry.recording.result),
       list.append(before, [Entry(..entry, played: True), ..after]),
     )
-    [] -> #(Error(miss_error(entries, key, query, path)), entries)
+    [] -> #(Error(miss_error(entries, key, query, path, key_of)), entries)
   }
 }
 
@@ -1325,12 +1440,89 @@ fn miss_error(
   key: String,
   query: RecordedQuery,
   path: String,
+  key_of: MatchKey,
 ) -> RecorderError {
   let matching = list.count(entries, fn(entry) { entry.key == key })
   let parameters = parameters_text(query.parameters)
   case matching {
-    0 -> NoRecording(sql: query.sql, parameters:, path:)
+    0 ->
+      NoRecording(
+        sql: query.sql,
+        parameters:,
+        path:,
+        nearest: nearest_recordings(entries, key_of, query),
+      )
     _ -> PlayedAlready(sql: query.sql, parameters:, path:)
+  }
+}
+
+/// The most recordings that a miss names.
+const nearest_limit = 3
+
+// The recordings that the key would match if the query had their
+// parameters, fewest differing parameters first, then in file order, with
+// no two that have the same parameters.
+fn nearest_recordings(
+  entries: List(Entry),
+  key_of: MatchKey,
+  query: RecordedQuery,
+) -> List(NearestRecording) {
+  let requested = parameters_text(query.parameters)
+  entries
+  |> list.index_map(fn(entry, index) {
+    #(index + 1, entry.key, entry.recording.query.parameters)
+  })
+  |> list.filter(fn(candidate) {
+    let #(_position, key, parameters) = candidate
+    key_of(RecordedQuery(..query, parameters:)) == key
+  })
+  |> first_of_each_parameters()
+  |> list.map(fn(candidate) {
+    #(changed_count(candidate.2, query.parameters), candidate)
+  })
+  |> list.sort(fn(left, right) {
+    int.compare(left.0, right.0)
+    |> order.break_tie(int.compare(left.1.0, right.1.0))
+  })
+  |> list.take(nearest_limit)
+  |> list.map(fn(scored) {
+    let #(_count, #(position, _key, parameters)) = scored
+    NearestRecording(
+      position:,
+      recorded: parameters_text(parameters),
+      requested:,
+    )
+  })
+}
+
+// Keeps the first candidate with each list of parameters.
+fn first_of_each_parameters(
+  candidates: List(#(Int, String, List(RecordedValue))),
+) -> List(#(Int, String, List(RecordedValue))) {
+  list.fold(candidates, [], fn(kept, candidate) {
+    case
+      list.any(kept, fn(earlier: #(Int, String, List(RecordedValue))) {
+        earlier.2 == candidate.2
+      })
+    {
+      True -> kept
+      False -> [candidate, ..kept]
+    }
+  })
+  |> list.reverse()
+}
+
+// The number of places where two parameter lists differ. A value that one
+// list has and the other has not counts as a place that differs.
+fn changed_count(left: List(RecordedValue), right: List(RecordedValue)) -> Int {
+  case left, right {
+    [], rest | rest, [] -> list.length(rest)
+    [a, ..left_rest], [b, ..right_rest] ->
+      case a == b {
+        True -> 0
+        False -> 1
+      }
+      + changed_count(left_rest, right_rest)
   }
 }
 

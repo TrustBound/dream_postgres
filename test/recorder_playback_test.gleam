@@ -38,6 +38,7 @@ pub fn tests() -> TestSuite {
     playback_tests(),
     no_connection_tests(),
     miss_tests(),
+    nearest_tests(),
     error_tests(),
     transaction_tests(),
     scrub_tests(),
@@ -158,6 +159,293 @@ fn no_connection_tests() {
 
 const insert_sql = "INSERT INTO users (name) VALUES ($1) RETURNING id"
 
+const share_token_sql = "SELECT share_token FROM tasks WHERE id = $1"
+
+const owner_sql = "SELECT share_token FROM tasks WHERE id = $1 AND owner = $2"
+
+fn nearest() -> recorder.RecorderBuilder {
+  recordings.builder(recordings.fixtures, "nearest")
+}
+
+/// Runs `sql` with the parameters on a playback connection of `builder`,
+/// and gives the recorder's error.
+fn miss(
+  builder: recorder.RecorderBuilder,
+  sql: String,
+  parameters: List(dream_postgres_client.Value),
+) -> Result(recorder.RecorderError, Nil) {
+  recordings.play(builder, fn(db) {
+    list.fold(parameters, dream_postgres_client.query(sql), fn(query, value) {
+      dream_postgres_client.parameter(query, value)
+    })
+    |> dream_postgres_client.execute(db)
+  })
+  |> fn(executed) {
+    case executed {
+      Ok(_returned) -> Error(Nil)
+      Error(query_error) -> recorder.error(query_error)
+    }
+  }
+}
+
+fn nearest_tests() {
+  group("the nearest recordings of a miss", [
+    it("a changed parameter shows the parameter diff", fn() {
+      // Act
+      let text =
+        miss(nearest(), share_token_sql, [dream_postgres_client.int(42)])
+        |> result.map(recorder.describe_error)
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(
+        "No recording matches SELECT share_token FROM tasks WHERE id = $1 with [42]\n"
+        <> "Nearest recording in test/fixtures/recordings/nearest.json:\n"
+        <> "  parameters:\n"
+        <> "  - [7]\n"
+        <> "  + [42]",
+      ))
+      |> or_fail_with("The miss should show the changed parameter")
+    }),
+    it("the typed error holds the nearest recording", fn() {
+      // Act
+      let error =
+        miss(nearest(), share_token_sql, [dream_postgres_client.int(42)])
+
+      // Assert
+      error
+      |> should
+      |> be_equal(
+        Ok(
+          recorder.NoRecording(
+            sql: share_token_sql,
+            parameters: "[42]",
+            path: "test/fixtures/recordings/nearest.json",
+            nearest: [
+              recorder.NearestRecording(
+                position: 1,
+                recorded: "[7]",
+                requested: "[42]",
+              ),
+            ],
+          ),
+        ),
+      )
+      |> or_fail_with("The miss should hold the nearest recording")
+    }),
+    it("orders the candidates nearest first, at most three", fn() {
+      // Act
+      let positions =
+        miss(nearest(), owner_sql, [
+          dream_postgres_client.int(42),
+          dream_postgres_client.text("ada"),
+        ])
+        |> result.map(nearest_positions)
+
+      // Assert
+      positions
+      |> should
+      |> be_equal(Ok([3, 5, 2]))
+      |> or_fail_with("Fewest changed parameters first, then file order")
+    }),
+    it("shows each candidate in the text", fn() {
+      // Act
+      let text =
+        miss(nearest(), owner_sql, [
+          dream_postgres_client.int(42),
+          dream_postgres_client.text("ada"),
+        ])
+        |> result.map(recorder.describe_error)
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(
+        "No recording matches SELECT share_token FROM tasks WHERE id = $1 AND owner = $2 with [42,\"ada\"]\n"
+        <> "Nearest recording in test/fixtures/recordings/nearest.json:\n"
+        <> "  parameters:\n"
+        <> "  - [7,\"ada\"]\n"
+        <> "  + [42,\"ada\"]\n"
+        <> "Next nearest recording in test/fixtures/recordings/nearest.json:\n"
+        <> "  parameters:\n"
+        <> "  - [6,\"ada\"]\n"
+        <> "  + [42,\"ada\"]\n"
+        <> "Next nearest recording in test/fixtures/recordings/nearest.json:\n"
+        <> "  parameters:\n"
+        <> "  - [9,\"bob\"]\n"
+        <> "  + [42,\"ada\"]",
+      ))
+      |> or_fail_with("Each candidate should show its parameters")
+    }),
+    it("a parameter list of another length counts each extra value", fn() {
+      // Act
+      let positions =
+        miss(nearest(), owner_sql, [
+          dream_postgres_client.int(5),
+          dream_postgres_client.text("cy"),
+          dream_postgres_client.int(4),
+        ])
+        |> result.map(nearest_positions)
+
+      // Assert
+      positions
+      |> should
+      |> be_equal(Ok([7, 2, 3]))
+      |> or_fail_with("The recording with three values is nearest")
+    }),
+    it("with no recording of the SQL, names the file it searched", fn() {
+      // Act
+      let text =
+        miss(nearest(), "SELECT title FROM tasks WHERE id = $1", [
+          dream_postgres_client.int(42),
+        ])
+        |> result.map(recorder.describe_error)
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(
+        "No recording matches SELECT title FROM tasks WHERE id = $1 with [42]\n"
+        <> "No recording in test/fixtures/recordings/nearest.json has this SQL",
+      ))
+      |> or_fail_with("The miss should name the file it searched")
+    }),
+    it("compares the SQL as the key does", fn() {
+      // Act
+      let positions =
+        miss(
+          nearest() |> recorder.key(recorder.normalized_sql_and_parameters),
+          "SELECT  share_token\nFROM tasks WHERE id = $1",
+          [dream_postgres_client.int(42)],
+        )
+        |> result.map(nearest_positions)
+
+      // Assert
+      positions
+      |> should
+      |> be_equal(Ok([1]))
+      |> or_fail_with("A key that ignores whitespace finds the recording")
+    }),
+    it("shows a parameter after the query transformer", fn() {
+      // Act
+      let text =
+        miss(
+          recorder_scrub.scrubbing_builder(recordings.fixtures, "scrubbed"),
+          "INSERT INTO sessions (user_name, token) VALUES ($1, $2)",
+          [
+            dream_postgres_client.text("grace"),
+            dream_postgres_client.text("s3cret"),
+          ],
+        )
+        |> result.map(recorder.describe_error)
+
+      // Assert
+      text
+      |> should
+      |> be_equal(Ok(
+        "No recording matches INSERT INTO sessions (user_name, token) VALUES ($1, $2) with [\"grace\",\"[hidden]\"]\n"
+        <> "Nearest recording in test/fixtures/recordings/scrubbed.json:\n"
+        <> "  parameters:\n"
+        <> "  - [\"ada\",\"[hidden]\"]\n"
+        <> "  + [\"grace\",\"[hidden]\"]",
+      ))
+      |> or_fail_with("The miss should show the hidden parameter")
+    }),
+    it("never shows a value that the query transformer removes", fn() {
+      // Act
+      let has_secret =
+        miss(
+          recorder_scrub.scrubbing_builder(recordings.fixtures, "scrubbed"),
+          "INSERT INTO sessions (user_name, token) VALUES ($1, $2)",
+          [
+            dream_postgres_client.text("grace"),
+            dream_postgres_client.text("s3cret"),
+          ],
+        )
+        |> result.map(recorder.describe_error)
+        |> result.map(string.contains(_, "s3cret"))
+
+      // Assert
+      has_secret
+      |> should
+      |> be_equal(Ok(False))
+      |> or_fail_with("A hidden secret must not show")
+    }),
+    it("describes a query that was played already", fn() {
+      // Act
+      let text =
+        recordings.play(users(), fn(db) {
+          let _first = user_queries.insert_user(db, "Grace")
+          user_queries.insert_user(db, "Grace")
+          |> result.map_error(recorder.error)
+        })
+        |> result.map_error(result.map(_, recorder.describe_error))
+
+      // Assert
+      text
+      |> should
+      |> be_equal(
+        Error(Ok(
+          "Each recording of INSERT INTO users (name) VALUES ($1) RETURNING id with [\"Grace\"] in test/fixtures/recordings/users.json was played already",
+        )),
+      )
+      |> or_fail_with("The text should say the recording was used")
+    }),
+    it("describes a write that failed", fn() {
+      // Act
+      let text =
+        recorder.describe_error(recorder.WriteFailed(
+          path: "test/recordings/tasks.json",
+          reason: "permission denied",
+        ))
+
+      // Assert
+      text
+      |> should
+      |> be_equal(
+        "Could not write test/recordings/tasks.json: permission denied",
+      )
+      |> or_fail_with("The text should name the file and the reason")
+    }),
+    it("describes a query that cannot be recorded", fn() {
+      // Act
+      let text =
+        recorder.describe_error(recorder.NotRecordable(
+          sql: "SELECT $1::text",
+          reason: "A parameter cannot be recorded: <0.1.0>",
+        ))
+
+      // Assert
+      text
+      |> should
+      |> be_equal(
+        "Cannot record SELECT $1::text: A parameter cannot be recorded: <0.1.0>",
+      )
+      |> or_fail_with("The text should name the query and the reason")
+    }),
+    it("describes a stopped recorder", fn() {
+      // Act
+      let text =
+        recorder.describe_error(recorder.RecorderStopped(sql: "SELECT 1"))
+
+      // Assert
+      text
+      |> should
+      |> be_equal("The recorder stopped before SELECT 1")
+      |> or_fail_with("The text should name the query")
+    }),
+  ])
+}
+
+fn nearest_positions(error: recorder.RecorderError) -> List(Int) {
+  case error {
+    recorder.NoRecording(nearest:, ..) ->
+      list.map(nearest, fn(candidate) { candidate.position })
+    _ -> []
+  }
+}
+
 fn miss_tests() {
   group("a query with no recording", [
     it("gives the NoRecording error that names the query", fn() {
@@ -173,11 +461,25 @@ fn miss_tests() {
       |> should
       |> be_equal(
         Error(
-          Ok(recorder.NoRecording(
-            sql: insert_sql,
-            parameters: "[\"Linus\"]",
-            path: "test/fixtures/recordings/users.json",
-          )),
+          Ok(
+            recorder.NoRecording(
+              sql: insert_sql,
+              parameters: "[\"Linus\"]",
+              path: "test/fixtures/recordings/users.json",
+              nearest: [
+                recorder.NearestRecording(
+                  position: 2,
+                  recorded: "[\"Ada\"]",
+                  requested: "[\"Linus\"]",
+                ),
+                recorder.NearestRecording(
+                  position: 6,
+                  recorded: "[\"Grace\"]",
+                  requested: "[\"Linus\"]",
+                ),
+              ],
+            ),
+          ),
         ),
       )
       |> or_fail_with("Expected the NoRecording error")

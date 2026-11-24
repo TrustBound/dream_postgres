@@ -25,8 +25,20 @@ It is a major version because `from_url()` now returns a `Result`, the package n
 The new module `dream_postgres/recorder` records each query of a test, with its parameters and its result, to one JSON file, and plays the file back with no database. It has the three modes of the HTTP recorder of `dream_http_client`, the constructors of the type `recorder.Mode`:
 
 - `Record`: each query runs on the database. The recorder writes the query and its result (the count and the rows, or the error) to the file before the query returns. A query in `dream_postgres_client.transaction` is recorded too.
-- `Playback`: no pool starts and nothing connects. Each query gets the result of its recording. A query with no recording fails with `dream_postgres_client.InterceptorFailed`, and never reaches a database. `recorder.error` reads the `recorder.NoRecording(sql:, parameters:, path:)` error back from it.
+- `Playback`: no pool starts and nothing connects. Each query gets the result of its recording. A query with no recording fails with `dream_postgres_client.InterceptorFailed`, and never reaches a database. `recorder.error` reads the `recorder.NoRecording(sql:, parameters:, path:, nearest:)` error back from it, and `recorder.describe_error` shows the nearest recordings in the file and what differs (see below).
 - `Passthrough`: each query runs on the database, and nothing is recorded.
+
+#### A query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+No recording matches SELECT id, name, email FROM users WHERE id = $1 with [2]
+Nearest recording in test/fixtures/recordings/create_and_find.json:
+  parameters:
+  - [1]
+  + [2]
+```
+
+The nearest recordings are those that the key would match with their parameters, fewest differing parameters first, at most 3. The recorder compares after the query transformer, so a hidden value never shows. When no recording has the SQL, the text names the file that the recorder searched.
 
 Set the mode with `recorder.mode(recorder.Playback)`. A wrong mode name is a compile error. For a mode in a text, for example from an environment variable, `recorder.parse_mode(text)` accepts `"record"`, `"playback"` and `"passthrough"`, and gives an `Error` that names any other text.
 
@@ -133,8 +145,8 @@ The README is short and links to them, and HexDocs shows the guides.
 
 ## Testing
 
-- 369 tests run, 0 failed, 100.0% line coverage (509 of 509 lines). `make test` takes about 62 seconds, and the test times add up to about 107 seconds, because 4 tests run at a time and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
-- The 59 recorder tests that need no database pass with both test servers stopped (`make test-playback`), which proves that playback mode opens no connection
+- 384 tests run, 0 failed, 100.0% line coverage (557 of 557 lines). The test times add up to about 108 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The 74 recorder tests that need no database pass with both test servers stopped (`make test-playback`), which proves that playback mode opens no connection
 - A test against PostgreSQL 16 records and plays back each kind of value: integers, floats, `Infinity` and `NaN`, text, `bytea`, booleans, `NULL`, arrays, `timestamp`, `timestamptz`, `date`, `time`, `numeric`, `uuid`, a UUID as text, `json`, `jsonb`, `interval`, `bit`, `point` and rows as maps
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image): one with SSL off, and one with SSL on and a certificate from a test CA. The SSL tests run each `sslmode` against both, with a matching and a non-matching host name, and with and without the test CA in `sslrootcert`
 

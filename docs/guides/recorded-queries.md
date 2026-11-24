@@ -273,16 +273,34 @@ A query in `dream_postgres_client.transaction` is recorded and played back the s
 
 ## Step 5: Read a query with no recording
 
-In playback mode, a query with no recording never reaches a database. It fails, and the error names the query. A `find_user` for id 2, which the recording doesn't have:
+In playback mode, a query with no recording never reaches a database. It fails, and the error names the query and the recordings nearest to it. A `find_user` for id 2, which the recording doesn't have:
 
 ### A query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 find_user(db, 2) |> result.map_error(recorder.error)
-  -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1", "[2]", "test/fixtures/recordings/create_and_find.json")))
+  -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1", "[2]", "test/fixtures/recordings/create_and_find.json", [NearestRecording(2, "[1]", "[2]")])))
 ```
 
-The query error is `dream_postgres_client.InterceptorFailed`. `recorder.error` reads the `recorder.RecorderError` back from it: `NoRecording(sql:, parameters:, path:)` names the SQL, the parameters and the file. For any other query error, `recorder.error` gives `Error(Nil)`. When the same query ran more times than the recording has results for it, the error is `PlayedAlready`, with the same fields.
+The query error is `dream_postgres_client.InterceptorFailed`. `recorder.error` reads the `recorder.RecorderError` back from it: `NoRecording(sql:, parameters:, path:, nearest:)` names the SQL, the parameters, the file and the nearest recordings. `recorder.describe_error` writes it as text. The `-` line is the parameters of the recording, and the `+` line is the parameters of the query:
+
+### The text of a query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+No recording matches SELECT id, name, email FROM users WHERE id = $1 with [2]
+Nearest recording in test/fixtures/recordings/create_and_find.json:
+  parameters:
+  - [1]
+  + [2]
+```
+
+How the recorder finds the nearest recordings:
+
+- A candidate is a recording that the key would match if the query had the recording's parameters. With `sql_and_parameters` it has the same SQL. With `normalized_sql_and_parameters` it has the same SQL apart from whitespace.
+- The recorder compares the query after the query transformer, so a value that the transformer hides never shows.
+- The nearest candidates have the fewest parameters that differ. A value that one list has and the other has not counts too. Candidates with the same count are in file order.
+- A recording with the same parameters as a nearer one is left out. The error holds at most 3 candidates. The first shows as `Nearest recording in`, and the others as `Next nearest recording in`.
+- `NearestRecording(position:, recorded:, requested:)` gives the place of the recording in the file (1 for the first), its parameters, and the parameters of the query. For any other query error, `recorder.error` gives `Error(Nil)`. When the same query ran more times than the recording has results for it, the error is `PlayedAlready(sql:, parameters:, path:)`, and `describe_error` writes `Each recording of <sql> with <parameters> in <path> was played already`.
 
 That's the error you see when a test runs a query you never recorded, or a query that changed since you recorded it. Record again, or fix the test.
 
@@ -436,7 +454,16 @@ The recording has the old SQL, so playback can't answer the new query:
 
 ```text
 find_user(db, 1) |> result.map_error(recorder.error)
-  -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1 LIMIT 1", "[1]", "test/fixtures/recordings/create_and_find.json")))
+  -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1 LIMIT 1", "[1]", "test/fixtures/recordings/create_and_find.json", [])))
+```
+
+No recording has the new SQL, so `nearest` is empty, and the text names the file that the recorder searched:
+
+### The text of a changed query <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_changed_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+No recording matches SELECT id, name, email FROM users WHERE id = $1 LIMIT 1 with [1]
+No recording in test/fixtures/recordings/create_and_find.json has this SQL
 ```
 
 Run the test once in `Record` mode against the database, as in Step 3. The recorder writes the file again, with the new SQL. Then switch back to `Playback` and commit the new file. The diff shows exactly the changed SQL.
@@ -456,6 +483,8 @@ The key is the text two queries must share to match. Pick it with `recorder.key`
 | `recorder.normalized_sql_and_parameters` | The SQL is the same after each run of whitespace outside quotes becomes one space, and each parameter is the same. | You format your SQL and don't want a new line break to need a new recording. |
 | `recorder.sql_only` | The SQL is the same, whatever the parameters. | A parameter changes on each run, such as a time, and it doesn't change the answer. |
 | your own `fn(RecordedQuery) -> String` | Your function gives the same text. | You want to ignore one parameter but keep the others. |
+
+The key also decides the nearest recordings of a miss: a recording is a candidate when the key would match it if the query had the recording's parameters. With `sql_only`, a query with recorded SQL always matches, so a miss of it has no candidate.
 
 ## Test your code
 
@@ -495,7 +524,7 @@ The test passes with no database on the machine. The URL points at port 1 of `12
 
 ## Common pitfalls
 
-**A query that changed since the recording.** *Symptom:* playback fails, and `recorder.error` gives `Ok(NoRecording(sql:, parameters:, path:))`. *Fix:* the error shows the SQL and the parameters the test sent. Compare them with the file. Record again, as Step 7 shows.
+**A query that changed since the recording.** *Symptom:* playback fails, and `recorder.error` gives `Ok(NoRecording(sql:, parameters:, path:, nearest:))`. *Fix:* `recorder.describe_error` shows the SQL and the parameters the test sent, and the nearest recordings with their parameters. When no recording has the SQL, the SQL changed. Record again, as Step 7 shows.
 
 **A test that runs a query more often than when it recorded.** *Symptom:* `recorder.error` gives `Ok(PlayedAlready(...))`. *Fix:* each recording answers one query. Record again, so the file has a result for each run of the query.
 

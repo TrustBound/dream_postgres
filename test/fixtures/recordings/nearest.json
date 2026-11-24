@@ -1,0 +1,76 @@
+{
+  "format": "dream_postgres query recording",
+  "version": 1,
+  "queries": [
+    {
+      "sql": "SELECT share_token FROM tasks WHERE id = $1",
+      "parameters": [7],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":["t"]}
+        ]
+      }
+    },
+    {
+      "sql": "SELECT share_token FROM tasks WHERE id = $1 AND owner = $2",
+      "parameters": [9,"bob"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":["t"]}
+        ]
+      }
+    },
+    {
+      "sql": "SELECT share_token FROM tasks WHERE id = $1 AND owner = $2",
+      "parameters": [7,"ada"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":["t"]}
+        ]
+      }
+    },
+    {
+      "sql": "SELECT share_token FROM tasks WHERE id = $1 AND owner = $2",
+      "parameters": [8,"bob"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":["t"]}
+        ]
+      }
+    },
+    {
+      "sql": "SELECT share_token FROM tasks WHERE id = $1 AND owner = $2",
+      "parameters": [6,"ada"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":["t"]}
+        ]
+      }
+    },
+    {
+      "sql": "SELECT share_token FROM tasks WHERE id = $1 AND owner = $2",
+      "parameters": [7,"ada"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":["t"]}
+        ]
+      }
+    },
+    {
+      "sql": "SELECT share_token FROM tasks WHERE id = $1 AND owner = $2",
+      "parameters": [5,"cy",3],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":["t"]}
+        ]
+      }
+    }
+  ]
+}
