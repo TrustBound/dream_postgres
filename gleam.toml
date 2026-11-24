@@ -27,7 +27,7 @@ gleam_json = ">= 3.0.0 and < 4.0.0"
 # Switched to a Hex version range once it is published.
 dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "1639959578a14ae3577f8e3ae5cac058f933aa53" }
 # Switched to a Hex version range once it is published.
-dream_snippets = { git = "https://github.com/TrustBound/dream_snippets.git", ref = "6c2bf3e4d19bf023b09822def9cf04c72037b7e4" }
+dream_snippets = { git = "https://github.com/TrustBound/dream_snippets.git", ref = "96cf9a146a608e5cf82afab23600eec852de3d6b" }
 
 [tools.dream_snippets]
 # Changelog sections and release notes before this version are history. They are not checked.
