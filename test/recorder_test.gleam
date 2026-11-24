@@ -140,35 +140,43 @@ fn record(
 
 fn record_failure_tests() {
   group("record mode when a query cannot be recorded", [
-    it("a query keeps its live result when the file cannot be written", fn() {
+    it("a query fails with WriteFailed when the file cannot be written", fn() {
       // Act
-      let count = {
+      let #(failed, expected) = {
         use directory <- recordings.with_directory()
         let #(count, _stopped) = read_only_after_start(directory)
-        count
+        #(
+          result.map_error(count, recorder.error),
+          Error(
+            Ok(recorder.WriteFailed(
+              path: directory <> "/locked.json",
+              reason: "permission denied",
+            )),
+          ),
+        )
       }
 
       // Assert
-      count
+      failed
       |> should
-      |> be_equal(Ok(0))
-      |> or_fail_with("Expected the live count")
+      |> be_equal(expected)
+      |> or_fail_with("Expected the WriteFailed error")
     }),
-    it("stop gives the first write error", fn() {
+    it("stop gives Ok(Nil) after a write failed its query", fn() {
       // Act
-      let #(stopped, expected) = {
+      let stopped = {
         use directory <- recordings.with_directory()
         let #(_count, stopped) = read_only_after_start(directory)
-        #(stopped, Error(directory <> "/locked.json: permission denied"))
+        stopped
       }
 
       // Assert
       stopped
       |> should
-      |> be_equal(expected)
-      |> or_fail_with("Expected the write error")
+      |> be_equal(Ok(Nil))
+      |> or_fail_with("Expected Ok(Nil)")
     }),
-    it("a query after stop keeps its live result", fn() {
+    it("a query after stop fails with RecorderStopped", fn() {
       // Act
       let answered = {
         use directory <- recordings.with_directory()
@@ -177,37 +185,42 @@ fn record_failure_tests() {
           recordings.start(recorder.Record, directory, "late")
         let assert Ok(db) = recorder.connect(recording, test_database.config())
         let assert Ok(Nil) = recorder.stop(recording)
-        postgres.check(db)
+        postgres.check(db) |> result.map_error(recorder.error)
       }
 
       // Assert
       answered
       |> should
-      |> be_equal(Ok(Nil))
-      |> or_fail_with("Expected the live answer")
+      |> be_equal(Error(Ok(recorder.RecorderStopped(sql: "SELECT 1"))))
+      |> or_fail_with("Expected the RecorderStopped error")
     }),
-    it("stop gives the error of a parameter that cannot be recorded", fn() {
+    it("a parameter that cannot be recorded fails the query", fn() {
       // Arrange
       let pid = process.self()
 
       // Act
-      let stopped = {
+      let selected = {
         use directory <- recordings.with_directory()
         record(directory, "pid", fn(db) {
           pog.query("SELECT $1::text")
           |> pog.parameter(unsafe_value(pid))
           |> pog.execute(db)
-        }).1
+          |> result.map_error(recorder.error)
+        }).0
       }
 
       // Assert
-      stopped
+      selected
       |> should
-      |> be_equal(Error(
-        "A parameter of SELECT $1::text cannot be recorded: "
-        <> describe_term(pid),
-      ))
-      |> or_fail_with("Expected the parameter error")
+      |> be_equal(
+        Error(
+          Ok(recorder.NotRecordable(
+            sql: "SELECT $1::text",
+            reason: "A parameter cannot be recorded: " <> describe_term(pid),
+          )),
+        ),
+      )
+      |> or_fail_with("Expected the NotRecordable error")
     }),
   ])
 }

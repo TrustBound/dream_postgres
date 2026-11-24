@@ -266,11 +266,11 @@ In playback mode, a query with no recording never reaches a database. It fails, 
 ### A query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-find_user(db, 2)
-  -> Error(PostgresqlError("NOREC", "no_recording", "No recording in test/fixtures/recordings/create_and_find.json matches SELECT id, name, email FROM users WHERE id = $1 with the parameters [2]"))
+find_user(db, 2) |> result.map_error(recorder.error)
+  -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1", "[2]", "test/fixtures/recordings/create_and_find.json")))
 ```
 
-The error is a `pog.PostgresqlError` with the code `recorder.no_recording_code` (`"NOREC"`) and the name `recorder.no_recording_name` (`"no_recording"`). The message names the file, the SQL and the parameters. When the same query ran more times than the recording has results for it, the message says `was played already`.
+The query error is `pog.InterceptorFailed`. `recorder.error` reads the `recorder.RecorderError` back from it: `NoRecording(sql:, parameters:, path:)` names the SQL, the parameters and the file. For any other query error, `recorder.error` gives `Error(Nil)`. When the same query ran more times than the recording has results for it, the error is `PlayedAlready`, with the same fields.
 
 That's the error you see when a test runs a query you never recorded, or a query that changed since you recorded it. Record again, or fix the test.
 
@@ -421,8 +421,8 @@ The recording has the old SQL, so playback can't answer the new query:
 ### A changed query in playback <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_changed.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-find_user(db, 1)
-  -> Error(PostgresqlError("NOREC", "no_recording", "No recording in test/fixtures/recordings/create_and_find.json matches SELECT id, name, email FROM users WHERE id = $1 LIMIT 1 with the parameters [1]"))
+find_user(db, 1) |> result.map_error(recorder.error)
+  -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1 LIMIT 1", "[1]", "test/fixtures/recordings/create_and_find.json")))
 ```
 
 Run the test once in `Record` mode against the database, as in Step 3. The recorder writes the file again, with the new SQL. Then switch back to `Playback` and commit the new file. The diff shows exactly the changed SQL.
@@ -481,13 +481,13 @@ The test passes with no database on the machine. The URL points at port 1 of `12
 
 ## Common pitfalls
 
-**A query that changed since the recording.** *Symptom:* playback fails with `PostgresqlError("NOREC", "no_recording", "No recording in ... matches ...")`. *Fix:* the message shows the SQL and the parameters the test sent. Compare them with the file. Record again, as Step 7 shows.
+**A query that changed since the recording.** *Symptom:* playback fails, and `recorder.error` gives `Ok(NoRecording(sql:, parameters:, path:))`. *Fix:* the error shows the SQL and the parameters the test sent. Compare them with the file. Record again, as Step 7 shows.
 
-**A test that runs a query more often than when it recorded.** *Symptom:* `... was played already`. *Fix:* each recording answers one query. Record again, so the file has a result for each run of the query.
+**A test that runs a query more often than when it recorded.** *Symptom:* `recorder.error` gives `Ok(PlayedAlready(...))`. *Fix:* each recording answers one query. Record again, so the file has a result for each run of the query.
 
 **A secret in a committed recording.** *Symptom:* a token or a password shows up in a recording file. *Fix:* record with a query transformer and a result transformer that hide it, as Step 6 shows. Then delete the old file from the repository history.
 
-**A file that can't be written.** *Symptom:* `recorder.start` in record mode returns `Error("<directory>/<name>.json: permission denied")`, or `recorder.stop` returns it after a query. *Fix:* a query returns its live result also when its recording can't be written, so `stop` gives the first such error. Check the result of `stop` in record mode, and make sure the directory can be written.
+**A file that can't be written.** *Symptom:* `recorder.start` in record mode returns `Error("<directory>/<name>.json: permission denied")`, or a query fails and `recorder.error` gives `Ok(WriteFailed(path:, reason: "permission denied"))`. *Fix:* the query ran on the database, but the recorder could not write its recording, so the query fails. Make sure the directory can be written.
 
 **A value that changes on each run.** *Symptom:* a new recording differs from the old one in a timestamp or a generated id. *Fix:* that's real: the database gave another value. Hide it with a result transformer if the test doesn't need it, or set it in the test data.
 

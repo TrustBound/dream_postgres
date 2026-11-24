@@ -48,7 +48,9 @@
 ////
 //// The `result` is `{"count":...,"rows":[...]}` for a query that worked, or
 //// `{"error":...}` for one that failed, with the fields of the
-//// `pog.QueryError`. `version` is 1. A later version of this package that
+//// `pog.QueryError`. The `reason` of a `pog.InterceptorFailed` error is a
+//// value as above. A reason that no value can hold, such as a process, is
+//// written as its text. `version` is 1. A later version of this package that
 //// changes the format gives the files a new version, and reads version 1.
 
 import dream_pog as pog
@@ -347,8 +349,28 @@ fn error_to_json(error: pog.QueryError) -> json.Json {
     pog.QueryTimeout -> json.object([#("error", json.string("query_timeout"))])
     pog.ConnectionUnavailable ->
       json.object([#("error", json.string("connection_unavailable"))])
+    pog.InterceptorFailed(reason:) ->
+      json.object([
+        #("error", json.string("interceptor_failed")),
+        #("reason", value_to_json(reason_to_recorded(reason))),
+      ])
   }
 }
+
+// The reason of `pog.InterceptorFailed` can be any term. A term that no
+// `RecordedValue` holds, such as a process, is kept as its text.
+fn reason_to_recorded(reason: Dynamic) -> RecordedValue {
+  case to_recorded(reason) {
+    Ok(value) -> value
+    Error(text) -> Text(text)
+  }
+}
+
+@external(erlang, "dream_postgres_recorder_ffi", "to_recorded")
+fn to_recorded(term: Dynamic) -> Result(RecordedValue, String)
+
+@external(erlang, "dream_postgres_recorder_ffi", "from_recorded")
+fn from_recorded(value: RecordedValue) -> Dynamic
 
 fn decode_error_to_json(error: decode.DecodeError) -> json.Json {
   json.object([
@@ -421,6 +443,10 @@ fn error_decoder(kind: String) -> decode.Decoder(pog.QueryError) {
     }
     "query_timeout" -> decode.success(pog.QueryTimeout)
     "connection_unavailable" -> decode.success(pog.ConnectionUnavailable)
+    "interceptor_failed" -> {
+      use reason <- decode.field("reason", value_decoder())
+      decode.success(pog.InterceptorFailed(from_recorded(reason)))
+    }
     _ -> decode.failure(pog.ConnectionUnavailable, "a pog.QueryError")
   }
 }

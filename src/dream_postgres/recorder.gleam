@@ -7,12 +7,16 @@
 ////
 //// - `Record`: each query runs on the real database, and the recorder
 ////   writes the query, its parameters and its result (the rows and the
-////   count, or the error) to the file before the query returns.
+////   count, or the error) to the file before the query returns. A query
+////   that the recorder cannot record fails.
 //// - `Playback`: no pool starts and nothing connects. Each query gets the
-////   result of its recording. A query with no recording gets an error that
-////   names it, and never reaches a database.
+////   result of its recording. A query with no recording fails, and never
+////   reaches a database.
 //// - `Passthrough`: each query runs on the real database, and nothing is
 ////   recorded.
+////
+//// A query that the recorder fails returns `pog.InterceptorFailed`, and
+//// `error` reads the `RecorderError` back from it.
 ////
 //// `recording` documents the file format.
 ////
@@ -54,6 +58,8 @@ import dream_postgres/recording.{
   Failed, RecordedQuery, Recording, Returned,
 }
 import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
+import gleam/erlang/atom
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -61,13 +67,36 @@ import gleam/otp/actor
 import gleam/result
 import gleam/string
 
-/// The `code` of the `pog.PostgresqlError` that a query gets in playback
-/// mode when no recording matches it.
-pub const no_recording_code = "NOREC"
+/// Why the recorder failed a query.
+///
+/// The query returns `pog.InterceptorFailed`, and `error` reads the
+/// `RecorderError` back from it.
+///
+/// - `NoRecording`: in playback mode, no recording in the file at `path`
+///   matches the query. `parameters` is the text of the parameters, as
+///   `recording.values_to_json` writes them.
+/// - `PlayedAlready`: in playback mode, each recording in the file at
+///   `path` that matches the query was played already.
+/// - `WriteFailed`: in record mode, the recorder could not write the file
+///   at `path`. `reason` is the error of the file system, such as
+///   `permission denied`. The query ran on the database.
+/// - `NotRecordable`: a parameter or a value of the result of the query is
+///   a term that a recording cannot hold, such as a process.
+/// - `RecorderStopped`: the recorder had stopped already, so it could not
+///   record or play the query.
+pub type RecorderError {
+  NoRecording(sql: String, parameters: String, path: String)
+  PlayedAlready(sql: String, parameters: String, path: String)
+  WriteFailed(path: String, reason: String)
+  NotRecordable(sql: String, reason: String)
+  RecorderStopped(sql: String)
+}
 
-/// The `name` of the `pog.PostgresqlError` that a query gets in playback
-/// mode when no recording matches it.
-pub const no_recording_name = "no_recording"
+// The reason that the recorder gives to `pog.InterceptorFailed`. The tag
+// keeps it apart from the reason of any other interceptor.
+type Failure {
+  DreamPostgresRecorderError(error: RecorderError)
+}
 
 /// Gives the text that two queries must share to match.
 ///
@@ -632,9 +661,12 @@ fn start_record(
   settings: Settings,
 ) -> Result(Recorder, String) {
   use path <- result.try(file_path(builder))
-  use Nil <- result.try(write_file(path, recording.to_json([])))
+  use Nil <- result.try(
+    write_file(path, recording.to_json([]))
+    |> result.map_error(fn(reason) { path <> ": " <> reason }),
+  )
   use server <- result.map(start_server(
-    RecordState(path:, recordings: [], failure: None),
+    RecordState(path:, recordings: []),
     handle_record,
   ))
   RecordMode(server:, settings:)
@@ -762,15 +794,13 @@ pub fn connect(
 /// Stop the recorder process.
 ///
 /// In record mode, each query is on disk when it returns, so `stop` does
-/// not write. It returns the first error that the recorder met while it
-/// wrote the file or read a result, if any: the query that met it still
-/// returned its live result.
+/// not write. A query that the recorder could not record failed already,
+/// with a `RecorderError`.
 ///
 /// ## Returns
 ///
-/// - `Ok(Nil)`: the recorder stopped, and every query was recorded
-/// - `Error(message)`: a query could not be recorded, or the recorder had
-///   stopped already
+/// - `Ok(Nil)`: the recorder stopped
+/// - `Error(message)`: the recorder had stopped already
 ///
 /// ## Example
 ///
@@ -812,11 +842,10 @@ pub fn stop(recorder: Recorder) -> Result(Nil, String) {
 
 fn stop_server(
   server: Server(message),
-  stop: fn(Subject(Result(Nil, String))) -> message,
+  stop: fn(Subject(Nil)) -> message,
 ) -> Result(Nil, String) {
   call(server, stop)
   |> result.replace_error("The recorder had stopped already.")
-  |> result.flatten()
 }
 
 /// The default key: the SQL text exactly, and every parameter.
@@ -950,54 +979,55 @@ fn record_interceptor(
   settings: Settings,
 ) -> pog.Interceptor {
   pog.Interceptor(fn(request) {
-    pog.Capture(on_result: fn(result) { add(server, settings, request, result) })
+    pog.Capture(on_result: fn(result) {
+      add(server, settings, request, result)
+      |> result.map_error(to_reason)
+    })
   })
 }
 
-// Runs in the process of the query, before the query returns. A failure
-// here cannot change the result of the query (`pog.Capture` returns
-// `Nil`), so the recorder keeps it, and `stop` returns it.
+// Runs in the process of the query, before the query returns. An error
+// here fails the query.
 fn add(
   server: Server(RecordMessage),
   settings: Settings,
   request: pog.InterceptRequest,
   result: Result(#(Int, List(Dynamic)), pog.QueryError),
-) -> Nil {
-  let message = case to_recording(settings, request, result) {
-    Ok(recording) -> Add(recording, _)
-    Error(problem) -> Problem(problem, _)
-  }
-  case call(server, message) {
-    // The recorder keeps a failed write itself
-    Ok(Nil) -> Nil
-    // The recorder stopped. Nothing can keep the failure.
-    Error(Nil) -> Nil
-  }
+) -> Result(Nil, RecorderError) {
+  use recording <- result.try(to_recording(settings, request, result))
+  call(server, Add(recording, _))
+  |> result.replace_error(RecorderStopped(sql: recording.query.sql))
+  |> result.flatten()
 }
 
 fn to_recording(
   settings: Settings,
   request: pog.InterceptRequest,
   result: Result(#(Int, List(Dynamic)), pog.QueryError),
-) -> Result(Recording, String) {
+) -> Result(Recording, RecorderError) {
   use query <- result.try(to_query(settings, request))
-  use recorded <- result.map(to_result(result))
+  use recorded <- result.map(
+    to_result(result)
+    |> result.map_error(not_recordable(query.sql, "A value of the result", _)),
+  )
   Recording(query:, result: settings.result_transformer(query, recorded))
 }
 
 fn to_query(
   settings: Settings,
   request: pog.InterceptRequest,
-) -> Result(RecordedQuery, String) {
+) -> Result(RecordedQuery, RecorderError) {
   use parameters <- result.map(
     list.try_map(request.parameters, fn(parameter) {
       to_recorded(to_dynamic(parameter))
     })
-    |> result.map_error(fn(term) {
-      "A parameter of " <> request.sql <> " cannot be recorded: " <> term
-    }),
+    |> result.map_error(not_recordable(request.sql, "A parameter", _)),
   )
   settings.query_transformer(RecordedQuery(sql: request.sql, parameters:))
+}
+
+fn not_recordable(sql: String, what: String, term: String) -> RecorderError {
+  NotRecordable(sql:, reason: what <> " cannot be recorded: " <> term)
 }
 
 fn to_result(
@@ -1033,23 +1063,106 @@ fn play(
   let answer = {
     use query <- result.try(to_query(settings, request))
     call(server, Play(settings.key(query), query, _))
-    |> result.replace_error("The recorder had stopped already.")
+    |> result.replace_error(RecorderStopped(sql: query.sql))
     |> result.flatten()
   }
   case answer {
     Ok(Returned(count:, rows:)) ->
       pog.Respond(count: from_count(count), rows: list.map(rows, from_recorded))
-    Ok(Failed(error)) -> pog.Fail(error)
-    Error(message) -> pog.Fail(no_recording(message))
+    Ok(Failed(query_error)) -> pog.Fail(query_error)
+    Error(recorder_error) ->
+      pog.Fail(pog.InterceptorFailed(to_reason(recorder_error)))
   }
 }
 
-fn no_recording(message: String) -> pog.QueryError {
-  pog.PostgresqlError(
-    code: no_recording_code,
-    name: no_recording_name,
-    message: message,
-  )
+fn to_reason(recorder_error: RecorderError) -> Dynamic {
+  failure_to_dynamic(DreamPostgresRecorderError(recorder_error))
+}
+
+/// Reads the recorder's error back from a query error.
+///
+/// ## Returns
+///
+/// - `Ok(RecorderError)`: the recorder failed the query
+/// - `Error(Nil)`: the error is not from this recorder: an error of the
+///   database, or the `pog.InterceptorFailed` of another interceptor
+///
+/// ## Example
+///
+/// ### Explain a query error <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_pog as pog
+/// import dream_postgres/recorder
+///
+/// pub fn explain(query_error: pog.QueryError) -> String {
+///   case recorder.error(query_error) {
+///     Ok(recorder.NoRecording(sql:, parameters:, path:)) ->
+///       "Record again: " <> path <> " has no " <> sql <> " with " <> parameters
+///     Ok(_other) -> "The recorder failed the query"
+///     Error(Nil) -> "The database failed the query"
+///   }
+/// }
+/// ```
+pub fn error(query_error: pog.QueryError) -> Result(RecorderError, Nil) {
+  case query_error {
+    pog.InterceptorFailed(reason:) ->
+      decode.run(reason, failure_decoder())
+      |> result.replace_error(Nil)
+    _ -> Error(Nil)
+  }
+}
+
+fn failure_decoder() -> decode.Decoder(RecorderError) {
+  use Nil <- decode.then(tag("dream_postgres_recorder_error"))
+  decode.at([1], recorder_error_decoder())
+}
+
+fn recorder_error_decoder() -> decode.Decoder(RecorderError) {
+  decode.one_of(variant("no_recording", miss_decoder(NoRecording)), [
+    variant("played_already", miss_decoder(PlayedAlready)),
+    variant("write_failed", {
+      use path <- decode.field(1, decode.string)
+      use reason <- decode.field(2, decode.string)
+      decode.success(WriteFailed(path:, reason:))
+    }),
+    variant("not_recordable", {
+      use sql <- decode.field(1, decode.string)
+      use reason <- decode.field(2, decode.string)
+      decode.success(NotRecordable(sql:, reason:))
+    }),
+    variant("recorder_stopped", {
+      use sql <- decode.field(1, decode.string)
+      decode.success(RecorderStopped(sql:))
+    }),
+  ])
+}
+
+fn miss_decoder(
+  make: fn(String, String, String) -> RecorderError,
+) -> decode.Decoder(RecorderError) {
+  use sql <- decode.field(1, decode.string)
+  use parameters <- decode.field(2, decode.string)
+  use path <- decode.field(3, decode.string)
+  decode.success(make(sql, parameters, path))
+}
+
+// A decoder of the constructor `name`: the first element of its tuple is
+// the atom `name`.
+fn variant(
+  name: String,
+  fields: decode.Decoder(RecorderError),
+) -> decode.Decoder(RecorderError) {
+  use Nil <- decode.then(tag(name))
+  fields
+}
+
+fn tag(name: String) -> decode.Decoder(Nil) {
+  use found <- decode.field(0, atom.decoder())
+  case found == atom.create(name) {
+    True -> decode.success(Nil)
+    False -> decode.failure(Nil, name)
+  }
 }
 
 // The count of a recording is the term that the driver gave, which is an
@@ -1070,6 +1183,9 @@ fn to_dynamic(value: pog.Value) -> Dynamic
 @external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
 fn coerce(value: Dynamic) -> Int
 
+@external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
+fn failure_to_dynamic(failure: Failure) -> Dynamic
+
 @external(erlang, "dream_postgres_recorder_ffi", "write_file")
 fn write_file(path: String, content: String) -> Result(Nil, String)
 
@@ -1081,26 +1197,21 @@ fn read_file(path: String) -> Result(String, String)
 // one mode never reaches the process of the other.
 
 type RecordMessage {
-  Add(recording: Recording, reply: Subject(Nil))
-  Problem(message: String, reply: Subject(Nil))
-  StopRecording(reply: Subject(Result(Nil, String)))
+  Add(recording: Recording, reply: Subject(Result(Nil, RecorderError)))
+  StopRecording(reply: Subject(Nil))
 }
 
 type RecordState {
-  RecordState(
-    path: String,
-    recordings: List(Recording),
-    failure: Option(String),
-  )
+  RecordState(path: String, recordings: List(Recording))
 }
 
 type PlaybackMessage {
   Play(
     key: String,
     query: RecordedQuery,
-    reply: Subject(Result(RecordedResult, String)),
+    reply: Subject(Result(RecordedResult, RecorderError)),
   )
-  StopPlayback(reply: Subject(Result(Nil, String)))
+  StopPlayback(reply: Subject(Nil))
 }
 
 type PlaybackState {
@@ -1128,44 +1239,29 @@ fn handle_record(
 ) -> actor.Next(RecordState, RecordMessage) {
   case message {
     Add(recording, reply) -> {
-      let state = add_recording(state, recording)
-      process.send(reply, Nil)
+      let #(state, written) = add_recording(state, recording)
+      process.send(reply, written)
       actor.continue(state)
     }
-    Problem(problem, reply) -> {
-      process.send(reply, Nil)
-      actor.continue(keep_failure(state, problem))
-    }
     StopRecording(reply) -> {
-      process.send(reply, failure_result(state.failure))
+      process.send(reply, Nil)
       actor.stop()
     }
   }
 }
 
-fn failure_result(failure: Option(String)) -> Result(Nil, String) {
-  case failure {
-    Some(problem) -> Error(problem)
-    None -> Ok(Nil)
-  }
-}
-
 // The recordings of the state are newest first. The whole file is written
 // again for each query, so the file on disk always holds every query that
-// returned.
-fn add_recording(state: RecordState, recording: Recording) -> RecordState {
+// returned its result. When the write fails, the state keeps the
+// recordings of before: the query fails, so it is not recorded.
+fn add_recording(
+  state: RecordState,
+  recording: Recording,
+) -> #(RecordState, Result(Nil, RecorderError)) {
   let recordings = [recording, ..state.recordings]
-  let state = RecordState(..state, recordings:)
   case write_file(state.path, recording.to_json(list.reverse(recordings))) {
-    Ok(Nil) -> state
-    Error(problem) -> keep_failure(state, problem)
-  }
-}
-
-fn keep_failure(state: RecordState, problem: String) -> RecordState {
-  case state.failure {
-    None -> RecordState(..state, failure: Some(problem))
-    Some(_) -> state
+    Ok(Nil) -> #(RecordState(..state, recordings:), Ok(Nil))
+    Error(reason) -> #(state, Error(WriteFailed(path: state.path, reason:)))
   }
 }
 
@@ -1180,7 +1276,7 @@ fn handle_playback(
       actor.continue(PlaybackState(..state, entries:))
     }
     StopPlayback(reply) -> {
-      process.send(reply, Ok(Nil))
+      process.send(reply, Nil)
       actor.stop()
     }
   }
@@ -1195,7 +1291,7 @@ fn take(
   key: String,
   query: RecordedQuery,
   path: String,
-) -> #(Result(RecordedResult, String), List(Entry)) {
+) -> #(Result(RecordedResult, RecorderError), List(Entry)) {
   let #(before, rest) =
     list.split_while(entries, fn(entry) { entry.played || entry.key != key })
   case rest {
@@ -1203,27 +1299,21 @@ fn take(
       Ok(entry.recording.result),
       list.append(before, [Entry(..entry, played: True), ..after]),
     )
-    [] -> #(Error(miss_message(entries, key, query, path)), entries)
+    [] -> #(Error(miss_error(entries, key, query, path)), entries)
   }
 }
 
-fn miss_message(
+fn miss_error(
   entries: List(Entry),
   key: String,
   query: RecordedQuery,
   path: String,
-) -> String {
+) -> RecorderError {
   let matching = list.count(entries, fn(entry) { entry.key == key })
-  let describe =
-    query.sql <> " with the parameters " <> parameters_text(query.parameters)
+  let parameters = parameters_text(query.parameters)
   case matching {
-    0 -> "No recording in " <> path <> " matches " <> describe
-    _ ->
-      "Each recording in "
-      <> path
-      <> " that matches "
-      <> describe
-      <> " was played already"
+    0 -> NoRecording(sql: query.sql, parameters:, path:)
+    _ -> PlayedAlready(sql: query.sql, parameters:, path:)
   }
 }
 

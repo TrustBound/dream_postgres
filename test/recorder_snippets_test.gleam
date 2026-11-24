@@ -10,6 +10,7 @@ import fixtures/recordings
 import gleam/dynamic/decode
 import gleam/result
 import snippets/guide_recording_users.{find_user}
+import snippets/recorder_error
 import snippets/recorder_key
 import snippets/recorder_keys
 import snippets/recorder_parse_mode
@@ -142,6 +143,42 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_equal("[1,\"Ada\",null]")
       |> or_fail_with("Expected one line of JSON")
+    }),
+    it("explain names the file, the SQL and the parameters of a miss", fn() {
+      // Arrange
+      let builder = recordings.builder(recordings.fixtures, "create_and_find")
+
+      // Act
+      let explained =
+        recordings.play(builder, fn(db) {
+          case find_user(db, 2) {
+            Ok(_user) -> "Expected a miss"
+            Error(query_error) -> recorder_error.explain(query_error)
+          }
+        })
+
+      // Assert
+      explained
+      |> should
+      |> be_equal(
+        "Record again: test/fixtures/recordings/create_and_find.json has no SELECT id, name, email FROM users WHERE id = $1 with [2]",
+      )
+      |> or_fail_with("Expected the explanation of the miss")
+    }),
+    it("explain tells a database error from a recorder error", fn() {
+      // Act
+      let explained =
+        recorder_error.explain(pog.PostgresqlError(
+          code: "42601",
+          name: "syntax_error",
+          message: "syntax error",
+        ))
+
+      // Assert
+      explained
+      |> should
+      |> be_equal("The database failed the query")
+      |> or_fail_with("Expected the database explanation")
     }),
   ])
 }

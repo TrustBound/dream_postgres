@@ -15,6 +15,7 @@ import fixtures/guide_schema
 import fixtures/output_file
 import fixtures/recordings
 import fixtures/test_database
+import gleam/result
 import gleam/string
 import recorder_test
 import snippets/guide_recording_changed
@@ -144,10 +145,17 @@ fn playback_group() {
       "step 5: a query with no recording answers as the output file shows",
       fn() {
         // Act
-        let missed = play(fn(db) { find_user(db, 2) |> string.inspect })
+        let missed =
+          play(fn(db) {
+            find_user(db, 2)
+            |> result.map_error(recorder.error)
+            |> string.inspect
+          })
 
         // Assert
-        output_file.calls([#("find_user(db, 2)", missed)])
+        output_file.calls([
+          #("find_user(db, 2) |> result.map_error(recorder.error)", missed),
+        ])
         |> should
         |> be_equal(output_file.read("guide_recording_miss"))
         |> or_fail_with("Expected the output file")
@@ -158,11 +166,15 @@ fn playback_group() {
       let missed =
         play(fn(db) {
           let _created = create_user(db, "Ada", "ada@example.com")
-          guide_recording_changed.find_user(db, 1) |> string.inspect
+          guide_recording_changed.find_user(db, 1)
+          |> result.map_error(recorder.error)
+          |> string.inspect
         })
 
       // Assert
-      output_file.calls([#("find_user(db, 1)", missed)])
+      output_file.calls([
+        #("find_user(db, 1) |> result.map_error(recorder.error)", missed),
+      ])
       |> should
       |> be_equal(output_file.read("guide_recording_changed"))
       |> or_fail_with("Expected the output file")

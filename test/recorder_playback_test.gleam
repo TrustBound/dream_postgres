@@ -15,7 +15,9 @@ import dream_test/unit.{describe, group, it}
 import fixtures/recordings
 import fixtures/user_queries
 import gleam/dict
+import gleam/dynamic
 import gleam/dynamic/decode
+import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/list
 import gleam/result
@@ -28,11 +30,15 @@ fn describe_term(term: a) -> String
 @external(erlang, "recorder_ffi", "unsafe_value")
 fn unsafe_value(term: a) -> pog.Value
 
+@external(erlang, "recorder_ffi", "unsafe_value")
+fn any_to_dynamic(term: a) -> dynamic.Dynamic
+
 pub fn tests() -> TestSuite {
   describe("recorder with no database", [
     playback_tests(),
     no_connection_tests(),
     miss_tests(),
+    error_tests(),
     transaction_tests(),
     scrub_tests(),
     parse_mode_tests(),
@@ -154,50 +160,52 @@ const insert_sql = "INSERT INTO users (name) VALUES ($1) RETURNING id"
 
 fn miss_tests() {
   group("a query with no recording", [
-    it("gives the no_recording error that names the query", fn() {
+    it("gives the NoRecording error that names the query", fn() {
       // Act
       let inserted =
         recordings.play(users(), fn(db) {
           user_queries.insert_user(db, "Linus")
+          |> result.map_error(recorder.error)
         })
 
       // Assert
       inserted
       |> should
       |> be_equal(
-        Error(pog.PostgresqlError(
-          code: "NOREC",
-          name: "no_recording",
-          message: "No recording in test/fixtures/recordings/users.json matches "
-            <> insert_sql
-            <> " with the parameters [\"Linus\"]",
-        )),
+        Error(
+          Ok(recorder.NoRecording(
+            sql: insert_sql,
+            parameters: "[\"Linus\"]",
+            path: "test/fixtures/recordings/users.json",
+          )),
+        ),
       )
-      |> or_fail_with("Expected the no_recording error")
+      |> or_fail_with("Expected the NoRecording error")
     }),
-    it("gives the no_recording error when each recording was played", fn() {
+    it("gives the PlayedAlready error when each recording was played", fn() {
       // Act
       let inserted =
         recordings.play(users(), fn(db) {
           let _first = user_queries.insert_user(db, "Grace")
           user_queries.insert_user(db, "Grace")
+          |> result.map_error(recorder.error)
         })
 
       // Assert
       inserted
       |> should
       |> be_equal(
-        Error(pog.PostgresqlError(
-          code: recorder.no_recording_code,
-          name: recorder.no_recording_name,
-          message: "Each recording in test/fixtures/recordings/users.json that matches "
-            <> insert_sql
-            <> " with the parameters [\"Grace\"] was played already",
-        )),
+        Error(
+          Ok(recorder.PlayedAlready(
+            sql: insert_sql,
+            parameters: "[\"Grace\"]",
+            path: "test/fixtures/recordings/users.json",
+          )),
+        ),
       )
-      |> or_fail_with("Expected the no_recording error")
+      |> or_fail_with("Expected the PlayedAlready error")
     }),
-    it("gives the no_recording error for a parameter it cannot read", fn() {
+    it("gives the NotRecordable error for a parameter it cannot read", fn() {
       // Arrange
       let pid = process.self()
 
@@ -207,22 +215,23 @@ fn miss_tests() {
           pog.query("SELECT $1::text")
           |> pog.parameter(unsafe_value(pid))
           |> pog.execute(db)
+          |> result.map_error(recorder.error)
         })
 
       // Assert
       selected
       |> should
       |> be_equal(
-        Error(pog.PostgresqlError(
-          code: "NOREC",
-          name: "no_recording",
-          message: "A parameter of SELECT $1::text cannot be recorded: "
-            <> describe_term(pid),
-        )),
+        Error(
+          Ok(recorder.NotRecordable(
+            sql: "SELECT $1::text",
+            reason: "A parameter cannot be recorded: " <> describe_term(pid),
+          )),
+        ),
       )
-      |> or_fail_with("Expected the no_recording error")
+      |> or_fail_with("Expected the NotRecordable error")
     }),
-    it("gives the no_recording error for a list or a map it cannot read", fn() {
+    it("gives the NotRecordable error for a list or a map it cannot read", fn() {
       // Arrange
       let pid = process.self()
 
@@ -236,6 +245,7 @@ fn miss_tests() {
               |> pog.parameter(value)
               |> pog.execute(db)
               |> result.replace(Nil)
+              |> result.map_error(recorder.error)
             })
           },
         )
@@ -244,17 +254,17 @@ fn miss_tests() {
       selected
       |> should
       |> be_equal(list.repeat(
-        Error(pog.PostgresqlError(
-          code: "NOREC",
-          name: "no_recording",
-          message: "A parameter of SELECT $1 cannot be recorded: "
-            <> describe_term(pid),
-        )),
+        Error(
+          Ok(recorder.NotRecordable(
+            sql: "SELECT $1",
+            reason: "A parameter cannot be recorded: " <> describe_term(pid),
+          )),
+        ),
         2,
       ))
-      |> or_fail_with("Expected the no_recording error for each")
+      |> or_fail_with("Expected the NotRecordable error for each")
     }),
-    it("gives the no_recording error after the recorder stopped", fn() {
+    it("gives the RecorderStopped error after the recorder stopped", fn() {
       // Act
       let names = {
         let assert Ok(playback) =
@@ -262,21 +272,73 @@ fn miss_tests() {
         let assert Ok(db) =
           recorder.connect(playback, recordings.unreachable_config())
         let assert Ok(Nil) = recorder.stop(playback)
-        user_queries.user_names(db)
+        user_queries.user_names(db) |> result.map_error(recorder.error)
       }
 
       // Assert
       names
       |> should
       |> be_equal(
-        Error(pog.PostgresqlError(
-          code: "NOREC",
-          name: "no_recording",
-          message: "The recorder had stopped already.",
-        )),
+        Error(
+          Ok(recorder.RecorderStopped(sql: "SELECT name FROM users ORDER BY id")),
+        ),
       )
-      |> or_fail_with("Expected the no_recording error")
+      |> or_fail_with("Expected the RecorderStopped error")
     }),
+  ])
+}
+
+fn error_tests() {
+  group("error", [
+    it("gives Error(Nil) for a PostgresqlError", fn() {
+      // Act
+      let read =
+        recorder.error(pog.PostgresqlError(
+          code: "42601",
+          name: "syntax_error",
+          message: "syntax error",
+        ))
+
+      // Assert
+      read
+      |> should
+      |> be_equal(Error(Nil))
+      |> or_fail_with("Expected Error(Nil)")
+    }),
+    it(
+      "gives Error(Nil) for the InterceptorFailed of another interceptor",
+      fn() {
+        // Act
+        let read =
+          recorder.error(pog.InterceptorFailed(dynamic.string("no_recording")))
+
+        // Assert
+        read
+        |> should
+        |> be_equal(Error(Nil))
+        |> or_fail_with("Expected Error(Nil)")
+      },
+    ),
+    it(
+      "gives Error(Nil) for a value with the tag of the recorder and another shape",
+      fn() {
+        // Arrange
+        let reason =
+          any_to_dynamic(#(
+            atom.create("dream_postgres_recorder_error"),
+            #(atom.create("no_recording"), 1, 2, 3),
+          ))
+
+        // Act
+        let read = recorder.error(pog.InterceptorFailed(reason))
+
+        // Assert
+        read
+        |> should
+        |> be_equal(Error(Nil))
+        |> or_fail_with("Expected Error(Nil)")
+      },
+    ),
   ])
 }
 
@@ -764,6 +826,9 @@ fn file_format_tests() {
             ]),
             pog.QueryTimeout,
             pog.ConnectionUnavailable,
+            pog.InterceptorFailed(
+              any_to_dynamic(#(atom.create("tag"), "reason", [1, 2])),
+            ),
           ],
           fn(error) { Recording(RecordedQuery("SELECT 1", []), Failed(error)) },
         )
@@ -777,6 +842,35 @@ fn file_format_tests() {
       |> be_equal(Ok(recorded))
       |> or_fail_with("Expected the same errors")
     }),
+    it(
+      "to_json writes an InterceptorFailed reason that no value holds as its text",
+      fn() {
+        // Arrange
+        let pid = process.self()
+        let recorded = [
+          Recording(
+            RecordedQuery("SELECT 1", []),
+            Failed(pog.InterceptorFailed(any_to_dynamic(pid))),
+          ),
+        ]
+
+        // Act
+        let read = recording.from_json(recording.to_json(recorded))
+
+        // Assert
+        read
+        |> should
+        |> be_equal(
+          Ok([
+            Recording(
+              RecordedQuery("SELECT 1", []),
+              Failed(pog.InterceptorFailed(dynamic.string(describe_term(pid)))),
+            ),
+          ]),
+        )
+        |> or_fail_with("Expected the text of the reason")
+      },
+    ),
     it("from_json refuses another format, another version and bad values", fn() {
       // Act
       let read =

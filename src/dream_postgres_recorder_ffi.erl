@@ -85,7 +85,8 @@ hex_to_bits(Size, Hex) ->
 
 %% Writes the file in one step: first to a temporary file next to it, then
 %% a rename. A reader never sees half a file. The folder is made when it
-%% does not exist.
+%% does not exist. An error is the text of the file system error, such as
+%% `permission denied`, without the path.
 write_file(Path, Content) ->
     Temporary = <<Path/binary, ".tmp">>,
     Result = case filelib:ensure_path(filename:dirname(Path)) of
@@ -99,7 +100,7 @@ write_file(Path, Content) ->
     end,
     case Result of
         ok -> {ok, nil};
-        {error, Reason} -> {error, describe(Path, Reason)}
+        {error, Reason} -> {error, unicode:characters_to_binary(file:format_error(Reason))}
     end.
 
 read_file(Path) ->

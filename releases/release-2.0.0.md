@@ -25,7 +25,7 @@ It is a major version because `from_url()` now returns a `Result`, the package n
 The new module `dream_postgres/recorder` records each query of a test, with its parameters and its result, to one JSON file, and plays the file back with no database. It has the three modes of the HTTP recorder of `dream_http_client`, the constructors of the type `recorder.Mode`:
 
 - `Record`: each query runs on the database. The recorder writes the query and its result (the count and the rows, or the error) to the file before the query returns. A query in `pog.transaction` is recorded too.
-- `Playback`: no pool starts and nothing connects. Each query gets the result of its recording. A query with no recording gets `pog.PostgresqlError("NOREC", "no_recording", message)`, where the message names the file, the SQL and the parameters. It never reaches a database.
+- `Playback`: no pool starts and nothing connects. Each query gets the result of its recording. A query with no recording fails with `pog.InterceptorFailed`, and never reaches a database. `recorder.error` reads the `recorder.NoRecording(sql:, parameters:, path:)` error back from it.
 - `Passthrough`: each query runs on the database, and nothing is recorded.
 
 Set the mode with `recorder.mode(recorder.Playback)`. A wrong mode name is a compile error. For a mode in a text, for example from an environment variable, `recorder.parse_mode(text)` accepts `"record"`, `"playback"` and `"passthrough"`, and gives an `Error` that names any other text.
@@ -51,7 +51,7 @@ A query gets the first recording with its key that it was not given yet. So the 
 
 The new guide [Test database code with recorded queries](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/recorded-queries.md) walks through it.
 
-In record mode, a query whose recording cannot be written still returns its live result, because the interceptor of `dream_pog` cannot change the result of a query. `recorder.stop` returns the first such error.
+In record mode, a query that the recorder cannot record fails: the file cannot be written (`WriteFailed`), a value cannot be recorded (`NotRecordable`), or the recorder stopped (`RecorderStopped`). `recorder.error` reads the `recorder.RecorderError` back from the query error, and gives `Error(Nil)` for an error of the database or of another interceptor. `recorder.stop` gives an `Error` only when the recorder had stopped already.
 
 ### `dream_pog` in Place of `pog`
 
@@ -133,8 +133,8 @@ The README is short and links to them, and HexDocs shows the guides.
 
 ## Testing
 
-- 363 tests run, 0 failed, 100.0% line coverage (483 of 483 lines). `make test` takes about 62 seconds, and the test times add up to about 105 seconds, because 4 tests run at a time and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
-- The 53 recorder tests that need no database pass with both test servers stopped (`make test-playback`), which proves that playback mode opens no connection
+- 369 tests run, 0 failed, 100.0% line coverage (509 of 509 lines). `make test` takes about 62 seconds, and the test times add up to about 107 seconds, because 4 tests run at a time and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The 59 recorder tests that need no database pass with both test servers stopped (`make test-playback`), which proves that playback mode opens no connection
 - A test against PostgreSQL 16 records and plays back each kind of value: integers, floats, `Infinity` and `NaN`, text, `bytea`, booleans, `NULL`, arrays, `timestamp`, `timestamptz`, `date`, `time`, `numeric`, `uuid`, a UUID as text, `json`, `jsonb`, `interval`, `bit`, `point` and rows as maps
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image): one with SSL off, and one with SSL on and a certificate from a test CA. The SSL tests run each `sslmode` against both, with a matching and a non-matching host name, and with and without the test CA in `sslrootcert`
 

@@ -85,10 +85,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     recorded too.
   - Playback mode starts no pool and opens no connection
     (`pog.disconnected`). Each query gets the result of its recording. A
-    query with no recording gets
-    `pog.PostgresqlError("NOREC", "no_recording", message)`, where the
-    message names the file, the SQL and the parameters. It never reaches a
-    database.
+    query with no recording fails with `pog.InterceptorFailed`, and never
+    reaches a database.
+  - `recorder.error(query_error)` reads a `recorder.RecorderError` back from
+    a query error that the recorder made: `NoRecording(sql, parameters,
+    path)`, `PlayedAlready(sql, parameters, path)`, `WriteFailed(path,
+    reason)`, `NotRecordable(sql, reason)` or `RecorderStopped(sql)`. It
+    gives `Error(Nil)` for any other query error, also for the
+    `pog.InterceptorFailed` of another interceptor.
+  - In record mode, a query fails when the recorder cannot record it: the
+    file cannot be written, a parameter or a value of the result cannot be
+    recorded, or the recorder stopped. `recorder.stop` gives an `Error` only
+    when the recorder had stopped already.
   - A query matches the first recording with its key that it was not given
     yet. The keys are `sql_and_parameters` (the default),
     `normalized_sql_and_parameters`, `sql_only`, or a function of your own.
@@ -185,8 +193,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 363 tests, 0 failed, 100.0% line coverage of `src/` (483 of 483 lines), the Erlang file of the recorder too. `make test` takes about 62 seconds, and the test times add up to about 105 seconds, because 4 tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
-- `make test-playback` runs the 53 recorder tests that need no database. They pass with both test servers stopped, which proves that playback mode opens no connection.
+- 369 tests, 0 failed, 100.0% line coverage of `src/` (509 of 509 lines), the Erlang file of the recorder too. `make test` takes about 62 seconds, and the test times add up to about 107 seconds, because 4 tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- `make test-playback` runs the 59 recorder tests that need no database. They pass with both test servers stopped, which proves that playback mode opens no connection.
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image), started with `make db-up`. One has SSL off. It runs as a service container in CI. The other has SSL on, with a test CA and a server certificate from `test/fixtures/ssl`. CI starts it with `docker compose`.
 
 ## [1.0.2] - 2025-11-21

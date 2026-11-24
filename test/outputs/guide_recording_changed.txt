@@ -1,2 +1,2 @@
-find_user(db, 1)
-  -> Error(PostgresqlError("NOREC", "no_recording", "No recording in test/fixtures/recordings/create_and_find.json matches SELECT id, name, email FROM users WHERE id = $1 LIMIT 1 with the parameters [1]"))
+find_user(db, 1) |> result.map_error(recorder.error)
+  -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1 LIMIT 1", "[1]", "test/fixtures/recordings/create_and_find.json")))
