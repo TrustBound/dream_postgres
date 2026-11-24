@@ -1,10 +1,3 @@
-# TODO before release: replace the path dependency
-# `dream_postgres_client = { path = "../../dream_pog" }` with a Hex version
-# range, such as `dream_postgres_client = ">= 4.1.0 and < 5.0.0"`, after
-# dream_postgres_client is published. A Hex package must not have a path or git
-# dependency. The path dependency needs a dream_postgres_client checkout in the
-# folder dream_pog two folders up from this one, with its dream_postgres_driver
-# checkout in the folder dream_pgo next to it.
 name = "dream_postgres"
 version = "2.0.0"
 description = "PostgreSQL utilities for Gleam with type-safe query helpers"
@@ -27,7 +20,7 @@ pages = [
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_erlang = ">= 0.30.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
-dream_postgres_client = { path = "../../dream_pog" }
+dream_postgres_client = ">= 1.0.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
 
 [dev-dependencies]

@@ -317,7 +317,7 @@ The code that reads results is where your logic lives, and you can test it with 
 
 The tests here use [dream_test](https://hexdocs.pm/dream_test). It isn't on Hex yet, so add it from GitHub, with the commit this package tests with:
 
-### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L33-L35"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L26-L28"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```toml
 [dev-dependencies]
