@@ -592,32 +592,24 @@ fn application_name_tests() {
         |> or_fail_with("Expected the client_encoding of the caller")
       },
     ),
-    // A known fault of dream_pgo: it compares the name `application_name`
-    // with case, but PostgreSQL reads parameter names without case. So the
-    // driver also sends the Erlang node name, after the caller's name, and
-    // the server keeps the node name. This test shows the fault, and fails
-    // when dream_pgo is fixed.
-    it(
-      "Application_Name in mixed case shows the Erlang node name (a dream_pgo fault)",
-      fn() {
-        // Arrange
-        let config =
-          test_database.config()
-          |> pog.connection_parameter(
-            name: "Application_Name",
-            value: "billing",
-          )
+    // PostgreSQL reads parameter names without case, and so does dream_pgo:
+    // it sees `Application_Name` as the caller's name and does not send the
+    // Erlang node name too.
+    it("Application_Name in mixed case reaches the server", fn() {
+      // Arrange
+      let config =
+        test_database.config()
+        |> pog.connection_parameter(name: "Application_Name", value: "billing")
 
-        // Act
-        let name = connect_and_select(config, application_name_query)
+      // Act
+      let name = connect_and_select(config, application_name_query)
 
-        // Assert
-        name
-        |> should
-        |> be_equal(Ok(Ok(["nonode@nohost"])))
-        |> or_fail_with("Expected the Erlang node name")
-      },
-    ),
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok(Ok(["billing"])))
+      |> or_fail_with("Expected the application name in mixed case")
+    }),
     it(
       "application_name from the URL reaches the server under pog.supervised",
       fn() {

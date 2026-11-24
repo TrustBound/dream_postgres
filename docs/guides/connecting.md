@@ -217,7 +217,7 @@ SELECT current_setting('search_path') || '|' || current_setting('timezone') || '
   -> "app|UTC|billing"
 ```
 
-The driver under `dream_pog` sends your `application_name` to the server. Without one, it sends the name of the Erlang node, such as `nonode@nohost`. Set the name with the `application_name` parameter, not with `-c application_name=...` in `options`: the server applies `options` first and the separate parameters after it, so the node name replaces a name from `options`. Write the name in lower case: the driver does not see `Application_Name` as your name, and the server then shows the node name.
+The driver under `dream_pog` sends your `application_name` to the server. Without one, it sends the name of the Erlang node, such as `nonode@nohost`. Set the name with the `application_name` parameter, not with `-c application_name=...` in `options`: the server applies `options` first and the separate parameters after it, so the node name replaces a name from `options`.
 
 **How big should the pool be?** Each connection in the pool is one connection on the PostgreSQL server, and the server has a limit (`max_connections`, 100 by default). Add up the pools of every instance of your app, plus anything else that connects, and stay under that limit. A pool that's too small makes requests wait for a free connection: with a pool of 1, two queries of half a second each, sent at the same time, run one after the other on the same connection, and the second answers after about 1 second. A pool that's too big makes the server refuse connections when you scale out. And don't set the size to 0: `pool_size(0)` is accepted, the pool starts, and every query returns `ConnectionUnavailable` after about 2 seconds.
 
@@ -547,8 +547,6 @@ To check that the pool really connects, give `connect_pool` the URL of a test se
 **`verify-ca` where you want a host check.** *Symptom:* a pool with `sslmode=verify-ca` connects to a server at an address that its certificate doesn't name. *Fix:* `verify-ca` checks only that a trusted CA signed the certificate, as in `libpq`. Use `verify-full` to also check the host name.
 
 **A database with a private CA.** *Symptom:* with `sslmode=verify-full`, queries return `ConnectionUnavailable`, and the log shows `Fatal - Unknown CA`, but `sslmode=require` connects. *Fix:* the client trusts only the CA certificates of the operating system. Name your provider's CA file with `sslrootcert`, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows.
-
-**`Application_Name` in mixed case.** *Symptom:* `pg_stat_activity` shows the Erlang node name, such as `nonode@nohost`, not the name you set with `pog.connection_parameter(name: "Application_Name", ...)`. *Cause:* the driver under `dream_pog` compares the parameter name with case, so it sends the node name too, and PostgreSQL keeps the node name. *Fix:* write `application_name` in lower case.
 
 **A password with special characters.** *Symptom:* `MalformedUrl`, or a login that fails. *Fix:* percent-encode `@`, `/`, `:` and `#` in the password (`%40`, `%2F`, `%3A`, `%23`).
 

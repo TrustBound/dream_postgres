@@ -97,8 +97,7 @@ pub type RecordedValue {
   /// A row of a pool with `pog.rows_as_map`, or a `point`. The pairs are in
   /// the order of their keys.
   Map(List(#(RecordedValue, RecordedValue)))
-  /// Another atom, such as `infinity` or `NaN` for a float, or the row
-  /// count of a command such as `CREATE TABLE`.
+  /// Another atom, such as `infinity` or `NaN` for a float.
   Atom(String)
 }
 
@@ -109,11 +108,11 @@ pub type RecordedQuery {
 
 /// The result of a recorded query.
 pub type RecordedResult {
-  /// The query worked. `count` is the row count of the driver: an
-  /// `Integer`, or an `Atom` for a command with no row count, such as
-  /// `Atom("table")` for `CREATE TABLE`. `rows` holds the rows before they
-  /// are decoded, so each decoder works on them as on a live result.
-  Returned(count: RecordedValue, rows: List(RecordedValue))
+  /// The query worked. `count` is the row count of the driver, which is 0
+  /// for a command with no row count, such as `CREATE TABLE`. `rows` holds
+  /// the rows before they are decoded, so each decoder works on them as on
+  /// a live result.
+  Returned(count: Int, rows: List(RecordedValue))
   /// The query failed with this error.
   Failed(error: pog.QueryError)
 }
@@ -264,7 +263,7 @@ fn result_layout(result: RecordedResult) -> Layout {
   case result {
     Returned(count:, rows:) ->
       Object([
-        #("count", Inline(value_to_json(count))),
+        #("count", Inline(json.int(count))),
         #("rows", Lines(list.map(rows, fn(row) { Inline(value_to_json(row)) }))),
       ])
     Failed(error) -> Inline(error_to_json(error))
@@ -403,7 +402,7 @@ fn result_decoder() -> decode.Decoder(RecordedResult) {
 }
 
 fn returned_decoder() -> decode.Decoder(RecordedResult) {
-  use count <- decode.field("count", value_decoder())
+  use count <- decode.field("count", decode.int)
   use rows <- decode.field("rows", decode.list(value_decoder()))
   decode.success(Returned(count:, rows:))
 }

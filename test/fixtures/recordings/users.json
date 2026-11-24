@@ -6,7 +6,7 @@
       "sql": "CREATE TABLE users (id serial PRIMARY KEY, name text UNIQUE)",
       "parameters": [],
       "result": {
-        "count": {"atom":"table"},
+        "count": 0,
         "rows": []
       }
     },

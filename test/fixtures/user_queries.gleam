@@ -64,7 +64,7 @@ pub fn scenario(db: pog.Connection) -> List(String) {
 
 /// The results of `scenario`, live and played back.
 pub const scenario_results = [
-  "Ok(Returned(Table, []))",
+  "Ok(Returned(0, []))",
   "Ok(1)",
   "Error(ConstraintViolated(\"duplicate key value violates unique constraint \\\"users_name_key\\\"\", \"users_name_key\", \"Key (name)=(Ada) already exists.\"))",
   "Ok([\"Ada\"])",

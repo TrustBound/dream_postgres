@@ -179,7 +179,7 @@ Before, the user was always `postgres` with no password, whatever the URL said. 
 
 #### 6. Your code reads `config.connection_parameters`, or loads a CA file with `public_key:cacerts_load`
 
-`parse_config` no longer adds `client_encoding` before an `application_name`, and keeps every `application_name` of the URL in order. Write `application_name` in lower case. To trust a private CA, put `sslrootcert=<path>` in the URL, or use `pog.SslVerifiedCaFile(path)`, in place of `public_key:cacerts_load`, which changed the CA list of the whole BEAM.
+`parse_config` no longer adds `client_encoding` before an `application_name`, and keeps every `application_name` of the URL in order. To trust a private CA, put `sslrootcert=<path>` in the URL, or use `pog.SslVerifiedCaFile(path)`, in place of `public_key:cacerts_load`, which changed the CA list of the whole BEAM.
 
 ## Documentation
 

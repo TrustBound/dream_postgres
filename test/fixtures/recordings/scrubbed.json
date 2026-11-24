@@ -6,7 +6,7 @@
       "sql": "CREATE TABLE sessions (user_name text, token text)",
       "parameters": [],
       "result": {
-        "count": {"atom":"table"},
+        "count": 0,
         "rows": []
       }
     },

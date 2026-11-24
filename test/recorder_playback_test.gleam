@@ -108,15 +108,15 @@ fn playback_tests() {
       )
       |> or_fail_with("Expected the recorded error")
     }),
-    it("gives the row count of a command as the driver gave it", fn() {
+    it("gives 0 as the row count of a command with no row count", fn() {
       // Act
       let created = recordings.play(users(), user_queries.create_table)
 
       // Assert
-      result.map(created, fn(returned) { string.inspect(returned.count) })
+      result.map(created, fn(returned) { returned.count })
       |> should
-      |> be_equal(Ok("Table"))
-      |> or_fail_with("Expected the atom table")
+      |> be_equal(Ok(0))
+      |> or_fail_with("Expected the count 0 of CREATE TABLE")
     }),
   ])
 }
@@ -356,7 +356,7 @@ fn transaction_tests() {
       results
       |> should
       |> be_equal([
-        "Ok(Returned(Table, []))",
+        "Ok(Returned(0, []))",
         "Error(TransactionRolledBack(ConstraintViolated(\"duplicate key value violates unique constraint \\\"users_name_key\\\"\", \"users_name_key\", \"Key (name)=(Ada) already exists.\")))",
         "Ok(0)",
         "Ok(#(3, 4))",
@@ -770,7 +770,7 @@ fn file_format_tests() {
               Map([#(Atom("x"), Real(1.0))]),
               Atom("infinity"),
             ]),
-            Returned(Integer(0), []),
+            Returned(0, []),
           ),
         ])
 
@@ -799,7 +799,7 @@ fn file_format_tests() {
             Map([#(Text("id"), Integer(1))]),
             Atom("NaN"),
           ]),
-          Returned(Atom("table"), [Tuple([Text("a")])]),
+          Returned(2, [Tuple([Text("a")])]),
         ),
       ]
 

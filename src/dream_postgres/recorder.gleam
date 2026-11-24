@@ -1043,7 +1043,6 @@ fn to_returned(
   count: Int,
   rows: List(Dynamic),
 ) -> Result(RecordedResult, String) {
-  use count <- result.try(to_recorded(dynamic.int(count)))
   use rows <- result.map(list.try_map(rows, to_recorded))
   Returned(count:, rows:)
 }
@@ -1068,7 +1067,7 @@ fn play(
   }
   case answer {
     Ok(Returned(count:, rows:)) ->
-      pog.Respond(count: from_count(count), rows: list.map(rows, from_recorded))
+      pog.Respond(count:, rows: list.map(rows, from_recorded))
     Ok(Failed(query_error)) -> pog.Fail(query_error)
     Error(recorder_error) ->
       pog.Fail(pog.InterceptorFailed(to_reason(recorder_error)))
@@ -1165,12 +1164,6 @@ fn tag(name: String) -> decode.Decoder(Nil) {
   }
 }
 
-// The count of a recording is the term that the driver gave, which is an
-// atom such as `table` for some commands.
-fn from_count(count: RecordedValue) -> Int {
-  coerce(from_recorded(count))
-}
-
 @external(erlang, "dream_postgres_recorder_ffi", "to_recorded")
 fn to_recorded(term: Dynamic) -> Result(RecordedValue, String)
 
@@ -1179,9 +1172,6 @@ fn from_recorded(value: RecordedValue) -> Dynamic
 
 @external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
 fn to_dynamic(value: pog.Value) -> Dynamic
-
-@external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
-fn coerce(value: Dynamic) -> Int
 
 @external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
 fn failure_to_dynamic(failure: Failure) -> Dynamic

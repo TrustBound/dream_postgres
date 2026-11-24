@@ -355,7 +355,7 @@ Recorded with this builder, the file holds `[hidden]` in place of the token:
       "sql": "CREATE TABLE sessions (user_name text, token text)",
       "parameters": [],
       "result": {
-        "count": {"atom":"table"},
+        "count": 0,
         "rows": []
       }
     },

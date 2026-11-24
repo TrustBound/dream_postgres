@@ -28,15 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that lost the caller's `application_name`. `dream_pgo` fixes the bug: the
   caller's `application_name` reaches the server in any order, also from a
   config that goes to `pog.start` or `pog.supervised` without `connect`.
-  The real-server tests of the name pass without the workaround.
+  The name has no case, as in PostgreSQL: `Application_Name` also reaches
+  the server. The real-server tests of the name pass without the workaround.
   - Before: `?application_name=billing` gave
     `[#("client_encoding", "UTF8"), #("application_name", "billing")]`
   - After: it gives `[#("application_name", "billing")]`, and the server
     keeps its default `client_encoding`
   - Upgrade: none, unless your code reads `config.connection_parameters`.
-    Write `application_name` in lower case: `dream_pgo` does not see
-    `Application_Name` as the caller's name, so the server shows the
-    Erlang node name for it.
 - `postgres.from_url()` now returns `Result(Connection, FromUrlError)`.
   Before, it returned `Connection` and stopped the calling process with a
   `let assert` when the pool did not start, so a caller could not handle the
