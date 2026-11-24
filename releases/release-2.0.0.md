@@ -145,7 +145,7 @@ The README is short and links to them, and HexDocs shows the guides.
 
 ## Testing
 
-- 384 tests run, 0 failed, 100.0% line coverage (557 of 557 lines). The test times add up to about 108 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- 388 tests run, 0 failed, 100.0% line coverage (557 of 557 lines). The test times add up to about 108 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
 - The 74 recorder tests that need no database pass with both test servers stopped (`make test-playback`), which proves that playback mode opens no connection
 - A test against PostgreSQL 16 records and plays back each kind of value: integers, floats, `Infinity` and `NaN`, text, `bytea`, booleans, `NULL`, arrays, `timestamp`, `timestamptz`, `date`, `time`, `numeric`, `uuid`, a UUID as text, `json`, `jsonb`, `interval`, `bit`, `point` and rows as maps
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image): one with SSL off, and one with SSL on and a certificate from a test CA. The SSL tests run each `sslmode` against both, with a matching and a non-matching host name, and with and without the test CA in `sslrootcert`

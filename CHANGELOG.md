@@ -213,7 +213,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 384 tests, 0 failed, 100.0% line coverage of `src/` (557 of 557 lines),
+- 388 tests, 0 failed, 100.0% line coverage of `src/` (557 of 557 lines),
   the Erlang file of the recorder too. The test times add up to about 108
   seconds, and 4 tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB,
   macOS 26.5.1, OTP 29, Gleam 1.19.2.

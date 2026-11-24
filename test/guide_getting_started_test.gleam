@@ -13,7 +13,6 @@ import fixtures/database_url
 import fixtures/output_file
 import fixtures/test_database
 import gleam/int
-import gleam/list
 import gleam/result
 import gleam/string
 import snippets/guide_getting_started_connect
@@ -125,36 +124,95 @@ fn with_database_tests() {
       |> be_equal(Ok(Ok([test_database.config().database])))
       |> or_fail_with("Expected the name of the test database")
     }),
-    it("step 2: start answers as the output file shows", fn() {
+    // Each call of the start output file has its own test. A wrong password
+    // and a port where nothing listens each take 2 to 3 seconds (see
+    // `started`), so two of them in one test can pass the time limit of a
+    // test.
+    it(
+      "step 2: start of the test database answers as the output file shows",
+      fn() {
+        // Arrange
+        let call = start_call(test_database.url())
+
+        // Act
+        let answer = started(test_database.url())
+
+        // Assert
+        output_file.calls([#(call, answer)])
+        |> should
+        |> be_equal(output_file.block(start_output, call))
+        |> or_fail_with("Expected the block of the output file")
+      },
+    ),
+    it(
+      "step 2: start with a wrong password answers as the output file shows",
+      fn() {
+        // Arrange
+        let url = wrong_password_url()
+        let call = start_call(url)
+
+        // Act
+        let answer = started(url)
+
+        // Assert
+        output_file.calls([#(call, answer)])
+        |> should
+        |> be_equal(output_file.block(start_output, call))
+        |> or_fail_with("Expected the block of the output file")
+      },
+    ),
+    it(
+      "step 2: start of a malformed URL answers as the output file shows",
+      fn() {
+        // Arrange
+        let call = start_call(malformed_url)
+
+        // Act
+        let answer = started(malformed_url)
+
+        // Assert
+        output_file.calls([#(call, answer)])
+        |> should
+        |> be_equal(output_file.block(start_output, call))
+        |> or_fail_with("Expected the block of the output file")
+      },
+    ),
+    it(
+      "step 2: start where no database listens answers as the output file shows",
+      fn() {
+        // Arrange
+        let port = database_url.unused_port()
+        let url = unused_port_url(port)
+        let call = output_file.hide_port(start_call(url), port)
+
+        // Act
+        let answer = started(url)
+
+        // Assert
+        output_file.calls([#(call, answer)])
+        |> should
+        |> be_equal(output_file.block(start_output, call))
+        |> or_fail_with("Expected the block of the output file")
+      },
+    ),
+    it("step 2: the start output file shows the calls of the tests", fn() {
       // Arrange
-      let config = test_database.config()
       let port = database_url.unused_port()
-      let urls = [
-        test_database.url(),
-        test_database.url_for(
-          user: config.user,
-          password: "wrong-password",
-          database: config.database,
-        ),
-        "postgresql://app:p@ss@db.example.com/app",
-        "postgresql://user:pass@127.0.0.1:" <> int.to_string(port) <> "/myapp",
+      let calls = [
+        start_call(test_database.url()),
+        start_call(wrong_password_url()),
+        start_call(malformed_url),
+        output_file.hide_port(start_call(unused_port_url(port)), port),
       ]
 
       // Act
-      let answers = list.map(urls, started)
+      let file_calls = output_file.call_lines(start_output)
 
       // Assert
-      list.zip(urls, answers)
-      |> list.map(fn(pair) {
-        #(
-          output_file.hide_port("start(" <> string.inspect(pair.0) <> ")", port),
-          pair.1,
-        )
-      })
-      |> output_file.calls()
+      file_calls
       |> should
-      |> be_equal(output_file.read("guide_getting_started_start"))
-      |> or_fail_with("Expected the output file")
+      |> be_equal(calls)
+      |> or_fail_with("Expected the four calls of the step 2 tests, in order")
     }),
     it("step 3: greet_user and find_user answer as the output file shows", fn() {
       // Act
@@ -208,10 +266,44 @@ fn with_database_tests() {
   ])
 }
 
+// The output file of step 2, which the guide shows under "What start
+// returns".
+const start_output = "guide_getting_started_start"
+
+// A URL that `from_url` cannot read: the password holds an `@`.
+const malformed_url = "postgresql://app:p@ss@db.example.com/app"
+
+fn wrong_password_url() -> String {
+  let config = test_database.config()
+  test_database.url_for(
+    user: config.user,
+    password: "wrong-password",
+    database: config.database,
+  )
+}
+
+fn unused_port_url(port: Int) -> String {
+  "postgresql://user:pass@127.0.0.1:" <> int.to_string(port) <> "/myapp"
+}
+
+// The call as the output file shows it.
+fn start_call(url: String) -> String {
+  "start(" <> string.inspect(url) <> ")"
+}
+
 // Runs `start` of the guide on `url` and stops its pool. Gives the answer
 // as the guide shows it: `Ok(connection)`, because the connection holds a
 // pool name that changes from one run to the next, or the error through
 // `describe`.
+//
+// When the database does not answer, `check` returns `ConnectionUnavailable`
+// only when the pool drops the queued `SELECT 1`. The pool of
+// `dream_postgres_driver` drops a queued checkout at a queue poll, once per
+// `queue_interval` (1 second) from the start of the pool. The poll at 2
+// seconds drops it when the checkout came in the same millisecond as the pool
+// start, and the poll at 3 seconds drops it when it came later in the first
+// second. So this function takes 2 to 3 seconds for a wrong password or a
+// port where nothing listens.
 fn started(url: String) -> String {
   use <- test_database.with_own_pools()
   case guide_getting_started_startup.start(url) {
