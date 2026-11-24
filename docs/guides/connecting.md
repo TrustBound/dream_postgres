@@ -467,7 +467,7 @@ How the query string is read:
 
 Most of your connection code is pure: it reads a URL and builds a config. Test that by checking the fields of the config. For the part that starts a pool, point it at a port where nothing listens. The pool starts, and a query fails with `ConnectionUnavailable`, which is exactly the path your startup check has to handle.
 
-These tests use [dream_test](https://hexdocs.pm/dream_test), added from GitHub as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#test-your-code) guide shows:
+These tests use [dream_test](https://hexdocs.pm/dream_test), added as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#test-your-code) guide shows:
 
 ### Test the config and a pool with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 

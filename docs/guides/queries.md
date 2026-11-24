@@ -419,7 +419,7 @@ An empty result isn't in this table, because it's not an error: `dream_postgres_
 
 Because each handler splits the query from the response logic, most tests need no database. Build the result the database would return, call the response function, and check the response. For the "database is down" path, run the handler itself on a pool where nothing listens.
 
-These tests use [dream_test](https://hexdocs.pm/dream_test), added from GitHub as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#test-your-code) guide shows:
+These tests use [dream_test](https://hexdocs.pm/dream_test), added as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#test-your-code) guide shows:
 
 ### Test the user handlers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 

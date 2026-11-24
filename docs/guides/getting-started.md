@@ -315,14 +315,13 @@ The [Connecting to PostgreSQL in production](https://github.com/TrustBound/dream
 
 The code that reads results is where your logic lives, and you can test it with results you build by hand: `dream_postgres_client.Returned(count: 1, rows: [...])` for a query that worked, and a `dream_postgres_client.QueryError` value for one that didn't. Startup code that fails on a bad URL needs no database either, because the URL is read before anything connects.
 
-The tests here use [dream_test](https://hexdocs.pm/dream_test). It isn't on Hex yet, so add it from GitHub, with the commit this package tests with:
+The tests here use [dream_test](https://hexdocs.pm/dream_test). Add it as a dev dependency, with the version range this package tests with:
 
-### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L26-L28"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L26-L27"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```toml
 [dev-dependencies]
-# Switched to a Hex version range once it is published.
-dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "1639959578a14ae3577f8e3ae5cac058f933aa53" }
+dream_test = ">= 3.0.0 and < 4.0.0"
 ```
 
 ### Test the greeting and the startup check <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>

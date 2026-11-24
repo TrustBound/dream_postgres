@@ -1,6 +1,6 @@
 # dream_postgres 2.0.0 Release Notes
 
-**Release Date:** not released yet (draft)
+**Release Date:** 2026-11-24
 
 This release makes `postgres.from_url()` read a connection URL correctly and tell you when it cannot. Before, it read the user and the password wrongly, kept the query string in the database name, and stopped the calling process when the pool did not start.
 
