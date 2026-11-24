@@ -190,7 +190,7 @@ start("postgresql://user:pass@127.0.0.1:<a port where nothing listens>/myapp")
   -> Error("The database did not answer: ConnectionUnavailable")
 ```
 
-`Ok(connection)` stands for the connection that `start` gives back: it holds a pool name that changes on each call. The port of the last URL is a free port, which changes on each test run. The two `ConnectionUnavailable` answers aren't instant. The query waits while the pool tries to connect, and gives up after about 2 seconds. A user that doesn't exist and a database name that doesn't exist give the same error after the same wait. The error doesn't say which of these it was, but the server's log does: `password authentication failed for user "dream"`, for example. One check at startup covers all of them.
+`Ok(connection)` stands for the connection that `start` gives back: it holds a pool name that changes on each call. The port of the last URL is a free port, which changes on each test run. The two `ConnectionUnavailable` answers aren't instant. The query waits while the pool tries to connect, and gives up after 2 to 3 seconds. A user that doesn't exist and a database name that doesn't exist give the same error after the same wait. The error doesn't say which of these it was, but the server's log does: `password authentication failed for user "dream"`, for example. One check at startup covers all of them.
 
 In your `main`, call `start` once. On `Error(error)`, print `describe(error)` to standard error and exit, so whatever runs your app (a container platform, systemd, a release script) sees the failure and the message.
 
@@ -305,10 +305,10 @@ The [Connecting to PostgreSQL in production](https://github.com/TrustBound/dream
 | What happened | What you see | What to do |
 |:---|:---|:---|
 | The URL has a typo, a missing part or a `libpq` keyword this package doesn't read | `Error(InvalidUrl(error))` from `from_url`, where `error` names the problem | Fix the URL. The [connecting guide](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md#step-1-say-exactly-whats-wrong-with-a-url) turns each `UrlError` into a message. |
-| The URL has a server parameter that the server doesn't know, such as `serach_path`, or a value it refuses, such as `timezone=Mars%2FPhobos` | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after about 2 seconds. | The Step 2 check catches it. The PostgreSQL server log names the parameter. |
+| The URL has a server parameter that the server doesn't know, such as `serach_path`, or a value it refuses, such as `timezone=Mars%2FPhobos` | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after 2 to 3 seconds. | The Step 2 check catches it. The PostgreSQL server log names the parameter. |
 | The password has an `@`, `/`, `:` or `#` that isn't encoded | `Error(InvalidUrl(MalformedUrl))` | Percent-encode it: `@` is `%40`, `/` is `%2F`, `:` is `%3A`, `#` is `%23`. |
-| No database listens at the host and port | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after about 2 seconds. | Check at startup, as Step 2 does. |
-| The password is wrong, the user doesn't exist, or the database doesn't exist | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after about 2 seconds, the same as when nothing listens. | The Step 2 check catches it. The PostgreSQL server log names the cause. |
+| No database listens at the host and port | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after 2 to 3 seconds. | Check at startup, as Step 2 does. |
+| The password is wrong, the user doesn't exist, or the database doesn't exist | `from_url` returns `Ok`. The first query returns `Error(dream_postgres_client.ConnectionUnavailable)` after 2 to 3 seconds, the same as when nothing listens. | The Step 2 check catches it. The PostgreSQL server log names the cause. |
 | The table doesn't exist, or the SQL has an error | `Error(dream_postgres_client.PostgresqlError(..))` from `dream_postgres_client.execute` at once, for example `PostgresqlError("42P01", "undefined_table", "relation \"users\" does not exist")`. `first_row` turns it into `DatabaseError`. | Log the Pog error before you turn it into `DatabaseError`. The [queries guide](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md#step-5-keep-the-cause-of-a-failure) shows how. |
 
 ## Test your code

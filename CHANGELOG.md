@@ -152,7 +152,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `check` after them to stop at startup when the database does not answer.
   When no database listens, the password is wrong, the database does not
   exist or the pool size is 0, the error is
-  `dream_postgres_client.ConnectionUnavailable`, after about 2 seconds. The
+  `dream_postgres_client.ConnectionUnavailable`, after 2 to 3 seconds. The
   guides use it for their startup check.
 - `FromUrlError` holds a `UrlError` or the reason the pool did not start:
   `InvalidUrl` and `PoolStartExited`.
@@ -181,7 +181,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   misspelled `sslmode` never connects without TLS. A name or a value that
   the server refuses (for example `serach_path` or `timezone=Mars%2FPhobos`)
   fails at connection time: each query returns
-  `dream_postgres_client.ConnectionUnavailable` after about 2 seconds, and
+  `dream_postgres_client.ConnectionUnavailable` after 2 to 3 seconds, and
   only the server log says why. A name that starts with `_pq_.` is a
   protocol option of PostgreSQL, not a setting, so it gives
   `UnsupportedParameter`. An `application_name` in `options` (`-c
