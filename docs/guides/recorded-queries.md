@@ -55,15 +55,15 @@ Only the recording run needs the table. The playback runs need no database at al
 
 ## Which mode to use
 
-A recorder runs in one of three modes, which you pick by name when you start it:
+A recorder runs in one of three modes. You pick one with a `recorder.Mode` value when you start it:
 
 | Your situation | Mode | What happens |
 |:---|:---|:---|
-| You want a new recording from the real database | `"record"` | Each query runs on the database. The recorder writes the query, its parameters and its result to the file before the query returns. |
-| The test must run without a database | `"playback"` | No pool starts and nothing connects. Each query gets the result of its recording. A query with no recording gets an error that names it. |
-| The recorder is in place, but you want plain queries for now | `"passthrough"` | Each query runs on the database, and nothing is written. |
+| You want a new recording from the real database | `recorder.Record` | Each query runs on the database. The recorder writes the query, its parameters and its result to the file before the query returns. |
+| The test must run without a database | `recorder.Playback` | No pool starts and nothing connects. Each query gets the result of its recording. A query with no recording gets an error that names it. |
+| The recorder is in place, but you want plain queries for now | `recorder.Passthrough` | Each query runs on the database, and nothing is written. |
 
-`recorder.new()` starts in `"passthrough"` mode. Mode names are case-sensitive. These are the same three modes, with the same names, as the HTTP recorder of [dream_http_client](https://github.com/TrustBound/dream_http_client).
+`recorder.new()` starts in `Passthrough` mode. These are the same three modes, with the same names, as the HTTP recorder of [dream_http_client](https://github.com/TrustBound/dream_http_client).
 
 ## Step 1: Write the module under test
 
@@ -143,7 +143,7 @@ import gleam/result
 import gleam/string
 
 pub fn start_recorder(
-  mode: String,
+  mode: recorder.Mode,
   directory: String,
   test_name: String,
 ) -> Result(recorder.Recorder, String) {
@@ -170,9 +170,9 @@ pub fn connect(
 
 How it works:
 
-- `recorder.start` checks the settings. An unknown mode, or a missing directory or name, is an `Error` with a message that says what to fix.
+- `recorder.start` checks the settings. A missing directory or name is an `Error` with a message that says what to fix. A wrong mode name does not compile.
 - `recorder.connect` takes a `Config`. In record and passthrough mode it starts the pool with `client.connect`. In playback mode it starts no pool and opens no connection: the config isn't used, so the database doesn't have to exist.
-- The mode is text, so your test run can read it from an environment variable, such as `RECORD_QUERIES=record`.
+- To read the mode from an environment variable, such as `RECORD_QUERIES=record`, use `recorder.parse_mode`. It accepts `"record"`, `"playback"` and `"passthrough"`, and gives an `Error` that names any other text.
 
 ## Step 3: Record once against the real database
 
@@ -182,7 +182,7 @@ How it works:
 
 ```gleam
 pub fn run_recorded(
-  mode: String,
+  mode: recorder.Mode,
   database_url: String,
   directory: String,
 ) -> Result(User, String) {
@@ -200,7 +200,7 @@ With the users table in place, record once:
 ### Recorded against PostgreSQL 16 <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_record.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-run_recorded("record", database_url, "test/fixtures/recordings")
+run_recorded(recorder.Record, database_url, "test/fixtures/recordings")
   -> Ok(User(1, "Ada", "ada@example.com"))
 ```
 
@@ -243,12 +243,12 @@ A recorded query returns only when its recording is on disk. You can read the fi
 
 ## Step 4: Play it back with no database
 
-Now the same function in `"playback"` mode, with a URL where nothing listens:
+Now the same function in `Playback` mode, with a URL where nothing listens:
 
 ### Played back with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_playback.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
-run_recorded("playback", "postgresql://app:secret@127.0.0.1:1/app", "test/fixtures/recordings")
+run_recorded(recorder.Playback, "postgresql://app:secret@127.0.0.1:1/app", "test/fixtures/recordings")
   -> Ok(User(1, "Ada", "ada@example.com"))
 
 create_and_find(a pool with no database)
@@ -425,7 +425,7 @@ find_user(db, 1)
   -> Error(PostgresqlError("NOREC", "no_recording", "No recording in test/fixtures/recordings/create_and_find.json matches SELECT id, name, email FROM users WHERE id = $1 LIMIT 1 with the parameters [1]"))
 ```
 
-Run the test once in `"record"` mode against the database, as in Step 3. The recorder writes the file again, with the new SQL. Then switch back to `"playback"` and commit the new file. The diff shows exactly the changed SQL.
+Run the test once in `Record` mode against the database, as in Step 3. The recorder writes the file again, with the new SQL. Then switch back to `Playback` and commit the new file. The diff shows exactly the changed SQL.
 
 ## How a query finds its recording
 
@@ -450,6 +450,7 @@ The usual setup: commit the recordings to your repository, and play them back in
 ### Test create_and_find with a committed recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_postgres/recorder
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -464,7 +465,7 @@ pub fn tests() -> TestSuite {
   describe("create_and_find", [
     it("creates Ada and finds her", fn() {
       // Act
-      let user = run_recorded("playback", no_database, recordings)
+      let user = run_recorded(recorder.Playback, no_database, recordings)
 
       // Assert
       user

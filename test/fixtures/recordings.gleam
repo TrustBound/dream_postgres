@@ -57,7 +57,7 @@ pub fn is_registered(name: process.Name(pog.Message)) -> Bool {
 
 /// Starts a recorder in `mode` for the recording `name` in `directory`.
 pub fn start(
-  mode: String,
+  mode: recorder.Mode,
   directory: String,
   name: String,
 ) -> Result(recorder.Recorder, String) {
@@ -90,14 +90,14 @@ pub fn record_in_schema(
   builder: recorder.RecorderBuilder,
   run: fn(pog.Connection) -> a,
 ) -> #(a, Result(Nil, String)) {
-  in_schema(builder, "record", run)
+  in_schema(builder, recorder.Record, run)
 }
 
 /// Starts a recorder in `mode`, gives `run` a connection whose tables are
 /// in a new, empty schema, stops the recorder and drops the schema.
 pub fn in_schema(
   builder: recorder.RecorderBuilder,
-  mode: String,
+  mode: recorder.Mode,
   run: fn(pog.Connection) -> a,
 ) -> #(a, Result(Nil, String)) {
   use <- test_database.with_own_pools()
@@ -130,7 +130,8 @@ pub fn play(
   builder: recorder.RecorderBuilder,
   run: fn(pog.Connection) -> a,
 ) -> a {
-  let assert Ok(playback) = recorder.start(builder |> recorder.mode("playback"))
+  let assert Ok(playback) =
+    recorder.start(builder |> recorder.mode(recorder.Playback))
   let assert Ok(db) = recorder.connect(playback, unreachable_config())
   let value = run(db)
   let assert Ok(Nil) = recorder.stop(playback)

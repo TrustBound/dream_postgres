@@ -35,6 +35,7 @@ pub fn tests() -> TestSuite {
     miss_tests(),
     transaction_tests(),
     scrub_tests(),
+    parse_mode_tests(),
     start_error_tests(),
     stop_tests(),
     key_tests(),
@@ -123,7 +124,7 @@ fn no_connection_tests() {
       // Act
       let registered = {
         let assert Ok(playback) =
-          recorder.start(users() |> recorder.mode("playback"))
+          recorder.start(users() |> recorder.mode(recorder.Playback))
         let assert Ok(db) = recorder.connect(playback, config)
         let _names = user_queries.user_names(db)
         let assert Ok(Nil) = recorder.stop(playback)
@@ -257,7 +258,7 @@ fn miss_tests() {
       // Act
       let names = {
         let assert Ok(playback) =
-          recorder.start(users() |> recorder.mode("playback"))
+          recorder.start(users() |> recorder.mode(recorder.Playback))
         let assert Ok(db) =
           recorder.connect(playback, recordings.unreachable_config())
         let assert Ok(Nil) = recorder.stop(playback)
@@ -355,30 +356,117 @@ fn scrub_tests() {
   ])
 }
 
-fn start_error_tests() {
-  group("start", [
-    it("refuses a mode it does not know", fn() {
+fn parse_mode_tests() {
+  group("parse_mode", [
+    it("reads record as Record", fn() {
       // Act
-      let started =
-        users()
-        |> recorder.mode("Record")
-        |> recorder.start()
-        |> result.replace(Nil)
+      let parsed = recorder.parse_mode("record")
 
       // Assert
-      started
+      parsed
+      |> should
+      |> be_equal(Ok(recorder.Record))
+      |> or_fail_with("Expected Record")
+    }),
+    it("reads playback as Playback", fn() {
+      // Act
+      let parsed = recorder.parse_mode("playback")
+
+      // Assert
+      parsed
+      |> should
+      |> be_equal(Ok(recorder.Playback))
+      |> or_fail_with("Expected Playback")
+    }),
+    it("reads passthrough as Passthrough", fn() {
+      // Act
+      let parsed = recorder.parse_mode("passthrough")
+
+      // Assert
+      parsed
+      |> should
+      |> be_equal(Ok(recorder.Passthrough))
+      |> or_fail_with("Expected Passthrough")
+    }),
+    it("refuses a mode it does not know", fn() {
+      // Act
+      let parsed = recorder.parse_mode("replay")
+
+      // Assert
+      parsed
+      |> should
+      |> be_equal(Error(
+        "The recorder mode \"replay\" is not known. Use \"record\", \"playback\" or \"passthrough\".",
+      ))
+      |> or_fail_with("Expected the mode error")
+    }),
+    it("refuses a mode in another case", fn() {
+      // Act
+      let parsed = recorder.parse_mode("Record")
+
+      // Assert
+      parsed
       |> should
       |> be_equal(Error(
         "The recorder mode \"Record\" is not known. Use \"record\", \"playback\" or \"passthrough\".",
       ))
       |> or_fail_with("Expected the mode error")
     }),
+  ])
+}
+
+fn start_error_tests() {
+  group("start", [
+    it("starts in record mode", fn() {
+      // Act
+      let stopped = {
+        use directory <- recordings.with_directory()
+        recordings.builder(directory, "started")
+        |> recorder.mode(recorder.Record)
+        |> recorder.start()
+        |> result.try(recorder.stop)
+      }
+
+      // Assert
+      stopped
+      |> should
+      |> be_equal(Ok(Nil))
+      |> or_fail_with("Expected a record recorder to start and stop")
+    }),
+    it("starts in playback mode", fn() {
+      // Act
+      let stopped =
+        users()
+        |> recorder.mode(recorder.Playback)
+        |> recorder.start()
+        |> result.try(recorder.stop)
+
+      // Assert
+      stopped
+      |> should
+      |> be_equal(Ok(Nil))
+      |> or_fail_with("Expected a playback recorder to start and stop")
+    }),
+    it("starts in passthrough mode", fn() {
+      // Act
+      let stopped =
+        recorder.new()
+        |> recorder.mode(recorder.Passthrough)
+        |> recorder.start()
+        |> result.try(recorder.stop)
+
+      // Assert
+      stopped
+      |> should
+      |> be_equal(Ok(Nil))
+      |> or_fail_with("Expected a passthrough recorder to start and stop")
+    }),
     it("needs a directory in record mode", fn() {
       // Act
       let started =
         recorder.new()
         |> recorder.name("users")
-        |> recorder.mode("record")
+        |> recorder.mode(recorder.Record)
         |> recorder.start()
         |> result.replace(Nil)
 
@@ -395,7 +483,7 @@ fn start_error_tests() {
       let started =
         recorder.new()
         |> recorder.directory(recordings.fixtures)
-        |> recorder.mode("playback")
+        |> recorder.mode(recorder.Playback)
         |> recorder.start()
         |> result.replace(Nil)
 
@@ -410,7 +498,7 @@ fn start_error_tests() {
       let started =
         list.map(["", "../users", ".hidden", "a/b", "a b"], fn(name) {
           recordings.builder(recordings.fixtures, name)
-          |> recorder.mode("playback")
+          |> recorder.mode(recorder.Playback)
           |> recorder.start()
           |> result.replace(Nil)
         })
@@ -435,7 +523,7 @@ fn start_error_tests() {
         // Act
         let started =
           recordings.builder(recordings.fixtures, "missing")
-          |> recorder.mode("playback")
+          |> recorder.mode(recorder.Playback)
           |> recorder.start()
           |> result.replace(Nil)
 
@@ -454,10 +542,11 @@ fn start_error_tests() {
         // Act
         let started = {
           use directory <- recordings.with_directory()
-          let assert Ok(written) = recordings.start("record", directory, "x")
+          let assert Ok(written) =
+            recordings.start(recorder.Record, directory, "x")
           let assert Ok(Nil) = recorder.stop(written)
           recordings.write(directory <> "/x.json", "{\"version\": 1}")
-          recordings.start("playback", directory, "x")
+          recordings.start(recorder.Playback, directory, "x")
           |> result.map_error(string.replace(_, directory, "<directory>"))
           |> result.replace(Nil)
         }
@@ -477,7 +566,7 @@ fn start_error_tests() {
         // Act
         let started =
           recordings.builder("README.md/recordings", "x")
-          |> recorder.mode("record")
+          |> recorder.mode(recorder.Record)
           |> recorder.start()
           |> result.replace(Nil)
 
@@ -508,7 +597,7 @@ fn stop_tests() {
       // Act
       let stopped = {
         let assert Ok(playback) =
-          recorder.start(users() |> recorder.mode("playback"))
+          recorder.start(users() |> recorder.mode(recorder.Playback))
         let assert Ok(Nil) = recorder.stop(playback)
         recorder.stop(playback)
       }

@@ -3,6 +3,7 @@
 //// Plays back the committed recording of `create_and_find`. No database
 //// runs: the URL points at a port where nothing listens.
 
+import dream_postgres/recorder
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -17,7 +18,7 @@ pub fn tests() -> TestSuite {
   describe("create_and_find", [
     it("creates Ada and finds her", fn() {
       // Act
-      let user = run_recorded("playback", no_database, recordings)
+      let user = run_recorded(recorder.Playback, no_database, recordings)
 
       // Assert
       user

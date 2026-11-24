@@ -16,7 +16,7 @@ pub fn create_and_find(db: pog.Connection) -> Result(User, pog.QueryError) {
 }
 
 pub fn run_recorded(
-  mode: String,
+  mode: recorder.Mode,
   database_url: String,
   directory: String,
 ) -> Result(User, String) {

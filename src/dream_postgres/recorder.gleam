@@ -3,15 +3,15 @@
 ////
 //// A recorder keeps the queries of one test in one file,
 //// `<directory>/<name>.json`, in the order they ran. It runs in one of
-//// three modes:
+//// three modes, the constructors of `Mode`:
 ////
-//// - `"record"`: each query runs on the real database, and the recorder
+//// - `Record`: each query runs on the real database, and the recorder
 ////   writes the query, its parameters and its result (the rows and the
 ////   count, or the error) to the file before the query returns.
-//// - `"playback"`: no pool starts and nothing connects. Each query gets the
+//// - `Playback`: no pool starts and nothing connects. Each query gets the
 ////   result of its recording. A query with no recording gets an error that
 ////   names it, and never reaches a database.
-//// - `"passthrough"`: each query runs on the real database, and nothing is
+//// - `Passthrough`: each query runs on the real database, and nothing is
 ////   recorded.
 ////
 //// `recording` documents the file format.
@@ -34,7 +34,7 @@
 //// }
 ////
 //// pub fn run_recorded(
-////   mode: String,
+////   mode: recorder.Mode,
 ////   database_url: String,
 ////   directory: String,
 //// ) -> Result(User, String) {
@@ -95,6 +95,23 @@ pub type QueryTransformer =
 pub type ResultTransformer =
   fn(RecordedQuery, RecordedResult) -> RecordedResult
 
+/// What a recorder does with each query.
+///
+/// - `Record`: the query runs on the real database, and the recorder writes
+///   it and its result to the file before the query returns.
+/// - `Playback`: nothing connects, and the query gets the result of its
+///   recording.
+/// - `Passthrough`: the query runs on the real database, and nothing is
+///   recorded.
+///
+/// Set it with `mode`. For a mode in a text, for example from an
+/// environment variable, use `parse_mode`.
+pub type Mode {
+  Record
+  Playback
+  Passthrough
+}
+
 /// The settings of a recorder, before it starts.
 ///
 /// Make one with `new`, change it with `directory`, `name`, `mode`, `key`,
@@ -102,7 +119,7 @@ pub type ResultTransformer =
 /// `start`.
 pub opaque type RecorderBuilder {
   RecorderBuilder(
-    mode: String,
+    mode: Mode,
     directory: Option(String),
     name: Option(String),
     key: MatchKey,
@@ -132,7 +149,7 @@ type Settings {
 
 /// Make the settings of a recorder.
 ///
-/// The defaults: mode `"passthrough"`, no directory, no name, the key
+/// The defaults: mode `Passthrough`, no directory, no name, the key
 /// `sql_and_parameters`, and transformers that change nothing.
 ///
 /// ## Example
@@ -148,7 +165,7 @@ type Settings {
 /// import gleam/string
 ///
 /// pub fn start_recorder(
-///   mode: String,
+///   mode: recorder.Mode,
 ///   directory: String,
 ///   test_name: String,
 /// ) -> Result(recorder.Recorder, String) {
@@ -174,7 +191,7 @@ type Settings {
 /// ```
 pub fn new() -> RecorderBuilder {
   RecorderBuilder(
-    mode: "passthrough",
+    mode: Passthrough,
     directory: None,
     name: None,
     key: sql_and_parameters,
@@ -210,7 +227,7 @@ fn keep_result(
 /// import gleam/string
 ///
 /// pub fn start_recorder(
-///   mode: String,
+///   mode: recorder.Mode,
 ///   directory: String,
 ///   test_name: String,
 /// ) -> Result(recorder.Recorder, String) {
@@ -260,7 +277,7 @@ pub fn directory(
 /// import gleam/string
 ///
 /// pub fn start_recorder(
-///   mode: String,
+///   mode: recorder.Mode,
 ///   directory: String,
 ///   test_name: String,
 /// ) -> Result(recorder.Recorder, String) {
@@ -288,11 +305,10 @@ pub fn name(builder: RecorderBuilder, name: String) -> RecorderBuilder {
   RecorderBuilder(..builder, name: Some(name))
 }
 
-/// Set the mode: `"record"`, `"playback"` or `"passthrough"`. `start`
-/// refuses any other text. Mode names are case-sensitive.
+/// Set the mode: `Record`, `Playback` or `Passthrough`.
 ///
-/// The mode is text, so a test run can read it from an environment
-/// variable.
+/// For a mode in a text, for example from an environment variable, use
+/// `parse_mode` first.
 ///
 /// ## Example
 ///
@@ -307,7 +323,7 @@ pub fn name(builder: RecorderBuilder, name: String) -> RecorderBuilder {
 /// import gleam/string
 ///
 /// pub fn start_recorder(
-///   mode: String,
+///   mode: recorder.Mode,
 ///   directory: String,
 ///   test_name: String,
 /// ) -> Result(recorder.Recorder, String) {
@@ -331,8 +347,50 @@ pub fn name(builder: RecorderBuilder, name: String) -> RecorderBuilder {
 ///   |> result.map_error(string.inspect)
 /// }
 /// ```
-pub fn mode(builder: RecorderBuilder, mode: String) -> RecorderBuilder {
+pub fn mode(builder: RecorderBuilder, mode: Mode) -> RecorderBuilder {
   RecorderBuilder(..builder, mode: mode)
+}
+
+/// Read a mode from a text, for example from an environment variable such
+/// as `RECORD_QUERIES=record`.
+///
+/// The texts are `"record"`, `"playback"` and `"passthrough"`. They are
+/// case-sensitive. Any other text gives an error that names it, such as
+/// `Error("The recorder mode \"replay\" is not known. Use \"record\", \"playback\" or \"passthrough\".")`.
+///
+/// ## Example
+///
+/// ### Read the mode from a text <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_parse_mode.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/recorder
+/// import gleam/result
+///
+/// pub fn start_from_text(
+///   mode_text: String,
+///   directory: String,
+///   test_name: String,
+/// ) -> Result(recorder.Recorder, String) {
+///   use mode <- result.try(recorder.parse_mode(mode_text))
+///   recorder.new()
+///   |> recorder.directory(directory)
+///   |> recorder.name(test_name)
+///   |> recorder.mode(mode)
+///   |> recorder.start()
+/// }
+/// ```
+pub fn parse_mode(text: String) -> Result(Mode, String) {
+  case text {
+    "record" -> Ok(Record)
+    "playback" -> Ok(Playback)
+    "passthrough" -> Ok(Passthrough)
+    _ ->
+      Error(
+        "The recorder mode "
+        <> string.inspect(text)
+        <> " is not known. Use \"record\", \"playback\" or \"passthrough\".",
+      )
+  }
 }
 
 /// Set the function that decides which recording a query matches in
@@ -352,7 +410,7 @@ pub fn mode(builder: RecorderBuilder, mode: String) -> RecorderBuilder {
 ///   recorder.new()
 ///   |> recorder.directory(directory)
 ///   |> recorder.name(test_name)
-///   |> recorder.mode("playback")
+///   |> recorder.mode(recorder.Playback)
 ///   |> recorder.key(recorder.normalized_sql_and_parameters)
 ///   |> recorder.start()
 /// }
@@ -522,8 +580,7 @@ pub fn result_transformer(
 /// ## Returns
 ///
 /// - `Ok(Recorder)`: the recorder runs
-/// - `Error(message)`: the mode is not known, the directory or the name is
-///   missing or not valid, the file cannot be written (record mode), or the
+/// - `Error(message)`: the directory or the name is missing or not valid, the file cannot be written (record mode), or the
 ///   file cannot be read or is not a recording file (playback mode)
 ///
 /// ## Example
@@ -544,7 +601,7 @@ pub fn result_transformer(
 /// }
 ///
 /// pub fn run_recorded(
-///   mode: String,
+///   mode: recorder.Mode,
 ///   database_url: String,
 ///   directory: String,
 /// ) -> Result(User, String) {
@@ -564,15 +621,9 @@ pub fn start(builder: RecorderBuilder) -> Result(Recorder, String) {
       result_transformer: builder.result_transformer,
     )
   case builder.mode {
-    "passthrough" -> Ok(PassthroughMode)
-    "record" -> start_record(builder, settings)
-    "playback" -> start_playback(builder, settings)
-    other ->
-      Error(
-        "The recorder mode "
-        <> string.inspect(other)
-        <> " is not known. Use \"record\", \"playback\" or \"passthrough\".",
-      )
+    Passthrough -> Ok(PassthroughMode)
+    Record -> start_record(builder, settings)
+    Playback -> start_playback(builder, settings)
   }
 }
 
@@ -681,7 +732,7 @@ fn is_name_character(character: String) -> Bool {
 /// }
 ///
 /// pub fn run_recorded(
-///   mode: String,
+///   mode: recorder.Mode,
 ///   database_url: String,
 ///   directory: String,
 /// ) -> Result(User, String) {
@@ -739,7 +790,7 @@ pub fn connect(
 /// }
 ///
 /// pub fn run_recorded(
-///   mode: String,
+///   mode: recorder.Mode,
 ///   database_url: String,
 ///   directory: String,
 /// ) -> Result(User, String) {

@@ -12,12 +12,47 @@ import gleam/result
 import snippets/guide_recording_users.{find_user}
 import snippets/recorder_key
 import snippets/recorder_keys
+import snippets/recorder_parse_mode
 import snippets/recording_by_hand
 import snippets/recording_read
 import snippets/recording_values
 
 pub fn tests() -> TestSuite {
   describe("recorder doc snippets", [
+    it("start_from_text starts a playback recorder from its text", fn() {
+      // Act
+      let stopped =
+        recorder_parse_mode.start_from_text(
+          "playback",
+          recordings.fixtures,
+          "users",
+        )
+        |> result.try(recorder.stop)
+
+      // Assert
+      stopped
+      |> should
+      |> be_equal(Ok(Nil))
+      |> or_fail_with("Expected a playback recorder to start and stop")
+    }),
+    it("start_from_text refuses a text that is not a mode", fn() {
+      // Act
+      let started =
+        recorder_parse_mode.start_from_text(
+          "replay",
+          recordings.fixtures,
+          "users",
+        )
+        |> result.replace(Nil)
+
+      // Assert
+      started
+      |> should
+      |> be_equal(Error(
+        "The recorder mode \"replay\" is not known. Use \"record\", \"playback\" or \"passthrough\".",
+      ))
+      |> or_fail_with("Expected the mode error")
+    }),
     it("keys gives the three keys of the query", fn() {
       // Act
       let keys = recorder_keys.keys()
@@ -63,7 +98,7 @@ pub fn tests() -> TestSuite {
       let found = {
         use directory <- recordings.with_directory()
         let assert Ok(written) =
-          recordings.start("record", directory, "timeout")
+          recordings.start(recorder.Record, directory, "timeout")
         let assert Ok(Nil) = recorder.stop(written)
         recordings.write(
           directory <> "/timeout.json",

@@ -102,7 +102,8 @@ fn record_tests() {
       let file = {
         use directory <- recordings.with_directory()
         let _recorded = record(directory, "users", user_queries.scenario)
-        let assert Ok(again) = recordings.start("record", directory, "users")
+        let assert Ok(again) =
+          recordings.start(recorder.Record, directory, "users")
         let assert Ok(Nil) = recorder.stop(again)
         recordings.read(directory <> "/users.json")
       }
@@ -172,7 +173,8 @@ fn record_failure_tests() {
       let answered = {
         use directory <- recordings.with_directory()
         use <- test_database.with_own_pools()
-        let assert Ok(recording) = recordings.start("record", directory, "late")
+        let assert Ok(recording) =
+          recordings.start(recorder.Record, directory, "late")
         let assert Ok(db) = recorder.connect(recording, test_database.config())
         let assert Ok(Nil) = recorder.stop(recording)
         postgres.check(db)
@@ -275,7 +277,7 @@ fn passthrough_tests() {
 fn passthrough(directory: String, run: fn(pog.Connection) -> a) -> a {
   recordings.in_schema(
     recordings.builder(directory, "passthrough"),
-    "passthrough",
+    recorder.Passthrough,
     run,
   ).0
 }

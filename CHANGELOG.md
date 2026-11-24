@@ -73,7 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Query recording: the new modules `dream_postgres/recorder` and
   `dream_postgres/recording`. A recorder keeps the queries of one test in
-  one JSON file, in the modes `record`, `playback` and `passthrough`.
+  one JSON file, in the modes `Record`, `Playback` and `Passthrough`.
+  - The mode is a typed value, `recorder.Mode`, so a wrong mode name is a
+    compile error: `recorder.mode(recorder.Playback)`. For a mode in a
+    text, for example from an environment variable, use
+    `recorder.parse_mode(text)`. It accepts `"record"`, `"playback"` and
+    `"passthrough"`, and gives an `Error` that names any other text.
   - Record mode runs each query on the database, and writes the query, its
     parameters and its result (the count and the rows, or the error) to
     the file before the query returns. A query in `pog.transaction` is
@@ -180,8 +185,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 354 tests, 0 failed, 100.0% line coverage of `src/`, the Erlang file of the recorder too. `make test` takes about 62 seconds, and the test times add up to about 104 seconds, because 4 tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
-- `make test-playback` runs the 44 recorder tests that need no database. They pass with both test servers stopped, which proves that playback mode opens no connection.
+- 363 tests, 0 failed, 100.0% line coverage of `src/` (483 of 483 lines), the Erlang file of the recorder too. `make test` takes about 62 seconds, and the test times add up to about 105 seconds, because 4 tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- `make test-playback` runs the 53 recorder tests that need no database. They pass with both test servers stopped, which proves that playback mode opens no connection.
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image), started with `make db-up`. One has SSL off. It runs as a service container in CI. The other has SSL on, with a test CA and a server certificate from `test/fixtures/ssl`. CI starts it with `docker compose`.
 
 ## [1.0.2] - 2025-11-21

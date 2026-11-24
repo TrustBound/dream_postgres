@@ -65,13 +65,13 @@ pub fn connect_database() -> Result(postgres.Connection, actor.StartError) {
 
 ## Recorded queries
 
-`dream_postgres/recorder` records each query of a test, with its parameters and its result, to one JSON file. Later runs play the file back with no database. A query with no recording is an error that names it, and never reaches a database. The modes are `record`, `playback` and `passthrough`, as in the HTTP recorder of `dream_http_client`.
+`dream_postgres/recorder` records each query of a test, with its parameters and its result, to one JSON file. Later runs play the file back with no database. A query with no recording is an error that names it, and never reaches a database. The modes are the values `recorder.Record`, `recorder.Playback` and `recorder.Passthrough`, as in the HTTP recorder of `dream_http_client`. `recorder.parse_mode` reads a mode from a text, such as an environment variable.
 
 ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L18-L29"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/docs/guides/recorded-queries.md#step-3-record-once-against-the-real-database"><img align="right" alt="Guide" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
 pub fn run_recorded(
-  mode: String,
+  mode: recorder.Mode,
   database_url: String,
   directory: String,
 ) -> Result(User, String) {

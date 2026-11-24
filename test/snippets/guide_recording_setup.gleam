@@ -11,7 +11,7 @@ import gleam/result
 import gleam/string
 
 pub fn start_recorder(
-  mode: String,
+  mode: recorder.Mode,
   directory: String,
   test_name: String,
 ) -> Result(recorder.Recorder, String) {

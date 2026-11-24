@@ -43,13 +43,13 @@ fn with_database_tests() {
         let user = {
           use directory <- recordings.with_directory()
           use url <- guide_schema.with_users_url()
-          run_recorded("record", url, directory)
+          run_recorded(recorder.Record, url, directory)
         }
 
         // Assert
         output_file.calls([
           #(
-            "run_recorded(\"record\", database_url, \"test/fixtures/recordings\")",
+            "run_recorded(recorder.Record, database_url, \"test/fixtures/recordings\")",
             string.inspect(user),
           ),
         ])
@@ -63,7 +63,7 @@ fn with_database_tests() {
       let file = {
         use directory <- recordings.with_directory()
         use url <- guide_schema.with_users_url()
-        let _user = run_recorded("record", url, directory)
+        let _user = run_recorded(recorder.Record, url, directory)
         recordings.read(directory <> "/create_and_find.json")
       }
 
@@ -78,7 +78,7 @@ fn with_database_tests() {
       let file = {
         use directory <- recordings.with_directory()
         use url <- guide_schema.with_users_url()
-        let _user = run_recorded("record", url, directory)
+        let _user = run_recorded(recorder.Record, url, directory)
         recordings.read(directory <> "/create_and_find.json")
       }
 
@@ -119,7 +119,7 @@ fn playback_group() {
     it("step 4: playback answers as the output file shows", fn() {
       // Act
       let played =
-        run_recorded("playback", no_database, recordings.fixtures)
+        run_recorded(recorder.Playback, no_database, recordings.fixtures)
         |> string.inspect
       let live = {
         use <- test_database.with_own_pools()
@@ -131,7 +131,7 @@ fn playback_group() {
       // Assert
       output_file.calls([
         #(
-          "run_recorded(\"playback\", \"postgresql://app:secret@127.0.0.1:1/app\", \"test/fixtures/recordings\")",
+          "run_recorded(recorder.Playback, \"postgresql://app:secret@127.0.0.1:1/app\", \"test/fixtures/recordings\")",
           played,
         ),
         #("create_and_find(a pool with no database)", live),
@@ -173,7 +173,7 @@ fn playback_group() {
 // Plays back the committed recording of create_and_find.
 fn play(run: fn(pog.Connection) -> a) -> a {
   let assert Ok(recording) =
-    start_recorder("playback", recordings.fixtures, "create_and_find")
+    start_recorder(recorder.Playback, recordings.fixtures, "create_and_find")
   let assert Ok(db) = connect(recording, no_database)
   let value = run(db)
   let assert Ok(Nil) = recorder.stop(recording)

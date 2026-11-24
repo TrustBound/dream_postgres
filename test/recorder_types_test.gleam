@@ -650,12 +650,14 @@ fn round_trip_with(
 ) {
   use directory <- recordings.with_directory()
   use <- test_database.with_own_pools()
-  let assert Ok(recording) = recordings.start("record", directory, "value")
+  let assert Ok(recording) =
+    recordings.start(recorder.Record, directory, "value")
   let assert Ok(live_db) =
     recorder.connect(recording, config |> postgres.pool_size(1))
   let live = recordings.rows(live_db, sql)
   let assert Ok(Nil) = recorder.stop(recording)
-  let assert Ok(playback) = recordings.start("playback", directory, "value")
+  let assert Ok(playback) =
+    recordings.start(recorder.Playback, directory, "value")
   let assert Ok(config) =
     postgres.parse_config(
       process.new_name("recorder_types_test"),

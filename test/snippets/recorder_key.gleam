@@ -12,7 +12,7 @@ pub fn playback_ignoring_whitespace(
   recorder.new()
   |> recorder.directory(directory)
   |> recorder.name(test_name)
-  |> recorder.mode("playback")
+  |> recorder.mode(recorder.Playback)
   |> recorder.key(recorder.normalized_sql_and_parameters)
   |> recorder.start()
 }
