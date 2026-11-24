@@ -4,6 +4,7 @@
 //// queries on the test PostgreSQL server. The other pools start on a local
 //// port where no database listens.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -18,7 +19,6 @@ import gleam/list
 import gleam/option.{Some}
 import gleam/result
 import gleam/string
-import pog
 import snippets/guide_connecting_builder_ssl
 import snippets/guide_connecting_explain_url_error.{explain}
 import snippets/guide_connecting_pool_config
@@ -223,7 +223,7 @@ fn pitfall_tests() {
       ))
       |> or_fail_with("Expected the Pog defaults")
     }),
-    it("sslmode=verify-ca gives SslVerified, as verify-full does", fn() {
+    it("sslmode=verify-ca gives SslVerifiedChainOnly, with no host check", fn() {
       // Act
       let ssl =
         postgres.parse_config(
@@ -235,8 +235,8 @@ fn pitfall_tests() {
       // Assert
       ssl
       |> should
-      |> be_equal(Ok(pog.SslVerified))
-      |> or_fail_with("Expected SslVerified")
+      |> be_equal(Ok(pog.SslVerifiedChainOnly))
+      |> or_fail_with("Expected SslVerifiedChainOnly")
     }),
     it("host does not set IPv6 for an IPv6 address", fn() {
       // Act

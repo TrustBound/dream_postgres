@@ -1,11 +1,11 @@
 //// Lesson 2: Services holding the database connection pool
 //// (src/services.gleam)
 
+import dream_pog as pog
 import gleam/erlang/process
 import gleam/option.{Some}
 import gleam/otp/actor
 import gleam/result
-import pog
 
 pub type Services {
   Services(db: pog.Connection)

@@ -3,11 +3,11 @@
 //// Tests `greeting` with results built by hand, and `start` with a URL
 //// that is not valid. Neither test needs a database.
 
+import dream_pog as pog
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
 import gleam/result
-import pog
 import snippets/guide_getting_started_startup.{describe as describe_error, start}
 import snippets/guide_getting_started_users.{User, greeting}
 

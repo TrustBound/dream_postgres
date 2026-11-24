@@ -30,10 +30,10 @@ In this guide you'll:
 
 ## Before you start
 
-You need the package and Pog:
+You need the package and `dream_pog`, a fork of Pog that this package uses. Import it as `pog`: `import dream_pog as pog`.
 
 ```sh
-gleam add dream_postgres pog
+gleam add dream_postgres dream_pog
 ```
 
 The [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md) guide shows a first connection and a startup check. This guide builds on it, but you can read it on its own.
@@ -95,7 +95,13 @@ pub fn explain(error: postgres.UrlError) -> String {
     postgres.UnsupportedSslMode(mode) ->
       "DATABASE_URL has sslmode="
       <> mode
-      <> ". Use disable, require or verify-full."
+      <> ". Use disable, require, verify-ca or verify-full."
+    postgres.SslRootCertSystemNeedsVerifyFull(mode) ->
+      "DATABASE_URL has sslrootcert=system with sslmode="
+      <> mode
+      <> ". Use sslmode=verify-full."
+    postgres.SslRootCertWithoutSslMode ->
+      "DATABASE_URL has sslrootcert but no sslmode. Add sslmode=verify-full."
     postgres.UnsupportedFragment -> "DATABASE_URL has a # part. Remove it."
   }
 }
@@ -112,7 +118,7 @@ postgresql://app:secret@db.example.com/app?sslmode=require&channel_binding=requi
   -> DATABASE_URL has the parameter channel_binding. Remove it.
 
 postgresql://app:secret@db.example.com/app?sslmode=prefer
-  -> DATABASE_URL has sslmode=prefer. Use disable, require or verify-full.
+  -> DATABASE_URL has sslmode=prefer. Use disable, require, verify-ca or verify-full.
 
 postgresql://app:secret@db.example.com/app?sslmod=require
   -> DATABASE_URL has the parameter sslmod, which looks like sslmode. Fix the spelling.
@@ -139,10 +145,10 @@ The last one is worth a second look. A URL without `postgresql://` reads as a UR
 ### Read a URL and set the pool size <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_pool_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/client as postgres
 import gleam/erlang/process
 import gleam/result
-import pog
 import snippets/guide_connecting_explain_url_error.{explain}
 
 pub fn pool_config(
@@ -187,7 +193,7 @@ pool_config(name, "postgresql://app:secret@[2001:db8::10]:6432/app?sslmode=verif
   port:                  6432
   ssl:                   SslVerified
   ip_version:            Ipv6
-  connection_parameters: [#("client_encoding", "UTF8"), #("application_name", "billing")]
+  connection_parameters: [#("application_name", "billing")]
   pool_size:             30
 ```
 
@@ -211,7 +217,7 @@ SELECT current_setting('search_path') || '|' || current_setting('timezone') || '
   -> "app|UTC|billing"
 ```
 
-Why `client_encoding` is in the list: pgo, the driver under Pog, adds its own `application_name`, the name of the Erlang node, such as `nonode@nohost`. PostgreSQL keeps the last `application_name` it gets. pgo puts its value before the first of your parameters whose name sorts after `application_name`. So when there's an `application_name`, this package puts `client_encoding` just before it, and your name comes last. `UTF8` is the encoding that Pog reads and writes. On a UTF-8 database it's also the server's default, so text comes back the same. If you set `client_encoding` yourself, your value stays. Without an `application_name`, the list stays as it is, and the server shows the node name. Set the name with the `application_name` parameter, not with `-c application_name=...` in `options`: the server applies `options` first and the separate parameters after it, so the node name replaces a name from `options`.
+The driver under `dream_pog` sends your `application_name` to the server. Without one, it sends the name of the Erlang node, such as `nonode@nohost`. Set the name with the `application_name` parameter, not with `-c application_name=...` in `options`: the server applies `options` first and the separate parameters after it, so the node name replaces a name from `options`. Write the name in lower case: the driver does not see `Application_Name` as your name, and the server then shows the node name.
 
 **How big should the pool be?** Each connection in the pool is one connection on the PostgreSQL server, and the server has a limit (`max_connections`, 100 by default). Add up the pools of every instance of your app, plus anything else that connects, and stay under that limit. A pool that's too small makes requests wait for a free connection: with a pool of 1, two queries of half a second each, sent at the same time, run one after the other on the same connection, and the second answers after about 1 second. A pool that's too big makes the server refuse connections when you scale out. And don't set the size to 0: `pool_size(0)` is accepted, the pool starts, and every query returns `ConnectionUnavailable` after about 2 seconds.
 
@@ -250,9 +256,9 @@ For production you'll want SSL and an application name too. The package has no s
 ### Add SSL and an application name <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_builder_ssl.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/client as postgres
 import gleam/erlang/process
-import pog
 
 pub fn production_config(
   pool_name: process.Name(pog.Message),
@@ -271,7 +277,7 @@ pub fn production_config(
 }
 ```
 
-`pog.ssl(pog.SslVerified)` turns on TLS and checks the server's certificate, and `pog.connection_parameter` puts `application_name` in the config. `connect` puts `client_encoding` before it, as [Step 2](#step-2-read-a-url-and-set-the-pool-size) explains, so the server shows `myapp-web`. The [SSL modes](#ssl-modes) section explains the TLS choices.
+`pog.ssl(pog.SslVerified)` turns on TLS and checks the server's certificate, and `pog.connection_parameter` puts `application_name` in the config, so the server shows `myapp-web`. The [SSL modes](#ssl-modes) section explains the TLS choices.
 
 One difference from the URL path: `host` doesn't look at the address. With `parse_config`, a host like `[2001:db8::10]` sets IPv6. With the builder, `postgres.host("2001:db8::10")` keeps IPv4, so add `|> pog.ip_version(pog.Ipv6)` yourself.
 
@@ -282,11 +288,11 @@ One difference from the URL path: `host` doesn't look at the address. With `pars
 ### Start the pool under a supervisor <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_supervised.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/client as postgres
 import gleam/erlang/process
 import gleam/otp/static_supervisor as supervisor
 import gleam/result
-import pog
 import snippets/guide_connecting_explain_url_error.{explain}
 
 pub fn start_supervised(
@@ -312,7 +318,7 @@ What changes here:
 - `pog.supervised(config)` is a child specification. The supervisor starts the pool and restarts it under the same name if it stops.
 - A supervisor doesn't hand back the pool's `Connection`. `pog.named_connection(pool_name)` makes one from the name, and it keeps working after a restart, because the new pool registers under the same name.
 - In a real app you add the pool to the supervisor that starts the rest of your app, and pass the connection to the children that need it.
-- `parse_config` already puts `client_encoding` before the `application_name` of the URL, so the server shows that name under `pog.supervised` too.
+- The server shows the `application_name` of the URL under `pog.supervised` too.
 
 When no database listens, this works the same as `connect`: `start_supervised` returns `Ok`, and a query on the connection returns `Error(pog.ConnectionUnavailable)`.
 
@@ -326,11 +332,11 @@ The results below come from the package's tests. They run against two PostgreSQL
 |:---|:---|:---|
 | `disable` | `SslDisabled` | No TLS, also when the server has SSL turned on. This is also what you get with no `sslmode` at all. The server's `pg_stat_ssl` shows `ssl = false` for the connection. |
 | `require` | `SslUnverified` | TLS 1.3, with no check of the certificate or the host name: it connects to a server whose certificate comes from a CA the client doesn't trust, at an address the certificate doesn't name. Against a server with SSL turned off, the pool never connects: each query returns `ConnectionUnavailable` after about 2 seconds. There's no fallback to plain text. |
-| `verify-ca` | `SslVerified` | The same as `verify-full`: it checks the certificate and the host name. `libpq` (the client library behind `psql`) checks only the certificate here, so a URL with an address the certificate doesn't name works in `psql` and fails here. |
+| `verify-ca` | `SslVerifiedChainOnly` | TLS. Checks that a CA the client trusts signed the certificate, but not the host name, as `libpq` (the client library behind `psql`) does. It connects to `127.0.0.1` with a certificate that names only `localhost`. |
 | `verify-full` | `SslVerified` | TLS. Checks that a CA the client trusts signed the certificate, and that the certificate names the host of the URL. |
 | `prefer`, `allow` or anything else | none | `UnsupportedSslMode(mode)`, because the pool can't fall back from TLS to plain text. |
 
-The client trusts the CA list of OTP's `public_key` application, which is the CA certificates of the operating system. A managed database whose certificate comes from a public CA passes the check. A certificate from a private CA doesn't, until you load that CA as the next section shows.
+The client trusts the CA list of OTP's `public_key` application, which is the CA certificates of the operating system. A managed database whose certificate comes from a public CA passes the check. A certificate from a private CA doesn't, until you name the CA file as the next section shows.
 
 A failed check looks like every other failed connection: the pool starts, and each query returns `ConnectionUnavailable` after about 2 seconds. The cause shows only in the log. OTP's `ssl` application logs a notice for each try of each connection:
 
@@ -345,43 +351,62 @@ The `...` stands for the place in OTP's source that logs the alert, which change
 
 ### Trust a private certificate authority
 
-Neither this package nor Pog has a setting for a CA file. `pog.Config` has no field for one, and Pog gives every `SslVerified` pool the list from `public_key:cacerts_get()`. You can change that list with `public_key:cacerts_load`, before you start the pool:
+Name the PEM file of your provider's CA in the URL, with `sslrootcert`:
 
-### Load a CA file, then start the pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_private_ca.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+```text illustration
+postgresql://app:secret@db.internal/app?sslmode=verify-full&sslrootcert=/etc/ssl/db-ca.pem
+```
+
+The pool then trusts the CA certificates of that file, and only those. Other pools keep the CA certificates of the system. `sslmode` and `sslrootcert` give these `pog.Ssl` values, with the meaning `libpq` gives them:
+
+| `sslmode` | no `sslrootcert` | `sslrootcert=<path>` |
+|:---|:---|:---|
+| not set | `SslDisabled` | `SslRootCertWithoutSslMode` |
+| `disable` | `SslDisabled` | `SslDisabled`: the file is not used |
+| `require` | `SslUnverified` | `SslVerifiedChainOnlyCaFile(path)`: a CA file makes `require` check the chain, as in `libpq` |
+| `verify-ca` | `SslVerifiedChainOnly` | `SslVerifiedChainOnlyCaFile(path)` |
+| `verify-full` | `SslVerified` | `SslVerifiedCaFile(path)` |
+
+`sslrootcert=system` names the CA certificates of the system. It gives `SslVerified` with `sslmode=verify-full` or with no `sslmode`, and `SslRootCertSystemNeedsVerifyFull(mode)` with another mode. These are the rules of `pog.url_config` in `dream_pog` too.
+
+With the builder, put the file in the `pog.Ssl` value:
+
+### Trust the CA of one file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_private_ca.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/client as postgres
-import gleam/dynamic.{type Dynamic}
-import gleam/erlang/atom
-import gleam/result
-import pog
+import gleam/otp/actor
 
 pub fn connect_with_private_ca(
-  url: String,
+  config: postgres.Config,
   ca_file: String,
-) -> Result(pog.Connection, String) {
-  case load_ca_certificates(ca_file) == atom.to_dynamic(atom.create("ok")) {
-    False -> Error("Can't read the CA certificates in " <> ca_file)
-    True ->
-      postgres.from_url(url)
-      |> result.replace_error("The pool did not start")
-  }
+) -> Result(postgres.Connection, actor.StartError) {
+  config
+  |> pog.ssl(pog.SslVerifiedCaFile(ca_file))
+  |> postgres.connect()
 }
-
-// Replaces the CA list of the whole BEAM with the certificates of the
-// file. Pog reads that list when a pool starts.
-@external(erlang, "public_key", "cacerts_load")
-fn load_ca_certificates(path: String) -> Dynamic
 ```
 
 How it works:
 
 - `ca_file` is a PEM file with the CA certificate, as your provider gives it.
-- `public_key:cacerts_load` returns the atom `ok` when it read the file. For a file that doesn't exist, `connect_with_private_ca` returns `Error("Can't read the CA certificates in ...")`.
-- With the test CA loaded, `sslmode=verify-full` and `sslmode=verify-ca` connect with TLS to `localhost`, the name in the test server's certificate. To `127.0.0.1`, both return `ConnectionUnavailable`.
-- The pool keeps the list it read when it started, so it keeps trusting the CA when the list changes later.
+- `connect` reads the file before the pool starts. A file that can't be read, or that holds no certificate, is an error of `connect`, and no pool starts.
+- With the test CA file, `sslmode=verify-full` connects with TLS to `localhost`, the name in the test server's certificate, and returns `ConnectionUnavailable` for `127.0.0.1`. `sslmode=verify-ca` connects to both.
 
-`cacerts_load` replaces the list. It doesn't add to it: after the call, `public_key:cacerts_get()` returns the certificates of that file only. That counts for the whole BEAM, so other pools and other TLS clients that use `public_key:cacerts_get()` lose the CA certificates of the operating system too. If your app also needs those, put them in the same PEM file.
+For a file that doesn't exist, and for a file with no certificate:
+
+### The errors of a bad CA file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_ca_file_errors.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```text
+connect_with_private_ca(config, "test/fixtures/ssl/missing.crt")
+  -> Error(InitExited(Abnormal("dream_pog: the CA file test/fixtures/ssl/missing.crt cannot be read: enoent")))
+
+connect_with_private_ca(config, "README.md")
+  -> Error(InitExited(Abnormal("dream_pog: the CA file README.md holds no PEM certificate")))
+```
+
+`from_url` with such a file returns `Error(PoolStartExited)`.
 
 ## The URL format
 
@@ -398,7 +423,8 @@ postgresql://user:password@host:port/database?sslmode=verify-full&application_na
 | `port` | no | 5432 | 1 to 65535, or `InvalidPort(port)`. A port that isn't a number gives `MalformedUrl`. |
 | `database` | yes | `MissingDatabase` | One path segment, percent-decoded. `/a/b` gives `InvalidDatabase("/a/b")`. Encode a `/` in the name as `%2F`. `%00` gives `InvalidDatabaseEncoding`. |
 | `sslmode` | no | `SslDisabled` | See [SSL modes](#ssl-modes). |
-| `application_name` | no | not set | Sets the PostgreSQL connection parameter of that name, with `client_encoding=UTF8` before it, so that the server shows the name. It wins over `-c application_name=...` in `options`. |
+| `sslrootcert` | no | the CA certificates of the system | The path of a PEM file with the CA certificates to trust, or `system`. It needs an `sslmode`. See [Trust a private certificate authority](#trust-a-private-certificate-authority). |
+| `application_name` | no | not set | Sets the PostgreSQL connection parameter of that name, so that the server shows the name. It wins over `-c application_name=...` in `options`. |
 | `options` | no | not set | Goes to the server, which reads it like the command line of a backend. `options=-c%20statement_timeout%3D5s` sets `statement_timeout` to `5s`. Don't set `application_name` here: the server applies the separate parameters after `options`, and the driver always sends an `application_name`. So `options=-c%20application_name%3Dx` alone shows the Erlang node name, such as `nonode@nohost`, and with `application_name=y` in the URL too, the server shows `y`, in either order. |
 | a name that starts with `_pq_.` | no | | `UnsupportedParameter(name)`. PostgreSQL reads such a name as a protocol option, not a setting, and closes the connection when it doesn't know it. |
 | any other `libpq` connection keyword, such as `connect_timeout`, `channel_binding`, `user`, `password` or `client_encoding`, and `database` | no | | `UnsupportedParameter(name)`. The server can't apply these, so the package refuses them, not drops them. |
@@ -410,7 +436,7 @@ A bad percent-encoding, such as `%zz`, gives `InvalidUserEncoding`, `InvalidPass
 
 How the query string is read:
 
-- Parameters go to the server in the order of the URL. When a name comes twice, the last value wins, as in `libpq`: `search_path=a&search_path=b` gives `b`. That holds for `sslmode` and `application_name` too.
+- Parameters go to the server in the order of the URL. When a name comes twice, the last value wins, as in `libpq`: `search_path=a&search_path=b` gives `b`. That holds for `sslmode`, `sslrootcert` and `application_name` too.
 - Keyword names are case-sensitive, as in `libpq`, so `SSLMODE` and `Application_Name` give `UnknownParameterLooksLike`. The server reads its own parameter names in any case: `Search_Path=app` sets `search_path`.
 - Names and values are percent-decoded: `search_path=%22my%20app%22%2Cpublic` gives `"my app",public`.
 - An empty value goes to the server as it is: `search_path=` gives an empty `search_path`. An empty name gives `UnsupportedParameter("")`, and `%00` in a name or a value gives `MalformedUrl`.
@@ -424,8 +450,8 @@ How the query string is read:
 | Nothing listens at the host and port | `connect` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Call `postgres.check` after `from_url` or `connect`, as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#step-2-stop-at-startup-when-the-database-doesnt-answer) guide does. |
 | The password is wrong, or the user or the database doesn't exist | `connect` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | `postgres.check` at startup gives the same error. The PostgreSQL server log says which one it was. |
 | Any `sslmode` but `disable`, and the server has SSL turned off | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds | Turn on SSL on the server, or use `sslmode=disable` on a network you trust. |
-| `verify-ca` or `verify-full`, and the client doesn't trust the CA of the server's certificate | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `Fatal - Unknown CA`. | Load the CA with `public_key:cacerts_load`, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows. |
-| `verify-ca` or `verify-full`, and the certificate doesn't name the host of the URL | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `hostname_check_failed`. | Put a host name from the certificate in the URL. |
+| `verify-ca` or `verify-full`, and the client doesn't trust the CA of the server's certificate | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `Fatal - Unknown CA`. | Name the CA file with `sslrootcert`, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows. |
+| `verify-full`, and the certificate doesn't name the host of the URL | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The log shows `hostname_check_failed`. | Put a host name from the certificate in the URL. |
 | A server parameter that the server doesn't know, such as `serach_path`, or a value it refuses, such as `timezone=Mars%2FPhobos`, `timezone=` or `statement_timeout=abc` | `parse_config` and `from_url` return `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | `postgres.check` at startup gives the same error. Only the PostgreSQL server log says why, for example `unrecognized configuration parameter "serach_path"`. Fix the name or the value in the URL. |
 | A parameter the user may not set, such as `session_replication_role`, or `role` for a role the user isn't a member of | `Ok`, then `Error(pog.ConnectionUnavailable)` on each query, after about 2 seconds. The server log shows `permission denied to set parameter`. | Remove the parameter, or let an administrator grant the right. |
 | The pool size is 0 | `connect` returns `Ok`. Each query returns `Error(pog.ConnectionUnavailable)` after about 2 seconds. | Set a pool size of 1 or more. |
@@ -441,13 +467,13 @@ These tests use [dream_test](https://hexdocs.pm/dream_test), added from GitHub a
 ### Test the config and a pool with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
 import gleam/erlang/process
 import gleam/result
-import pog
 import snippets/guide_connecting_pool_config.{connect_pool, pool_config}
 
 pub fn tests() -> TestSuite {
@@ -518,11 +544,11 @@ To check that the pool really connects, give `connect_pool` the URL of a test se
 
 **`sslmode=prefer`.** *Symptom:* `UnsupportedSslMode("prefer")`. `prefer` is the `libpq` default, so you'll find it in URLs that other tools generate. *Fix:* use `require` for TLS without a certificate check, or `verify-full` for TLS with one.
 
-**`verify-ca` with an address the certificate doesn't name.** *Symptom:* with `sslmode=verify-ca` and an IP address in the URL, the pool doesn't connect and queries return `ConnectionUnavailable`, although `psql` connects with the same URL. *Fix:* this package checks the host name for `verify-ca` too, because it maps `verify-ca` to the same `pog.SslVerified` as `verify-full`. Put a host name from the certificate in the URL, or use `require`.
+**`verify-ca` where you want a host check.** *Symptom:* a pool with `sslmode=verify-ca` connects to a server at an address that its certificate doesn't name. *Fix:* `verify-ca` checks only that a trusted CA signed the certificate, as in `libpq`. Use `verify-full` to also check the host name.
 
-**A database with a private CA.** *Symptom:* with `sslmode=verify-full`, queries return `ConnectionUnavailable`, and the log shows `Fatal - Unknown CA`, but `sslmode=require` connects. *Fix:* the client trusts only the CA certificates of the operating system. Load your provider's CA file with `public_key:cacerts_load` before you start the pool, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows.
+**A database with a private CA.** *Symptom:* with `sslmode=verify-full`, queries return `ConnectionUnavailable`, and the log shows `Fatal - Unknown CA`, but `sslmode=require` connects. *Fix:* the client trusts only the CA certificates of the operating system. Name your provider's CA file with `sslrootcert`, as [Trust a private certificate authority](#trust-a-private-certificate-authority) shows.
 
-**`application_name` with `pog.supervised` or `pog.start` and the builder.** *Symptom:* `pg_stat_activity` shows the Erlang node name, such as `nonode@nohost`, not the `application_name` you set with `pog.connection_parameter`. *Cause:* the config went to Pog without `connect` or `parse_config`, so this package didn't put `client_encoding` before the name. *Fix:* add `|> pog.connection_parameter(name: "client_encoding", value: "UTF8")` after the `application_name` line, or start the pool with `connect`.
+**`Application_Name` in mixed case.** *Symptom:* `pg_stat_activity` shows the Erlang node name, such as `nonode@nohost`, not the name you set with `pog.connection_parameter(name: "Application_Name", ...)`. *Cause:* the driver under `dream_pog` compares the parameter name with case, so it sends the node name too, and PostgreSQL keeps the node name. *Fix:* write `application_name` in lower case.
 
 **A password with special characters.** *Symptom:* `MalformedUrl`, or a login that fails. *Fix:* percent-encode `@`, `/`, `:` and `#` in the password (`%40`, `%2F`, `%3A`, `%23`).
 
@@ -536,4 +562,4 @@ To check that the pool really connects, give `connect_pool` the URL of a test se
 - [Running queries and handling their results](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md): turn query results and their errors into responses.
 - [README](https://github.com/TrustBound/dream_postgres/blob/main/README.md): the package at a glance.
 - [API reference on HexDocs](https://hexdocs.pm/dream_postgres/dream_postgres/client.html): `from_url`, `parse_config`, `UrlError` and the builder functions.
-- [Pog on HexDocs](https://hexdocs.pm/pog/pog.html): `pog.Config`, `pog.ssl`, `pog.supervised` and the other pool settings.
+- [Pog on HexDocs](https://hexdocs.pm/pog/pog.html), which has the same API as `dream_pog`: `pog.Config`, `pog.ssl`, `pog.supervised` and the other pool settings.

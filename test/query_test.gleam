@@ -3,11 +3,11 @@
 //// The query helpers take a Pog result value, so these tests build the
 //// results by hand and need no database.
 
+import dream_pog as pog
 import dream_postgres/query
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import pog
 
 pub fn tests() -> TestSuite {
   describe("dream_postgres/query", [

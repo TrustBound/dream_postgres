@@ -1,12 +1,18 @@
 # dream_postgres Makefile
 
-.PHONY: test build format check check-snippets docs clean db-up db-down
+.PHONY: test test-playback build format check check-snippets docs clean db-up db-down
 
 # Run the tests with line coverage (fails below 100%). The tests need the
 # two PostgreSQL servers of docker-compose.yml: start them with `make db-up`.
 # The test run stops at once with a message when a server does not answer.
 test:
 	@gleam test
+
+# Run only the recorder tests that need no database. They pass with both
+# test servers stopped (`make db-down`), which proves that playback mode
+# opens no connection.
+test-playback:
+	@gleam run -m recorder_playback_main
 
 # Build the package
 build:

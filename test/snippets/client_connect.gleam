@@ -1,7 +1,7 @@
+import dream_pog as pog
 import dream_postgres/client as postgres
 import gleam/erlang/process
 import gleam/otp/actor
-import pog
 
 pub fn connect_database(
   pool_name: process.Name(pog.Message),

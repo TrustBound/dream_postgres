@@ -5,6 +5,7 @@
 //// table that the guide's SQL makes. The other tests build the results by
 //// hand, or run the handlers on a pool where no database listens.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -14,7 +15,6 @@ import fixtures/output_file
 import fixtures/test_database
 import gleam/list
 import gleam/string
-import pog
 import snippets/guide_queries_create_user
 import snippets/guide_queries_list_users
 import snippets/guide_queries_log_failure

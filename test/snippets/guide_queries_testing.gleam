@@ -3,11 +3,11 @@
 //// Tests the response functions with results built by hand, and a handler
 //// against a pool where no database listens.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
-import pog
 import snippets/guide_queries_create_user.{created_response}
 import snippets/guide_queries_show_user.{Response, show_user, user_response}
 import snippets/guide_queries_sql.{FindUserRow}

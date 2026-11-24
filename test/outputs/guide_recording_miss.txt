@@ -1,0 +1,2 @@
+find_user(db, 2)
+  -> Error(PostgresqlError("NOREC", "no_recording", "No recording in test/fixtures/recordings/create_and_find.json matches SELECT id, name, email FROM users WHERE id = $1 with the parameters [2]"))

@@ -8,8 +8,8 @@
 //// ### Read the first row <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_first_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
+//// import dream_pog as pog
 //// import dream_postgres/query
-//// import pog
 ////
 //// pub fn find_name(
 ////   result: Result(pog.Returned(String), pog.QueryError),
@@ -22,9 +22,9 @@
 //// }
 //// ```
 
+import dream_pog as pog
 import gleam/list
 import gleam/result
-import pog
 
 /// Query error types
 ///
@@ -70,8 +70,8 @@ pub type QueryError {
 /// ### Read the first row <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_first_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
+/// import dream_pog as pog
 /// import dream_postgres/query
-/// import pog
 ///
 /// pub fn find_name(
 ///   result: Result(pog.Returned(String), pog.QueryError),
@@ -123,9 +123,9 @@ fn first_of_rows(rows: List(row)) -> Result(row, QueryError) {
 /// ### Read all rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_all_rows.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
+/// import dream_pog as pog
 /// import dream_postgres/query
 /// import gleam/string
-/// import pog
 ///
 /// pub fn find_names(
 ///   result: Result(pog.Returned(String), pog.QueryError),

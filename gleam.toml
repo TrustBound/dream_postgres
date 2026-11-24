@@ -1,3 +1,8 @@
+# TODO before release: replace the path dependency
+# `dream_pog = { path = "../../dream_pog" }` with a Hex version range, such as
+# `dream_pog = ">= 4.1.0 and < 5.0.0"`, after dream_pog is published. A Hex
+# package must not have a path or git dependency. The path dependency needs a
+# dream_pog checkout two folders up from this one, with dream_pgo next to it.
 name = "dream_postgres"
 version = "2.0.0"
 description = "PostgreSQL utilities for Gleam with type-safe query helpers"
@@ -13,13 +18,15 @@ pages = [
     { title = "Getting started", path = "guides/getting-started.html", source = "./docs/guides/getting-started.md" },
     { title = "Connecting to PostgreSQL in production", path = "guides/connecting.html", source = "./docs/guides/connecting.md" },
     { title = "Running queries and handling their results", path = "guides/queries.html", source = "./docs/guides/queries.md" },
+    { title = "Test database code with recorded queries", path = "guides/recorded-queries.html", source = "./docs/guides/recorded-queries.md" },
 ]
 
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_erlang = ">= 0.30.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
-pog = ">= 4.0.0 and < 5.0.0"
+dream_pog = { path = "../../dream_pog" }
+gleam_json = ">= 3.0.0 and < 4.0.0"
 
 [dev-dependencies]
 # Switched to a Hex version range once it is published.

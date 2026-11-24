@@ -5,6 +5,7 @@
 //// guide's SQL makes. The other pools start on a local port where no
 //// database listens.
 
+import dream_pog as pog
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -15,7 +16,6 @@ import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
-import pog
 import snippets/guide_getting_started_connect
 import snippets/guide_getting_started_startup
 import snippets/guide_getting_started_users.{Context, User}

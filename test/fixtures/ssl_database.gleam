@@ -7,12 +7,12 @@
 //// the certificate, and a URL with `127.0.0.1` does not. The operating
 //// system does not trust the test CA.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import fixtures/test_database
 import gleam/int
 import gleam/result
 import gleam/string
-import pog
 
 /// The port of the SSL server on this machine.
 pub const port = 5437
@@ -25,12 +25,6 @@ pub const matching_host = "localhost"
 
 /// An address of the server that the server certificate does not name.
 pub const other_address = "127.0.0.1"
-
-@external(erlang, "ssl_ffi", "with_os_ca_list_restored")
-fn with_os_ca_list_restored_ffi(run: fn() -> a) -> a
-
-@external(erlang, "ssl_ffi", "ca_count")
-fn ca_count_ffi() -> Int
 
 @external(erlang, "ssl_ffi", "capture_tls_alerts")
 fn capture_tls_alerts_ffi(run: fn() -> a) -> #(a, List(#(String, String)))
@@ -49,20 +43,6 @@ pub fn url(host host: String, sslmode sslmode: String) -> String {
   <> int.to_string(port)
   <> "/dream_test?sslmode="
   <> sslmode
-}
-
-/// Calls `run`, and then makes the BEAM trust the CA certificates of the
-/// operating system again, also when `run` fails.
-///
-/// Use it around each test that calls `public_key:cacerts_load`.
-pub fn with_os_ca_list_restored(run: fn() -> a) -> a {
-  with_os_ca_list_restored_ffi(run)
-}
-
-/// Returns the number of CA certificates that a pool trusts when it
-/// starts now.
-pub fn ca_count() -> Int {
-  ca_count_ffi()
 }
 
 /// Calls `run` and returns each TLS alert report that OTP's `ssl`

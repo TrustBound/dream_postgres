@@ -4,8 +4,8 @@
 //// takes a connection and the parameters, and returns
 //// `Result(pog.Returned(Row), pog.QueryError)`.
 
+import dream_pog as pog
 import gleam/dynamic/decode
-import pog
 
 pub type FindUserRow {
   FindUserRow(id: Int, name: String, email: String)

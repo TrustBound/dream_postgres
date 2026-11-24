@@ -3,9 +3,9 @@
 //// Runs a first query with the connection from the context of the program,
 //// and turns the result into a greeting.
 
+import dream_pog as pog
 import dream_postgres/query
 import gleam/dynamic/decode
-import pog
 
 pub type Context {
   Context(db: pog.Connection)

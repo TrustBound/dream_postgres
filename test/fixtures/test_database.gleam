@@ -8,6 +8,7 @@
 //// Tests that write make their own schema with `with_schema`, so tests that
 //// run at the same time never see each other's tables or rows.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import gleam/dynamic/decode
 import gleam/erlang/process
@@ -15,7 +16,6 @@ import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
-import pog
 
 /// The environment variable that holds the URL of the test server.
 pub const url_variable = "DREAM_POSTGRES_TEST_URL"

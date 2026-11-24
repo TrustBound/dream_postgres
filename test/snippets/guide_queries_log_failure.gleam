@@ -3,9 +3,9 @@
 //// Writes the Pog error to standard error before `query.first_row` turns
 //// it into `DatabaseError`.
 
+import dream_pog as pog
 import gleam/io
 import gleam/string
-import pog
 import snippets/guide_queries_show_user.{type Response, user_response}
 import snippets/guide_queries_sql as sql
 

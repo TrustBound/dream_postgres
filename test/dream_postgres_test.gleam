@@ -13,15 +13,21 @@ import gleam/result
 import guide_connecting_test
 import guide_getting_started_test
 import guide_queries_test
+import guide_recording_test
 import hexdocs_snippets_test
 import learn_building_api_snippets_test
 import postgres_server_test
 import postgres_ssl_test
 import query_test
 import readme_snippets_test
+import recorder_playback_test
+import recorder_snippets_test
+import recorder_test
+import recorder_types_test
 import snippets/guide_connecting_testing
 import snippets/guide_getting_started_testing
 import snippets/guide_queries_testing
+import snippets/guide_recording_testing
 
 @external(erlang, "database_ffi", "halt")
 fn halt(status: Int) -> Nil
@@ -64,6 +70,12 @@ fn run_tests() -> Nil {
     guide_queries_test.tests(),
     guide_queries_testing.tests(),
     postgres_server_test.tests(),
+    recorder_types_test.tests(),
+    recorder_test.tests(),
+    recorder_playback_test.tests(),
+    recorder_snippets_test.tests(),
+    guide_recording_test.tests(),
+    guide_recording_testing.tests(),
   ])
   // The SSL tests change the CA list of the whole BEAM, so they run one at
   // a time, after the other suites.

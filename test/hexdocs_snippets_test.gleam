@@ -4,6 +4,7 @@
 //// The `connect` example starts a pool for localhost:5432. The pool
 //// connects in the background, so the test needs no database.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -13,7 +14,6 @@ import fixtures/test_database
 import gleam/erlang/process
 import gleam/option.{Some}
 import gleam/result
-import pog
 import snippets/client_check
 import snippets/client_connect
 import snippets/client_database

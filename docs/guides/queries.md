@@ -30,10 +30,10 @@ In this guide you'll:
 
 ## Before you start
 
-You need the package and Pog, and a connection. The [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md) guide shows how to get one from a `DATABASE_URL`.
+You need the package and `dream_pog` (a fork of Pog, imported as `pog`), and a connection. The [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md) guide shows how to get one from a `DATABASE_URL`.
 
 ```sh
-gleam add dream_postgres pog
+gleam add dream_postgres dream_pog
 ```
 
 The examples use this table. With the `docker-compose.yml` from [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#before-you-start), create it in `psql` (`docker compose exec postgres psql -U dream -d dream_test`):
@@ -66,8 +66,8 @@ Keep each query in a function that takes a connection and the parameters, and re
 ### Query functions for the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_sql.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import gleam/dynamic/decode
-import pog
 
 pub type FindUserRow {
   FindUserRow(id: Int, name: String, email: String)
@@ -141,9 +141,9 @@ A "show user" handler runs `find_user` and turns its result into a response. Spl
 ### Answer with one user <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_show_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/query
 import gleam/int
-import pog
 import snippets/guide_queries_sql as sql
 
 pub type Response {
@@ -210,10 +210,10 @@ For a list, an empty result isn't an error. `all_rows` gives you `Ok([])` for it
 ### Answer with every user <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_list_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/query
 import gleam/list
 import gleam/string
-import pog
 import snippets/guide_queries_show_user.{type Response, Response}
 import snippets/guide_queries_sql as sql
 
@@ -263,9 +263,9 @@ index_users(<a pool where nothing listens>)
 ### Answer 409 for a duplicate email <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_create_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/query
 import gleam/int
-import pog
 import snippets/guide_queries_show_user.{type Response, Response}
 import snippets/guide_queries_sql as sql
 
@@ -343,9 +343,9 @@ A constraint you didn't plan for still becomes a 500, because you didn't decide 
 ### Log the Pog error, then answer <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_log_failure.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import gleam/io
 import gleam/string
-import pog
 import snippets/guide_queries_show_user.{type Response, user_response}
 import snippets/guide_queries_sql as sql
 
@@ -395,11 +395,11 @@ These tests use [dream_test](https://hexdocs.pm/dream_test), added from GitHub a
 ### Test the user handlers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
-import pog
 import snippets/guide_queries_create_user.{created_response}
 import snippets/guide_queries_show_user.{Response, show_user, user_response}
 import snippets/guide_queries_sql.{FindUserRow}
@@ -498,4 +498,4 @@ To test the SQL itself, run the query functions against a real test database wit
 - [README](https://github.com/TrustBound/dream_postgres/blob/main/README.md): the package at a glance.
 - [API reference on HexDocs](https://hexdocs.pm/dream_postgres/dream_postgres/query.html): `first_row`, `all_rows` and `QueryError`.
 - [Squirrel on HexDocs](https://hexdocs.pm/squirrel/): generate the query functions from SQL files.
-- [Pog on HexDocs](https://hexdocs.pm/pog/pog.html): queries, parameters, decoders, timeouts and transactions.
+- [Pog on HexDocs](https://hexdocs.pm/pog/pog.html), which has the same API as `dream_pog`: queries, parameters, decoders, timeouts and transactions.

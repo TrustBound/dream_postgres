@@ -4,6 +4,7 @@
 //// test runs against the server of `fixtures/test_database`. The tests for
 //// a server with SSL on are in `postgres_ssl_test`.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_between, be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -17,7 +18,6 @@ import gleam/int
 import gleam/list
 import gleam/otp/actor
 import gleam/result
-import pog
 import snippets/guide_connecting_supervised.{start_supervised}
 import snippets/guide_getting_started_startup.{describe as describe_error, start}
 
@@ -592,21 +592,32 @@ fn application_name_tests() {
         |> or_fail_with("Expected the client_encoding of the caller")
       },
     ),
-    it("Application_Name in mixed case reaches the server", fn() {
-      // Arrange
-      let config =
-        test_database.config()
-        |> pog.connection_parameter(name: "Application_Name", value: "billing")
+    // A known fault of dream_pgo: it compares the name `application_name`
+    // with case, but PostgreSQL reads parameter names without case. So the
+    // driver also sends the Erlang node name, after the caller's name, and
+    // the server keeps the node name. This test shows the fault, and fails
+    // when dream_pgo is fixed.
+    it(
+      "Application_Name in mixed case shows the Erlang node name (a dream_pgo fault)",
+      fn() {
+        // Arrange
+        let config =
+          test_database.config()
+          |> pog.connection_parameter(
+            name: "Application_Name",
+            value: "billing",
+          )
 
-      // Act
-      let name = connect_and_select(config, application_name_query)
+        // Act
+        let name = connect_and_select(config, application_name_query)
 
-      // Assert
-      name
-      |> should
-      |> be_equal(Ok(Ok(["billing"])))
-      |> or_fail_with("Expected the application name from the config")
-    }),
+        // Assert
+        name
+        |> should
+        |> be_equal(Ok(Ok(["nonode@nohost"])))
+        |> or_fail_with("Expected the Erlang node name")
+      },
+    ),
     it(
       "application_name from the URL reaches the server under pog.supervised",
       fn() {
@@ -624,27 +635,21 @@ fn application_name_tests() {
         |> or_fail_with("Expected the application name from the URL")
       },
     ),
-    it(
-      "pog.start of a builder config shows the Erlang node name, not application_name",
-      fn() {
-        // Arrange
-        let config =
-          test_database.config()
-          |> pog.connection_parameter(
-            name: "application_name",
-            value: "billing",
-          )
+    it("pog.start of a builder config shows the application_name", fn() {
+      // Arrange
+      let config =
+        test_database.config()
+        |> pog.connection_parameter(name: "application_name", value: "billing")
 
-        // Act
-        let name = pog_start_and_select(config, application_name_query)
+      // Act
+      let name = pog_start_and_select(config, application_name_query)
 
-        // Assert
-        name
-        |> should
-        |> be_equal(Ok(Ok(["nonode@nohost"])))
-        |> or_fail_with("Expected the Erlang node name, which pgo sends last")
-      },
-    ),
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok(Ok(["billing"])))
+      |> or_fail_with("Expected the application name from the config")
+    }),
     it(
       "pog.start of a builder config with client_encoding after application_name shows the name",
       fn() {
@@ -667,7 +672,7 @@ fn application_name_tests() {
         |> or_fail_with("Expected the application name from the config")
       },
     ),
-    it("an application_name sends client_encoding UTF8", fn() {
+    it("an application_name sends no client_encoding", fn() {
       // Arrange
       let config = url_config("?application_name=billing")
 
@@ -677,8 +682,8 @@ fn application_name_tests() {
       // Assert
       encoding
       |> should
-      |> be_equal(Ok(Ok(["UTF8 from client"])))
-      |> or_fail_with("Expected client_encoding UTF8 from the client")
+      |> be_equal(Ok(Ok(["UTF8 from default"])))
+      |> or_fail_with("Expected the default client_encoding of the server")
     }),
     it("no application_name sends no client_encoding", fn() {
       // Act
@@ -700,7 +705,7 @@ fn application_name_tests() {
       name
       |> should
       |> be_equal(Ok(Ok(["nonode@nohost"])))
-      |> or_fail_with("Expected the Erlang node name, which pgo sends")
+      |> or_fail_with("Expected the Erlang node name, which dream_pgo sends")
     }),
     it(
       "non-ASCII text goes to the server and back with an application_name",

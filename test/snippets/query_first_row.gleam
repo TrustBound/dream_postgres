@@ -1,5 +1,5 @@
+import dream_pog as pog
 import dream_postgres/query
-import pog
 
 pub fn find_name(
   result: Result(pog.Returned(String), pog.QueryError),

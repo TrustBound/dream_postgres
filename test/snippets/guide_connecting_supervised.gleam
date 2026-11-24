@@ -3,11 +3,11 @@
 //// Starts the pool as a child of a supervisor, and makes a connection from
 //// the pool name.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import gleam/erlang/process
 import gleam/otp/static_supervisor as supervisor
 import gleam/result
-import pog
 import snippets/guide_connecting_explain_url_error.{explain}
 
 pub fn start_supervised(

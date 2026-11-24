@@ -1,6 +1,6 @@
 //// Queries for the tests that run against a pool with no database.
 
-import pog
+import dream_pog as pog
 
 /// Runs `SELECT 1` on the connection with a 500 ms timeout.
 ///

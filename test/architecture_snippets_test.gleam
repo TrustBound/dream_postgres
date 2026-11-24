@@ -6,12 +6,12 @@
 //// in the background, so pool start returns Ok with no database.
 //// find_user_name runs its query on the test PostgreSQL server.
 
+import dream_pog as pog
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/test_database
 import gleam/result
-import pog
 import snippets/architecture_postgres
 
 pub fn tests() -> TestSuite {

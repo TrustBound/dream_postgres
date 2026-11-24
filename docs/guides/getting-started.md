@@ -27,10 +27,10 @@ In this guide you'll:
 
 ## Before you start
 
-Add the package, and Pog with it. dream_postgres sets up the pool and reads the results, but you write the queries with [Pog](https://hexdocs.pm/pog), so your code imports `pog` directly:
+Add the package, and `dream_pog` with it. dream_postgres sets up the pool and reads the results, but you write the queries with `dream_pog`, a fork of [Pog](https://hexdocs.pm/pog) with the same API, so your code imports it directly, as `import dream_pog as pog`:
 
 ```sh
-gleam add dream_postgres pog
+gleam add dream_postgres dream_pog
 ```
 
 dream_postgres has no dependency on Dream or on any web framework, so it works in any Gleam project on the Erlang target.
@@ -201,9 +201,9 @@ Now the program has a connection that works. Keep it in a context value that you
 ### Find a user and greet them <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_postgres/query
 import gleam/dynamic/decode
-import pog
 
 pub type Context {
   Context(db: pog.Connection)
@@ -309,7 +309,7 @@ The code that reads results is where your logic lives, and you can test it with 
 
 The tests here use [dream_test](https://hexdocs.pm/dream_test). It isn't on Hex yet, so add it from GitHub, with the commit this package tests with:
 
-### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L24-L26"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L31-L33"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```toml
 [dev-dependencies]
@@ -320,11 +320,11 @@ dream_test = { git = "https://github.com/TrustBound/dream_test.git", ref = "1639
 ### Test the greeting and the startup check <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_pog as pog
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
 import gleam/result
-import pog
 import snippets/guide_getting_started_startup.{describe as describe_error, start}
 import snippets/guide_getting_started_users.{User, greeting}
 
@@ -394,4 +394,4 @@ To test the queries themselves against a real database, run a test database (the
 - [Running queries and handling their results](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md): turn query results and their errors into responses, with tests.
 - [README](https://github.com/TrustBound/dream_postgres/blob/main/README.md): the package at a glance.
 - [API reference on HexDocs](https://hexdocs.pm/dream_postgres/): `dream_postgres/client` and `dream_postgres/query`.
-- [Pog on HexDocs](https://hexdocs.pm/pog/): queries, parameters, decoders and transactions.
+- [Pog on HexDocs](https://hexdocs.pm/pog/), which has the same API as `dream_pog`: queries, parameters, decoders and transactions.

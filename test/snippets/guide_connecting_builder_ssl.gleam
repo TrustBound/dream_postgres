@@ -3,9 +3,9 @@
 //// Builds a config from a host and a password with the builder functions,
 //// and sets SSL and the application name with pog.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import gleam/erlang/process
-import pog
 
 pub fn production_config(
   pool_name: process.Name(pog.Message),

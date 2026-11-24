@@ -1,6 +1,6 @@
+import dream_pog as pog
 import dream_postgres/query
 import gleam/string
-import pog
 
 pub fn find_names(
   result: Result(pog.Returned(String), pog.QueryError),

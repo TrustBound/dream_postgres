@@ -3,9 +3,9 @@
 //// Tells a duplicate email apart from other errors before the result goes
 //// to `query.first_row`.
 
+import dream_pog as pog
 import dream_postgres/query
 import gleam/int
-import pog
 import snippets/guide_queries_show_user.{type Response, Response}
 import snippets/guide_queries_sql as sql
 

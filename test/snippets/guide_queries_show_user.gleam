@@ -2,9 +2,9 @@
 ////
 //// Turns the result of `find_user` into a response with `query.first_row`.
 
+import dream_pog as pog
 import dream_postgres/query
 import gleam/int
-import pog
 import snippets/guide_queries_sql as sql
 
 pub type Response {

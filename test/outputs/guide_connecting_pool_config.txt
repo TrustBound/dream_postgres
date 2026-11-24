@@ -3,5 +3,5 @@ pool_config(name, "postgresql://app:secret@[2001:db8::10]:6432/app?sslmode=verif
   port:                  6432
   ssl:                   SslVerified
   ip_version:            Ipv6
-  connection_parameters: [#("client_encoding", "UTF8"), #("application_name", "billing")]
+  connection_parameters: [#("application_name", "billing")]
   pool_size:             30

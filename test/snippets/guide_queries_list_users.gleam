@@ -2,10 +2,10 @@
 ////
 //// Turns the result of `list_users` into a response with `query.all_rows`.
 
+import dream_pog as pog
 import dream_postgres/query
 import gleam/list
 import gleam/string
-import pog
 import snippets/guide_queries_show_user.{type Response, Response}
 import snippets/guide_queries_sql as sql
 

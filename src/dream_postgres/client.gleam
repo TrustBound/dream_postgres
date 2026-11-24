@@ -1,7 +1,9 @@
 //// PostgreSQL client wrapper
 ////
-//// Provides a clean builder interface to Pog connection management.
-//// Follows Dream's builder pattern for consistency.
+//// Provides a clean builder interface to the connection pool of
+//// `dream_pog`, a fork of Pog. Follows Dream's builder pattern for
+//// consistency. Import `dream_pog` as `pog` to use its types and query
+//// functions with this module.
 ////
 //// ## Example
 ////
@@ -29,6 +31,7 @@
 //// }
 //// ```
 
+import dream_pog as pog
 import gleam/erlang/process
 import gleam/list
 import gleam/option
@@ -36,7 +39,6 @@ import gleam/otp/actor
 import gleam/result
 import gleam/string
 import gleam/uri
-import pog
 
 /// A connection to a PostgreSQL connection pool.
 ///
@@ -287,12 +289,10 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// configuration. The pool will be registered with the process name you
 /// provided to `new()`.
 ///
-/// When the config has an `application_name` connection parameter, for
-/// example from `pog.connection_parameter`, `connect` puts `client_encoding`
-/// just before it. Then the server shows that name, not the Erlang node name
-/// that pgo, the driver under Pog, also sends. The `client_encoding` of the
-/// config stays, else it is `UTF8`. Without an `application_name`, the
-/// connection parameters do not change.
+/// An `application_name` connection parameter, for example from
+/// `pog.connection_parameter`, is the name that the server shows for the
+/// connections of the pool. Without one, the server shows the Erlang node
+/// name.
 ///
 /// ## Parameters
 ///
@@ -308,6 +308,10 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 ///   no pool starts. The driver would end the text at the null byte and
 ///   send the rest to the server as another parameter. The message names
 ///   the part, never its value.
+/// - `Error(actor.InitExited(_))`: The SSL mode is `pog.SslVerifiedCaFile`
+///   or `pog.SslVerifiedChainOnlyCaFile`, and the CA file cannot be read or
+///   holds no PEM certificate. `dream_pog` reads the file before the pool
+///   starts.
 ///
 /// The pool connects to the database in the background. So this function
 /// returns `Ok` at once also when no database listens at the host and port,
@@ -327,10 +331,10 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// ### Start a connection pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
+/// import dream_pog as pog
 /// import dream_postgres/client as postgres
 /// import gleam/erlang/process
 /// import gleam/otp/actor
-/// import pog
 ///
 /// pub fn connect_database(
 ///   pool_name: process.Name(pog.Message),
@@ -348,12 +352,11 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 pub fn connect(config: Config) -> Result(Connection, actor.StartError) {
   use Nil <- result.try(refuse_null_bytes(config))
   config
-  |> order_connection_parameters()
   |> pog.start()
   |> result.map(extract_connection_from_started)
 }
 
-// pgo, the driver under Pog, writes the user, the database name and the
+// dream_pgo, the driver under dream_pog, writes the user, the database name and the
 // connection parameters into the startup packet as strings that end with a
 // null byte. So a null byte in one of them ends that string early, and the
 // server reads the rest as the next name or value: a database name of
@@ -446,10 +449,18 @@ pub type UrlError {
   /// keyword, so such a name is a misspelled keyword.
   UnknownParameterLooksLike(name: String, keyword: String)
   /// The `sslmode` value is not one that this package reads. Use `disable`,
-  /// `require`, `verify-ca` or `verify-full`. `verify-ca` is not an exact
-  /// equivalent of the `libpq` mode: here `verify-ca` and `verify-full` both
-  /// check the certificate and the host name.
+  /// `require`, `verify-ca` or `verify-full`. They have the meaning of
+  /// `libpq`: `verify-ca` checks the certificate chain, and `verify-full`
+  /// also checks that the certificate names the host.
   UnsupportedSslMode(mode: String)
+  /// The URL has `sslrootcert=system` with an `sslmode` other than
+  /// `verify-full`. As in `libpq`, the CA certificates of the system need
+  /// `sslmode=verify-full`, or no `sslmode`.
+  SslRootCertSystemNeedsVerifyFull(mode: String)
+  /// The URL has `sslrootcert=<path>` but no `sslmode`. Add
+  /// `sslmode=verify-full` or `sslmode=verify-ca`. This package does not read
+  /// `prefer`, the `libpq` default.
+  SslRootCertWithoutSslMode
   /// The URL has a fragment (a `#` part). PostgreSQL URLs do not use one.
   UnsupportedFragment
 }
@@ -488,7 +499,8 @@ pub type FromUrlError {
 /// - `database` is required and percent-decoded. `%00` in it gives
 ///   `InvalidDatabaseEncoding`.
 /// - Query parameters: `sslmode` (`disable`, `require`, `verify-ca`,
-///   `verify-full`) sets the SSL mode. `application_name` and `options` go
+///   `verify-full`) and `sslrootcert` set the SSL mode, as the table below
+///   shows. `application_name` and `options` go
 ///   to the server. An `application_name` in `options`
 ///   (`-c application_name=x`) does not show, because the server applies
 ///   the separate parameters after `options` and the driver always sends
@@ -501,16 +513,34 @@ pub type FromUrlError {
 ///   server as a run-time parameter, with its percent-decoded value. Of two
 ///   parameters with the same name, the last wins, as in `libpq`.
 ///
+/// `sslmode` and `sslrootcert` give the `pog.Ssl` of the config, with the
+/// meaning that `libpq` gives them, the same as `pog.url_config` of
+/// `dream_pog`:
+///
+/// | `sslmode`     | no `sslrootcert`       | `sslrootcert=<path>`               |
+/// |---------------|------------------------|------------------------------------|
+/// | not set       | `SslDisabled`          | `SslRootCertWithoutSslMode`        |
+/// | `disable`     | `SslDisabled`          | `SslDisabled` (the file is unused) |
+/// | `require`     | `SslUnverified`        | `SslVerifiedChainOnlyCaFile(path)` |
+/// | `verify-ca`   | `SslVerifiedChainOnly` | `SslVerifiedChainOnlyCaFile(path)` |
+/// | `verify-full` | `SslVerified`          | `SslVerifiedCaFile(path)`          |
+///
+/// `verify-ca` checks that a trusted CA signed the certificate, and
+/// `verify-full` also checks that the certificate names the host. With a
+/// path, the pool trusts the CA certificates of that PEM file only, and
+/// without one, the CA certificates of the system. `sslrootcert=system`
+/// selects the CA certificates of the system: with `sslmode=verify-full` or
+/// no `sslmode` it gives `SslVerified`, and with another `sslmode` it gives
+/// `SslRootCertSystemNeedsVerifyFull(mode)`. `connect` reads the file before
+/// the pool starts.
+///
 /// This function does not know the parameters of the server. A name that
 /// the server does not know, or a value that it refuses, gives `Ok` here,
 /// and each query on the pool then returns `pog.ConnectionUnavailable`
 /// after about 2 seconds. The server log says why. Call `check` at startup.
 ///
-/// The connection parameters of the config keep the order of the URL. With
-/// an `application_name`, they end with `client_encoding` (`UTF8`) and then
-/// `application_name`. pgo, the
-/// driver under Pog, sends its own `application_name` (the Erlang node
-/// name), and this order makes the server show your name. It also holds
+/// The connection parameters of the config keep the order of the URL. The
+/// `application_name` of the URL is the name that the server shows, also
 /// when you give the config to `pog.supervised` or `pog.start`.
 ///
 /// All other settings keep the values from `new(pool_name)`.
@@ -536,9 +566,9 @@ pub type FromUrlError {
 /// ### Read a connection URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_parse_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
+/// import dream_pog as pog
 /// import dream_postgres/client as postgres
 /// import gleam/erlang/process
-/// import pog
 ///
 /// pub fn read_database_url(
 ///   pool_name: process.Name(pog.Message),
@@ -563,7 +593,6 @@ pub fn parse_config(
     |> database(database_name)
   use config <- result.try(apply_userinfo(config, parsed.userinfo))
   apply_query(config, parsed.query)
-  |> result.map(order_connection_parameters)
 }
 
 /// Connect from a PostgreSQL connection URL
@@ -675,85 +704,6 @@ pub fn check(connection: Connection) -> Result(Nil, QueryError) {
   pog.query("SELECT 1")
   |> pog.execute(connection)
   |> result.replace(Nil)
-}
-
-// Puts the connection parameters in an order that makes the server use the
-// caller's `application_name`.
-//
-// pgo 0.15 (the driver under Pog) adds its own `application_name`, the
-// Erlang node name, with `lists:keymerge(1, Ours, [{AppName, Node}])` in
-// `pgo_handler:setup_startup`. keymerge expects sorted lists, so it puts
-// the driver's entry just before the first of our entries whose name sorts
-// after "application_name". PostgreSQL uses the last `application_name` of
-// the startup packet. So the list ends with `client_encoding` (it sorts
-// after "application_name") and then the caller's `application_name`: the
-// driver's entry then always comes before the caller's.
-//
-// The caller's `client_encoding` stays when there is one. Else the value is
-// UTF8, the encoding that pgo and Pog read and write. Without an
-// `application_name` the list does not change and no `client_encoding` is
-// sent.
-//
-// When the server would take one of several entries with the same name, it
-// takes the last, so only the last `application_name` and the last
-// `client_encoding` stay. Names are compared without case, like PostgreSQL
-// does.
-//
-// When pgo is fixed so that the caller's `application_name` replaces the
-// driver's, or the merge is `lists:ukeymerge` (which keeps our entry and
-// drops the driver's), the caller's name is still the last one, so the
-// server still shows it. A real-server test checks this order on each test
-// run.
-//
-// `connect` and `parse_config` both call this function, so a URL config that
-// goes to `pog.supervised` or `pog.start` also gets the order. Calling it
-// again on its own result gives the same list.
-fn order_connection_parameters(config: Config) -> Config {
-  let parameters = config.connection_parameters
-  case last_parameter_value(parameters, "application_name") {
-    Error(Nil) -> config
-    Ok(application_name) ->
-      pog.Config(
-        ..config,
-        connection_parameters: parameters_with_name_last(
-          parameters,
-          application_name,
-        ),
-      )
-  }
-}
-
-fn parameters_with_name_last(
-  parameters: List(#(String, String)),
-  application_name: String,
-) -> List(#(String, String)) {
-  let client_encoding =
-    last_parameter_value(parameters, "client_encoding")
-    |> result.unwrap("UTF8")
-  list.filter(parameters, is_not_ordered_parameter)
-  |> list.append([
-    #("client_encoding", client_encoding),
-    #("application_name", application_name),
-  ])
-}
-
-fn last_parameter_value(
-  parameters: List(#(String, String)),
-  name: String,
-) -> Result(String, Nil) {
-  parameters
-  |> list.filter(fn(parameter) { has_name(parameter, name) })
-  |> list.last()
-  |> result.map(fn(parameter) { parameter.1 })
-}
-
-fn is_not_ordered_parameter(parameter: #(String, String)) -> Bool {
-  !has_name(parameter, "application_name")
-  && !has_name(parameter, "client_encoding")
-}
-
-fn has_name(parameter: #(String, String), name: String) -> Bool {
-  string.lowercase(parameter.0) == name
 }
 
 // Private URL parsing - flat functions, no nesting
@@ -902,6 +852,17 @@ fn apply_query(
   }
 }
 
+// The `sslmode` and the `sslrootcert` of a URL. `parse_config` reads the
+// whole query string first, and then both together, because `sslrootcert`
+// changes the meaning of `sslmode`, as in libpq. The last value of each
+// wins.
+type SslSettings {
+  SslSettings(
+    mode: option.Option(String),
+    root_certificate: option.Option(String),
+  )
+}
+
 fn apply_query_string(
   config: Config,
   query: String,
@@ -910,18 +871,36 @@ fn apply_query_string(
     uri.parse_query(query)
     |> result.replace_error(MalformedUrl),
   )
-  list.try_fold(parameters, config, apply_parameter)
+  let start = #(
+    config,
+    SslSettings(mode: option.None, root_certificate: option.None),
+  )
+  use #(config, settings) <- result.try(list.try_fold(
+    parameters,
+    start,
+    apply_parameter,
+  ))
+  use ssl <- result.try(resolve_ssl(config.ssl, settings))
+  Ok(pog.ssl(config, ssl))
 }
 
 fn apply_parameter(
-  config: Config,
+  state: #(Config, SslSettings),
   parameter: #(String, String),
-) -> Result(Config, UrlError) {
+) -> Result(#(Config, SslSettings), UrlError) {
+  let #(config, settings) = state
   let #(name, value) = parameter
   case string.contains(name, "\u{0}"), string.contains(value, "\u{0}"), name {
     True, _, _ | _, True, _ -> Error(MalformedUrl)
-    False, False, "sslmode" -> apply_ssl_mode(config, value)
-    False, False, _ -> apply_named_parameter(config, name, value)
+    False, False, "sslmode" -> apply_ssl_mode(config, settings, value)
+    False, False, "sslrootcert" ->
+      Ok(#(
+        config,
+        SslSettings(..settings, root_certificate: option.Some(value)),
+      ))
+    False, False, _ ->
+      apply_named_parameter(config, name, value)
+      |> result.map(fn(config) { #(config, settings) })
   }
 }
 
@@ -970,9 +949,11 @@ fn append_connection_parameter(
   )
 }
 
-// The keywords that `parse_config` reads: `sslmode` sets the SSL mode, and
-// the others go to the server.
-const handled_keywords = ["sslmode", "application_name", "options"]
+// The keywords that `parse_config` reads: `sslmode` and `sslrootcert` set
+// the SSL mode, and the others go to the server.
+const handled_keywords = [
+  "sslmode", "sslrootcert", "application_name", "options",
+]
 
 const passed_keywords = ["application_name", "options"]
 
@@ -989,8 +970,8 @@ const refused_names = [
   "fallback_application_name", "keepalives", "keepalives_idle",
   "keepalives_interval", "keepalives_count", "tcp_user_timeout", "replication",
   "gssencmode", "requiressl", "sslnegotiation", "sslcompression", "sslcert",
-  "sslkey", "sslkeylogfile", "sslpassword", "sslcertmode", "sslrootcert",
-  "sslcrl", "sslcrldir", "sslsni", "requirepeer", "ssl_min_protocol_version",
+  "sslkey", "sslkeylogfile", "sslpassword", "sslcertmode", "sslcrl", "sslcrldir",
+  "sslsni", "requirepeer", "ssl_min_protocol_version",
   "ssl_max_protocol_version", "min_protocol_version", "max_protocol_version",
   "krbsrvname", "gsslib", "gssdelegation", "scram_client_key",
   "scram_server_key", "service", "target_session_attrs", "load_balance_hosts",
@@ -1041,16 +1022,44 @@ fn is_swap(left: List(String), right: List(String)) -> Bool {
   }
 }
 
-fn apply_ssl_mode(config: Config, mode: String) -> Result(Config, UrlError) {
-  use ssl <- result.try(parse_ssl_mode(mode))
-  Ok(pog.ssl(config, ssl))
+fn apply_ssl_mode(
+  config: Config,
+  settings: SslSettings,
+  mode: String,
+) -> Result(#(Config, SslSettings), UrlError) {
+  case list.contains(ssl_modes, mode) {
+    True -> Ok(#(config, SslSettings(..settings, mode: option.Some(mode))))
+    False -> Error(UnsupportedSslMode(mode))
+  }
 }
 
-fn parse_ssl_mode(mode: String) -> Result(pog.Ssl, UrlError) {
-  case mode {
-    "disable" -> Ok(pog.SslDisabled)
-    "require" -> Ok(pog.SslUnverified)
-    "verify-ca" | "verify-full" -> Ok(pog.SslVerified)
-    _ -> Error(UnsupportedSslMode(mode))
+const ssl_modes = ["disable", "require", "verify-ca", "verify-full"]
+
+// The rules of `pog.url_config` in dream_pog, which are the rules of libpq:
+// a CA file makes `require` check the chain, as `verify-ca` does, and
+// `sslrootcert=system` needs `verify-full`. `apply_ssl_mode` let only the
+// four modes of `ssl_modes` through, so the last two branches are
+// `verify-full`.
+fn resolve_ssl(
+  current: pog.Ssl,
+  settings: SslSettings,
+) -> Result(pog.Ssl, UrlError) {
+  case settings.mode, settings.root_certificate {
+    option.None, option.None -> Ok(current)
+    option.Some("verify-full"), option.Some("system")
+    | option.None, option.Some("system")
+    -> Ok(pog.SslVerified)
+    option.Some(mode), option.Some("system") ->
+      Error(SslRootCertSystemNeedsVerifyFull(mode))
+    option.None, option.Some(_path) -> Error(SslRootCertWithoutSslMode)
+    option.Some("disable"), _ -> Ok(pog.SslDisabled)
+    option.Some("require"), option.None -> Ok(pog.SslUnverified)
+    option.Some("require"), option.Some(path)
+    | option.Some("verify-ca"), option.Some(path)
+    -> Ok(pog.SslVerifiedChainOnlyCaFile(path))
+    option.Some("verify-ca"), option.None -> Ok(pog.SslVerifiedChainOnly)
+    option.Some(_verify_full), option.None -> Ok(pog.SslVerified)
+    option.Some(_verify_full), option.Some(path) ->
+      Ok(pog.SslVerifiedCaFile(path))
   }
 }

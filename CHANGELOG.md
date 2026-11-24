@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.0.0] - Unreleased
 
 ### Changed (breaking)
+- The package now uses `dream_pog`, a fork of Pog 4.1.0 on the driver
+  `dream_pgo`, a fork of pgo 0.20.0, in place of `pog`. The API is the
+  same, but the module name is `dream_pog`.
+  - Before: `import pog`, and `pog` in `[dependencies]`
+  - After: `import dream_pog as pog`, and `dream_pog` in `[dependencies]`
+  - Upgrade: replace `pog` with `dream_pog` in `gleam.toml`, and
+    `import pog` with `import dream_pog as pog`. The rest of the code stays
+    the same. `postgres.Config`, `Connection` and the other types are the
+    `dream_pog` types now.
+- `sslmode=verify-ca` now gives `pog.SslVerifiedChainOnly`, the meaning of
+  `libpq`: it checks that a trusted CA signed the certificate, but not the
+  host name. Before, it gave `pog.SslVerified`, which also checks the host
+  name. `sslmode=verify-full` still gives `pog.SslVerified`. Upgrade: use
+  `verify-full` where you want the host name checked.
+- `parse_config` and `connect` no longer put `client_encoding` before an
+  `application_name` in the connection parameters, and they no longer drop
+  an earlier `application_name`. That order was a workaround for a pgo bug
+  that lost the caller's `application_name`. `dream_pgo` fixes the bug: the
+  caller's `application_name` reaches the server in any order, also from a
+  config that goes to `pog.start` or `pog.supervised` without `connect`.
+  The real-server tests of the name pass without the workaround.
+  - Before: `?application_name=billing` gave
+    `[#("client_encoding", "UTF8"), #("application_name", "billing")]`
+  - After: it gives `[#("application_name", "billing")]`, and the server
+    keeps its default `client_encoding`
+  - Upgrade: none, unless your code reads `config.connection_parameters`.
+    Write `application_name` in lower case: `dream_pgo` does not see
+    `Application_Name` as the caller's name, so the server shows the
+    Erlang node name for it.
 - `postgres.from_url()` now returns `Result(Connection, FromUrlError)`.
   Before, it returned `Connection` and stopped the calling process with a
   `let assert` when the pool did not start, so a caller could not handle the
@@ -37,8 +66,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   block of the guides is a file in `test/outputs/` that a test compares
   with the real output, and the SQL, the `docker-compose.yml` service and
   the commands are copies of the files that the tests and CI use.
+- The connecting guide trusts a private CA with `sslrootcert` or
+  `pog.SslVerifiedCaFile` for one pool. Before, it loaded the CA file into
+  the CA list of the whole BEAM with `public_key:cacerts_load`.
 
 ### Added
+- Query recording: the new modules `dream_postgres/recorder` and
+  `dream_postgres/recording`. A recorder keeps the queries of one test in
+  one JSON file, in the modes `record`, `playback` and `passthrough`.
+  - Record mode runs each query on the database, and writes the query, its
+    parameters and its result (the count and the rows, or the error) to
+    the file before the query returns. A query in `pog.transaction` is
+    recorded too.
+  - Playback mode starts no pool and opens no connection
+    (`pog.disconnected`). Each query gets the result of its recording. A
+    query with no recording gets
+    `pog.PostgresqlError("NOREC", "no_recording", message)`, where the
+    message names the file, the SQL and the parameters. It never reaches a
+    database.
+  - A query matches the first recording with its key that it was not given
+    yet. The keys are `sql_and_parameters` (the default),
+    `normalized_sql_and_parameters`, `sql_only`, or a function of your own.
+  - A query transformer and a result transformer hide secrets before the
+    file is written.
+  - Every kind of value that the driver returns comes back the same in
+    playback: integers, floats, text, `bytea`, booleans, `NULL`, arrays,
+    timestamps, dates, times, numerics, UUIDs, JSON, intervals, bits and
+    rows as maps. A test against PostgreSQL 16 proves each one.
+  - The file format has a version (1), one key order and one line for each
+    row, so a diff shows only what changed. `recording.to_json` and
+    `recording.from_json` write and read it.
+  - The guide "Test database code with recorded queries" walks through it.
+- `sslrootcert` in a URL: the path of a PEM file with the CA certificates
+  that the pool trusts, or `system`. With the `sslmode`, it gives
+  `pog.SslVerifiedCaFile(path)`, `pog.SslVerifiedChainOnlyCaFile(path)`,
+  `pog.SslVerified` or `pog.SslDisabled`, by the same rules as
+  `pog.url_config` of `dream_pog` and `libpq`. The new `UrlError` values
+  `SslRootCertSystemNeedsVerifyFull(mode)` and `SslRootCertWithoutSslMode`
+  refuse the cases that `libpq` refuses or that this package does not read.
+  `connect` reads the CA file before the pool starts, and gives
+  `actor.InitExited` with a message that names the file when it cannot
+  read it.
+- `gleam_json` is a dependency, for the recording files.
 - `postgres.parse_config(pool_name, url) -> Result(Config, UrlError)` reads
   a connection URL into a `Config` and does not connect.
 - `UrlError` says what is wrong with a URL: `MalformedUrl`, `MissingScheme`,
@@ -57,22 +126,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FromUrlError` holds a `UrlError` or the reason the pool did not start:
   `InvalidUrl` and `PoolStartExited`.
   No error value holds the password.
-- The `sslmode` query parameter sets the SSL mode. `verify-ca` and
-  `verify-full` both give `pog.SslVerified`, which checks the certificate
-  and the host name, so `verify-ca` checks more than in `libpq`. The client
-  trusts the CA certificates of the operating system. The connecting guide
-  shows how to trust a private CA. `application_name`
-  sets the PostgreSQL connection parameter with that name in the config, and
-  the server shows that name: a test on a real PostgreSQL 16 server, with SSL
-  off and with SSL on, asserts it. pgo, the driver under Pog, also sends the
-  Erlang node name as `application_name`, and PostgreSQL keeps the last one.
-  So `parse_config` and `connect` put `client_encoding` (`UTF8`, or the value
-  of the config) just before the caller's `application_name`, and then pgo
-  puts its own value before both. A config without an `application_name`
-  sends no `client_encoding`. A config that goes to `pog.supervised` or
-  `pog.start` without `parse_config` or `connect` does not get this order.
-  The connecting guide shows the fix for that case. An IPv6 host such as
-  `[::1]` sets IPv6.
+- The `sslmode` query parameter sets the SSL mode, with the meaning of
+  `libpq`: `require` gives `pog.SslUnverified`, `verify-ca` gives
+  `pog.SslVerifiedChainOnly` and `verify-full` gives `pog.SslVerified`.
+  Without `sslrootcert`, the client trusts the CA certificates of the
+  operating system. The connecting guide shows how to trust a private CA
+  for one pool with `sslrootcert`. A test on a real PostgreSQL 16 server
+  with a certificate that names only `localhost` proves each mode: with the
+  test CA, `verify-ca` connects to `127.0.0.1` and `verify-full` does not.
+  `application_name` sets the PostgreSQL connection parameter with that
+  name in the config, and the server shows that name: a test on a real
+  PostgreSQL 16 server, with SSL off and with SSL on, asserts it. An IPv6
+  host such as `[::1]` sets IPv6.
 - Every other query parameter goes to the server as a run-time parameter,
   with its percent-decoded value, in the order of the URL:
   `?search_path=app&timezone=UTC` sets both on each connection, and
@@ -115,7 +180,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- 239 tests, 0 failed, 100.0% line coverage. `make test` takes about 58 seconds, and the test times add up to about 100 seconds, because 4 tests run at a time. The 18 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- 354 tests, 0 failed, 100.0% line coverage of `src/`, the Erlang file of the recorder too. `make test` takes about 62 seconds, and the test times add up to about 104 seconds, because 4 tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
+- `make test-playback` runs the 44 recorder tests that need no database. They pass with both test servers stopped, which proves that playback mode opens no connection.
 - The tests run against two PostgreSQL 16 servers (the `postgres:16-alpine` image), started with `make db-up`. One has SSL off. It runs as a service container in CI. The other has SSL on, with a test CA and a server certificate from `test/fixtures/ssl`. CI starts it with `docker compose`.
 
 ## [1.0.2] - 2025-11-21

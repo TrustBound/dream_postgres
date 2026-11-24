@@ -3,6 +3,7 @@
 //// Builds a connection config, runs a query, and turns the result into a
 //// value with query.first_row.
 
+import dream_pog as pog
 import dream_postgres/client.{
   type Config, type Connection, type QueryError, type Returned,
 }
@@ -10,7 +11,6 @@ import dream_postgres/query
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/otp/actor
-import pog
 
 pub fn create_database_config() -> Config {
   client.new(process.new_name("app_database"))

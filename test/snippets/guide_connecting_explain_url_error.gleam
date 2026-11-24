@@ -37,7 +37,13 @@ pub fn explain(error: postgres.UrlError) -> String {
     postgres.UnsupportedSslMode(mode) ->
       "DATABASE_URL has sslmode="
       <> mode
-      <> ". Use disable, require or verify-full."
+      <> ". Use disable, require, verify-ca or verify-full."
+    postgres.SslRootCertSystemNeedsVerifyFull(mode) ->
+      "DATABASE_URL has sslrootcert=system with sslmode="
+      <> mode
+      <> ". Use sslmode=verify-full."
+    postgres.SslRootCertWithoutSslMode ->
+      "DATABASE_URL has sslrootcert but no sslmode. Add sslmode=verify-full."
     postgres.UnsupportedFragment -> "DATABASE_URL has a # part. Remove it."
   }
 }

@@ -1,23 +1,6 @@
 -module(ssl_ffi).
--export([with_os_ca_list_restored/1, ca_count/0, capture_tls_alerts/1,
+-export([capture_tls_alerts/1,
          drop_tls_alert_reports/0, drop_tls_alert_report/2, log/2]).
-
-%% Calls Fun and returns its value. Then it clears the CA list that
-%% public_key:cacerts_load/1 loaded, also when Fun fails, so the next
-%% call of public_key:cacerts_get/0 reads the CA certificates of the
-%% operating system again. The list is global to the BEAM, so the tests
-%% that change it run one at a time.
-with_os_ca_list_restored(Fun) ->
-    try
-        Fun()
-    after
-        public_key:cacerts_clear()
-    end.
-
-%% Returns the number of CA certificates that Pog gives to the TLS
-%% connections of a pool that starts now (public_key:cacerts_get/0).
-ca_count() ->
-    length(public_key:cacerts_get()).
 
 %% Calls Fun and returns {Value, Alerts}: the value of Fun, and each TLS
 %% alert report that OTP's ssl application logged while Fun ran, as

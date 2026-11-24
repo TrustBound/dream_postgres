@@ -1,9 +1,10 @@
 //// Tests for what the guides say about the SSL modes, against a real
 //// PostgreSQL 16 server with SSL on (`fixtures/ssl_database`).
 ////
-//// Some tests change the CA list of the whole BEAM with
-//// `public_key:cacerts_load`, so this suite runs one test at a time.
+//// Some tests read the TLS alert reports that OTP's `ssl` application logs
+//// for every pool of the BEAM, so this suite runs one test at a time.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_between, be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -12,10 +13,10 @@ import fixtures/clock
 import fixtures/output_file
 import fixtures/ssl_database.{matching_host, other_address, url}
 import fixtures/test_database
+import gleam/erlang/process
 import gleam/list
 import gleam/result
 import gleam/string
-import pog
 import snippets/guide_connecting_private_ca.{connect_with_private_ca}
 
 const ssl_sql = "SELECT ssl::text FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
@@ -178,7 +179,7 @@ fn untrusted_ca_tests() {
 }
 
 fn trusted_ca_tests() {
-  group("the verify modes when the client trusts the CA", [
+  group("the verify modes with the test CA in sslrootcert", [
     it("verify-full connects with TLS to the name of the certificate", fn() {
       // Act
       let ssl =
@@ -219,7 +220,7 @@ fn trusted_ca_tests() {
       |> or_fail_with("Expected a Bad Certificate notice")
     }),
     it(
-      "verify-ca gives ConnectionUnavailable for an address the certificate does not name",
+      "verify-ca connects with TLS to an address the certificate does not name",
       fn() {
         // Act
         let ssl =
@@ -228,8 +229,8 @@ fn trusted_ca_tests() {
         // Assert
         ssl
         |> should
-        |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
-        |> or_fail_with("Expected ConnectionUnavailable, as for verify-full")
+        |> be_equal(Ok(Ok(["true"])))
+        |> or_fail_with("Expected a connection with TLS and a chain check")
       },
     ),
     it("verify-ca connects with TLS to the name of the certificate", fn() {
@@ -242,54 +243,99 @@ fn trusted_ca_tests() {
       |> be_equal(Ok(Ok(["true"])))
       |> or_fail_with("Expected a verified connection with TLS")
     }),
-    it("the pool keeps the CA list it read when it started", fn() {
-      // Act
-      let ssl = {
-        use <- test_database.with_own_pools()
-        let connected = {
-          use <- ssl_database.with_os_ca_list_restored()
-          connect_with_private_ca(
-            url(host: matching_host, sslmode: "verify-full"),
-            ssl_database.ca_file,
-          )
-        }
-        // The system's CA list is back, and the pool still trusts the test CA
-        result.map(connected, test_database.texts(_, ssl_sql))
-      }
+    it(
+      "require with a CA file connects with TLS to an address the certificate does not name",
+      fn() {
+        // Act
+        let ssl = ssl_with_test_ca(url(host: other_address, sslmode: "require"))
 
-      // Assert
-      ssl
-      |> should
-      |> be_equal(Ok(Ok(["true"])))
-      |> or_fail_with("Expected a verified connection with TLS")
-    }),
-    it("loading the CA file replaces the CA list of the system", fn() {
-      // Act
-      let count = {
-        use <- ssl_database.with_os_ca_list_restored()
-        use <- test_database.with_own_pools()
-        let _connected =
-          connect_with_private_ca(
-            url(host: matching_host, sslmode: "verify-full"),
-            ssl_database.ca_file,
-          )
-        ssl_database.ca_count()
-      }
-
-      // Assert
-      count
-      |> should
-      |> be_equal(1)
-      |> or_fail_with("Expected only the test CA in the list")
-    }),
-    it("gives an error for a CA file that does not exist", fn() {
+        // Assert
+        ssl
+        |> should
+        |> be_equal(Ok(Ok(["true"])))
+        |> or_fail_with("Expected a connection with TLS and a chain check")
+      },
+    ),
+    it("a CA file of one pool does not change the CA list of other pools", fn() {
       // Act
       let connected = {
-        use <- ssl_database.with_os_ca_list_restored()
         use <- test_database.with_own_pools()
-        connect_with_private_ca(
-          url(host: matching_host, sslmode: "verify-full"),
-          "test/fixtures/ssl/missing.crt",
+        let _pool =
+          ssl_with_test_ca(url(host: matching_host, sslmode: "verify-full"))
+        // The CA list of the system does not hold the test CA
+        ssl_database.ssl_in_use(url(host: matching_host, sslmode: "verify-full"))
+      }
+
+      // Assert
+      connected
+      |> should
+      |> be_equal(Ok(Error(pog.ConnectionUnavailable)))
+      |> or_fail_with("Expected ConnectionUnavailable without the CA file")
+    }),
+    it(
+      "connect_with_private_ca connects with TLS to the name of the certificate",
+      fn() {
+        // Arrange
+        let assert Ok(config) =
+          postgres.parse_config(
+            process.new_name("ssl_test"),
+            url(host: matching_host, sslmode: "disable"),
+          )
+
+        // Act
+        let ssl = {
+          use <- test_database.with_own_pools()
+          connect_with_private_ca(config, ssl_database.ca_file)
+          |> result.map(test_database.texts(_, ssl_sql))
+        }
+
+        // Assert
+        ssl
+        |> should
+        |> be_equal(Ok(Ok(["true"])))
+        |> or_fail_with("Expected a verified connection with TLS")
+      },
+    ),
+    it("connect_with_private_ca answers as the output file shows", fn() {
+      // Arrange
+      let assert Ok(config) =
+        postgres.parse_config(
+          process.new_name("ssl_test"),
+          url(host: matching_host, sslmode: "disable"),
+        )
+
+      // Act
+      let answers = {
+        use <- test_database.with_own_pools()
+        [
+          #(
+            "connect_with_private_ca(config, \"test/fixtures/ssl/missing.crt\")",
+            connect_with_private_ca(config, "test/fixtures/ssl/missing.crt")
+              |> result.replace(Nil)
+              |> string.inspect,
+          ),
+          #(
+            "connect_with_private_ca(config, \"README.md\")",
+            connect_with_private_ca(config, "README.md")
+              |> result.replace(Nil)
+              |> string.inspect,
+          ),
+        ]
+      }
+
+      // Assert
+      output_file.calls(answers)
+      |> should
+      |> be_equal(output_file.read("guide_connecting_ca_file_errors"))
+      |> or_fail_with("Expected the output file")
+    }),
+    it("from_url gives PoolStartExited for a CA file that does not exist", fn() {
+      // Act
+      let connected = {
+        use <- test_database.with_own_pools()
+        postgres.from_url(
+          url(host: matching_host, sslmode: "verify-full")
+          <> "&sslrootcert=test/fixtures/ssl/missing.crt",
         )
         |> result.replace(Nil)
       }
@@ -297,24 +343,18 @@ fn trusted_ca_tests() {
       // Assert
       connected
       |> should
-      |> be_equal(Error(
-        "Can't read the CA certificates in test/fixtures/ssl/missing.crt",
-      ))
-      |> or_fail_with("Expected the CA file error")
+      |> be_equal(Error(postgres.PoolStartExited))
+      |> or_fail_with("Expected PoolStartExited")
     }),
   ])
 }
 
-// Trusts the test CA with the snippet of the connecting guide, starts a
-// pool from `url` and asks the server whether the connection uses TLS.
-// Then it stops the pool and trusts the system's CA list again.
+// Starts a pool from `url` with the test CA in `sslrootcert`, asks the
+// server whether the connection uses TLS, and stops the pool.
 fn ssl_with_test_ca(
   url: String,
-) -> Result(Result(List(String), pog.QueryError), String) {
-  use <- ssl_database.with_os_ca_list_restored()
-  use <- test_database.with_own_pools()
-  connect_with_private_ca(url, ssl_database.ca_file)
-  |> result.map(test_database.texts(_, ssl_sql))
+) -> Result(Result(List(String), pog.QueryError), postgres.FromUrlError) {
+  ssl_database.ssl_in_use(url <> "&sslrootcert=" <> ssl_database.ca_file)
 }
 
 // Keeps the level of a TLS alert report, and writes its text as the

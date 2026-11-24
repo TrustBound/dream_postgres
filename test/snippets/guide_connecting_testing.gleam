@@ -3,13 +3,13 @@
 //// Tests the config that a URL gives, the message for a bad URL, and a pool
 //// on a port where no database listens.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
 import gleam/erlang/process
 import gleam/result
-import pog
 import snippets/guide_connecting_pool_config.{connect_pool, pool_config}
 
 pub fn tests() -> TestSuite {

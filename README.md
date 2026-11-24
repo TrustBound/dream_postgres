@@ -20,14 +20,15 @@
 
 # dream_postgres
 
-A standalone module with clean interfaces for PostgreSQL operations that use [Pog](https://hex.pm/packages/pog). It includes query result helpers and a builder pattern for connection management. It is built with the same quality standards as [Dream](https://github.com/TrustBound/dream), but it is completely independent. Use it in any Gleam project.
+A standalone module with clean interfaces for PostgreSQL operations that use `dream_pog`, a fork of [Pog](https://hex.pm/packages/pog). Import it as `import dream_pog as pog`. It includes query result helpers and a builder pattern for connection management. It is built with the same quality standards as [Dream](https://github.com/TrustBound/dream), but it is completely independent. Use it in any Gleam project.
 
 ## Features
 
 - ✅ Builder pattern for connection configuration
 - ✅ Type-safe query result extraction
 - ✅ Simplified error handling
-- ✅ Connection pooling via Pog
+- ✅ Connection pooling via `dream_pog`
+- ✅ Query recording: record the queries of a test once, then play them back with no database
 - ✅ Zero dependencies on Dream or other frameworks
 
 ## Installation
@@ -62,11 +63,33 @@ pub fn connect_database() -> Result(postgres.Connection, actor.StartError) {
 }
 ```
 
+## Recorded queries
+
+`dream_postgres/recorder` records each query of a test, with its parameters and its result, to one JSON file. Later runs play the file back with no database. A query with no recording is an error that names it, and never reaches a database. The modes are `record`, `playback` and `passthrough`, as in the HTTP recorder of `dream_http_client`.
+
+### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L18-L29"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/docs/guides/recorded-queries.md#step-3-record-once-against-the-real-database"><img align="right" alt="Guide" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
+
+```gleam
+pub fn run_recorded(
+  mode: String,
+  database_url: String,
+  directory: String,
+) -> Result(User, String) {
+  use recording <- result.try(start_recorder(mode, directory, "create_and_find"))
+  use db <- result.try(connect(recording, database_url))
+  let user = create_and_find(db) |> result.map_error(string.inspect)
+  // In record mode, each query was on disk when it returned
+  use Nil <- result.try(recorder.stop(recording))
+  user
+}
+```
+
 ## Guides
 
 - [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md): connect from `DATABASE_URL`, stop at startup when the URL or the database is wrong, run a first query and test it
 - [Connecting to PostgreSQL in production](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md): SSL, pool size, IPv6, a supervised pool, the URL format and a clear message for each URL error
 - [Running queries and handling their results](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md): turn query results and their errors into responses, tell a duplicate apart from a failure, and test it without a database
+- [Test database code with recorded queries](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/recorded-queries.md): record the queries of a test once against PostgreSQL, play them back with no database, read a query with no recording, hide a secret and record again after a query changes
 
 ## API Reference
 

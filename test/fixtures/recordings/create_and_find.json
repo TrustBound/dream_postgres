@@ -1,0 +1,26 @@
+{
+  "format": "dream_postgres query recording",
+  "version": 1,
+  "queries": [
+    {
+      "sql": "INSERT INTO users (name, email) VALUES ($1, $2) RETURNING id",
+      "parameters": ["Ada","ada@example.com"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1]}
+        ]
+      }
+    },
+    {
+      "sql": "SELECT id, name, email FROM users WHERE id = $1",
+      "parameters": [1],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,"Ada","ada@example.com"]}
+        ]
+      }
+    }
+  ]
+}

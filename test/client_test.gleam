@@ -5,6 +5,7 @@
 //// tests run a query on the test PostgreSQL server, or start a pool on a
 //// local port that has no listener.
 
+import dream_pog as pog
 import dream_postgres/client as postgres
 import dream_test/matchers.{
   be_equal, be_false, be_less_than, or_fail_with, should,
@@ -20,7 +21,6 @@ import gleam/list
 import gleam/option.{Some}
 import gleam/result
 import gleam/string
-import pog
 
 pub fn tests() -> TestSuite {
   describe("dream_postgres/client", [
@@ -29,6 +29,7 @@ pub fn tests() -> TestSuite {
     parse_config_value_tests(),
     parse_config_error_tests(),
     query_parameter_tests(),
+    ssl_root_certificate_tests(),
     from_url_tests(),
   ])
 }
@@ -285,7 +286,7 @@ fn parse_config_value_tests() {
       |> be_equal(Ok(expected))
       |> or_fail_with("Expected the default user")
     }),
-    it("maps sslmode and application_name, with client_encoding first", fn() {
+    it("maps sslmode and application_name", fn() {
       // Arrange
       let pool_name = process.new_name("client_test_pool")
       let expected =
@@ -296,10 +297,7 @@ fn parse_config_value_tests() {
           |> postgres.user("user")
           |> postgres.password("pass")
           |> pog.ssl(pog.SslVerified),
-          connection_parameters: [
-            #("client_encoding", "UTF8"),
-            #("application_name", "my app"),
-          ],
+          connection_parameters: [#("application_name", "my app")],
         )
 
       // Act
@@ -359,14 +357,14 @@ fn parse_config_value_tests() {
       |> be_equal(Ok(expected))
       |> or_fail_with("Expected SslUnverified")
     }),
-    it("maps sslmode=verify-ca to SslVerified", fn() {
+    it("maps sslmode=verify-ca to SslVerifiedChainOnly", fn() {
       // Arrange
       let pool_name = process.new_name("client_test_pool")
       let expected =
         postgres.new(pool_name)
         |> postgres.host("localhost")
         |> postgres.database("myapp")
-        |> pog.ssl(pog.SslVerified)
+        |> pog.ssl(pog.SslVerifiedChainOnly)
 
       // Act
       let config =
@@ -379,7 +377,7 @@ fn parse_config_value_tests() {
       config
       |> should
       |> be_equal(Ok(expected))
-      |> or_fail_with("Expected SslVerified")
+      |> or_fail_with("Expected SslVerifiedChainOnly")
     }),
     it("maps sslmode=verify-full to SslVerified", fn() {
       // Arrange
@@ -726,8 +724,8 @@ const refused_names = [
   "fallback_application_name", "keepalives", "keepalives_idle",
   "keepalives_interval", "keepalives_count", "tcp_user_timeout", "replication",
   "gssencmode", "requiressl", "sslnegotiation", "sslcompression", "sslcert",
-  "sslkey", "sslkeylogfile", "sslpassword", "sslcertmode", "sslrootcert",
-  "sslcrl", "sslcrldir", "sslsni", "requirepeer", "ssl_min_protocol_version",
+  "sslkey", "sslkeylogfile", "sslpassword", "sslcertmode", "sslcrl", "sslcrldir",
+  "sslsni", "requirepeer", "ssl_min_protocol_version",
   "ssl_max_protocol_version", "min_protocol_version", "max_protocol_version",
   "krbsrvname", "gsslib", "gssdelegation", "scram_client_key",
   "scram_server_key", "service", "target_session_attrs", "load_balance_hosts",
@@ -757,29 +755,23 @@ fn parse_query(query: String) -> Result(postgres.Config, postgres.UrlError) {
 
 fn query_parameter_tests() {
   group("parse_config query parameters", [
-    it(
-      "passes server parameters in URL order, with application_name last",
-      fn() {
-        // Act
-        let parameters =
-          parameters_of(
-            "?search_path=app&timezone=UTC&application_name=billing",
-          )
+    it("passes server parameters and application_name in URL order", fn() {
+      // Act
+      let parameters =
+        parameters_of("?search_path=app&timezone=UTC&application_name=billing")
 
-        // Assert
-        parameters
-        |> should
-        |> be_equal(
-          Ok([
-            #("search_path", "app"),
-            #("timezone", "UTC"),
-            #("client_encoding", "UTF8"),
-            #("application_name", "billing"),
-          ]),
-        )
-        |> or_fail_with("Expected the server parameters in URL order")
-      },
-    ),
+      // Assert
+      parameters
+      |> should
+      |> be_equal(
+        Ok([
+          #("search_path", "app"),
+          #("timezone", "UTC"),
+          #("application_name", "billing"),
+        ]),
+      )
+      |> or_fail_with("Expected the server parameters in URL order")
+    }),
     it("passes options to the server", fn() {
       // Act
       let parameters = parameters_of("?options=-c%20statement_timeout%3D5s")
@@ -901,17 +893,15 @@ fn query_parameter_tests() {
       |> be_equal(Ok([#("search_path", "a"), #("search_path", "b")]))
       |> or_fail_with("Expected both values in URL order")
     }),
-    it("uses the last application_name of the URL", fn() {
+    it("keeps both application_name values of the URL in order", fn() {
       // Act
       let parameters = parameters_of("?application_name=a&application_name=b")
 
       // Assert
       parameters
       |> should
-      |> be_equal(
-        Ok([#("client_encoding", "UTF8"), #("application_name", "b")]),
-      )
-      |> or_fail_with("Expected the last application name")
+      |> be_equal(Ok([#("application_name", "a"), #("application_name", "b")]))
+      |> or_fail_with("Expected both application names in URL order")
     }),
     it("uses the last sslmode of the URL", fn() {
       // Act
@@ -978,6 +968,187 @@ fn query_parameter_tests() {
       |> should
       |> be_equal(Error(postgres.UnsupportedParameter("_pq_.dream")))
       |> or_fail_with("Expected Error(UnsupportedParameter('_pq_.dream'))")
+    }),
+  ])
+}
+
+// Returns the SSL mode that `parse_config` gives for the query string
+// `query`.
+fn ssl_of(query: String) -> Result(pog.Ssl, postgres.UrlError) {
+  parse_query(query)
+  |> result.map(fn(config) { config.ssl })
+}
+
+fn ssl_root_certificate_tests() {
+  group("parse_config sslrootcert", [
+    it(
+      "gives SslDisabled for sslmode=disable with a CA file, which it does not use",
+      fn() {
+        // Act
+        let ssl = ssl_of("?sslmode=disable&sslrootcert=ca.pem")
+
+        // Assert
+        ssl
+        |> should
+        |> be_equal(Ok(pog.SslDisabled))
+        |> or_fail_with("Expected Ok(pog.SslDisabled)")
+      },
+    ),
+    it(
+      "gives SslVerifiedChainOnlyCaFile for sslmode=require with a CA file",
+      fn() {
+        // Act
+        let ssl = ssl_of("?sslmode=require&sslrootcert=ca.pem")
+
+        // Assert
+        ssl
+        |> should
+        |> be_equal(Ok(pog.SslVerifiedChainOnlyCaFile("ca.pem")))
+        |> or_fail_with("Expected Ok(pog.SslVerifiedChainOnlyCaFile(ca.pem))")
+      },
+    ),
+    it(
+      "gives SslVerifiedChainOnlyCaFile for sslmode=verify-ca with a CA file",
+      fn() {
+        // Act
+        let ssl = ssl_of("?sslmode=verify-ca&sslrootcert=ca.pem")
+
+        // Assert
+        ssl
+        |> should
+        |> be_equal(Ok(pog.SslVerifiedChainOnlyCaFile("ca.pem")))
+        |> or_fail_with("Expected Ok(pog.SslVerifiedChainOnlyCaFile(ca.pem))")
+      },
+    ),
+    it("gives SslVerifiedCaFile for sslmode=verify-full with a CA file", fn() {
+      // Act
+      let ssl = ssl_of("?sslmode=verify-full&sslrootcert=ca.pem")
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(Ok(pog.SslVerifiedCaFile("ca.pem")))
+      |> or_fail_with("Expected Ok(pog.SslVerifiedCaFile(ca.pem))")
+    }),
+    it("gives SslVerifiedCaFile when sslrootcert comes before sslmode", fn() {
+      // Act
+      let ssl = ssl_of("?sslrootcert=ca.pem&sslmode=verify-full")
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(Ok(pog.SslVerifiedCaFile("ca.pem")))
+      |> or_fail_with("Expected Ok(pog.SslVerifiedCaFile(ca.pem))")
+    }),
+    it("percent-decodes the path of the CA file", fn() {
+      // Act
+      let ssl = ssl_of("?sslmode=verify-full&sslrootcert=%2Fetc%2Fmy%20ca.pem")
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(Ok(pog.SslVerifiedCaFile("/etc/my ca.pem")))
+      |> or_fail_with("Expected Ok(pog.SslVerifiedCaFile(/etc/my ca.pem))")
+    }),
+    it("uses the last sslrootcert of the URL", fn() {
+      // Act
+      let ssl =
+        ssl_of("?sslmode=verify-full&sslrootcert=a.pem&sslrootcert=b.pem")
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(Ok(pog.SslVerifiedCaFile("b.pem")))
+      |> or_fail_with("Expected Ok(pog.SslVerifiedCaFile(b.pem))")
+    }),
+    it(
+      "gives SslVerified for sslrootcert=system with sslmode=verify-full",
+      fn() {
+        // Act
+        let ssl = ssl_of("?sslmode=verify-full&sslrootcert=system")
+
+        // Assert
+        ssl
+        |> should
+        |> be_equal(Ok(pog.SslVerified))
+        |> or_fail_with("Expected Ok(pog.SslVerified)")
+      },
+    ),
+    it("gives SslVerified for sslrootcert=system without sslmode", fn() {
+      // Act
+      let ssl = ssl_of("?sslrootcert=system")
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(Ok(pog.SslVerified))
+      |> or_fail_with("Expected Ok(pog.SslVerified)")
+    }),
+    it(
+      "returns SslRootCertSystemNeedsVerifyFull for sslrootcert=system with verify-ca",
+      fn() {
+        // Act
+        let ssl = ssl_of("?sslmode=verify-ca&sslrootcert=system")
+
+        // Assert
+        ssl
+        |> should
+        |> be_equal(
+          Error(postgres.SslRootCertSystemNeedsVerifyFull("verify-ca")),
+        )
+        |> or_fail_with(
+          "Expected Error(postgres.SslRootCertSystemNeedsVerifyFull(verify-ca))",
+        )
+      },
+    ),
+    it(
+      "returns SslRootCertSystemNeedsVerifyFull for sslrootcert=system with disable",
+      fn() {
+        // Act
+        let ssl = ssl_of("?sslmode=disable&sslrootcert=system")
+
+        // Assert
+        ssl
+        |> should
+        |> be_equal(Error(postgres.SslRootCertSystemNeedsVerifyFull("disable")))
+        |> or_fail_with(
+          "Expected Error(postgres.SslRootCertSystemNeedsVerifyFull(disable))",
+        )
+      },
+    ),
+    it("returns SslRootCertWithoutSslMode for a CA file without sslmode", fn() {
+      // Act
+      let ssl = ssl_of("?sslrootcert=ca.pem")
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(Error(postgres.SslRootCertWithoutSslMode))
+      |> or_fail_with("Expected Error(postgres.SslRootCertWithoutSslMode)")
+    }),
+    it("returns UnknownParameterLooksLike for sslrootcrt", fn() {
+      // Act
+      let ssl = ssl_of("?sslmode=verify-full&sslrootcrt=ca.pem")
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(
+        Error(postgres.UnknownParameterLooksLike("sslrootcrt", "sslrootcert")),
+      )
+      |> or_fail_with(
+        "Expected Error(postgres.UnknownParameterLooksLike(sslrootcrt, sslrootcert))",
+      )
+    }),
+    it("keeps the SSL mode of the config when the URL has neither", fn() {
+      // Act
+      let ssl = ssl_of("?search_path=app")
+
+      // Assert
+      ssl
+      |> should
+      |> be_equal(Ok(pog.SslDisabled))
+      |> or_fail_with("Expected Ok(pog.SslDisabled)")
     }),
   ])
 }
