@@ -111,8 +111,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PostgreSQL 16. `dream_postgres_driver` 1.1.0 compares 2,000 random
   values in each direction with the text of the server on PostgreSQL 16,
   17, 18 and 19, with no difference.
-- 526 tests, 0 failed, 100.0% line coverage of `src/` (648 of 648 lines),
-  the Erlang files too. The run took 2 minutes 16 seconds, and 4 tests run
+- 534 tests, 0 failed, 100.0% line coverage of `src/` (654 of 654 lines),
+  the Erlang files too. The run took 1 minute 4 seconds of wall time, and
+  the runner reports 2 minutes 6 seconds of test time. 4 tests run
   at a time. The 20 SSL tests run one at a time. Apple M1 Max,
   10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 
