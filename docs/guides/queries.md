@@ -191,6 +191,23 @@ SELECT id, name, email, created_at FROM users WHERE id = $1
 
 The tests of this package run every query of two generated modules against PostgreSQL 16 through `dream_postgres/client`, then play them back with no database.
 
+Code from dream_model calls three more functions of `dream_postgres/client`. `violated_constraint` gives the name of the constraint that an insert violated, and the generated code compares it with the unique constraints that dream_model found. `promised_not_null` checks the `-- not null:` promise of a `.sql` file on each row. `check_schema` compares the schema fingerprint of each generated module with the database. Call `check_schema` right after the pool starts, next to `check`. When it gives an error, regenerate the modules with dream_model.
+
+### Check the generated modules at startup <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_check_schema.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+import gleam/result
+
+pub fn check_models(
+  connection: postgres.Connection,
+  models: List(postgres.SchemaFingerprint),
+) -> Result(Nil, String) {
+  postgres.check_schema(connection, models)
+  |> result.map_error(postgres.format_schema_check_error)
+}
+```
+
 ## Step 2: Turn one row into a response
 
 A "show user" handler runs `find_user` and turns its result into a response. Split those two parts into two functions:

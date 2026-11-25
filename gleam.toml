@@ -34,3 +34,7 @@ checked_from_version = "2.0.0"
 # The files that the tests or CI use. A file, command or output block of the
 # docs must copy one of them.
 tested_files = ["test", ".github", "scripts", "gleam.toml", "docker-compose.yml"]
+
+[erlang]
+# crypto gives the SHA-256 hash of a schema fingerprint.
+extra_applications = ["crypto"]

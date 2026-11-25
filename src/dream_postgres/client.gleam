@@ -1521,6 +1521,556 @@ pub fn numeric_decoder() -> decode.Decoder(Float) {
   dream_postgres_client.numeric_decoder()
 }
 
+// Helpers for the code that dream_model generates. Generated code imports
+// only this module, so it cannot match a `QueryError` variant itself.
+
+/// Get the name of the constraint that a query violated
+///
+/// When a query fails because it violates a constraint, this function gives
+/// the name of the constraint, for example `users_email_key`. This includes
+/// a unique constraint, a primary key, a unique index, a foreign key, a
+/// check constraint and an exclusion constraint. Every other error gives
+/// `Error(Nil)`, also a `NOT NULL` violation.
+///
+/// This function does not tell the kinds of constraints apart. To find a
+/// duplicate, compare the name with the names of constraints that you know
+/// are unique. dream_model makes sure at generation time that each
+/// `-- unique <name>` hint names a unique constraint, a primary key or a
+/// unique index of the table, and `check_schema` finds a schema that
+/// changed after that.
+///
+/// ## Parameters
+///
+/// - `error`: The error from `execute`
+///
+/// ## Returns
+///
+/// - `Ok(constraint)`: The query violated the constraint `constraint`
+/// - `Error(Nil)`: The error is not a constraint violation
+///
+/// ## Example
+///
+/// ### Tell the user that the email is taken <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_violated_constraint.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+///
+/// pub fn sign_up_error_message(error: postgres.QueryError) -> String {
+///   case postgres.violated_constraint(error) {
+///     Ok("users_email_key") -> "Email already taken"
+///     Ok(constraint) -> "The sign-up broke the constraint " <> constraint
+///     Error(Nil) -> "The sign-up failed"
+///   }
+/// }
+/// ```
+pub fn violated_constraint(error: QueryError) -> Result(String, Nil) {
+  case error {
+    dream_postgres_client.ConstraintViolated(constraint:, ..) -> Ok(constraint)
+    _ -> Error(Nil)
+  }
+}
+
+/// Decode a column that a SQL file promised is never NULL
+///
+/// PostgreSQL cannot tell if a computed column, such as `sum(amount)`, can
+/// be NULL. A `.sql` file for dream_model can promise it with a
+/// `-- not null: total` line, and the generated decoder then reads the
+/// column with this function. It checks the promise on each row.
+///
+/// A value that is not NULL goes to `decoder`. A NULL fails the row with
+/// one `decode.DecodeError`: `found` is `"NULL"`, and `expected` is
+/// the message `the SQL file order_total.sql promised the column total is
+/// never NULL, and PostgreSQL returned NULL`. `execute` then returns
+/// `UnexpectedResultType` with that error. The path of the error is the
+/// path of the column, for example `["0"]` for `decode.at([0], ...)`. A
+/// NULL fails also when `decoder` accepts NULL.
+///
+/// ## Parameters
+///
+/// - `decoder`: The decoder for a value that is not NULL
+/// - `file`: The name of the SQL file that made the promise
+/// - `column`: The name of the column
+///
+/// ## Returns
+///
+/// A decoder that fails on NULL with a message that names `file` and
+/// `column`.
+///
+/// ## Example
+///
+/// ### Read a sum that the SQL file promised is never NULL <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_promised_not_null.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn order_total(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   "SELECT sum(amount)::int AS total FROM orders"
+///   |> postgres.query
+///   |> postgres.returning(decode.at(
+///     [0],
+///     postgres.promised_not_null(decode.int, "order_total.sql", "total"),
+///   ))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn promised_not_null(
+  decoder: decode.Decoder(a),
+  file: String,
+  column: String,
+) -> decode.Decoder(a) {
+  let null_error =
+    decode.DecodeError(
+      expected: "the SQL file "
+        <> file
+        <> " promised the column "
+        <> column
+        <> " is never NULL, and PostgreSQL returned NULL",
+      found: "NULL",
+      path: [],
+    )
+  use found <- decode.then(decode.optional(decoder))
+  case found {
+    option.Some(value) -> decode.success(value)
+    option.None ->
+      decoder
+      |> decode.then(decode.failure(_, null_error.expected))
+      |> decode.map_errors(fn(_errors) { [null_error] })
+  }
+}
+
+/// The schema fingerprint that a generated module expects.
+///
+/// dream_model writes one value for each module that it generates. Give the
+/// values to `check_schema` right after the pool starts.
+pub type SchemaFingerprint {
+  SchemaFingerprint(
+    /// The name of the generated module, for example `app/sql/users`.
+    module: String,
+    /// The tables that the module reads or writes, each as
+    /// `schema.table`, for example `public.users`.
+    tables: List(String),
+    /// The value of `schema_fingerprint` for `tables` when dream_model
+    /// generated the module: 64 lowercase hexadecimal digits.
+    hash: String,
+  )
+}
+
+/// A generated module whose tables changed after dream_model generated it.
+pub type SchemaMismatch {
+  SchemaMismatch(
+    /// The name of the generated module.
+    module: String,
+    /// The tables of the module.
+    tables: List(String),
+    /// The fingerprint that the module expects.
+    expected: String,
+    /// The fingerprint of the database.
+    found: String,
+  )
+}
+
+/// Why `check_schema` failed.
+pub type SchemaCheckError {
+  /// The schema of these modules changed. Regenerate the modules with
+  /// dream_model.
+  SchemaChanged(mismatches: List(SchemaMismatch))
+  /// The fingerprint query of `module` failed with `error`.
+  SchemaUnreadable(module: String, error: QueryError)
+}
+
+/// The SQL of `schema_fingerprint`
+///
+/// `$1` is a `text[]` of table names. The query gives one row with one
+/// `text` column: the canonical text of the schema. `schema_fingerprint`
+/// gives the SHA-256 hash of its UTF-8 bytes, as 64 lowercase hexadecimal
+/// digits. A tool that does not use this package, such as a code
+/// generator, runs this SQL to get the same fingerprint.
+///
+/// The text has one line for each fact, sorted by byte value and joined by
+/// a newline. It holds these facts for each table, and for each child table
+/// and partition of the table, at all levels:
+///
+/// - The kind of the relation (`relkind`), row level security and forced
+///   row level security, if it has a `BEFORE` row trigger, the partition
+///   key and the partition bound
+/// - Each parent of the table
+/// - Each column that is not dropped: its name, its type (`format_type`),
+///   `NOT NULL`, if it has a default, and its identity and generated kind
+/// - Each constraint: its kind, name, if it is validated, and its
+///   definition (`pg_get_constraintdef`). On PostgreSQL 18 and later, this
+///   includes the `NOT NULL` constraints.
+/// - Each policy: its name, command, if it is permissive, its roles, and
+///   its `USING` and `WITH CHECK` expressions
+/// - Each domain that a column uses, also through an array or another
+///   domain: its base type, `NOT NULL` and its constraints
+/// - Each enum type that a column uses: its labels in order
+///
+/// A name that is not a table gives the line `<name> missing`, so a
+/// missing table changes the fingerprint and is not an error.
+///
+/// The text holds no OIDs and no column numbers, and the columns are sorted
+/// by name. Two databases that the same migrations made give the same text.
+/// The query sets `search_path` to `pg_catalog` while it reads the
+/// catalog, and then sets the earlier value back. So each name in the
+/// text has its schema, and the `search_path` of the connection does not
+/// change the text. PostgreSQL 17 and later keep the `NOT NULL` of a
+/// domain as a constraint, and PostgreSQL 18 and later keep the `NOT NULL`
+/// of a column as a constraint. So the text of one schema is different on
+/// PostgreSQL 16, on 17, and on 18 and later. Generate the modules against
+/// the major version of PostgreSQL that the app uses.
+///
+/// ## Example
+///
+/// ### Read the canonical text of the fingerprint <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_schema_fingerprint_sql.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn fingerprint_text(
+///   connection: postgres.Connection,
+///   tables: List(String),
+/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+///   postgres.schema_fingerprint_sql
+///   |> postgres.query
+///   |> postgres.parameter(postgres.array(postgres.text, tables))
+///   |> postgres.returning(decode.at([0], decode.string))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub const schema_fingerprint_sql =
+  "WITH RECURSIVE saved AS MATERIALIZED (
+  SELECT current_setting('search_path') AS search_path
+),
+pinned AS MATERIALIZED (
+  SELECT set_config('search_path', 'pg_catalog', true) AS search_path
+  FROM saved
+),
+requested AS (
+  SELECT DISTINCT name FROM unnest($1::text[]) AS name
+),
+roots AS (
+  SELECT requested.name, class.oid
+  FROM requested
+  LEFT JOIN (
+    pg_class AS class
+    JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+  ) ON quote_ident(namespace.nspname) || '.' || quote_ident(class.relname)
+    = requested.name
+),
+relations AS (
+  SELECT oid FROM roots WHERE oid IS NOT NULL
+  UNION
+  SELECT inherits.inhrelid
+  FROM pg_inherits AS inherits
+  JOIN relations ON inherits.inhparent = relations.oid
+),
+named AS (
+  SELECT class.*,
+    quote_ident(namespace.nspname) || '.' || quote_ident(class.relname)
+      AS qualified
+  FROM relations
+  JOIN pg_class AS class ON class.oid = relations.oid
+  JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
+),
+columns AS (
+  SELECT named.qualified, attribute.*
+  FROM named
+  JOIN pg_attribute AS attribute ON attribute.attrelid = named.oid
+  WHERE attribute.attnum > 0 AND NOT attribute.attisdropped
+),
+types AS (
+  SELECT atttypid AS oid FROM columns
+  UNION
+  SELECT CASE WHEN type.typtype = 'd' THEN type.typbasetype ELSE type.typelem END
+  FROM types
+  JOIN pg_type AS type ON type.oid = types.oid
+  WHERE type.typtype = 'd' OR (type.typcategory = 'A' AND type.typelem <> 0)
+),
+lines AS (
+  SELECT roots.name || ' missing' AS line
+  FROM roots WHERE roots.oid IS NULL
+  UNION ALL
+  SELECT named.qualified || ' relation kind=' || named.relkind::text
+    || ' row_security=' || named.relrowsecurity
+    || ' force_row_security=' || named.relforcerowsecurity
+    || ' before_row_triggers=' || EXISTS (
+      SELECT FROM pg_trigger AS trigger
+      WHERE trigger.tgrelid = named.oid AND NOT trigger.tgisinternal
+        AND trigger.tgtype & 3 = 3
+    )
+    || ' partition_key=' || coalesce(pg_get_partkeydef(named.oid), '')
+    || ' partition_bound=' || coalesce(pg_get_expr(named.relpartbound, named.oid), '')
+  FROM named
+  UNION ALL
+  SELECT named.qualified || ' inherits ' || quote_ident(namespace.nspname) || '.' || quote_ident(parent.relname)
+  FROM named
+  JOIN pg_inherits AS inherits ON inherits.inhrelid = named.oid
+  JOIN pg_class AS parent ON parent.oid = inherits.inhparent
+  JOIN pg_namespace AS namespace ON namespace.oid = parent.relnamespace
+  UNION ALL
+  SELECT columns.qualified || ' column ' || quote_ident(columns.attname)
+    || ' type=' || format_type(columns.atttypid, columns.atttypmod)
+    || ' not_null=' || columns.attnotnull
+    || ' has_default=' || columns.atthasdef
+    || ' identity=' || columns.attidentity::text
+    || ' generated=' || columns.attgenerated::text
+  FROM columns
+  UNION ALL
+  SELECT named.qualified || ' constraint ' || quote_ident(constraint_row.conname)
+    || ' type=' || constraint_row.contype::text
+    || ' validated=' || constraint_row.convalidated
+    || ' definition=' || pg_get_constraintdef(constraint_row.oid)
+  FROM named
+  JOIN pg_constraint AS constraint_row ON constraint_row.conrelid = named.oid
+  UNION ALL
+  SELECT named.qualified || ' policy ' || quote_ident(policy.polname)
+    || ' command=' || policy.polcmd::text
+    || ' permissive=' || policy.polpermissive
+    || ' roles=' || (
+      SELECT string_agg(roles.name, ',' ORDER BY roles.name COLLATE \"C\")
+      FROM (
+        SELECT CASE WHEN role_oid = 0 THEN 'public'
+          ELSE quote_ident(pg_get_userbyid(role_oid)) END AS name
+        FROM unnest(policy.polroles) AS role_oid
+      ) AS roles
+    )
+    || ' using=' || coalesce(pg_get_expr(policy.polqual, policy.polrelid), '')
+    || ' with_check=' || coalesce(pg_get_expr(policy.polwithcheck, policy.polrelid), '')
+  FROM named
+  JOIN pg_policy AS policy ON policy.polrelid = named.oid
+  UNION ALL
+  SELECT format_type(type.oid, NULL) || ' domain base='
+    || format_type(type.typbasetype, type.typtypmod)
+    || ' not_null=' || type.typnotnull
+  FROM types JOIN pg_type AS type ON type.oid = types.oid
+  WHERE type.typtype = 'd'
+  UNION ALL
+  SELECT format_type(type.oid, NULL) || ' domain_constraint ' || quote_ident(constraint_row.conname)
+    || ' type=' || constraint_row.contype::text
+    || ' validated=' || constraint_row.convalidated
+    || ' definition=' || pg_get_constraintdef(constraint_row.oid)
+  FROM types
+  JOIN pg_type AS type ON type.oid = types.oid
+  JOIN pg_constraint AS constraint_row ON constraint_row.contypid = type.oid
+  UNION ALL
+  SELECT format_type(type.oid, NULL) || ' enum labels=' || (
+      SELECT string_agg(quote_literal(enum.enumlabel), ',' ORDER BY enum.enumsortorder)
+      FROM pg_enum AS enum WHERE enum.enumtypid = type.oid
+    )
+  FROM types JOIN pg_type AS type ON type.oid = types.oid
+  WHERE type.typtype = 'e'
+)
+SELECT CASE
+  WHEN set_config('search_path', saved.search_path, true) IS NULL THEN NULL
+  ELSE fingerprint.text
+END
+FROM saved
+CROSS JOIN pinned
+CROSS JOIN LATERAL (
+  SELECT coalesce(string_agg(lines.line, chr(10) ORDER BY lines.line COLLATE \"C\"), '') AS text
+  FROM lines
+  WHERE pinned.search_path IS NOT NULL
+) AS fingerprint"
+
+/// Get the schema fingerprint of tables
+///
+/// Runs `schema_fingerprint_sql` and gives the SHA-256 hash of its text.
+/// The fingerprint changes when a fact that dream_model reads from the
+/// catalog changes: see `schema_fingerprint_sql` for the list. It does not
+/// change when only OIDs or the order of the columns change.
+///
+/// Write each table as `schema.table`, as
+/// `quote_ident(schema) || '.' || quote_ident(table)` writes it, for
+/// example `public.users` or `public."Order"`. A table that does not
+/// exist gives a fingerprint too: a different one.
+///
+/// ## Parameters
+///
+/// - `connection`: The connection from `connect` or `from_url`
+/// - `tables`: The tables, each as `schema.table`
+///
+/// ## Returns
+///
+/// - `Ok(fingerprint)`: 64 lowercase hexadecimal digits
+/// - `Error(QueryError)`: The query failed
+///
+/// ## Example
+///
+/// ### Get the fingerprint of the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_schema_fingerprint.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+///
+/// pub fn users_fingerprint(
+///   connection: postgres.Connection,
+///   schema: String,
+/// ) -> Result(String, postgres.QueryError) {
+///   postgres.schema_fingerprint(connection, [schema <> ".users"])
+/// }
+/// ```
+pub fn schema_fingerprint(
+  connection: Connection,
+  tables: List(String),
+) -> Result(String, QueryError) {
+  schema_fingerprint_sql
+  |> query
+  |> parameter(array(text, tables))
+  |> returning(decode.at([0], decode.string))
+  |> execute(connection)
+  // The query always gives exactly one row.
+  |> result.map(fn(returned) { sha256_hex(string.concat(returned.rows)) })
+}
+
+@external(erlang, "dream_postgres_schema_ffi", "sha256_hex")
+fn sha256_hex(text: String) -> String
+
+/// Check that the schema still matches the generated modules
+///
+/// The types of a generated module are true only for the schema that
+/// dream_model generated it from. Call this function right after the pool
+/// starts, with the fingerprint of each generated module. It computes the
+/// fingerprint of the tables of each module with `schema_fingerprint`, and
+/// compares it with the expected one.
+///
+/// ## Parameters
+///
+/// - `connection`: The connection from `connect` or `from_url`
+/// - `expected`: The fingerprint of each generated module
+///
+/// ## Returns
+///
+/// - `Ok(Nil)`: Each module matches the schema
+/// - `Error(SchemaChanged(mismatches))`: The modules of `mismatches` do
+///   not match. Regenerate them with dream_model.
+/// - `Error(SchemaUnreadable(module, error))`: The fingerprint query of
+///   `module` failed. The check stops at that module.
+///
+/// ## See Also
+///
+/// - `format_schema_check_error`: a message for the error
+///
+/// ## Example
+///
+/// ### Check the generated modules at startup <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_check_schema.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/result
+///
+/// pub fn check_models(
+///   connection: postgres.Connection,
+///   models: List(postgres.SchemaFingerprint),
+/// ) -> Result(Nil, String) {
+///   postgres.check_schema(connection, models)
+///   |> result.map_error(postgres.format_schema_check_error)
+/// }
+/// ```
+pub fn check_schema(
+  connection: Connection,
+  expected: List(SchemaFingerprint),
+) -> Result(Nil, SchemaCheckError) {
+  use mismatches <- result.try(find_mismatches(connection, expected, []))
+  case mismatches {
+    [] -> Ok(Nil)
+    _ -> Error(SchemaChanged(mismatches))
+  }
+}
+
+fn find_mismatches(
+  connection: Connection,
+  remaining: List(SchemaFingerprint),
+  found: List(SchemaMismatch),
+) -> Result(List(SchemaMismatch), SchemaCheckError) {
+  case remaining {
+    [] -> Ok(list.reverse(found))
+    [fingerprint, ..rest] -> {
+      use hash <- result.try(
+        schema_fingerprint(connection, fingerprint.tables)
+        |> result.map_error(SchemaUnreadable(fingerprint.module, _)),
+      )
+      find_mismatches(connection, rest, add_mismatch(found, fingerprint, hash))
+    }
+  }
+}
+
+fn add_mismatch(
+  found: List(SchemaMismatch),
+  fingerprint: SchemaFingerprint,
+  hash: String,
+) -> List(SchemaMismatch) {
+  case hash == fingerprint.hash {
+    True -> found
+    False -> [
+      SchemaMismatch(
+        module: fingerprint.module,
+        tables: fingerprint.tables,
+        expected: fingerprint.hash,
+        found: hash,
+      ),
+      ..found
+    ]
+  }
+}
+
+/// Format a schema check error as a message
+///
+/// `SchemaChanged` gives a message that names each module and its tables,
+/// and tells you to regenerate the modules with dream_model.
+/// `SchemaUnreadable` gives a message that names the module and the query
+/// error.
+///
+/// ## Parameters
+///
+/// - `error`: The error from `check_schema`
+///
+/// ## Returns
+///
+/// The message, one line for each module.
+///
+/// ## Example
+///
+/// ### Check the generated modules at startup <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_check_schema.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/result
+///
+/// pub fn check_models(
+///   connection: postgres.Connection,
+///   models: List(postgres.SchemaFingerprint),
+/// ) -> Result(Nil, String) {
+///   postgres.check_schema(connection, models)
+///   |> result.map_error(postgres.format_schema_check_error)
+/// }
+/// ```
+pub fn format_schema_check_error(error: SchemaCheckError) -> String {
+  case error {
+    SchemaChanged(mismatches) ->
+      "The database schema changed after dream_model generated these modules. Regenerate them with dream_model:\n"
+      <> string.join(list.map(mismatches, format_mismatch), "\n")
+    SchemaUnreadable(module, query_error) ->
+      "The schema fingerprint query of "
+      <> module
+      <> " failed: "
+      <> string.inspect(query_error)
+  }
+}
+
+fn format_mismatch(mismatch: SchemaMismatch) -> String {
+  "- "
+  <> mismatch.module
+  <> " ("
+  <> string.join(mismatch.tables, ", ")
+  <> "): expected fingerprint "
+  <> mismatch.expected
+  <> ", found "
+  <> mismatch.found
+}
+
 // Private URL parsing - flat functions, no nesting
 
 fn parse_uri(url: String) -> Result(uri.Uri, UrlError) {
