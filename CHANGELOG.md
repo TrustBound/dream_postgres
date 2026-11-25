@@ -5,6 +5,34 @@ All notable changes to `dream_postgres` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - Unreleased
+
+### Added
+- `dream_postgres/client` now has the query functions, the value functions
+  and the decoders of `dream_postgres_client`: `query`, `parameter`,
+  `returning`, `timeout`, `execute`, `transaction`, `null`, `bool`, `int`,
+  `float`, `text`, `bytea`, `array`, `nullable`, `timestamp`,
+  `calendar_date`, `calendar_time_of_day`, `timestamp_decoder`,
+  `calendar_date_decoder`, `calendar_time_of_day_decoder` and
+  `numeric_decoder`. Each function calls the function of the same name in
+  `dream_postgres_client`, with the same arguments.
+- The type aliases `Query(row)` and `TransactionError(error)`, next to the
+  aliases `Connection`, `QueryError`, `Value` and `Returned(a)`.
+- Code that `dream_sql_generator` writes with
+  `client_module = "dream_postgres/client"` now compiles against this
+  package. The generated module imports `dream_postgres/client as pog`,
+  and an app needs no `dream_postgres_client` import for it. The README and
+  the queries guide show the `gleam.toml` setting.
+- `gleam_time` is now a direct dependency, for the `Timestamp`, `Date` and
+  `TimeOfDay` types of the new functions.
+
+### Tests
+- The tests run every query of two generated modules from the Dream
+  examples (`database` and `tasks`) through `dream_postgres/client`. Only
+  the import line of each module changed. The tests record the queries
+  against PostgreSQL 16 and play the committed recordings back with no
+  database.
+
 ## [2.0.0] - 2026-11-24
 
 ### Changed (breaking)

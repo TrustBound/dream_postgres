@@ -37,7 +37,7 @@ dream_postgres has no dependency on Dream or on any web framework, so it works i
 
 You also need a PostgreSQL server. If you have Docker, put this `docker-compose.yml` in your project. It's the server this package's own tests run against: PostgreSQL 16 on port 5436, so it doesn't clash with a PostgreSQL you already run on 5432, and with no volume, so each start gives you an empty database:
 
-### The PostgreSQL service of docker-compose.yml <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/docker-compose.yml#L11-L27"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The PostgreSQL service of docker-compose.yml <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/docker-compose.yml#L11-L27"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```yaml
 services:
@@ -61,7 +61,7 @@ services:
 
 Start it, and wait until it accepts connections:
 
-### Start the server <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/scripts/db-up.sh#L7"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Start the server <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/scripts/db-up.sh#L7"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```sh
 docker compose up -d --wait postgres
@@ -69,7 +69,7 @@ docker compose up -d --wait postgres
 
 Its URL is `postgresql://dream:dream@localhost:5436/dream_test`. Step 3 reads a `users` table. Create it in `psql` (`docker compose exec postgres psql -U dream -d dream_test`):
 
-### Make the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/fixtures/sql/getting_started_users.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Make the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/fixtures/sql/getting_started_users.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```sql
 CREATE TABLE users (id serial PRIMARY KEY, name text NOT NULL);
@@ -82,7 +82,7 @@ Gleam's standard library has no function to read an environment variable. The [e
 
 Most hosting platforms give your app one `DATABASE_URL`. `from_url` reads it and starts a pool of connections:
 
-### Start a pool from DATABASE_URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Start a pool from DATABASE_URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_getting_started_connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -107,7 +107,7 @@ Here's what happens:
 
 No error from `from_url` holds the password from the URL, so it's safe to print or log one with `string.inspect`. Here's what `connect` returns for a URL with an `sslmode` this package doesn't support:
 
-### What connect returns for an sslmode it does not support <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_connect_error.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What connect returns for an sslmode it does not support <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_getting_started_connect_error.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 connect("postgresql://app:secret@db.example.com/app?sslmode=prefer")
@@ -120,7 +120,7 @@ There's one thing `from_url` can't tell you: whether a database is listening. Th
 
 If the database is down or the URL points at the wrong host, you want to know when the app starts, not when the first user clicks something. `postgres.check` does that: it runs `SELECT 1` on the connection, and returns `Ok(Nil)` when the database answers or the query's error when it doesn't. Call it right after `from_url`. This module grows Step 1 into a `start` function with its own error type:
 
-### Start the pool and check that the database answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_startup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Start the pool and check that the database answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_getting_started_startup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -174,7 +174,7 @@ A few things to notice:
 
 Here's what `start` returns, passed through `describe` when it fails, for the server from [Before you start](#before-you-start), for a wrong password, for a password with an `@` that isn't encoded, and for a URL where nothing listens:
 
-### What start returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_start.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What start returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_getting_started_start.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 start("postgresql://dream:dream@localhost:5436/dream_test")
@@ -198,7 +198,7 @@ In your `main`, call `start` once. On `Error(error)`, print `describe(error)` to
 
 Now the program has a connection that works. Keep it in a context value that your handlers get, and write each query as a function that takes the connection:
 
-### Find a user and greet them <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Find a user and greet them <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_getting_started_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/query
@@ -260,7 +260,7 @@ Here's how the pieces fit:
 
 With the table and the two rows from [Before you start](#before-you-start), here's what `greet_user` and `find_user` return:
 
-### What greet_user and find_user return <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_greet_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What greet_user and find_user return <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_getting_started_greet_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 greet_user(Context(db:), 1)
@@ -275,7 +275,7 @@ find_user(db, 2)
 
 `find_user` shows the result as `string.inspect` writes it, so `dream_postgres_client.Returned(count: 1, rows: [...])` shows as `Returned(1, [...])`. Splitting the query from the code that reads its result is what makes this easy to test. `greeting` doesn't need a database at all. Here's what it returns for a result with two rows, and what `greet_user` returns when no database listens:
 
-### What greeting returns, and greet_user with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_getting_started_greeting.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What greeting returns, and greet_user with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_getting_started_greeting.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 greeting(Ok(dream_postgres_client.Returned(count: 2, rows: [User(1, "Ada"), User(2, "Grace")])))
@@ -317,14 +317,14 @@ The code that reads results is where your logic lives, and you can test it with 
 
 The tests here use [dream_test](https://hexdocs.pm/dream_test). Add it as a dev dependency, with the version range this package tests with:
 
-### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/gleam.toml#L26-L27"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The dream_test dependency of this package <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/gleam.toml#L27-L28"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```toml
 [dev-dependencies]
 dream_test = ">= 3.0.0 and < 4.0.0"
 ```
 
-### Test the greeting and the startup check <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_getting_started_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Test the greeting and the startup check <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_getting_started_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres_client

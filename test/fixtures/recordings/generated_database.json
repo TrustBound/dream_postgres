@@ -1,0 +1,113 @@
+{
+  "format": "dream_postgres query recording",
+  "version": 1,
+  "queries": [
+    {
+      "sql": "CREATE TABLE users (id SERIAL PRIMARY KEY, name VARCHAR(255) NOT NULL, email VARCHAR(255) UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT '2026-01-02 03:04:05')",
+      "parameters": [],
+      "result": {
+        "count": 0,
+        "rows": []
+      }
+    },
+    {
+      "sql": "CREATE TABLE posts (id SERIAL PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, title VARCHAR(255) NOT NULL, content TEXT, created_at TIMESTAMP DEFAULT '2026-01-02 03:04:05')",
+      "parameters": [],
+      "result": {
+        "count": 0,
+        "rows": []
+      }
+    },
+    {
+      "sql": "-- Create a new user\nINSERT INTO users (name, email) VALUES ($1, $2) RETURNING id, name, email, created_at\n\n\n\n\n\n",
+      "parameters": ["Ada","ada@example.com"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,"Ada","ada@example.com",1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- Create a new user\nINSERT INTO users (name, email) VALUES ($1, $2) RETURNING id, name, email, created_at\n\n\n\n\n\n",
+      "parameters": ["Ada","ada@example.com"],
+      "result": {"error":"constraint_violated","message":"duplicate key value violates unique constraint \"users_email_key\"","constraint":"users_email_key","detail":"Key (email)=(ada@example.com) already exists."}
+    },
+    {
+      "sql": "-- Create a new post for a user\nINSERT INTO posts (user_id, title, content) VALUES ($1, $2, $3) RETURNING id, user_id, title, content, created_at\n\n\n\n\n\n",
+      "parameters": [1,"Hello","The first post"],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,1,"Hello","The first post",1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- Get a single user by ID\nSELECT id, name, email, created_at FROM users WHERE id = $1\n\n\n\n\n\n",
+      "parameters": [1],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,"Ada","ada@example.com",1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- Get a single post by ID\nSELECT id, user_id, title, content, created_at FROM posts WHERE id = $1\n\n\n\n\n\n",
+      "parameters": [1],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,1,"Hello","The first post",1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- List all users\nSELECT id, name, email, created_at FROM users ORDER BY id\n\n\n\n\n\n",
+      "parameters": [],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,"Ada","ada@example.com",1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- List all posts for a user\nSELECT id, user_id, title, content, created_at FROM posts WHERE user_id = $1 ORDER BY id\n\n\n\n\n\n",
+      "parameters": [1],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,1,"Hello","The first post",1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- Update a user\nUPDATE users SET name = $1, email = $2 WHERE id = $3 RETURNING id, name, email, created_at\n\n\n\n\n\n",
+      "parameters": ["Ada Lovelace","ada@example.org",1],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,"Ada Lovelace","ada@example.org",1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- Delete a user\nDELETE FROM users WHERE id = $1\n\n\n\n\n\n",
+      "parameters": [1],
+      "result": {
+        "count": 1,
+        "rows": []
+      }
+    },
+    {
+      "sql": "-- List all posts for a user\nSELECT id, user_id, title, content, created_at FROM posts WHERE user_id = $1 ORDER BY id\n\n\n\n\n\n",
+      "parameters": [1],
+      "result": {
+        "count": 0,
+        "rows": []
+      }
+    }
+  ]
+}

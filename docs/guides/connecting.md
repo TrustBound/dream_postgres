@@ -57,7 +57,7 @@ There are three ways to get a `Config` (the pool settings), and one more way to 
 
 A `DATABASE_URL` usually comes from somewhere you don't control: a hosting dashboard, a secret store, a colleague's message. When it's wrong, `parse_config` and `from_url` return a `UrlError` that names the problem. `string.inspect` of it is fine for a log, but an operator reading `UnsupportedSslMode("prefer")` at 3 a.m. still has to look up what to do. This function turns each error into a sentence with the fix:
 
-### Explain each URL error <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_explain_url_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Explain each URL error <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_connecting_explain_url_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -111,7 +111,7 @@ Every variant of `UrlError` has a branch, so when a new version of the package a
 
 Here's what it returns for URLs you'll meet in practice:
 
-### What explain returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_explain.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What explain returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_connecting_explain.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 postgresql://app:secret@db.example.com/app?sslmode=require&channel_binding=require
@@ -142,7 +142,7 @@ The last one is worth a second look. A URL without `postgresql://` reads as a UR
 
 `from_url` always uses 15 connections. To choose your own number, read the URL with `parse_config`, change the config, and start the pool with `connect`:
 
-### Read a URL and set the pool size <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_pool_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Read a URL and set the pool size <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_connecting_pool_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -185,7 +185,7 @@ How it works:
 
 The URL also sets SSL, IPv6 and the application name. Here's the config that `pool_config` returns for a URL with all three and a pool size of 30:
 
-### The config of pool_config <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_pool_config.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The config of pool_config <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_connecting_pool_config.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 pool_config(name, "postgresql://app:secret@[2001:db8::10]:6432/app?sslmode=verify-full&application_name=billing", 30)
@@ -199,7 +199,7 @@ pool_config(name, "postgresql://app:secret@[2001:db8::10]:6432/app?sslmode=verif
 
 The host in brackets is an IPv6 address, so `parse_config` sets `Ipv6` for you. `application_name` is the name PostgreSQL shows for your connections in `pg_stat_activity`, which helps when several apps share one database. Ask the server and you'll see it:
 
-### The application name the server shows <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_application_name.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The application name the server shows <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_connecting_application_name.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 from_url("postgresql://dream:dream@localhost:5436/dream_test?application_name=billing")
@@ -209,7 +209,7 @@ SELECT current_setting('application_name')
 
 Any other name in the query string that isn't a `libpq` connection keyword goes to the server as a run-time parameter, such as `search_path`, `timezone` or `statement_timeout`. The server applies it to each connection of the pool:
 
-### The parameters the server applies <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_server_parameters.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The parameters the server applies <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_connecting_server_parameters.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 from_url("postgresql://dream:dream@localhost:5436/dream_test?search_path=app&timezone=UTC&application_name=billing")
@@ -225,7 +225,7 @@ The driver under `dream_postgres_client` sends your `application_name` to the se
 
 When your settings come as separate values, there's no URL to read and nothing to encode. Start from `new` with a pool name, set each value, and call `connect`:
 
-### Build a config and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Build a config and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -253,7 +253,7 @@ The builder functions each set one field and return the new config: `host`, `por
 
 For production you'll want SSL and an application name too. The package has no setter for those, but `Config` is a `dream_postgres_client.Config`, so Pog's setters slot into the same pipeline:
 
-### Add SSL and an application name <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_builder_ssl.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Add SSL and an application name <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_connecting_builder_ssl.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -288,7 +288,7 @@ One difference from the URL path: `host` doesn't look at the address. With `pars
 
 `connect` starts the pool linked to the process that calls it. That's fine for a script. In a long-running app, you'll want the pool in your supervision tree, so it restarts if it crashes. Pog has `dream_postgres_client.supervised` for that, and it takes the same config:
 
-### Start the pool under a supervisor <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_supervised.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Start the pool under a supervisor <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_connecting_supervised.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -345,7 +345,7 @@ The client trusts the CA list of OTP's `public_key` application, which is the CA
 
 A failed check looks like every other failed connection: the pool starts, and each query returns `ConnectionUnavailable` after 2 to 3 seconds. The cause shows only in the log. OTP's `ssl` application logs a notice for each try of each connection:
 
-### The notices of a failed certificate check <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_tls_notices.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The notices of a failed certificate check <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_connecting_tls_notices.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 TLS client: ... generated CLIENT ALERT: Fatal - Unknown CA
@@ -376,7 +376,7 @@ The pool then trusts the CA certificates of that file, and only those. Other poo
 
 With the builder, put the file in the `dream_postgres_client.Ssl` value:
 
-### Trust the CA of one file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_private_ca.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Trust the CA of one file <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_connecting_private_ca.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -401,7 +401,7 @@ How it works:
 
 For a file that doesn't exist, and for a file with no certificate:
 
-### The errors of a bad CA file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_connecting_ca_file_errors.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The errors of a bad CA file <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_connecting_ca_file_errors.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 connect_with_private_ca(config, "test/fixtures/ssl/missing.crt")
@@ -469,7 +469,7 @@ Most of your connection code is pure: it reads a URL and builds a config. Test t
 
 These tests use [dream_test](https://hexdocs.pm/dream_test), added as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#test-your-code) guide shows:
 
-### Test the config and a pool with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_connecting_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Test the config and a pool with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_connecting_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres

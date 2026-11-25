@@ -1,4 +1,5 @@
 import architecture_snippets_test
+import client_query_snippets_test
 import client_test
 import deployment_guide_snippets_test
 import dream_test/coverage
@@ -8,6 +9,7 @@ import dream_test/reporters/progress
 import dream_test/runner
 import fixtures/ssl_database
 import fixtures/test_database
+import generated_sql_test
 import gleam/io
 import gleam/result
 import guide_connecting_test
@@ -57,6 +59,8 @@ pub fn main() {
 fn run_tests() -> Nil {
   runner.new([
     client_test.tests(),
+    client_query_snippets_test.tests(),
+    generated_sql_test.tests(),
     query_test.tests(),
     hexdocs_snippets_test.tests(),
     readme_snippets_test.tests(),

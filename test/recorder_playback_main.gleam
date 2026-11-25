@@ -5,6 +5,7 @@
 import dream_test/reporters/bdd
 import dream_test/reporters/progress
 import dream_test/runner
+import generated_sql_test
 import guide_recording_test
 import recorder_playback_test
 import recorder_snippets_test
@@ -16,6 +17,7 @@ pub fn main() {
     recorder_snippets_test.tests(),
     guide_recording_test.playback_tests(),
     guide_recording_testing.tests(),
+    generated_sql_test.playback_tests(),
   ])
   |> runner.progress_reporter(progress.new())
   |> runner.results_reporters([bdd.new()])

@@ -1,0 +1,5 @@
+[dev-dependencies]
+dream_sql_generator = ">= 1.0.0 and < 2.0.0"
+
+[tools.dream_sql_generator]
+client_module = "dream_postgres/client"

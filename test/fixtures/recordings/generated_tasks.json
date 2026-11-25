@@ -1,0 +1,99 @@
+{
+  "format": "dream_postgres query recording",
+  "version": 1,
+  "queries": [
+    {
+      "sql": "CREATE TABLE projects (id SERIAL PRIMARY KEY, name TEXT NOT NULL, description TEXT, color TEXT, created_at TIMESTAMP NOT NULL DEFAULT '2026-01-02 03:04:05')",
+      "parameters": [],
+      "result": {
+        "count": 0,
+        "rows": []
+      }
+    },
+    {
+      "sql": "CREATE TABLE tasks (id SERIAL PRIMARY KEY, title TEXT NOT NULL, description TEXT, completed BOOLEAN NOT NULL DEFAULT FALSE, priority INTEGER NOT NULL DEFAULT 3, due_date DATE, position INTEGER NOT NULL DEFAULT 0, project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL, created_at TIMESTAMP NOT NULL DEFAULT '2026-01-02 03:04:05', updated_at TIMESTAMP NOT NULL DEFAULT '2026-01-02 03:04:05')",
+      "parameters": [],
+      "result": {
+        "count": 0,
+        "rows": []
+      }
+    },
+    {
+      "sql": "-- name: create_task\n-- Create a new task\nINSERT INTO tasks (\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id\n)\nVALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, 0))\nRETURNING\n  id,\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id,\n  created_at,\n  updated_at;\n\n",
+      "parameters": ["Write the docs","For 2.1.0",false,2,{"tuple":[2026,11,30]},1,0],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,"Write the docs","For 2.1.0",false,2,{"tuple":[2026,11,30]},1,null,1767323045000000,1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- name: create_task\n-- Create a new task\nINSERT INTO tasks (\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id\n)\nVALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, 0))\nRETURNING\n  id,\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id,\n  created_at,\n  updated_at;\n\n",
+      "parameters": ["Tag","",true,3,{"tuple":[2026,11,30]},2,0],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[2,"Tag","",true,3,{"tuple":[2026,11,30]},2,null,1767323045000000,1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- name: get_task\n-- Get a single task by ID\nSELECT\n  id,\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id,\n  created_at,\n  updated_at\nFROM tasks\nWHERE id = $1;\n\n",
+      "parameters": [1],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[1,"Write the docs","For 2.1.0",false,2,{"tuple":[2026,11,30]},1,null,1767323045000000,1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- name: list_tasks\n-- List all tasks ordered by position\nSELECT\n  id,\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id,\n  created_at,\n  updated_at\nFROM tasks\nORDER BY position ASC, created_at DESC;\n\n",
+      "parameters": [],
+      "result": {
+        "count": 2,
+        "rows": [
+          {"tuple":[1,"Write the docs","For 2.1.0",false,2,{"tuple":[2026,11,30]},1,null,1767323045000000,1767323045000000]},
+          {"tuple":[2,"Tag","",true,3,{"tuple":[2026,11,30]},2,null,1767323045000000,1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- name: list_by_project\n-- List all tasks for a specific project\nSELECT\n  id,\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id,\n  created_at,\n  updated_at\nFROM tasks\nWHERE project_id = $1\nORDER BY position ASC, created_at DESC;\n\n",
+      "parameters": [1],
+      "result": {
+        "count": 0,
+        "rows": []
+      }
+    },
+    {
+      "sql": "-- name: update_position\n-- Update the position of a task for drag-and-drop reordering\nUPDATE tasks\nSET position = $2\nWHERE id = $1\nRETURNING\n  id,\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id,\n  created_at,\n  updated_at;\n\n",
+      "parameters": [2,5],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[2,"Tag","",true,3,{"tuple":[2026,11,30]},5,null,1767323045000000,1767323045000000]}
+        ]
+      }
+    },
+    {
+      "sql": "-- name: delete_task\n-- Delete a task by ID\nDELETE FROM tasks\nWHERE id = $1;\n\n",
+      "parameters": [1],
+      "result": {
+        "count": 1,
+        "rows": []
+      }
+    },
+    {
+      "sql": "-- name: list_tasks\n-- List all tasks ordered by position\nSELECT\n  id,\n  title,\n  description,\n  completed,\n  priority,\n  due_date,\n  position,\n  project_id,\n  created_at,\n  updated_at\nFROM tasks\nORDER BY position ASC, created_at DESC;\n\n",
+      "parameters": [],
+      "result": {
+        "count": 1,
+        "rows": [
+          {"tuple":[2,"Tag","",true,3,{"tuple":[2026,11,30]},5,null,1767323045000000,1767323045000000]}
+        ]
+      }
+    }
+  ]
+}

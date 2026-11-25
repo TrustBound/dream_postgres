@@ -5,7 +5,7 @@
 ////
 //// ## Example
 ////
-//// ### Read the first row <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_first_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+//// ### Read the first row <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/query_first_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
 //// import dream_postgres/query
@@ -70,7 +70,7 @@ pub type QueryError {
 ///
 /// ## Example
 ///
-/// ### Read the first row <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_first_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Read the first row <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/query_first_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/query
@@ -129,7 +129,7 @@ fn first_of_rows(rows: List(row)) -> Result(row, QueryError) {
 ///
 /// ## Example
 ///
-/// ### Read all rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/query_all_rows.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Read all rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/query_all_rows.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/query

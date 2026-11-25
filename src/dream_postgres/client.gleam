@@ -2,12 +2,16 @@
 ////
 //// Provides a clean builder interface to the connection pool of
 //// `dream_postgres_client`, a fork of Pog. Follows Dream's builder pattern
-//// for consistency. Import `dream_postgres_client` to use its types and
-//// query functions with this module.
+//// for consistency.
+////
+//// It also has the query functions, the value functions and the types of
+//// `dream_postgres_client`, so most code imports only this module. Code
+//// that the SQL generator writes uses this module when `gleam.toml` sets
+//// `client_module = "dream_postgres/client"`.
 ////
 //// ## Example
 ////
-//// ### Build a config and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+//// ### Build a config and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/readme_connection_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
 //// import dream_postgres/client as postgres
@@ -32,19 +36,21 @@
 //// ```
 
 import dream_postgres_client
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/list
-import gleam/option
+import gleam/option.{type Option}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
+import gleam/time/calendar.{type Date, type TimeOfDay}
+import gleam/time/timestamp.{type Timestamp}
 import gleam/uri
 
 /// A connection to a PostgreSQL connection pool.
 ///
-/// The same type as `dream_postgres_client.Connection`. Pass it to
-/// `dream_postgres_client.execute` to run a query. `connect` and `from_url`
-/// return it.
+/// The same type as `dream_postgres_client.Connection`. Pass it to `execute`
+/// to run a query. `connect` and `from_url` return it.
 pub type Connection =
   dream_postgres_client.Connection
 
@@ -59,17 +65,16 @@ pub type Config =
 
 /// Why a query failed.
 ///
-/// The same type as `dream_postgres_client.QueryError`.
-/// `dream_postgres_client.execute` returns it. The `dream_postgres/query`
-/// helpers turn it into the simpler `query.QueryError`.
+/// The same type as `dream_postgres_client.QueryError`. `execute` returns
+/// it. The `dream_postgres/query` helpers turn it into the simpler
+/// `query.QueryError`.
 pub type QueryError =
   dream_postgres_client.QueryError
 
 /// A value for a parameter of a query.
 ///
-/// The same type as `dream_postgres_client.Value`. Make one with
-/// `dream_postgres_client.int`, `dream_postgres_client.text` and the other
-/// value functions of `dream_postgres_client`.
+/// The same type as `dream_postgres_client.Value`. Make one with `int`,
+/// `text` and the other value functions of this module.
 pub type Value =
   dream_postgres_client.Value
 
@@ -79,6 +84,24 @@ pub type Value =
 /// rows, and `rows` holds the decoded rows.
 pub type Returned(a) =
   dream_postgres_client.Returned(a)
+
+/// A query that is ready to run, with its SQL, its parameters and the decoder
+/// of its rows.
+///
+/// The same type as `dream_postgres_client.Query`. Make one with `query`,
+/// add parameters with `parameter`, set the row decoder with `returning`,
+/// then run it with `execute`. `row` is the type of one decoded row.
+pub type Query(row) =
+  dream_postgres_client.Query(row)
+
+/// Why a transaction failed.
+///
+/// The same type as `dream_postgres_client.TransactionError`. `transaction`
+/// returns it. `TransactionQueryError` holds the error of the `BEGIN` or the
+/// `COMMIT`, and `TransactionRolledBack` holds the error that the callback
+/// returned.
+pub type TransactionError(error) =
+  dream_postgres_client.TransactionError(error)
 
 /// Create a new default PostgreSQL configuration
 ///
@@ -95,7 +118,7 @@ pub type Returned(a) =
 ///
 /// ## Example
 ///
-/// ### Create a config for a pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_new.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Create a config for a pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_new.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -125,7 +148,7 @@ pub fn new(pool_name: process.Name(dream_postgres_client.Message)) -> Config {
 ///
 /// ## Example
 ///
-/// ### Set the host <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_host.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Set the host <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_host.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -154,7 +177,7 @@ pub fn host(config: Config, value: String) -> Config {
 ///
 /// ## Example
 ///
-/// ### Set the port <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_port.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Set the port <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_port.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -183,7 +206,7 @@ pub fn port(config: Config, value: Int) -> Config {
 ///
 /// ## Example
 ///
-/// ### Set the database name <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_database.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Set the database name <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_database.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -212,7 +235,7 @@ pub fn database(config: Config, value: String) -> Config {
 ///
 /// ## Example
 ///
-/// ### Set the user <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Set the user <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -241,7 +264,7 @@ pub fn user(config: Config, value: String) -> Config {
 ///
 /// ## Example
 ///
-/// ### Set the password <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_password.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Set the password <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_password.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -271,7 +294,7 @@ pub fn password(config: Config, value: String) -> Config {
 ///
 /// ## Example
 ///
-/// ### Set the pool size <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_pool_size.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Set the pool size <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_pool_size.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -333,7 +356,7 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 ///
 /// ## Example
 ///
-/// ### Start a connection pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start a connection pool <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -569,7 +592,7 @@ pub type FromUrlError {
 ///
 /// ## Example
 ///
-/// ### Read a connection URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_parse_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Read a connection URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_parse_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -641,7 +664,7 @@ pub fn parse_config(
 ///
 /// ## Example
 ///
-/// ### Start a pool from a URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_from_url.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start a pool from a URL <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_from_url.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -695,7 +718,7 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
 ///
 /// ## Example
 ///
-/// ### Check that the database answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/client_check.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Check that the database answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_check.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -712,6 +735,790 @@ pub fn check(connection: Connection) -> Result(Nil, QueryError) {
   dream_postgres_client.query("SELECT 1")
   |> dream_postgres_client.execute(connection)
   |> result.replace(Nil)
+}
+
+// Queries and values. Code that the SQL generator writes with
+// `client_module = "dream_postgres/client"` calls these functions.
+
+/// Create a query from SQL text
+///
+/// Makes a query that `execute` runs. The query has no parameters, a timeout
+/// of 5000 milliseconds, and a decoder that ignores the rows. Write `$1`,
+/// `$2` and so on in the SQL for the parameters, then add them with
+/// `parameter`. The same function as `dream_postgres_client.query`.
+///
+/// ## Parameters
+///
+/// - `sql`: The SQL text of the query
+///
+/// ## Returns
+///
+/// A new `Query(Nil)`. Set the row decoder with `returning`.
+///
+/// ## Example
+///
+/// ### Add two numbers in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_query.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn add(
+///   connection: postgres.Connection,
+///   left: Int,
+///   right: Int,
+/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   "SELECT $1::int + $2::int"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.int(left))
+///   |> postgres.parameter(postgres.int(right))
+///   |> postgres.returning(decode.at([0], decode.int))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn query(sql: String) -> Query(Nil) {
+  dream_postgres_client.query(sql)
+}
+
+/// Add a parameter to a query
+///
+/// Gives the value of the next `$n` placeholder of the SQL. The first call
+/// fills `$1`, the second fills `$2`, and so on. The value travels apart from
+/// the SQL text, so it cannot change the query. The same function as
+/// `dream_postgres_client.parameter`.
+///
+/// ## Parameters
+///
+/// - `query`: The query to change
+/// - `parameter`: The value, from `int`, `text` or another value function
+///
+/// ## Returns
+///
+/// The query with the parameter added.
+///
+/// ## Example
+///
+/// ### Add two numbers in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_query.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn add(
+///   connection: postgres.Connection,
+///   left: Int,
+///   right: Int,
+/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   "SELECT $1::int + $2::int"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.int(left))
+///   |> postgres.parameter(postgres.int(right))
+///   |> postgres.returning(decode.at([0], decode.int))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn parameter(query: Query(row), parameter: Value) -> Query(row) {
+  dream_postgres_client.parameter(query, parameter)
+}
+
+/// Set the decoder of the rows of a query
+///
+/// Each row comes to the decoder as a tuple of its columns. So
+/// `decode.at([0], decode.int)` gives the first column as an `Int`, and
+/// `decode.field(1, decode.string)` gives the second column as a `String`.
+/// The same function as `dream_postgres_client.returning`.
+///
+/// ## Parameters
+///
+/// - `query`: The query to change
+/// - `decoder`: The decoder of one row
+///
+/// ## Returns
+///
+/// The query with the new row type.
+///
+/// ## Example
+///
+/// ### Add two numbers in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_query.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn add(
+///   connection: postgres.Connection,
+///   left: Int,
+///   right: Int,
+/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   "SELECT $1::int + $2::int"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.int(left))
+///   |> postgres.parameter(postgres.int(right))
+///   |> postgres.returning(decode.at([0], decode.int))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn returning(query: Query(a), decoder: decode.Decoder(b)) -> Query(b) {
+  dream_postgres_client.returning(query, decoder)
+}
+
+/// Set the timeout of a query
+///
+/// The query fails with `QueryTimeout` when the database does not answer in
+/// time. The default is 5000 milliseconds. The same function as
+/// `dream_postgres_client.timeout`.
+///
+/// ## Parameters
+///
+/// - `query`: The query to change
+/// - `timeout`: The time in milliseconds
+///
+/// ## Returns
+///
+/// The query with the new timeout.
+///
+/// ## Example
+///
+/// ### Give a query one second <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timeout.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn one_in_a_second(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   "SELECT 1"
+///   |> postgres.query
+///   |> postgres.timeout(1000)
+///   |> postgres.returning(decode.at([0], decode.int))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn timeout(query: Query(row), timeout: Int) -> Query(row) {
+  dream_postgres_client.timeout(query, timeout)
+}
+
+/// Run a query
+///
+/// Sends the query and its parameters to the database, and decodes each row
+/// with the decoder of `returning`. Code that the SQL generator writes calls
+/// this function. The same function as `dream_postgres_client.execute`.
+///
+/// ## Parameters
+///
+/// - `query`: The query to run
+/// - `pool`: The connection, from `connect` or `from_url`
+///
+/// ## Returns
+///
+/// `Ok(Returned(row))` with the number of rows and the decoded rows, or the
+/// `QueryError` of the failure.
+///
+/// ## Example
+///
+/// ### Add two numbers in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_query.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn add(
+///   connection: postgres.Connection,
+///   left: Int,
+///   right: Int,
+/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   "SELECT $1::int + $2::int"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.int(left))
+///   |> postgres.parameter(postgres.int(right))
+///   |> postgres.returning(decode.at([0], decode.int))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn execute(
+  query query: Query(row),
+  on pool: Connection,
+) -> Result(Returned(row), QueryError) {
+  dream_postgres_client.execute(query, pool)
+}
+
+/// Run a function in a transaction
+///
+/// Starts a transaction and gives the callback a connection in it. When the
+/// callback returns `Ok`, the transaction commits. When it returns `Error`,
+/// the transaction rolls back. Run every query of the transaction on the
+/// connection that the callback gets. The same function as
+/// `dream_postgres_client.transaction`.
+///
+/// ## Parameters
+///
+/// - `pool`: The connection, from `connect` or `from_url`
+/// - `callback`: The function that runs the queries of the transaction
+///
+/// ## Returns
+///
+/// The `Ok` value of the callback, `TransactionRolledBack` with the error of
+/// the callback, or `TransactionQueryError` when the `BEGIN` or the `COMMIT`
+/// fails.
+///
+/// ## Example
+///
+/// ### Run a query in a transaction <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_transaction.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+/// import gleam/result
+///
+/// pub fn answer_in_transaction(
+///   connection: postgres.Connection,
+/// ) -> Result(List(Int), postgres.TransactionError(postgres.QueryError)) {
+///   use transaction <- postgres.transaction(connection)
+///   "SELECT 40 + 2"
+///   |> postgres.query
+///   |> postgres.returning(decode.at([0], decode.int))
+///   |> postgres.execute(transaction)
+///   |> result.map(fn(returned) { returned.rows })
+/// }
+/// ```
+pub fn transaction(
+  pool: Connection,
+  callback: fn(Connection) -> Result(value, error),
+) -> Result(value, TransactionError(error)) {
+  dream_postgres_client.transaction(pool, callback)
+}
+
+/// A SQL `NULL` parameter
+///
+/// Use it for a column that has no value. `nullable` gives `NULL` for `None`.
+/// The same function as `dream_postgres_client.null`.
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Send NULL <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_null.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn null_is_null(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(Bool), postgres.QueryError) {
+///   "SELECT $1::text IS NULL"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.null())
+///   |> postgres.returning(decode.at([0], decode.bool))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn null() -> Value {
+  dream_postgres_client.null()
+}
+
+/// A boolean parameter
+///
+/// Gives a `bool` value to PostgreSQL. The same function as
+/// `dream_postgres_client.bool`.
+///
+/// ## Parameters
+///
+/// - `value`: The boolean
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Negate a boolean in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_bool.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn negate(
+///   connection: postgres.Connection,
+///   value: Bool,
+/// ) -> Result(postgres.Returned(Bool), postgres.QueryError) {
+///   "SELECT NOT $1::bool"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.bool(value))
+///   |> postgres.returning(decode.at([0], decode.bool))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn bool(value: Bool) -> Value {
+  dream_postgres_client.bool(value)
+}
+
+/// An integer parameter
+///
+/// Gives an integer value to PostgreSQL, for an `int`, `bigint` or `smallint`
+/// column. The same function as `dream_postgres_client.int`.
+///
+/// ## Parameters
+///
+/// - `value`: The integer
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Add one in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_int.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn next_number(
+///   connection: postgres.Connection,
+///   value: Int,
+/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   "SELECT $1::int + 1"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.int(value))
+///   |> postgres.returning(decode.at([0], decode.int))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn int(value: Int) -> Value {
+  dream_postgres_client.int(value)
+}
+
+/// A float parameter
+///
+/// Gives a floating point value to PostgreSQL, for a `real` or `double
+/// precision` column. The same function as `dream_postgres_client.float`.
+///
+/// ## Parameters
+///
+/// - `value`: The float
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Double a float in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_float.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn double(
+///   connection: postgres.Connection,
+///   value: Float,
+/// ) -> Result(postgres.Returned(Float), postgres.QueryError) {
+///   "SELECT $1::float8 * 2"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.float(value))
+///   |> postgres.returning(decode.at([0], decode.float))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn float(value: Float) -> Value {
+  dream_postgres_client.float(value)
+}
+
+/// A text parameter
+///
+/// Gives a string to PostgreSQL, for a `text` or `varchar` column. The same
+/// function as `dream_postgres_client.text`.
+///
+/// ## Parameters
+///
+/// - `value`: The string
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Change text in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn shout(
+///   connection: postgres.Connection,
+///   value: String,
+/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+///   "SELECT upper($1::text)"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.text(value))
+///   |> postgres.returning(decode.at([0], decode.string))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn text(value: String) -> Value {
+  dream_postgres_client.text(value)
+}
+
+/// A bytea parameter
+///
+/// Gives binary data to PostgreSQL, for a `bytea` column. The same function
+/// as `dream_postgres_client.bytea`.
+///
+/// ## Parameters
+///
+/// - `value`: The bytes
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Count bytes in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_bytea.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn byte_count(
+///   connection: postgres.Connection,
+///   value: BitArray,
+/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   "SELECT length($1::bytea)"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.bytea(value))
+///   |> postgres.returning(decode.at([0], decode.int))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn bytea(value: BitArray) -> Value {
+  dream_postgres_client.bytea(value)
+}
+
+/// An array parameter
+///
+/// Gives a list to PostgreSQL as an array. The converter makes the `Value` of
+/// each item. The same function as `dream_postgres_client.array`.
+///
+/// ## Parameters
+///
+/// - `converter`: The value function of one item, such as `int`
+/// - `values`: The items
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Sort an array in the database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_array.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn sort_numbers(
+///   connection: postgres.Connection,
+///   values: List(Int),
+/// ) -> Result(postgres.Returned(List(Int)), postgres.QueryError) {
+///   "SELECT array(SELECT unnest($1::int[]) ORDER BY 1)"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.array(postgres.int, values))
+///   |> postgres.returning(decode.at([0], decode.list(decode.int)))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn array(converter: fn(a) -> Value, values: List(a)) -> Value {
+  dream_postgres_client.array(converter, values)
+}
+
+/// A parameter that can be NULL
+///
+/// Gives `NULL` for `None`, and the value of the converter for `Some`. The
+/// same function as `dream_postgres_client.nullable`.
+///
+/// ## Parameters
+///
+/// - `inner_type`: The value function for `Some`, such as `text`
+/// - `value`: The optional value
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Send an optional value <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_nullable.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+/// import gleam/option.{type Option}
+///
+/// pub fn nickname_or_none(
+///   connection: postgres.Connection,
+///   nickname: Option(String),
+/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+///   "SELECT coalesce($1::text, 'none')"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.nullable(postgres.text, nickname))
+///   |> postgres.returning(decode.at([0], decode.string))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn nullable(inner_type: fn(a) -> Value, value: Option(a)) -> Value {
+  dream_postgres_client.nullable(inner_type, value)
+}
+
+/// A timestamp parameter
+///
+/// Gives a `Timestamp` to PostgreSQL, with microsecond precision, for a
+/// `timestamp` column. Read the column back with `timestamp_decoder`. The
+/// same function as `dream_postgres_client.timestamp`.
+///
+/// ## Parameters
+///
+/// - `timestamp`: The time
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Send and read a timestamp <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timestamp.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+/// import gleam/time/timestamp.{type Timestamp}
+///
+/// pub fn one_hour_later(
+///   connection: postgres.Connection,
+///   value: Timestamp,
+/// ) -> Result(postgres.Returned(Timestamp), postgres.QueryError) {
+///   "SELECT $1::timestamp + interval '1 hour'"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.timestamp(value))
+///   |> postgres.returning(decode.at([0], postgres.timestamp_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn timestamp(timestamp: Timestamp) -> Value {
+  dream_postgres_client.timestamp(timestamp)
+}
+
+/// Decode a timestamp column
+///
+/// Reads a `timestamp` column as a `Timestamp`. The same function as
+/// `dream_postgres_client.timestamp_decoder`.
+///
+/// ## Returns
+///
+/// A decoder for `returning`.
+///
+/// ## Example
+///
+/// ### Send and read a timestamp <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timestamp.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+/// import gleam/time/timestamp.{type Timestamp}
+///
+/// pub fn one_hour_later(
+///   connection: postgres.Connection,
+///   value: Timestamp,
+/// ) -> Result(postgres.Returned(Timestamp), postgres.QueryError) {
+///   "SELECT $1::timestamp + interval '1 hour'"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.timestamp(value))
+///   |> postgres.returning(decode.at([0], postgres.timestamp_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn timestamp_decoder() -> decode.Decoder(Timestamp) {
+  dream_postgres_client.timestamp_decoder()
+}
+
+/// A date parameter
+///
+/// Gives a `Date` to PostgreSQL, for a `date` column. Read the column back
+/// with `calendar_date_decoder`. The same function as
+/// `dream_postgres_client.calendar_date`.
+///
+/// ## Parameters
+///
+/// - `date`: The date
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Send and read a date <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_calendar_date.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+/// import gleam/time/calendar.{type Date}
+///
+/// pub fn next_day(
+///   connection: postgres.Connection,
+///   value: Date,
+/// ) -> Result(postgres.Returned(Date), postgres.QueryError) {
+///   "SELECT $1::date + 1"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.calendar_date(value))
+///   |> postgres.returning(decode.at([0], postgres.calendar_date_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn calendar_date(date: Date) -> Value {
+  dream_postgres_client.calendar_date(date)
+}
+
+/// Decode a date column
+///
+/// Reads a `date` column as a `Date`. The same function as
+/// `dream_postgres_client.calendar_date_decoder`.
+///
+/// ## Returns
+///
+/// A decoder for `returning`.
+///
+/// ## Example
+///
+/// ### Send and read a date <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_calendar_date.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+/// import gleam/time/calendar.{type Date}
+///
+/// pub fn next_day(
+///   connection: postgres.Connection,
+///   value: Date,
+/// ) -> Result(postgres.Returned(Date), postgres.QueryError) {
+///   "SELECT $1::date + 1"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.calendar_date(value))
+///   |> postgres.returning(decode.at([0], postgres.calendar_date_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn calendar_date_decoder() -> decode.Decoder(Date) {
+  dream_postgres_client.calendar_date_decoder()
+}
+
+/// A time of day parameter
+///
+/// Gives a `TimeOfDay` to PostgreSQL, for a `time` column. Read the column
+/// back with `calendar_time_of_day_decoder`. The same function as
+/// `dream_postgres_client.calendar_time_of_day`.
+///
+/// ## Parameters
+///
+/// - `time`: The time of day
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Send and read a time of day <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_calendar_time_of_day.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+/// import gleam/time/calendar.{type TimeOfDay}
+///
+/// pub fn one_minute_later(
+///   connection: postgres.Connection,
+///   value: TimeOfDay,
+/// ) -> Result(postgres.Returned(TimeOfDay), postgres.QueryError) {
+///   "SELECT $1::time + interval '1 minute'"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.calendar_time_of_day(value))
+///   |> postgres.returning(decode.at([0], postgres.calendar_time_of_day_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn calendar_time_of_day(time: TimeOfDay) -> Value {
+  dream_postgres_client.calendar_time_of_day(time)
+}
+
+/// Decode a time column
+///
+/// Reads a `time` column as a `TimeOfDay`. The same function as
+/// `dream_postgres_client.calendar_time_of_day_decoder`.
+///
+/// ## Returns
+///
+/// A decoder for `returning`.
+///
+/// ## Example
+///
+/// ### Send and read a time of day <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_calendar_time_of_day.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+/// import gleam/time/calendar.{type TimeOfDay}
+///
+/// pub fn one_minute_later(
+///   connection: postgres.Connection,
+///   value: TimeOfDay,
+/// ) -> Result(postgres.Returned(TimeOfDay), postgres.QueryError) {
+///   "SELECT $1::time + interval '1 minute'"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.calendar_time_of_day(value))
+///   |> postgres.returning(decode.at([0], postgres.calendar_time_of_day_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn calendar_time_of_day_decoder() -> decode.Decoder(TimeOfDay) {
+  dream_postgres_client.calendar_time_of_day_decoder()
+}
+
+/// Decode a numeric column
+///
+/// Reads a `numeric` column as a `Float`. A whole number becomes a `Float`
+/// too. A `Float` can lose digits of a large or exact `numeric` value. The
+/// same function as `dream_postgres_client.numeric_decoder`.
+///
+/// ## Returns
+///
+/// A decoder for `returning`.
+///
+/// ## Example
+///
+/// ### Read a numeric result <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_decoder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn price_with_tax(
+///   connection: postgres.Connection,
+///   cents: Int,
+/// ) -> Result(postgres.Returned(Float), postgres.QueryError) {
+///   "SELECT $1::int * 1.25 / 100"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.int(cents))
+///   |> postgres.returning(decode.at([0], postgres.numeric_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn numeric_decoder() -> decode.Decoder(Float) {
+  dream_postgres_client.numeric_decoder()
 }
 
 // Private URL parsing - flat functions, no nesting

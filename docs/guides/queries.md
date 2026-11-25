@@ -38,7 +38,7 @@ gleam add dream_postgres dream_postgres_client
 
 The examples use this table. With the `docker-compose.yml` from [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#before-you-start), create it in `psql` (`docker compose exec postgres psql -U dream -d dream_test`):
 
-### Make the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/fixtures/sql/queries_users.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Make the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/fixtures/sql/queries_users.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```sql
 CREATE TABLE users (
@@ -63,7 +63,7 @@ The handlers return a small `Response` type with a status and a body, which Step
 
 Keep each query in a function that takes a connection and the parameters, and returns Pog's result unchanged. [Squirrel](https://hexdocs.pm/squirrel) generates functions in this shape from `.sql` files: a row type per query, and a function that returns `Result(dream_postgres_client.Returned(Row), dream_postgres_client.QueryError)`. Whether you generate them or write them by hand, the rest of this guide works the same:
 
-### Query functions for the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_sql.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Query functions for the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_queries_sql.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres_client
@@ -143,11 +143,59 @@ Each function builds a query, fills the `$1` and `$2` parameters with `dream_pos
 
 In this guide's tested code the module is `snippets/guide_queries_sql`. The handlers import it `as sql`, which is what an import of a Squirrel module (`import app/sql`) looks like in your app.
 
+### Generate the query functions
+
+[dream_sql_generator](https://hexdocs.pm/dream_sql_generator), a fork of Squirrel, writes these query functions from your `.sql` files. Set its `client_module` to `dream_postgres/client` in `gleam.toml`:
+
+### Point the SQL generator at dream_postgres/client <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/fixtures/generated/gleam.toml"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```toml
+[dev-dependencies]
+dream_sql_generator = ">= 1.0.0 and < 2.0.0"
+
+[tools.dream_sql_generator]
+client_module = "dream_postgres/client"
+```
+
+The generated module then starts with `import dream_postgres/client as pog`. Each function calls `pog.query`, `pog.parameter`, `pog.returning` and `pog.execute`. `dream_postgres/client` has these functions, the value functions such as `pog.int` and `pog.text`, and the decoders such as `pog.timestamp_decoder`. So your app needs no `dream_postgres_client` import for the generated code. This is one function that the generator wrote for the `database` example of Dream:
+
+### A generated query function <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/generated/database_sql.gleam#L215-L239"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+pub fn get_user(
+  connection: pog.Connection,
+  id: Int,
+) -> Result(pog.Returned(GetUserRow), pog.QueryError) {
+  let decoder = {
+    use id <- decode.field(0, decode.int)
+    use name <- decode.field(1, decode.string)
+    use email <- decode.field(2, decode.string)
+    use created_at <- decode.field(3, decode.optional(pog.timestamp_decoder()))
+    decode.success(GetUserRow(id:, name:, email:, created_at:))
+  }
+
+  "-- Get a single user by ID
+SELECT id, name, email, created_at FROM users WHERE id = $1
+
+
+
+
+
+"
+  |> pog.query
+  |> pog.parameter(pog.int(id))
+  |> pog.returning(decoder)
+  |> pog.execute(connection)
+}
+```
+
+The tests of this package run every query of two generated modules against PostgreSQL 16 through `dream_postgres/client`, then play them back with no database.
+
 ## Step 2: Turn one row into a response
 
 A "show user" handler runs `find_user` and turns its result into a response. Split those two parts into two functions:
 
-### Answer with one user <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_show_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Answer with one user <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_queries_show_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/query
@@ -190,7 +238,7 @@ pub fn user_response(
 
 Against the table, after `sql.create_user(db, "Ada", "ada@example.com")` gave Ada the id 1, here's what `show_user` answers:
 
-### What show_user answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_show_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What show_user answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_queries_show_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 show_user(db, 1)
@@ -202,7 +250,7 @@ show_user(db, 2)
 
 And here's what `user_response` returns for each case, with results built by hand:
 
-### What user_response returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_user_response.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What user_response returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_queries_user_response.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 user_response(Ok(dream_postgres_client.Returned(count: 1, rows: [FindUserRow(1, "Ada", "ada@example.com")])))
@@ -219,7 +267,7 @@ user_response(Error(dream_postgres_client.QueryTimeout))
 
 For a list, an empty result isn't an error. `all_rows` gives you `Ok([])` for it, and never `NotFound`:
 
-### Answer with every user <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_list_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Answer with every user <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_queries_list_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/query
@@ -252,7 +300,7 @@ pub fn users_response(
 
 `Ok([])` comes first, so an empty table gets its own message. `Ok(users)` joins the names. `all_rows` only fails with `DatabaseError`, but the error type has `NotFound` too, so the last branch matches any error with `Error(_error)`.
 
-### What index_users and users_response return <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_index_users.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What index_users and users_response return <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_queries_index_users.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 index_users(db)                       // the table is empty
@@ -275,7 +323,7 @@ index_users(<a pool where nothing listens>)
 
 `DatabaseError` is right for "something broke", but some failures are the user's to fix. When a sign-up uses an email that's already taken, the `UNIQUE` constraint on `email` stops the insert, and the user should get a 409 with a message, not a 500. Pog reports that as `dream_postgres_client.ConstraintViolated`, with the name of the constraint. Match it before the result reaches `first_row`:
 
-### Answer 409 for a duplicate email <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_create_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Answer 409 for a duplicate email <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_queries_create_user.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/query
@@ -325,7 +373,7 @@ fn new_user_response(
 
 Here's the handler against the table, for a first sign-up and a second one with the same email, and the Pog error behind the 409:
 
-### What create_user answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_create_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What create_user answers <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_queries_create_user.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 create_user(db, "Ada", "ada@example.com")
@@ -344,7 +392,7 @@ sql.create_user(db, "Ada", "ada@example.com")   // the email is taken
 
 And with results built by hand:
 
-### What created_response returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_queries_created_response.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### What created_response returns <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_queries_created_response.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 created_response(Ok(dream_postgres_client.Returned(count: 1, rows: [CreateUserRow(7)])))
@@ -363,7 +411,7 @@ A constraint you didn't plan for still becomes a 500, because you didn't decide 
 
 `DatabaseError` tells the handler what to answer, but it doesn't tell you why. Was it a timeout, a missing table, a row that didn't decode? The Pog error knows, and once `first_row` has run it's gone. Log it on the way through:
 
-### Log the Pog error, then answer <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_log_failure.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Log the Pog error, then answer <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_queries_log_failure.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres_client
@@ -421,7 +469,7 @@ Because each handler splits the query from the response logic, most tests need n
 
 These tests use [dream_test](https://hexdocs.pm/dream_test), added as the [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md#test-your-code) guide shows:
 
-### Test the user handlers <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_queries_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Test the user handlers <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_queries_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres

@@ -23,7 +23,7 @@
 ////
 //// ## Example
 ////
-//// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+//// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
 //// import dream_postgres/recorder
@@ -215,7 +215,7 @@ type Settings {
 ///
 /// ## Example
 ///
-/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -277,7 +277,7 @@ fn keep_result(
 ///
 /// ## Example
 ///
-/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -327,7 +327,7 @@ pub fn directory(
 ///
 /// ## Example
 ///
-/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -373,7 +373,7 @@ pub fn name(builder: RecorderBuilder, name: String) -> RecorderBuilder {
 ///
 /// ## Example
 ///
-/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/client as postgres
@@ -422,7 +422,7 @@ pub fn mode(builder: RecorderBuilder, mode: Mode) -> RecorderBuilder {
 ///
 /// ## Example
 ///
-/// ### Read the mode from a text <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_parse_mode.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Read the mode from a text <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_parse_mode.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -460,7 +460,7 @@ pub fn parse_mode(text: String) -> Result(Mode, String) {
 ///
 /// ## Example
 ///
-/// ### Match the SQL with its whitespace made the same <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_key.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Match the SQL with its whitespace made the same <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_key.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -486,7 +486,7 @@ pub fn key(builder: RecorderBuilder, key: MatchKey) -> RecorderBuilder {
 ///
 /// ## Example
 ///
-/// ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -561,7 +561,7 @@ pub fn query_transformer(
 ///
 /// ## Example
 ///
-/// ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -648,7 +648,7 @@ pub fn result_transformer(
 ///
 /// ## Example
 ///
-/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -785,7 +785,7 @@ fn is_name_character(character: String) -> Bool {
 ///
 /// ## Example
 ///
-/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -850,7 +850,7 @@ pub fn connect(
 ///
 /// ## Example
 ///
-/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -900,7 +900,7 @@ fn stop_server(
 ///
 /// ## Example
 ///
-/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -929,7 +929,7 @@ pub fn sql_and_parameters(query: RecordedQuery) -> String {
 ///
 /// ## Example
 ///
-/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -956,7 +956,7 @@ pub fn normalized_sql_and_parameters(query: RecordedQuery) -> String {
 ///
 /// ## Example
 ///
-/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -1141,7 +1141,7 @@ fn to_reason(recorder_error: RecorderError) -> Dynamic {
 ///
 /// ## Example
 ///
-/// ### Explain a query error <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Explain a query error <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recorder
@@ -1172,7 +1172,7 @@ pub fn error(
 /// A `NoRecording` names the query, then each nearest recording with its
 /// parameters on a `-` line and the query's parameters on a `+` line.
 ///
-/// ### The text of a query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### The text of a query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_miss_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```text
 /// No recording matches SELECT id, name, email FROM users WHERE id = $1 with [2]

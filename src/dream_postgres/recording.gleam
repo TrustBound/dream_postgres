@@ -131,7 +131,7 @@ pub type Recording {
 ///
 /// ## Example
 ///
-/// ### Write a recording by hand <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recording_by_hand.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Write a recording by hand <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recording_by_hand.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recording.{Failed, Integer, RecordedQuery, Recording}
@@ -169,7 +169,7 @@ pub fn to_json(recordings: List(Recording)) -> String {
 ///
 /// ## Example
 ///
-/// ### Read the SQL of a recording file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recording_read.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Read the SQL of a recording file <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recording_read.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recording
@@ -198,7 +198,7 @@ pub fn from_json(text: String) -> Result(List(Recording), String) {
 ///
 /// ## Example
 ///
-/// ### Write values as JSON <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recording_values.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Write values as JSON <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recording_values.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/recording.{Integer, Null, Text}

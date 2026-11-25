@@ -41,7 +41,7 @@ gleam add dream_postgres dream_postgres_client
 
 The examples use the users table of [Running queries and handling their results](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md#before-you-start):
 
-### Make the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/fixtures/sql/queries_users.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Make the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/fixtures/sql/queries_users.sql"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```sql
 CREATE TABLE users (
@@ -69,7 +69,7 @@ A recorder runs in one of three modes. You pick one with a `recorder.Mode` value
 
 Here are two query functions: one inserts a user and gives the new id, the other finds a user by id. Each takes a connection as its first parameter. That's the whole trick. The test decides what connection to pass, so the same code runs on a pool, a recording pool or a playback connection.
 
-### Two queries on the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Two queries on the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres_client
@@ -129,7 +129,7 @@ fn first(rows: List(a)) -> Result(a, dream_postgres_client.QueryError) {
 
 `find_user` gives an error for no row, so a test sees it. The code under test is a function that uses both:
 
-### The code under test <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L13-L18"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The code under test <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_round_trip.gleam#L13-L18"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 pub fn create_and_find(
@@ -144,7 +144,7 @@ pub fn create_and_find(
 
 A recorder keeps the queries of one test in one file, `<directory>/<name>.json`. Use the name of the test as the name. Start it, then let it make the connection:
 
-### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/client as postgres
@@ -190,7 +190,7 @@ How it works:
 
 `run_recorded` runs the code under test with a recorder in a mode, and stops the recorder:
 
-### Run the code under test with a recorder <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam#L20-L31"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Run the code under test with a recorder <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_round_trip.gleam#L20-L31"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 pub fn run_recorded(
@@ -209,7 +209,7 @@ pub fn run_recorded(
 
 With the users table in place, record once:
 
-### Recorded against PostgreSQL 16 <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_record.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Recorded against PostgreSQL 16 <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_record.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 run_recorded(recorder.Record, database_url, "test/fixtures/recordings")
@@ -218,7 +218,7 @@ run_recorded(recorder.Record, database_url, "test/fixtures/recordings")
 
 The queries ran on the real database, and `create_and_find` got the live answers. The recorder also wrote `test/fixtures/recordings/create_and_find.json`:
 
-### The recording file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_file.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The recording file <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_file.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 {
@@ -257,7 +257,7 @@ A recorded query returns only when its recording is on disk. You can read the fi
 
 Now the same function in `Playback` mode, with a URL where nothing listens:
 
-### Played back with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_playback.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Played back with no database <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_playback.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 run_recorded(recorder.Playback, "postgresql://app:secret@127.0.0.1:1/app", "test/fixtures/recordings")
@@ -275,7 +275,7 @@ A query in `dream_postgres_client.transaction` is recorded and played back the s
 
 In playback mode, a query with no recording never reaches a database. It fails, and the error names the query and the recordings nearest to it. A `find_user` for id 2, which the recording doesn't have:
 
-### A query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### A query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_miss.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 find_user(db, 2) |> result.map_error(recorder.error)
@@ -284,7 +284,7 @@ find_user(db, 2) |> result.map_error(recorder.error)
 
 The query error is `dream_postgres_client.InterceptorFailed`. `recorder.error` reads the `recorder.RecorderError` back from it: `NoRecording(sql:, parameters:, path:, nearest:)` names the SQL, the parameters, the file and the nearest recordings. `recorder.describe_error` writes it as text. The `-` line is the parameters of the recording, and the `+` line is the parameters of the query:
 
-### The text of a query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The text of a query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_miss_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 No recording matches SELECT id, name, email FROM users WHERE id = $1 with [2]
@@ -308,7 +308,7 @@ That's the error you see when a test runs a query you never recorded, or a query
 
 A recording file goes into your repository, so it must not hold a secret. Here a `sessions` table holds a token. The query transformer hides the token in the parameters of the `INSERT`, and the result transformer hides it in the rows of the `SELECT`:
 
-### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/recorder
@@ -374,7 +374,7 @@ fn hide_token_column(
 
 Recorded with this builder, the file holds `[hidden]` in place of the token:
 
-### The recording file with the token hidden <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_scrubbed.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The recording file with the token hidden <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_scrubbed.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 {
@@ -421,7 +421,7 @@ How it works:
 
 Say `find_user` gets a `LIMIT 1`:
 
-### find_user with new SQL <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_changed.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### find_user with new SQL <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_changed.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres_client
@@ -450,7 +450,7 @@ pub fn find_user(
 
 The recording has the old SQL, so playback can't answer the new query:
 
-### A changed query in playback <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_changed.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### A changed query in playback <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_changed.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 find_user(db, 1) |> result.map_error(recorder.error)
@@ -459,7 +459,7 @@ find_user(db, 1) |> result.map_error(recorder.error)
 
 No recording has the new SQL, so `nearest` is empty, and the text names the file that the recorder searched:
 
-### The text of a changed query <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_changed_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The text of a changed query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/outputs/guide_recording_changed_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```text
 No recording matches SELECT id, name, email FROM users WHERE id = $1 LIMIT 1 with [1]
@@ -490,7 +490,7 @@ The key also decides the nearest recordings of a miss: a recording is a candidat
 
 The usual setup: commit the recordings to your repository, and play them back in your tests. This package has `test/fixtures/recordings/create_and_find.json` from Step 3. Here's a test of `create_and_find` that plays it back:
 
-### Test create_and_find with a committed recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### Test create_and_find with a committed recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/guide_recording_testing.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/recorder
