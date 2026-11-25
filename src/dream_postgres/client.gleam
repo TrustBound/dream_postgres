@@ -2080,15 +2080,16 @@ pub type SchemaCheckError {
 /// the table, at all levels:
 ///
 /// - The kind of the relation (`relkind`), row level security and forced
-///   row level security, if it has a row-level `BEFORE` trigger, the
+///   row level security, if it has a row-level `BEFORE` trigger, if it has
+///   a row-level `INSTEAD OF` trigger, the `check_option` of a view, the
 ///   partition key and the partition bound. A statement-level trigger and
 ///   an `AFTER` trigger do not change the rows that a query returns, so
 ///   they are not in the text.
 /// - The definition of a view or a materialized view (`pg_get_viewdef`)
 /// - Each parent of the table
 /// - Each column that is not dropped: its name, its position, its type
-///   (`format_type`), `NOT NULL`, if it has a default, and its identity
-///   and generated kind
+///   (`format_type`), `NOT NULL`, if it has a default, its identity and
+///   generated kind, and the expression of a generated column
 /// - Each constraint: its kind, name, if it is validated, and its
 ///   definition (`pg_get_constraintdef`). On PostgreSQL 18 and later, this
 ///   includes the `NOT NULL` constraints.
@@ -2259,6 +2260,16 @@ lines AS (
       WHERE trigger.tgrelid = named.oid AND NOT trigger.tgisinternal
         AND trigger.tgtype & 3 = 3
     )
+    || ' instead_row_triggers=' || EXISTS (
+      SELECT FROM pg_trigger AS trigger
+      WHERE trigger.tgrelid = named.oid AND NOT trigger.tgisinternal
+        AND trigger.tgtype & 65 = 65
+    )
+    || ' check_option=' || coalesce((
+      SELECT option.option_value
+      FROM pg_options_to_table(named.reloptions) AS option
+      WHERE option.option_name = 'check_option'
+    ), '')
     || ' partition_key=' || coalesce(pg_get_partkeydef(named.oid), '')
     || ' partition_bound='
     || coalesce(pg_get_expr(named.relpartbound, named.oid), '')
@@ -2282,6 +2293,13 @@ lines AS (
     || ' has_default=' || columns.atthasdef
     || ' identity=' || columns.attidentity::text
     || ' generated=' || columns.attgenerated::text
+    || ' generation=' || coalesce((
+      SELECT pg_get_expr(generation.adbin, generation.adrelid)
+      FROM pg_attrdef AS generation
+      WHERE generation.adrelid = columns.attrelid
+        AND generation.adnum = columns.attnum
+        AND columns.attgenerated <> ''
+    ), '')
   FROM columns
   UNION ALL
   SELECT named.qualified || ' constraint '

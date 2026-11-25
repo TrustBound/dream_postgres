@@ -96,23 +96,23 @@ const exact_ddl = [
 ]
 
 const exact_text =
-  "fp.events column at position=1 type=timestamp with time zone not_null=false has_default=false identity= generated=
-fp.events relation kind=p row_security=false force_row_security=false before_row_triggers=false partition_key=RANGE (at) partition_bound=
-fp.events_old column at position=1 type=timestamp with time zone not_null=false has_default=false identity= generated=
+  "fp.events column at position=1 type=timestamp with time zone not_null=false has_default=false identity= generated= generation=
+fp.events relation kind=p row_security=false force_row_security=false before_row_triggers=false instead_row_triggers=false check_option= partition_key=RANGE (at) partition_bound=
+fp.events_old column at position=1 type=timestamp with time zone not_null=false has_default=false identity= generated= generation=
 fp.events_old inherits fp.events
-fp.events_old relation kind=r row_security=false force_row_security=false before_row_triggers=false partition_key= partition_bound=FOR VALUES FROM ('1999-12-31 23:59:59.123456+00') TO ('2026-01-01 00:00:00+00')
-fp.item_labels column label position=1 type=fp.short_text not_null=false has_default=false identity= generated=
-fp.item_labels relation kind=v row_security=false force_row_security=false before_row_triggers=false partition_key= partition_bound=
+fp.events_old relation kind=r row_security=false force_row_security=false before_row_triggers=false instead_row_triggers=false check_option= partition_key= partition_bound=FOR VALUES FROM ('1999-12-31 23:59:59.123456+00') TO ('2026-01-01 00:00:00+00')
+fp.item_labels column label position=1 type=fp.short_text not_null=false has_default=false identity= generated= generation=
+fp.item_labels relation kind=v row_security=false force_row_security=false before_row_triggers=false instead_row_triggers=false check_option= partition_key= partition_bound=
 fp.item_labels view definition= SELECT label
    FROM fp.items;
-fp.items column at position=7 type=timestamp with time zone not_null=false has_default=false identity= generated=
-fp.items column id position=1 type=integer not_null=false has_default=false identity= generated=
-fp.items column label position=2 type=fp.short_text not_null=false has_default=false identity= generated=
-fp.items column mood position=3 type=fp.mood not_null=false has_default=false identity= generated=
-fp.items column pair position=4 type=fp.pair not_null=false has_default=false identity= generated=
-fp.items column price position=8 type=money not_null=false has_default=false identity= generated=
-fp.items column span position=5 type=fp.span not_null=false has_default=false identity= generated=
-fp.items column total position=6 type=integer not_null=false has_default=true identity= generated=s
+fp.items column at position=7 type=timestamp with time zone not_null=false has_default=false identity= generated= generation=
+fp.items column id position=1 type=integer not_null=false has_default=false identity= generated= generation=
+fp.items column label position=2 type=fp.short_text not_null=false has_default=false identity= generated= generation=
+fp.items column mood position=3 type=fp.mood not_null=false has_default=false identity= generated= generation=
+fp.items column pair position=4 type=fp.pair not_null=false has_default=false identity= generated= generation=
+fp.items column price position=8 type=money not_null=false has_default=false identity= generated= generation=
+fp.items column span position=5 type=fp.span not_null=false has_default=false identity= generated= generation=
+fp.items column total position=6 type=integer not_null=false has_default=true identity= generated=s generation=(id * 2)
 fp.items constraint items_at_check type=c validated=true definition=CHECK ((at > '1999-12-31 23:59:59.123456+00'::timestamp with time zone))
 fp.items constraint items_label_key type=u validated=true definition=UNIQUE (label)
 fp.items constraint items_price_check type=c validated=true definition=CHECK ((price > '$1.50'::money))
@@ -120,7 +120,7 @@ fp.items index items_label_key unique=true valid=true definition=CREATE UNIQUE I
 fp.items index items_mood_index unique=false valid=true definition=CREATE INDEX items_mood_index ON fp.items USING btree (mood) WHERE (id > 0)
 fp.items inherits fp.parents
 fp.items policy readers command=r permissive=true roles=pg_monitor using=(id > 1) with_check=
-fp.items relation kind=r row_security=true force_row_security=false before_row_triggers=true partition_key= partition_bound=
+fp.items relation kind=r row_security=true force_row_security=false before_row_triggers=true instead_row_triggers=false check_option= partition_key= partition_bound=
 fp.items rule no_delete enabled=O definition=CREATE RULE no_delete AS
     ON DELETE TO fp.items DO INSTEAD NOTHING;
 fp.mood enum labels='sad','happy'
@@ -1289,6 +1289,33 @@ fn fingerprint_change_tests() {
       [
         "CREATE TRIGGER touch BEFORE INSERT ON items
         FOR EACH ROW EXECUTE FUNCTION touch()",
+      ],
+    ),
+    change_test(
+      "when an INSTEAD OF row trigger is added",
+      [
+        items_table,
+        "CREATE VIEW item_view AS SELECT id, name FROM items",
+        touch_function,
+      ],
+      [
+        "CREATE TRIGGER touch INSTEAD OF INSERT ON item_view
+        FOR EACH ROW EXECUTE FUNCTION touch()",
+      ],
+    ),
+    change_test(
+      "when a view gets WITH CHECK OPTION",
+      [items_table, "CREATE VIEW item_view AS SELECT id, name FROM items"],
+      ["ALTER VIEW item_view SET (check_option = local)"],
+    ),
+    change_test(
+      "when the expression of a generated column changes",
+      [
+        "CREATE TABLE items (id int, total int GENERATED ALWAYS AS (id * 2) STORED)",
+      ],
+      [
+        "ALTER TABLE items DROP COLUMN total",
+        "ALTER TABLE items ADD COLUMN total int GENERATED ALWAYS AS (id * 3) STORED",
       ],
     ),
     change_test("when row level security is turned on", [items_table], [
