@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `promised_not_null(decoder, file, column)` decodes a column that a SQL
   file promised is never NULL. A NULL fails the row with a message that
   names the file and the column.
+- `promised_elements_not_null(decoder, file, column)` decodes an array
+  column that a SQL file promised has no NULL element, as a `List(a)`. A
+  NULL element fails the row with a message that names the file and the
+  column, for example `the SQL file find.sql promised the elements of tags
+  are never NULL, and PostgreSQL returned NULL`. `broken_promise` gives
+  that message. A NULL array is not an element: wrap the decoder in
+  `decode.optional` for a column that can be NULL.
 - `timestamp_with_time_zone_decoder()` reads a `timestamptz` column as a
   `Timestamp`. `timestamp_decoder` reads only a `timestamp` column, because
   `dream_postgres_client` gives a `timestamptz` value as a date and a time

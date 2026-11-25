@@ -1889,6 +1889,84 @@ pub fn promised_not_null(
   }
 }
 
+/// Decode an array column that a SQL file promised has no NULL element
+///
+/// PostgreSQL cannot forbid a NULL element in an array, so an array column
+/// is a `List(Option(a))`. A `.sql` file for dream_model can promise that
+/// the elements of an array column are never NULL with a
+/// `-- not null elements: tags` line, and the generated decoder then reads
+/// the column with this function. It checks the promise on each row.
+///
+/// Each element that is not NULL goes to `decoder`. A NULL element fails
+/// the row with one `decode.DecodeError`: `found` is `"NULL"`, and
+/// `expected` is the marker `[dream_postgres promised_not_null] ` and then
+/// the message `the SQL file find.sql promised the elements of tags are
+/// never NULL, and PostgreSQL returned NULL`. `broken_promise` finds the
+/// error by the marker and gives the message without it. `execute` then
+/// returns `UnexpectedResultType` with that error. The path of the error is
+/// the path of the column, for example `["0"]` for `decode.at([0], ...)`.
+///
+/// The promise is about the elements only. A NULL array is not an element:
+/// wrap the decoder in `decode.optional` when the column itself can be
+/// NULL, and use `promised_not_null` when a SQL file promised that the
+/// column is never NULL.
+///
+/// ## Parameters
+///
+/// - `decoder`: The decoder for one element that is not NULL
+/// - `file`: The name of the SQL file that made the promise
+/// - `column`: The name of the array column
+///
+/// ## Returns
+///
+/// A decoder of a list that fails on a NULL element with a message that
+/// names `file` and `column`.
+///
+/// ## Example
+///
+/// ### Read tags that the SQL file promised have no NULL element <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_promised_elements_not_null.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn tags(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(List(String)), postgres.QueryError) {
+///   "SELECT tags FROM posts"
+///   |> postgres.query
+///   |> postgres.returning(decode.at(
+///     [0],
+///     postgres.promised_elements_not_null(decode.string, "find.sql", "tags"),
+///   ))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn promised_elements_not_null(
+  decoder: decode.Decoder(a),
+  file: String,
+  column: String,
+) -> decode.Decoder(List(a)) {
+  let null_error =
+    decode.DecodeError(
+      expected: promise_marker
+        <> "the SQL file "
+        <> file
+        <> " promised the elements of "
+        <> column
+        <> " are never NULL, and PostgreSQL returned NULL",
+      found: "NULL",
+      path: [],
+    )
+  use found <- decode.then(decode.list(decode.optional(decoder)))
+  case option.all(found) {
+    option.Some(values) -> decode.success(values)
+    option.None ->
+      decode.failure([], null_error.expected)
+      |> decode.map_errors(fn(_errors) { [null_error] })
+  }
+}
+
 /// Read the message of a broken `-- not null:` promise
 ///
 /// `promised_not_null` fails a NULL row with a message that names the SQL

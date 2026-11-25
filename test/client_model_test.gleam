@@ -25,6 +25,7 @@ import snippets/client_date_type
 import snippets/client_finite_date
 import snippets/client_finite_timestamp
 import snippets/client_infinite_value
+import snippets/client_promised_elements_not_null
 import snippets/client_promised_not_null
 import snippets/client_schema_fingerprint
 import snippets/client_schema_fingerprint_sql
@@ -37,6 +38,7 @@ pub fn tests() -> TestSuite {
   describe("dream_postgres/client model helpers", [
     violated_constraint_tests(),
     promised_not_null_tests(),
+    promised_elements_not_null_tests(),
     broken_promise_tests(),
     finite_timestamp_tests(),
     finite_date_tests(),
@@ -76,6 +78,9 @@ const touch_function =
 
 const null_message =
   "the SQL file count.sql promised the column total is never NULL, and PostgreSQL returned NULL"
+
+const elements_message =
+  "the SQL file list.sql promised the elements of numbers are never NULL, and PostgreSQL returned NULL"
 
 const exact_ddl = [
   "CREATE TYPE mood AS ENUM ('sad', 'happy')",
@@ -402,6 +407,147 @@ fn promised_not_null_tests() {
         ),
       )
       |> or_fail_with("Expected the NULL promise error of total")
+    }),
+  ])
+}
+
+fn promised_elements_not_null_tests() {
+  group("promised_elements_not_null", [
+    it("decodes an array with no NULL element", fn() {
+      // Act
+      let result =
+        test_database.with_schema(second_array(_, "SELECT 1, ARRAY[4, 5]"))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok([[4, 5]]))
+      |> or_fail_with("Expected [[4, 5]]")
+    }),
+    it("decodes an empty array", fn() {
+      // Act
+      let result =
+        test_database.with_schema(second_array(_, "SELECT 1, '{}'::int[]"))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok([[]]))
+      |> or_fail_with("Expected [[]]")
+    }),
+    it(
+      "fails a NULL element with the file, the column and the column path",
+      fn() {
+        // Act
+        let result =
+          test_database.with_schema(second_array(_, "SELECT 1, ARRAY[4, NULL]"))
+
+        // Assert
+        result
+        |> should
+        |> be_equal(
+          Error(
+            dream_postgres_client.UnexpectedResultType([
+              decode.DecodeError(
+                expected: promise_marker <> elements_message,
+                found: "NULL",
+                path: ["1"],
+              ),
+            ]),
+          ),
+        )
+        |> or_fail_with("Expected the element promise error at path 1")
+      },
+    ),
+    it("keeps the error of the decoder for an element of the wrong type", fn() {
+      // Act
+      let result =
+        test_database.with_schema(second_array(_, "SELECT 1, ARRAY['x']"))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Error(
+          dream_postgres_client.UnexpectedResultType([
+            decode.DecodeError(expected: "Int", found: "String", path: [
+              "1", "0",
+            ]),
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected the Int error of element 0 at path 1")
+    }),
+    it("lets decode.optional take a NULL array", fn() {
+      // Act
+      let result = test_database.with_schema(optional_second_array)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok([option.None]))
+      |> or_fail_with("Expected [None]")
+    }),
+    it("gives broken_promise the message of a NULL element", fn() {
+      // Arrange
+      let assert Error(error) =
+        test_database.with_schema(second_array(_, "SELECT 1, ARRAY[NULL::int]"))
+
+      // Act
+      let result = postgres.broken_promise(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok(elements_message))
+      |> or_fail_with("Expected the message of the element promise")
+    }),
+    it("client_promised_elements_not_null gives the tags of the posts", fn() {
+      // Act
+      let result =
+        test_database.with_schema(fn(db) {
+          run_all(db, [
+            "CREATE TABLE posts (tags text[])",
+            "INSERT INTO posts VALUES (ARRAY['gleam', 'sql'])",
+          ])
+          client_promised_elements_not_null.tags(db)
+        })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Ok(dream_postgres_client.Returned(count: 1, rows: [["gleam", "sql"]])),
+      )
+      |> or_fail_with("Expected one row with gleam and sql")
+    }),
+    it("client_promised_elements_not_null fails a NULL tag", fn() {
+      // Act
+      let result =
+        test_database.with_schema(fn(db) {
+          run_all(db, [
+            "CREATE TABLE posts (tags text[])",
+            "INSERT INTO posts VALUES (ARRAY['gleam', NULL])",
+          ])
+          client_promised_elements_not_null.tags(db)
+        })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Error(
+          dream_postgres_client.UnexpectedResultType([
+            decode.DecodeError(
+              expected: promise_marker
+                <> "the SQL file find.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL",
+              found: "NULL",
+              path: ["0"],
+            ),
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected the element promise error of tags")
     }),
   ])
 }
@@ -1773,6 +1919,37 @@ fn optional_second_column(
 fn schema_name(db: postgres.Connection) -> String {
   let assert Ok([name]) = test_database.texts(db, "SELECT current_schema()")
   name
+}
+
+fn second_array(
+  db: postgres.Connection,
+  sql: String,
+) -> Result(List(List(Int)), postgres.QueryError) {
+  sql
+  |> postgres.query
+  |> postgres.returning(decode.at(
+    [1],
+    postgres.promised_elements_not_null(decode.int, "list.sql", "numbers"),
+  ))
+  |> postgres.execute(db)
+  |> result.map(fn(returned) { returned.rows })
+}
+
+fn optional_second_array(
+  db: postgres.Connection,
+) -> Result(List(Option(List(Int))), postgres.QueryError) {
+  "SELECT 1, NULL::int[]"
+  |> postgres.query
+  |> postgres.returning(decode.at(
+    [1],
+    decode.optional(postgres.promised_elements_not_null(
+      decode.int,
+      "list.sql",
+      "numbers",
+    )),
+  ))
+  |> postgres.execute(db)
+  |> result.map(fn(returned) { returned.rows })
 }
 
 fn run_all(db: postgres.Connection, statements: List(String)) -> Nil {

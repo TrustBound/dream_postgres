@@ -103,6 +103,7 @@ dream_model writes a model module for each `.sql` file. Its code calls the query
 
 - `violated_constraint` gives the name of the constraint that a query violated. The generated code compares it with the unique constraints that dream_model found at generation time, so it can map `users_email_key` to "Email already taken".
 - `promised_not_null` makes a decoder check a `-- not null: total` promise of a `.sql` file on each row. A NULL fails the row with a message that names the file and the column, and `broken_promise` reads that message back from the query error.
+- `promised_elements_not_null` makes a decoder check a `-- not null elements: tags` promise on each row: the array has no NULL element. A NULL element fails the row with a message that names the file and the column, and `broken_promise` reads it back.
 - `finite_timestamp` and `finite_date` fail a row that holds `infinity` or `-infinity`, and `infinite_value` reads the message back. `timestamp_with_time_zone_decoder` reads a `timestamptz` column.
 - The type aliases `Timestamp`, `Date` and `TimeOfDay` name the time types, so the generated code imports no `gleam_time` module.
 - `check_schema` compares the `SchemaFingerprint` of each generated module with the live database. Call it right after the pool starts. `schema_fingerprint` and `schema_fingerprint_sql` compute the fingerprint.
