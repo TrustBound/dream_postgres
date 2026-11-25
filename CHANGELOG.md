@@ -52,7 +52,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gleam/time`. Generated model modules name these types through
   `dream_postgres/client` and import no `gleam_time` module.
 - `schema_fingerprint(connection, tables)` gives the SHA-256 hash of the
-  catalog facts of the tables, their child tables and their partitions.
+  catalog facts of the tables, their child tables and their partitions:
+  columns with their position, constraints, indexes, rules, view
+  definitions, row-level `BEFORE` triggers, row level security, policies,
+  and the domains, enums, composite types and ranges of the columns. The
+  query pins the session settings that change how PostgreSQL writes a
+  name or a constant, and then sets them back.
   `schema_fingerprint_sql` is its SQL. `check_schema(connection, expected)`
   compares the fingerprint of each generated module with the database, and
   `format_schema_check_error` gives a message that names each module to
@@ -67,14 +72,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the import line of each module changed. The tests record the queries
   against PostgreSQL 16 and play the committed recordings back with no
   database.
-- The 63 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19,
-  with `DREAM_POSTGRES_TEST_URL` set to each server. They show
-  that the fingerprint does not change when the same DDL makes the tables
-  again, when the columns are in another order, or when the
-  `search_path` is different. They also show that each kind of schema
-  change changes it.
-- 474 tests, 0 failed, 100.0% line coverage of `src/` (620 of 620 lines),
-  the Erlang files too. The test times add up to about 122 seconds, and 4
+- The 106 tests of the new helpers passed on PostgreSQL 16, 17, 18 and
+  19, with `DREAM_POSTGRES_TEST_URL` set to each server. They show that
+  the fingerprint does not change when the same DDL makes the tables
+  again, or when a session setting is different. They also show that each
+  kind of schema change changes it, also a change of the column order,
+  and they compare the exact canonical text of one schema.
+- 517 tests, 0 failed, 100.0% line coverage of `src/` (645 of 645 lines),
+  the Erlang files too. The test times add up to about 144 seconds, and 4
   tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max,
   10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 

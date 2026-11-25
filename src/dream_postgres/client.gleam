@@ -1657,8 +1657,10 @@ pub fn numeric_decoder() -> decode.Decoder(Float) {
 /// duplicate, compare the name with the names of constraints that you know
 /// are unique. dream_model makes sure at generation time that each
 /// `-- unique <name>` hint names a unique constraint, a primary key or a
-/// unique index of the table, and `check_schema` finds a schema that
-/// changed after that.
+/// unique index of the table. The schema fingerprint holds each constraint
+/// and each index of the table, with its kind and its definition. So
+/// `check_schema` finds a unique constraint or a unique index that changed
+/// after that, for example one that became a plain index.
 ///
 /// ## Parameters
 ///
@@ -1699,9 +1701,11 @@ pub fn violated_constraint(error: QueryError) -> Result(String, Nil) {
 /// column with this function. It checks the promise on each row.
 ///
 /// A value that is not NULL goes to `decoder`. A NULL fails the row with
-/// one `decode.DecodeError`: `found` is `"NULL"`, and `expected` is
-/// the message `the SQL file order_total.sql promised the column total is
-/// never NULL, and PostgreSQL returned NULL`. `execute` then returns
+/// one `decode.DecodeError`: `found` is `"NULL"`, and `expected` is the
+/// marker `[dream_postgres promised_not_null] ` and then the message `the
+/// SQL file order_total.sql promised the column total is never NULL, and
+/// PostgreSQL returned NULL`. `broken_promise` finds the error by the
+/// marker and gives the message without it. `execute` then returns
 /// `UnexpectedResultType` with that error. The path of the error is the
 /// path of the column, for example `["0"]` for `decode.at([0], ...)`. A
 /// NULL fails also when `decoder` accepts NULL.
@@ -1744,7 +1748,8 @@ pub fn promised_not_null(
 ) -> decode.Decoder(a) {
   let null_error =
     decode.DecodeError(
-      expected: promise_prefix
+      expected: promise_marker
+        <> "the SQL file "
         <> file
         <> " promised the column "
         <> column
@@ -1777,7 +1782,8 @@ pub fn promised_not_null(
 /// ## Returns
 ///
 /// - `Ok(message)`: A column that a SQL file promised is never NULL was
-///   NULL. The message is the `expected` text of the decode error, for
+///   NULL. The message is the `expected` text of the decode error after
+///   the marker `[dream_postgres promised_not_null] `, for
 ///   example `the SQL file order_total.sql promised the column total is
 ///   never NULL, and PostgreSQL returned NULL`
 /// - `Error(Nil)`: The error has no broken promise
@@ -1800,25 +1806,30 @@ pub fn broken_promise(error: QueryError) -> Result(String, Nil) {
   case error {
     dream_postgres_client.UnexpectedResultType(errors) ->
       list.find(errors, is_broken_promise)
-      |> result.map(fn(decode_error) { decode_error.expected })
+      |> result.map(fn(decode_error) {
+        string.drop_start(decode_error.expected, string.length(promise_marker))
+      })
     _ -> Error(Nil)
   }
 }
 
 fn is_broken_promise(error: decode.DecodeError) -> Bool {
-  error.found == "NULL" && string.starts_with(error.expected, promise_prefix)
+  error.found == "NULL" && string.starts_with(error.expected, promise_marker)
 }
 
-/// The start of the message of a broken promise.
-const promise_prefix = "the SQL file "
+// The start of the `expected` text of a broken promise. A decoder of the
+// standard library or of an app does not write it, so `broken_promise`
+// finds only the errors of `promised_not_null`.
+const promise_marker = "[dream_postgres promised_not_null] "
 
 /// Decode a timestamp column that can hold infinity
 ///
 /// A `timestamp` or `timestamptz` column can hold `'infinity'` and
 /// `'-infinity'`. A `Timestamp` cannot hold them. This decoder fails such a
 /// value with one `decode.DecodeError`: `found` is `"infinity"` or
-/// `"-infinity"`, and `expected` is the message `the column happened_at
-/// holds infinity, which the Gleam type Timestamp cannot hold`. `execute`
+/// `"-infinity"`, and `expected` is the marker `[dream_postgres finite] `
+/// and then the message `the column happened_at holds infinity, which the
+/// Gleam type Timestamp cannot hold`. `execute`
 /// then returns `UnexpectedResultType` with that error, and
 /// `infinite_value` gives the message. Every other value goes to
 /// `decoder`.
@@ -1866,8 +1877,9 @@ pub fn finite_timestamp(
 /// A `date` column can hold `'infinity'` and `'-infinity'`. A `Date`
 /// cannot hold them. This decoder fails such a value with one
 /// `decode.DecodeError`: `found` is `"infinity"` or `"-infinity"`, and
-/// `expected` is the message `the column day holds infinity, which the
-/// Gleam type Date cannot hold`. `infinite_value` gives the message. Every
+/// `expected` is the marker `[dream_postgres finite] ` and then the
+/// message `the column day holds infinity, which the Gleam type Date
+/// cannot hold`. `infinite_value` gives the message. Every
 /// other value goes to `decoder`.
 ///
 /// ## Parameters
@@ -1937,7 +1949,8 @@ fn finite(
 /// ## Returns
 ///
 /// - `Ok(message)`: A column held infinity or -infinity. The message is
-///   the `expected` text of the decode error, for example `the column
+///   the `expected` text of the decode error after the marker
+///   `[dream_postgres finite] `, for example `the column
 ///   ends_at holds infinity, which the Gleam type Timestamp cannot hold`
 /// - `Error(Nil)`: The error has no infinite value
 ///
@@ -1959,14 +1972,16 @@ pub fn infinite_value(error: QueryError) -> Result(String, Nil) {
   case error {
     dream_postgres_client.UnexpectedResultType(errors) ->
       list.find(errors, is_infinite_value)
-      |> result.map(fn(decode_error) { decode_error.expected })
+      |> result.map(fn(decode_error) {
+        string.drop_start(decode_error.expected, string.length(infinity_marker))
+      })
     _ -> Error(Nil)
   }
 }
 
 fn is_infinite_value(error: decode.DecodeError) -> Bool {
   list.contains(infinity_names, error.found)
-  && string.starts_with(error.expected, infinity_prefix)
+  && string.starts_with(error.expected, infinity_marker)
 }
 
 fn infinity_of(raw: dynamic.Dynamic) -> Result(String, Nil) {
@@ -1988,7 +2003,8 @@ fn infinity_failure(
   type_name: String,
 ) -> decode.Decoder(a) {
   let message =
-    infinity_prefix
+    infinity_marker
+    <> "the column "
     <> column
     <> " holds "
     <> value
@@ -2004,8 +2020,10 @@ fn infinity_failure(
 /// The values of an infinite timestamp or date.
 const infinity_names = ["infinity", "-infinity"]
 
-/// The start of the message of an infinite value.
-const infinity_prefix = "the column "
+// The start of the `expected` text of an infinite value. A decoder of the
+// standard library or of an app does not write it, so `infinite_value`
+// finds only the errors of `finite_timestamp` and `finite_date`.
+const infinity_marker = "[dream_postgres finite] "
 
 /// The schema fingerprint that a generated module expects.
 ///
@@ -2055,38 +2073,66 @@ pub type SchemaCheckError {
 /// digits. A tool that does not use this package, such as a code
 /// generator, runs this SQL to get the same fingerprint.
 ///
-/// The text has one line for each fact, sorted by byte value and joined by
-/// a newline. It holds these facts for each table, and for each child table
-/// and partition of the table, at all levels:
+/// The text has one entry for each fact, sorted by byte value and joined by
+/// a newline. An entry starts with the name of its table or type. The
+/// definition of a view or a rule can hold newlines. The text holds these
+/// facts for each table or view, and for each child table and partition of
+/// the table, at all levels:
 ///
 /// - The kind of the relation (`relkind`), row level security and forced
-///   row level security, if it has a `BEFORE` row trigger, the partition
-///   key and the partition bound
+///   row level security, if it has a row-level `BEFORE` trigger, the
+///   partition key and the partition bound. A statement-level trigger and
+///   an `AFTER` trigger do not change the rows that a query returns, so
+///   they are not in the text.
+/// - The definition of a view or a materialized view (`pg_get_viewdef`)
 /// - Each parent of the table
-/// - Each column that is not dropped: its name, its type (`format_type`),
-///   `NOT NULL`, if it has a default, and its identity and generated kind
+/// - Each column that is not dropped: its name, its position, its type
+///   (`format_type`), `NOT NULL`, if it has a default, and its identity
+///   and generated kind
 /// - Each constraint: its kind, name, if it is validated, and its
 ///   definition (`pg_get_constraintdef`). On PostgreSQL 18 and later, this
 ///   includes the `NOT NULL` constraints.
+/// - Each index: its name, if it is unique, if it is valid, and its
+///   definition (`pg_get_indexdef`)
+/// - Each rule other than the `_RETURN` rule of a view: its name, if it is
+///   enabled, and its definition (`pg_get_ruledef`)
 /// - Each policy: its name, command, if it is permissive, its roles, and
 ///   its `USING` and `WITH CHECK` expressions
-/// - Each domain that a column uses, also through an array or another
-///   domain: its base type, `NOT NULL` and its constraints
-/// - Each enum type that a column uses: its labels in order
+/// - Each type that a column uses, also through an array, a domain, a
+///   composite type or a range: for a domain its base type, `NOT NULL` and
+///   constraints, for an enum its labels in order, for a composite type
+///   the position, name and type of each field, and for a range its
+///   subtype
 ///
 /// A name that is not a table gives the line `<name> missing`, so a
 /// missing table changes the fingerprint and is not an error.
 ///
-/// The text holds no OIDs and no column numbers, and the columns are sorted
-/// by name. Two databases that the same migrations made give the same text.
-/// The query sets `search_path` to `pg_catalog` while it reads the
-/// catalog, and then sets the earlier value back. So each name in the
-/// text has its schema, and the `search_path` of the connection does not
-/// change the text. PostgreSQL 17 and later keep the `NOT NULL` of a
-/// domain as a constraint, and PostgreSQL 18 and later keep the `NOT NULL`
-/// of a column as a constraint. So the text of one schema is different on
-/// PostgreSQL 16, on 17, and on 18 and later. Generate the modules against
-/// the major version of PostgreSQL that the app uses.
+/// The position of a column is its place among the columns that are not
+/// dropped, in the order of `SELECT *`: 1 for the first column, 2 for the
+/// second, and so on. The generated decoders read the columns by position,
+/// so a change of the order changes the fingerprint. A dropped column
+/// changes the position of each column after it, and of no other column.
+/// So a table that had a column dropped has the same text as a table that
+/// the same columns made without it. The text holds no OIDs and no
+/// attribute numbers, so two databases that the same migrations made give
+/// the same text.
+///
+/// While it reads the catalog, the query sets these settings, because they
+/// change how PostgreSQL writes a name or a constant: `search_path` to
+/// `pg_catalog`, `TimeZone` to `UTC`, `DateStyle` to `ISO, YMD`,
+/// `IntervalStyle` to `postgres`, `extra_float_digits` to `1`,
+/// `quote_all_identifiers` to `off`, `bytea_output` to `hex`,
+/// `standard_conforming_strings` to `on` and `lc_monetary` to `C`. Then
+/// it sets the earlier values back. It sets them with `set_config(...,
+/// true)`, so when the query fails, the end of its transaction sets them
+/// back. The settings of the connection thus do not change the text, and
+/// each name in the text has its schema.
+///
+/// PostgreSQL 17 and later keep the `NOT NULL` of a domain as a
+/// constraint, and PostgreSQL 18 and later keep the `NOT NULL` of a column
+/// as a constraint. So the text of a schema with a `NOT NULL` is different
+/// on PostgreSQL 16, on 17, and on 18 and later. Generate the modules
+/// against the major version of PostgreSQL that the app uses.
 ///
 /// ## Example
 ///
@@ -2109,10 +2155,29 @@ pub type SchemaCheckError {
 /// ```
 pub const schema_fingerprint_sql =
   "WITH RECURSIVE saved AS MATERIALIZED (
-  SELECT current_setting('search_path') AS search_path
+  SELECT
+    current_setting('search_path') AS search_path,
+    current_setting('TimeZone') AS time_zone,
+    current_setting('DateStyle') AS date_style,
+    current_setting('IntervalStyle') AS interval_style,
+    current_setting('extra_float_digits') AS extra_float_digits,
+    current_setting('quote_all_identifiers') AS quote_all_identifiers,
+    current_setting('bytea_output') AS bytea_output,
+    current_setting('standard_conforming_strings') AS standard_conforming_strings,
+    current_setting('lc_monetary') AS lc_monetary
 ),
 pinned AS MATERIALIZED (
-  SELECT set_config('search_path', 'pg_catalog', true) AS search_path
+  SELECT concat(
+    set_config('search_path', 'pg_catalog', true),
+    set_config('TimeZone', 'UTC', true),
+    set_config('DateStyle', 'ISO, YMD', true),
+    set_config('IntervalStyle', 'postgres', true),
+    set_config('extra_float_digits', '1', true),
+    set_config('quote_all_identifiers', 'off', true),
+    set_config('bytea_output', 'hex', true),
+    set_config('standard_conforming_strings', 'on', true),
+    set_config('lc_monetary', 'C', true)
+  ) AS settings
   FROM saved
 ),
 requested AS (
@@ -2134,16 +2199,22 @@ relations AS (
   FROM pg_inherits AS inherits
   JOIN relations ON inherits.inhparent = relations.oid
 ),
+relation_set AS (
+  SELECT DISTINCT oid FROM relations
+),
 named AS (
   SELECT class.*,
     quote_ident(namespace.nspname) || '.' || quote_ident(class.relname)
       AS qualified
-  FROM relations
-  JOIN pg_class AS class ON class.oid = relations.oid
+  FROM relation_set
+  JOIN pg_class AS class ON class.oid = relation_set.oid
   JOIN pg_namespace AS namespace ON namespace.oid = class.relnamespace
 ),
 columns AS (
-  SELECT named.qualified, attribute.*
+  SELECT named.qualified, attribute.*,
+    row_number() OVER (
+      PARTITION BY attribute.attrelid ORDER BY attribute.attnum
+    ) AS position
   FROM named
   JOIN pg_attribute AS attribute ON attribute.attrelid = named.oid
   WHERE attribute.attnum > 0 AND NOT attribute.attisdropped
@@ -2151,10 +2222,30 @@ columns AS (
 types AS (
   SELECT atttypid AS oid FROM columns
   UNION
-  SELECT CASE WHEN type.typtype = 'd' THEN type.typbasetype ELSE type.typelem END
+  SELECT inner_type.oid
   FROM types
   JOIN pg_type AS type ON type.oid = types.oid
-  WHERE type.typtype = 'd' OR (type.typcategory = 'A' AND type.typelem <> 0)
+  LEFT JOIN pg_attribute AS field
+    ON type.typtype = 'c' AND field.attrelid = type.typrelid
+    AND field.attnum > 0 AND NOT field.attisdropped
+  LEFT JOIN pg_range AS range ON range.rngtypid = type.oid
+  LEFT JOIN pg_range AS multirange ON multirange.rngmultitypid = type.oid
+  CROSS JOIN LATERAL unnest(ARRAY[
+    CASE WHEN type.typtype = 'd' THEN type.typbasetype END,
+    CASE WHEN type.typcategory = 'A' THEN type.typelem END,
+    field.atttypid,
+    range.rngsubtype,
+    multirange.rngtypid
+  ]) AS inner_type (oid)
+  WHERE inner_type.oid IS NOT NULL AND inner_type.oid <> 0
+),
+type_set AS (
+  SELECT DISTINCT oid FROM types
+),
+user_types AS (
+  SELECT type.*, format_type(type.oid, NULL) AS qualified
+  FROM type_set
+  JOIN pg_type AS type ON type.oid = type_set.oid
 ),
 lines AS (
   SELECT roots.name || ' missing' AS line
@@ -2169,16 +2260,23 @@ lines AS (
         AND trigger.tgtype & 3 = 3
     )
     || ' partition_key=' || coalesce(pg_get_partkeydef(named.oid), '')
-    || ' partition_bound=' || coalesce(pg_get_expr(named.relpartbound, named.oid), '')
+    || ' partition_bound='
+    || coalesce(pg_get_expr(named.relpartbound, named.oid), '')
   FROM named
   UNION ALL
-  SELECT named.qualified || ' inherits ' || quote_ident(namespace.nspname) || '.' || quote_ident(parent.relname)
+  SELECT named.qualified || ' view definition=' || pg_get_viewdef(named.oid)
+  FROM named
+  WHERE named.relkind IN ('v', 'm')
+  UNION ALL
+  SELECT named.qualified || ' inherits '
+    || quote_ident(namespace.nspname) || '.' || quote_ident(parent.relname)
   FROM named
   JOIN pg_inherits AS inherits ON inherits.inhrelid = named.oid
   JOIN pg_class AS parent ON parent.oid = inherits.inhparent
   JOIN pg_namespace AS namespace ON namespace.oid = parent.relnamespace
   UNION ALL
   SELECT columns.qualified || ' column ' || quote_ident(columns.attname)
+    || ' position=' || columns.position
     || ' type=' || format_type(columns.atttypid, columns.atttypmod)
     || ' not_null=' || columns.attnotnull
     || ' has_default=' || columns.atthasdef
@@ -2186,12 +2284,28 @@ lines AS (
     || ' generated=' || columns.attgenerated::text
   FROM columns
   UNION ALL
-  SELECT named.qualified || ' constraint ' || quote_ident(constraint_row.conname)
+  SELECT named.qualified || ' constraint '
+    || quote_ident(constraint_row.conname)
     || ' type=' || constraint_row.contype::text
     || ' validated=' || constraint_row.convalidated
     || ' definition=' || pg_get_constraintdef(constraint_row.oid)
   FROM named
   JOIN pg_constraint AS constraint_row ON constraint_row.conrelid = named.oid
+  UNION ALL
+  SELECT named.qualified || ' index ' || quote_ident(index_class.relname)
+    || ' unique=' || index_row.indisunique
+    || ' valid=' || index_row.indisvalid
+    || ' definition=' || pg_get_indexdef(index_row.indexrelid)
+  FROM named
+  JOIN pg_index AS index_row ON index_row.indrelid = named.oid
+  JOIN pg_class AS index_class ON index_class.oid = index_row.indexrelid
+  UNION ALL
+  SELECT named.qualified || ' rule ' || quote_ident(rule.rulename)
+    || ' enabled=' || rule.ev_enabled::text
+    || ' definition=' || pg_get_ruledef(rule.oid)
+  FROM named
+  JOIN pg_rewrite AS rule ON rule.ev_class = named.oid
+  WHERE rule.rulename <> '_RETURN'
   UNION ALL
   SELECT named.qualified || ' policy ' || quote_ident(policy.polname)
     || ' command=' || policy.polcmd::text
@@ -2205,41 +2319,74 @@ lines AS (
       ) AS roles
     )
     || ' using=' || coalesce(pg_get_expr(policy.polqual, policy.polrelid), '')
-    || ' with_check=' || coalesce(pg_get_expr(policy.polwithcheck, policy.polrelid), '')
+    || ' with_check='
+    || coalesce(pg_get_expr(policy.polwithcheck, policy.polrelid), '')
   FROM named
   JOIN pg_policy AS policy ON policy.polrelid = named.oid
   UNION ALL
-  SELECT format_type(type.oid, NULL) || ' domain base='
-    || format_type(type.typbasetype, type.typtypmod)
-    || ' not_null=' || type.typnotnull
-  FROM types JOIN pg_type AS type ON type.oid = types.oid
-  WHERE type.typtype = 'd'
+  SELECT user_types.qualified || ' domain base='
+    || format_type(user_types.typbasetype, user_types.typtypmod)
+    || ' not_null=' || user_types.typnotnull
+  FROM user_types
+  WHERE user_types.typtype = 'd'
   UNION ALL
-  SELECT format_type(type.oid, NULL) || ' domain_constraint ' || quote_ident(constraint_row.conname)
+  SELECT user_types.qualified || ' domain_constraint '
+    || quote_ident(constraint_row.conname)
     || ' type=' || constraint_row.contype::text
     || ' validated=' || constraint_row.convalidated
     || ' definition=' || pg_get_constraintdef(constraint_row.oid)
-  FROM types
-  JOIN pg_type AS type ON type.oid = types.oid
-  JOIN pg_constraint AS constraint_row ON constraint_row.contypid = type.oid
+  FROM user_types
+  JOIN pg_constraint AS constraint_row
+    ON constraint_row.contypid = user_types.oid
   UNION ALL
-  SELECT format_type(type.oid, NULL) || ' enum labels=' || (
-      SELECT string_agg(quote_literal(enum.enumlabel), ',' ORDER BY enum.enumsortorder)
-      FROM pg_enum AS enum WHERE enum.enumtypid = type.oid
+  SELECT user_types.qualified || ' enum labels=' || (
+      SELECT string_agg(
+        quote_literal(enum.enumlabel), ',' ORDER BY enum.enumsortorder
+      )
+      FROM pg_enum AS enum WHERE enum.enumtypid = user_types.oid
     )
-  FROM types JOIN pg_type AS type ON type.oid = types.oid
-  WHERE type.typtype = 'e'
+  FROM user_types
+  WHERE user_types.typtype = 'e'
+  UNION ALL
+  SELECT user_types.qualified || ' field ' || quote_ident(field.attname)
+    || ' position=' || row_number() OVER (
+      PARTITION BY field.attrelid ORDER BY field.attnum
+    )
+    || ' type=' || format_type(field.atttypid, field.atttypmod)
+  FROM user_types
+  JOIN pg_attribute AS field ON field.attrelid = user_types.typrelid
+  WHERE user_types.typtype = 'c' AND field.attnum > 0
+    AND NOT field.attisdropped
+  UNION ALL
+  SELECT user_types.qualified || ' range subtype='
+    || format_type(range.rngsubtype, NULL)
+  FROM user_types
+  JOIN pg_range AS range ON range.rngtypid = user_types.oid
 )
 SELECT CASE
-  WHEN set_config('search_path', saved.search_path, true) IS NULL THEN NULL
+  WHEN concat(
+    set_config('search_path', saved.search_path, true),
+    set_config('TimeZone', saved.time_zone, true),
+    set_config('DateStyle', saved.date_style, true),
+    set_config('IntervalStyle', saved.interval_style, true),
+    set_config('extra_float_digits', saved.extra_float_digits, true),
+    set_config('quote_all_identifiers', saved.quote_all_identifiers, true),
+    set_config('bytea_output', saved.bytea_output, true),
+    set_config(
+      'standard_conforming_strings', saved.standard_conforming_strings, true
+    ),
+    set_config('lc_monetary', saved.lc_monetary, true)
+  ) IS NULL THEN NULL
   ELSE fingerprint.text
 END
 FROM saved
 CROSS JOIN pinned
 CROSS JOIN LATERAL (
-  SELECT coalesce(string_agg(lines.line, chr(10) ORDER BY lines.line COLLATE \"C\"), '') AS text
+  SELECT coalesce(
+    string_agg(lines.line, chr(10) ORDER BY lines.line COLLATE \"C\"), ''
+  ) AS text
   FROM lines
-  WHERE pinned.search_path IS NOT NULL
+  WHERE pinned.settings IS NOT NULL
 ) AS fingerprint"
 
 /// Get the schema fingerprint of tables
@@ -2247,7 +2394,7 @@ CROSS JOIN LATERAL (
 /// Runs `schema_fingerprint_sql` and gives the SHA-256 hash of its text.
 /// The fingerprint changes when a fact that dream_model reads from the
 /// catalog changes: see `schema_fingerprint_sql` for the list. It does not
-/// change when only OIDs or the order of the columns change.
+/// change when only OIDs or the settings of the connection change.
 ///
 /// Write each table as `schema.table`, as
 /// `quote_ident(schema) || '.' || quote_ident(table)` writes it, for

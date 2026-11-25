@@ -16,6 +16,7 @@ import gleam/dynamic/decode
 import gleam/list
 import gleam/option.{type Option}
 import gleam/result
+import gleam/string
 import gleam/time/calendar
 import gleam/time/timestamp
 import snippets/client_broken_promise
@@ -75,6 +76,78 @@ const touch_function =
 
 const null_message =
   "the SQL file count.sql promised the column total is never NULL, and PostgreSQL returned NULL"
+
+const exact_ddl = [
+  "CREATE TYPE mood AS ENUM ('sad', 'happy')",
+  "CREATE DOMAIN short_text AS text CHECK (length(VALUE) < 20)",
+  "CREATE TYPE pair AS (left_side int, right_side text)",
+  "CREATE TYPE span AS RANGE (subtype = float8)",
+  "CREATE TABLE parents (id int)",
+  "CREATE TABLE items (label short_text UNIQUE, mood mood, pair pair, span span, total int GENERATED ALWAYS AS (id * 2) STORED, at timestamptz CHECK (at > '1999-12-31 23:59:59.123456+00'), price money CHECK (price > '1.5')) INHERITS (parents)",
+  "CREATE INDEX items_mood_index ON items (mood) WHERE id > 0",
+  "ALTER TABLE items ENABLE ROW LEVEL SECURITY",
+  "CREATE POLICY readers ON items FOR SELECT TO pg_monitor USING (id > 1)",
+  "CREATE RULE no_delete AS ON DELETE TO items DO INSTEAD NOTHING",
+  "CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
+  "CREATE TRIGGER touch BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION touch()",
+  "CREATE VIEW item_labels AS SELECT label FROM items",
+  "CREATE TABLE events (at timestamptz) PARTITION BY RANGE (at)",
+  "CREATE TABLE events_old PARTITION OF events FOR VALUES FROM ('1999-12-31 23:59:59.123456+00') TO ('2026-01-01 00:00:00+00')",
+]
+
+const exact_text =
+  "fp.events column at position=1 type=timestamp with time zone not_null=false has_default=false identity= generated=
+fp.events relation kind=p row_security=false force_row_security=false before_row_triggers=false partition_key=RANGE (at) partition_bound=
+fp.events_old column at position=1 type=timestamp with time zone not_null=false has_default=false identity= generated=
+fp.events_old inherits fp.events
+fp.events_old relation kind=r row_security=false force_row_security=false before_row_triggers=false partition_key= partition_bound=FOR VALUES FROM ('1999-12-31 23:59:59.123456+00') TO ('2026-01-01 00:00:00+00')
+fp.item_labels column label position=1 type=fp.short_text not_null=false has_default=false identity= generated=
+fp.item_labels relation kind=v row_security=false force_row_security=false before_row_triggers=false partition_key= partition_bound=
+fp.item_labels view definition= SELECT label
+   FROM fp.items;
+fp.items column at position=7 type=timestamp with time zone not_null=false has_default=false identity= generated=
+fp.items column id position=1 type=integer not_null=false has_default=false identity= generated=
+fp.items column label position=2 type=fp.short_text not_null=false has_default=false identity= generated=
+fp.items column mood position=3 type=fp.mood not_null=false has_default=false identity= generated=
+fp.items column pair position=4 type=fp.pair not_null=false has_default=false identity= generated=
+fp.items column price position=8 type=money not_null=false has_default=false identity= generated=
+fp.items column span position=5 type=fp.span not_null=false has_default=false identity= generated=
+fp.items column total position=6 type=integer not_null=false has_default=true identity= generated=s
+fp.items constraint items_at_check type=c validated=true definition=CHECK ((at > '1999-12-31 23:59:59.123456+00'::timestamp with time zone))
+fp.items constraint items_label_key type=u validated=true definition=UNIQUE (label)
+fp.items constraint items_price_check type=c validated=true definition=CHECK ((price > '$1.50'::money))
+fp.items index items_label_key unique=true valid=true definition=CREATE UNIQUE INDEX items_label_key ON fp.items USING btree (label)
+fp.items index items_mood_index unique=false valid=true definition=CREATE INDEX items_mood_index ON fp.items USING btree (mood) WHERE (id > 0)
+fp.items inherits fp.parents
+fp.items policy readers command=r permissive=true roles=pg_monitor using=(id > 1) with_check=
+fp.items relation kind=r row_security=true force_row_security=false before_row_triggers=true partition_key= partition_bound=
+fp.items rule no_delete enabled=O definition=CREATE RULE no_delete AS
+    ON DELETE TO fp.items DO INSTEAD NOTHING;
+fp.mood enum labels='sad','happy'
+fp.pair field left_side position=1 type=integer
+fp.pair field right_side position=2 type=text
+fp.short_text domain base=text not_null=false
+fp.short_text domain_constraint short_text_check type=c validated=true definition=CHECK ((length(VALUE) < 20))
+fp.span range subtype=double precision"
+
+// DDL with a constant of each kind whose text depends on a setting.
+const settings_ddl = [
+  "CREATE TABLE items (
+    at timestamptz CHECK (at > '1999-12-31 23:59:59.123456+00'),
+    day date CHECK (day > '2001-02-03'),
+    span interval CHECK (span > '1 day 02:00'),
+    ratio float8 CHECK (ratio > 0.3333333333333333),
+    bytes bytea CHECK (bytes <> '\\x01'),
+    price money CHECK (price > '1.5'),
+    path text CHECK (path <> 'a\\b')
+  )",
+  "CREATE TABLE events (at timestamptz) PARTITION BY RANGE (at)",
+  "CREATE TABLE events_old PARTITION OF events
+    FOR VALUES FROM ('1999-12-31 23:59:59.123456+00')
+    TO ('2026-01-01 00:00:00+00')",
+]
+
+const promise_marker = "[dream_postgres promised_not_null] "
 
 const empty_text_hash =
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -237,9 +310,13 @@ fn promised_not_null_tests() {
       |> be_equal(
         Error(
           dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(expected: null_message, found: "NULL", path: [
-              "1",
-            ]),
+            decode.DecodeError(
+              expected: promise_marker <> null_message,
+              found: "NULL",
+              path: [
+                "1",
+              ],
+            ),
           ]),
         ),
       )
@@ -272,9 +349,13 @@ fn promised_not_null_tests() {
       |> be_equal(
         Error(
           dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(expected: null_message, found: "NULL", path: [
-              "1",
-            ]),
+            decode.DecodeError(
+              expected: promise_marker <> null_message,
+              found: "NULL",
+              path: [
+                "1",
+              ],
+            ),
           ]),
         ),
       )
@@ -312,7 +393,8 @@ fn promised_not_null_tests() {
         Error(
           dream_postgres_client.UnexpectedResultType([
             decode.DecodeError(
-              expected: "the SQL file order_total.sql promised the column total is never NULL, and PostgreSQL returned NULL",
+              expected: promise_marker
+                <> "the SQL file order_total.sql promised the column total is never NULL, and PostgreSQL returned NULL",
               found: "NULL",
               path: ["0"],
             ),
@@ -369,6 +451,24 @@ fn broken_promise_tests() {
       |> should
       |> be_equal(Error(Nil))
       |> or_fail_with("Expected Error(Nil) for a NULL without a promise")
+    }),
+    it("gives Error(Nil) for a lookalike error of another decoder", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.UnexpectedResultType([
+          decode.DecodeError(expected: null_message, found: "NULL", path: [
+            "0",
+          ]),
+        ])
+
+      // Act
+      let result = postgres.broken_promise(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Error(Nil))
+      |> or_fail_with("Expected Error(Nil) for an error without the marker")
     }),
     it("gives Error(Nil) for an error that is not a decode error", fn() {
       // Arrange
@@ -628,6 +728,26 @@ fn infinite_value_tests() {
       |> be_equal(Error(Nil))
       |> or_fail_with("Expected Error(Nil) for an Int error")
     }),
+    it("gives Error(Nil) for a lookalike error of another decoder", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.UnexpectedResultType([
+          decode.DecodeError(
+            expected: ends_at_infinity,
+            found: "infinity",
+            path: ["0"],
+          ),
+        ])
+
+      // Act
+      let result = postgres.infinite_value(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Error(Nil))
+      |> or_fail_with("Expected Error(Nil) for an error without the marker")
+    }),
     it("gives Error(Nil) for an error that is not a decode error", fn() {
       // Act
       let result = postgres.infinite_value(dream_postgres_client.QueryTimeout)
@@ -678,7 +798,11 @@ fn infinity_error(
 ) -> Result(a, postgres.QueryError) {
   Error(
     dream_postgres_client.UnexpectedResultType([
-      decode.DecodeError(expected: message, found:, path: ["0"]),
+      decode.DecodeError(
+        expected: "[dream_postgres finite] " <> message,
+        found:,
+        path: ["0"],
+      ),
     ]),
   )
 }
@@ -816,6 +940,31 @@ fn fingerprint_value_tests() {
         |> or_fail_with("Expected the one line <schema>.ghost missing")
       },
     ),
+    it(
+      "gives the exact canonical text of a schema with each kind of fact",
+      fn() {
+        // Act
+        let result =
+          test_database.with_schema(fn(db) {
+            run_all(db, exact_ddl)
+            let schema = schema_name(db)
+            client_schema_fingerprint_sql.fingerprint_text(db, [
+              schema <> ".items",
+              schema <> ".item_labels",
+              schema <> ".events",
+            ])
+            |> result.map(fn(returned) {
+              list.map(returned.rows, string.replace(_, schema <> ".", "fp."))
+            })
+          })
+
+        // Assert
+        result
+        |> should
+        |> be_equal(Ok([exact_text]))
+        |> or_fail_with("Expected the exact canonical text")
+      },
+    ),
     it("client_schema_fingerprint changes when the users table is made", fn() {
       // Act
       let changed =
@@ -847,24 +996,6 @@ fn fingerprint_stable_tests() {
           "DROP TABLE items",
           "CREATE TABLE unrelated (x int)",
           items_table,
-        ])
-
-      // Assert
-      changed
-      |> should
-      |> be_equal(False)
-      |> or_fail_with("Expected the same fingerprint")
-    }),
-    it("when the columns are in another order", fn() {
-      // Act
-      let changed =
-        changes_fingerprint([items_table], [
-          "DROP TABLE items",
-          "CREATE TABLE items (
-            price int CONSTRAINT items_price_check CHECK (price > 0),
-            name text NOT NULL,
-            id int PRIMARY KEY
-          )",
         ])
 
       // Assert
@@ -929,6 +1060,150 @@ fn fingerprint_stable_tests() {
       changed
       |> should
       |> be_equal(False)
+      |> or_fail_with("Expected the same fingerprint")
+    }),
+    it("when a statement-level BEFORE trigger is added", fn() {
+      // Act
+      let changed =
+        changes_fingerprint([items_table, touch_function], [
+          "CREATE TRIGGER audit BEFORE INSERT ON items
+            FOR EACH STATEMENT EXECUTE FUNCTION touch()",
+        ])
+
+      // Assert
+      changed
+      |> should
+      |> be_equal(False)
+      |> or_fail_with("Expected the same fingerprint")
+    }),
+    it(
+      "when TimeZone is America/New_York in the transaction, and keeps it",
+      fn() {
+        // Act
+        let result = fingerprint_with_setting("TimeZone", "America/New_York")
+
+        // Assert
+        result
+        |> should
+        |> be_equal(#(True, "America/New_York"))
+        |> or_fail_with(
+          "Expected the same fingerprint and TimeZone America/New_York",
+        )
+      },
+    ),
+    it("when DateStyle is SQL, DMY in the transaction, and keeps it", fn() {
+      // Act
+      let result = fingerprint_with_setting("DateStyle", "SQL, DMY")
+
+      // Assert
+      result
+      |> should
+      |> be_equal(#(True, "SQL, DMY"))
+      |> or_fail_with("Expected the same fingerprint and DateStyle SQL, DMY")
+    }),
+    it("when IntervalStyle is iso_8601 in the transaction, and keeps it", fn() {
+      // Act
+      let result = fingerprint_with_setting("IntervalStyle", "iso_8601")
+
+      // Assert
+      result
+      |> should
+      |> be_equal(#(True, "iso_8601"))
+      |> or_fail_with(
+        "Expected the same fingerprint and IntervalStyle iso_8601",
+      )
+    }),
+    it("when extra_float_digits is -5 in the transaction, and keeps it", fn() {
+      // Act
+      let result = fingerprint_with_setting("extra_float_digits", "-5")
+
+      // Assert
+      result
+      |> should
+      |> be_equal(#(True, "-5"))
+      |> or_fail_with("Expected the same fingerprint and extra_float_digits -5")
+    }),
+    it(
+      "when quote_all_identifiers is on in the transaction, and keeps it",
+      fn() {
+        // Act
+        let result = fingerprint_with_setting("quote_all_identifiers", "on")
+
+        // Assert
+        result
+        |> should
+        |> be_equal(#(True, "on"))
+        |> or_fail_with(
+          "Expected the same fingerprint and quote_all_identifiers on",
+        )
+      },
+    ),
+    it("when bytea_output is escape in the transaction, and keeps it", fn() {
+      // Act
+      let result = fingerprint_with_setting("bytea_output", "escape")
+
+      // Assert
+      result
+      |> should
+      |> be_equal(#(True, "escape"))
+      |> or_fail_with("Expected the same fingerprint and bytea_output escape")
+    }),
+    it("when lc_monetary is C in the transaction, and keeps it", fn() {
+      // Act
+      let result = fingerprint_with_setting("lc_monetary", "C")
+
+      // Assert
+      result
+      |> should
+      |> be_equal(#(True, "C"))
+      |> or_fail_with("Expected the same fingerprint and lc_monetary C")
+    }),
+    it("when search_path is pg_temp in the transaction, and keeps it", fn() {
+      // Act
+      let result = fingerprint_with_setting("search_path", "pg_temp")
+
+      // Assert
+      result
+      |> should
+      |> be_equal(#(True, "pg_temp"))
+      |> or_fail_with("Expected the same fingerprint and search_path pg_temp")
+    }),
+    it("when standard_conforming_strings is off in the transaction", fn() {
+      // Act
+      let result = fingerprint_with_old_strings()
+
+      // Assert
+      result
+      |> should
+      |> be_equal(#(True, True))
+      |> or_fail_with("Expected the same fingerprint and the setting kept")
+    }),
+    it("when the session has other time and date settings", fn() {
+      // Act
+      let same =
+        test_database.with_schema(fn(db) {
+          run_all(db, settings_ddl)
+          let tables = settings_tables(db)
+          let assert Ok(baseline) = postgres.schema_fingerprint(db, tables)
+          let assert Ok(other) =
+            test_database.config()
+            |> postgres.pool_size(1)
+            |> dream_postgres_client.connection_parameter(
+              name: "TimeZone",
+              value: "Asia/Kolkata",
+            )
+            |> dream_postgres_client.connection_parameter(
+              name: "DateStyle",
+              value: "German, DMY",
+            )
+            |> postgres.connect()
+          postgres.schema_fingerprint(other, tables) == Ok(baseline)
+        })
+
+      // Assert
+      same
+      |> should
+      |> be_equal(True)
       |> or_fail_with("Expected the same fingerprint")
     }),
     it("when the search_path of the connection is different", fn() {
@@ -1046,12 +1321,10 @@ fn fingerprint_change_tests() {
       [
         "CREATE TABLE events (id int, at date) PARTITION BY RANGE (at)",
         "CREATE TABLE events_2026 (id int, at date)",
-      ],
-      [
         "ALTER TABLE events ATTACH PARTITION events_2026
           FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
-        "ALTER TABLE events_2026 ADD CONSTRAINT small_id CHECK (id < 9)",
       ],
+      ["ALTER TABLE events_2026 ADD CONSTRAINT small_id CHECK (id < 9)"],
     ),
     change_test(
       "when a domain of a column gets a CHECK",
@@ -1076,6 +1349,120 @@ fn fingerprint_change_tests() {
         "CREATE TABLE items (size size)",
       ],
       ["ALTER TYPE size ADD VALUE 'medium' BEFORE 'large'"],
+    ),
+    change_test("when two columns swap places", [items_table], [
+      "DROP TABLE items",
+      "CREATE TABLE items (
+          id int PRIMARY KEY,
+          price int CONSTRAINT items_price_check CHECK (price > 0),
+          name text NOT NULL
+        )",
+    ]),
+    change_test(
+      "when a unique index becomes a plain index",
+      [items_table, "CREATE UNIQUE INDEX items_name_index ON items (name)"],
+      [
+        "DROP INDEX items_name_index",
+        "CREATE INDEX items_name_index ON items (name)",
+      ],
+    ),
+    change_test("when a partial unique index is added", [items_table], [
+      "CREATE UNIQUE INDEX items_cheap_index ON items (name) WHERE price < 10",
+    ]),
+    change_test("when a DO INSTEAD NOTHING rule is added", [items_table], [
+      "CREATE RULE ignore_insert AS ON INSERT TO items DO INSTEAD NOTHING",
+    ]),
+    change_test(
+      "when the definition of a named view changes",
+      [items_table, "CREATE VIEW item_view AS SELECT id, name FROM items"],
+      [
+        "CREATE OR REPLACE VIEW item_view AS SELECT id, name FROM items WHERE price > 1",
+      ],
+    ),
+    change_test(
+      "when the definition of a materialized view changes",
+      [
+        items_table,
+        "CREATE MATERIALIZED VIEW item_view AS SELECT id FROM items",
+      ],
+      [
+        "DROP MATERIALIZED VIEW item_view",
+        "CREATE MATERIALIZED VIEW item_view AS SELECT id FROM items WHERE id > 1",
+      ],
+    ),
+    change_test(
+      "when a field of a composite column type is renamed",
+      [
+        "CREATE TYPE pair AS (left_side int, right_side text)",
+        "CREATE TABLE items (pair pair)",
+      ],
+      ["ALTER TYPE pair RENAME ATTRIBUTE right_side TO other_side"],
+    ),
+    change_test(
+      "when the subtype of a range column type changes",
+      [
+        "CREATE TYPE span AS RANGE (subtype = int4)",
+        "CREATE TABLE items (id int, span span)",
+      ],
+      [
+        "ALTER TABLE items DROP COLUMN span",
+        "DROP TYPE span",
+        "CREATE TYPE span AS RANGE (subtype = float8)",
+        "ALTER TABLE items ADD COLUMN span span",
+      ],
+    ),
+    change_test(
+      "when a policy USING changes",
+      [
+        items_table,
+        "ALTER TABLE items ENABLE ROW LEVEL SECURITY",
+        "CREATE POLICY readers ON items FOR SELECT USING (price < 100)",
+      ],
+      ["ALTER POLICY readers ON items USING (price < 50)"],
+    ),
+    change_test(
+      "when the roles of a policy change",
+      [
+        items_table,
+        "ALTER TABLE items ENABLE ROW LEVEL SECURITY",
+        "CREATE POLICY readers ON items FOR SELECT USING (price < 100)",
+      ],
+      ["ALTER POLICY readers ON items TO pg_monitor"],
+    ),
+    change_test(
+      "when row level security is forced",
+      [items_table, "ALTER TABLE items ENABLE ROW LEVEL SECURITY"],
+      ["ALTER TABLE items FORCE ROW LEVEL SECURITY"],
+    ),
+    change_test("when a column becomes an identity column", [items_table], [
+      "ALTER TABLE items ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY",
+    ]),
+    change_test(
+      "when a column becomes a generated column",
+      ["CREATE TABLE items (price int, total int)"],
+      [
+        "ALTER TABLE items DROP COLUMN total",
+        "ALTER TABLE items ADD COLUMN total int GENERATED ALWAYS AS (price * 2) STORED",
+      ],
+    ),
+    change_test(
+      "when a domain of a column gets NOT NULL",
+      ["CREATE DOMAIN positive AS int", "CREATE TABLE items (price positive)"],
+      ["ALTER DOMAIN positive SET NOT NULL"],
+    ),
+    change_test(
+      "when the base domain of a domain gets a CHECK",
+      [
+        "CREATE DOMAIN amount AS int",
+        "CREATE DOMAIN price AS amount",
+        "CREATE TABLE items (price price)",
+      ],
+      ["ALTER DOMAIN amount ADD CHECK (VALUE > 0)"],
+    ),
+    change_test(
+      "when the table gets a parent with INHERIT",
+      [items_table, "CREATE TABLE base (id int)"],
+      ["ALTER TABLE items INHERIT base"],
     ),
     change_test("when the table is dropped", [items_table], [
       "DROP TABLE items",
@@ -1369,14 +1756,59 @@ fn run_all(db: postgres.Connection, statements: List(String)) -> Nil {
 }
 
 // Runs `setup` in a new schema, then `change`, and tells if the fingerprint
-// of the tables items and events changed.
+// of the tables items, events and item_view changed.
 fn changes_fingerprint(setup: List(String), change: List(String)) -> Bool {
   use db <- test_database.with_schema
   let schema = schema_name(db)
-  let tables = [schema <> ".items", schema <> ".events"]
+  let tables = [schema <> ".items", schema <> ".events", schema <> ".item_view"]
   run_all(db, setup)
   let assert Ok(before) = postgres.schema_fingerprint(db, tables)
   run_all(db, change)
   let assert Ok(after) = postgres.schema_fingerprint(db, tables)
   before != after
+}
+
+fn settings_tables(db: postgres.Connection) -> List(String) {
+  let schema = schema_name(db)
+  [schema <> ".items", schema <> ".events"]
+}
+
+// Makes the tables of `settings_ddl`, then sets `name` to `value` for one
+// transaction. Tells if the fingerprint in the transaction is the
+// fingerprint outside it, and gives the value of `name` after the query.
+fn fingerprint_with_setting(name: String, value: String) -> #(Bool, String) {
+  use db <- test_database.with_schema
+  run_all(db, settings_ddl)
+  let tables = settings_tables(db)
+  let assert Ok(baseline) = postgres.schema_fingerprint(db, tables)
+  let assert Ok(result) =
+    postgres.transaction(db, fn(transaction) {
+      let assert Ok(_set) =
+        test_database.execute(
+          transaction,
+          "SET LOCAL " <> name <> " = '" <> value <> "'",
+        )
+      let assert Ok(hash) = postgres.schema_fingerprint(transaction, tables)
+      let assert Ok([shown]) = test_database.texts(transaction, "SHOW " <> name)
+      Ok(#(hash == baseline, shown))
+    })
+  result
+}
+
+// PostgreSQL 19 refuses standard_conforming_strings = off. So on 19 and
+// later the test sets it to on, the only value, and checks that the query
+// keeps it.
+fn fingerprint_with_old_strings() -> #(Bool, Bool) {
+  let assert Ok([version]) =
+    test_database.with_schema(test_database.texts(
+      _,
+      "SELECT (current_setting('server_version_num')::int >= 190000)::text",
+    ))
+  let value = case version {
+    "true" -> "on"
+    _ -> "off"
+  }
+  let #(same, shown) =
+    fingerprint_with_setting("standard_conforming_strings", value)
+  #(same, shown == value)
 }
