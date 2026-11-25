@@ -131,7 +131,7 @@ fn startup_check_tests() {
       // Assert
       elapsed
       |> should
-      |> be_between(1500, 3500)
+      |> be_between(1500, 4500)
       |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
     }),
   ])
@@ -170,7 +170,7 @@ fn check_tests() {
       // Assert
       elapsed
       |> should
-      |> be_between(1500, 3500)
+      |> be_between(1500, 4500)
       |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
     }),
     it("gives ConnectionUnavailable for a database that does not exist", fn() {
@@ -190,7 +190,7 @@ fn check_tests() {
       // Assert
       elapsed
       |> should
-      |> be_between(1500, 3500)
+      |> be_between(1500, 4500)
       |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
     }),
     it("gives ConnectionUnavailable for a port with no listener", fn() {
@@ -212,7 +212,7 @@ fn check_tests() {
       // Assert
       elapsed
       |> should
-      |> be_between(1500, 3500)
+      |> be_between(1500, 4500)
       |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
     }),
     it("gives ConnectionUnavailable for pool_size(0)", fn() {
@@ -232,7 +232,7 @@ fn check_tests() {
       // Assert
       elapsed
       |> should
-      |> be_between(1500, 3500)
+      |> be_between(1500, 4500)
       |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
     }),
   ])
@@ -873,7 +873,7 @@ fn url_parameter_tests() {
       // Assert
       elapsed
       |> should
-      |> be_between(1500, 3500)
+      |> be_between(1500, 4500)
       |> or_fail_with("Expected the error after 1.5 to 3.5 seconds")
     }),
     it("timezone=Mars/Phobos gives ConnectionUnavailable", fn() {

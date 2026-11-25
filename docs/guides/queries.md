@@ -405,7 +405,7 @@ These are the errors `dream_postgres_client.execute` returns, and what the helpe
 
 | Pog error | What it means | After `first_row` or `all_rows` |
 |:---|:---|:---|
-| `ConnectionUnavailable` | The pool had no connection for the query within about 2 seconds: nothing listens, the login failed, the database doesn't exist, or the pool size is 0 | `DatabaseError` |
+| `ConnectionUnavailable` | The pool had no connection for the query within 2 to 3 seconds: nothing listens, the login failed, the database doesn't exist, or the pool size is 0 | `DatabaseError` |
 | `QueryTimeout` | The query ran longer than its timeout (5 seconds unless you set `dream_postgres_client.timeout`, from Pog's source). With `dream_postgres_client.timeout(200)`, `SELECT pg_sleep(1)` gives it after 200 ms. | `DatabaseError` |
 | `ConstraintViolated(message, constraint, detail)` | The change broke a constraint, such as `UNIQUE` or a foreign key | `DatabaseError` |
 | `PostgresqlError(code, name, message)` | PostgreSQL refused the query, for example `PostgresqlError("42P01", "undefined_table", ..)` for a missing table, or `PostgresqlError("42601", "syntax_error", "syntax error at or near \"SELEC\"")` for bad SQL | `DatabaseError` |
@@ -504,7 +504,7 @@ What each test covers:
 - `dream_postgres_client.Returned(count: 1, rows: [ada])` is the value `find_user` returns when the user exists. The row type is a plain record, so you build it like any other.
 - `dream_postgres_client.Returned(count: 0, rows: [])` is the result for an id that doesn't exist.
 - `dream_postgres_client.ConstraintViolated(..)` is the error PostgreSQL gives for a duplicate email, value for value: this package's tests insert the same email twice and get exactly this error. You can build any Pog error the same way, so you can test a 409 without a database that holds a duplicate.
-- The last test runs `show_user` on a pool on port 1 of `127.0.0.1`, where nothing listens. It takes about 2 seconds, so keep one or two tests like it.
+- The last test runs `show_user` on a pool on port 1 of `127.0.0.1`, where nothing listens. It takes 2 to 3 seconds, so keep one or two tests like it.
 
 To test the SQL itself, run the query functions against a real test database with the tables you need. That checks what a hand-built result can't: that the SQL is valid and the decoder matches the columns.
 

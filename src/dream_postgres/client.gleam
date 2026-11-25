@@ -321,7 +321,7 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 /// returns `Ok` at once also when no database listens at the host and port,
 /// when the password is wrong, when the database does not exist, and for a pool
 /// size of 0. The failure shows on the first query: it returns
-/// `Error(dream_postgres_client.ConnectionUnavailable)` after about 2 seconds.
+/// `Error(dream_postgres_client.ConnectionUnavailable)` after 2 to 3 seconds.
 /// Call `check` after `connect` to stop at startup when the database does not
 /// answer.
 ///
@@ -542,7 +542,7 @@ pub type FromUrlError {
 /// This function does not know the parameters of the server. A name that the
 /// server does not know, or a value that it refuses, gives `Ok` here, and each
 /// query on the pool then returns `dream_postgres_client.ConnectionUnavailable`
-/// after about 2 seconds. The server log says why. Call `check` at startup.
+/// after 2 to 3 seconds. The server log says why. Call `check` at startup.
 ///
 /// The connection parameters of the config keep the order of the URL. The
 /// `application_name` of the URL is the name that the server shows, also when
@@ -686,7 +686,7 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
 /// - `Error(QueryError)`: The error of the query. When no database listens at
 ///   the host and port, the password is wrong, the database does not exist or
 ///   the pool size is 0, the error is
-///   `dream_postgres_client.ConnectionUnavailable`, after about 2 seconds.
+///   `dream_postgres_client.ConnectionUnavailable`, after 2 to 3 seconds.
 ///
 /// ## See Also
 ///
