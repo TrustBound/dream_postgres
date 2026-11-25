@@ -41,6 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `broken_promise(error)` gives the message of a broken `-- not null:`
   promise from the error of `execute`, and `Error(Nil)` for every other
   error. Generated model modules return it as an `InternalServerError`.
+- `finite_timestamp(decoder, column)` and `finite_date(decoder, column)`
+  decode a `timestamp`, `timestamptz` or `date` column that can hold
+  `'infinity'` or `'-infinity'`. Such a value fails the row with a message
+  that names the column, for example `the column ends_at holds infinity,
+  which the Gleam type Timestamp cannot hold`. `infinite_value(error)`
+  gives that message from the error of `execute`, and `Error(Nil)` for
+  every other error.
 - The type aliases `Timestamp`, `Date` and `TimeOfDay`, for the types of
   `gleam/time`. Generated model modules name these types through
   `dream_postgres/client` and import no `gleam_time` module.

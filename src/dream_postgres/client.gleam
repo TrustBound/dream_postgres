@@ -36,7 +36,9 @@
 //// ```
 
 import dream_postgres_client
+import gleam/dynamic
 import gleam/dynamic/decode
+import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{type Option}
@@ -1809,6 +1811,201 @@ fn is_broken_promise(error: decode.DecodeError) -> Bool {
 
 /// The start of the message of a broken promise.
 const promise_prefix = "the SQL file "
+
+/// Decode a timestamp column that can hold infinity
+///
+/// A `timestamp` or `timestamptz` column can hold `'infinity'` and
+/// `'-infinity'`. A `Timestamp` cannot hold them. This decoder fails such a
+/// value with one `decode.DecodeError`: `found` is `"infinity"` or
+/// `"-infinity"`, and `expected` is the message `the column happened_at
+/// holds infinity, which the Gleam type Timestamp cannot hold`. `execute`
+/// then returns `UnexpectedResultType` with that error, and
+/// `infinite_value` gives the message. Every other value goes to
+/// `decoder`.
+///
+/// ## Parameters
+///
+/// - `decoder`: The decoder of a finite value, for example
+///   `timestamp_decoder()`
+/// - `column`: The name of the column, for the message
+///
+/// ## Returns
+///
+/// A decoder that fails on infinity with a message that names `column`.
+///
+/// ## Example
+///
+/// ### Read a timestamp that can be infinity <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_finite_timestamp.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn ends_at(
+///   connection: postgres.Connection,
+///   sql: String,
+/// ) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+///   sql
+///   |> postgres.query
+///   |> postgres.returning(decode.at(
+///     [0],
+///     postgres.finite_timestamp(postgres.timestamp_decoder(), "ends_at"),
+///   ))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn finite_timestamp(
+  decoder: decode.Decoder(Timestamp),
+  column: String,
+) -> decode.Decoder(Timestamp) {
+  finite(decoder, timestamp.unix_epoch, column, "Timestamp")
+}
+
+/// Decode a date column that can hold infinity
+///
+/// A `date` column can hold `'infinity'` and `'-infinity'`. A `Date`
+/// cannot hold them. This decoder fails such a value with one
+/// `decode.DecodeError`: `found` is `"infinity"` or `"-infinity"`, and
+/// `expected` is the message `the column day holds infinity, which the
+/// Gleam type Date cannot hold`. `infinite_value` gives the message. Every
+/// other value goes to `decoder`.
+///
+/// ## Parameters
+///
+/// - `decoder`: The decoder of the date, for example
+///   `calendar_date_decoder()`
+/// - `column`: The name of the column, for the message
+///
+/// ## Returns
+///
+/// A decoder that fails on infinity with a message that names `column`.
+///
+/// ## Example
+///
+/// ### Read a date that can be infinity <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_finite_date.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn valid_until(
+///   connection: postgres.Connection,
+///   sql: String,
+/// ) -> Result(postgres.Returned(postgres.Date), postgres.QueryError) {
+///   sql
+///   |> postgres.query
+///   |> postgres.returning(decode.at(
+///     [0],
+///     postgres.finite_date(postgres.calendar_date_decoder(), "valid_until"),
+///   ))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn finite_date(
+  decoder: decode.Decoder(Date),
+  column: String,
+) -> decode.Decoder(Date) {
+  finite(decoder, calendar.Date(1970, calendar.January, 1), column, "Date")
+}
+
+fn finite(
+  decoder: decode.Decoder(a),
+  zero: a,
+  column: String,
+  type_name: String,
+) -> decode.Decoder(a) {
+  use raw <- decode.then(decode.dynamic)
+  case infinity_of(raw) {
+    Ok(value) -> infinity_failure(zero, column, value, type_name)
+    Error(Nil) -> decoder
+  }
+}
+
+/// Read the message of an infinite value
+///
+/// `finite_timestamp` and `finite_date` fail an infinite value with a
+/// message that names the column. `execute` then returns
+/// `UnexpectedResultType` with that message in a `decode.DecodeError`.
+/// This function gives the message. Code that dream_model generates
+/// returns it as an `InternalServerError`, after the name of the model
+/// function.
+///
+/// ## Parameters
+///
+/// - `error`: The error from `execute`
+///
+/// ## Returns
+///
+/// - `Ok(message)`: A column held infinity or -infinity. The message is
+///   the `expected` text of the decode error, for example `the column
+///   ends_at holds infinity, which the Gleam type Timestamp cannot hold`
+/// - `Error(Nil)`: The error has no infinite value
+///
+/// ## Example
+///
+/// ### Show the infinite value of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_infinite_value.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+///
+/// pub fn error_message(error: postgres.QueryError) -> String {
+///   case postgres.infinite_value(error) {
+///     Ok(message) -> message
+///     Error(Nil) -> "The query failed"
+///   }
+/// }
+/// ```
+pub fn infinite_value(error: QueryError) -> Result(String, Nil) {
+  case error {
+    dream_postgres_client.UnexpectedResultType(errors) ->
+      list.find(errors, is_infinite_value)
+      |> result.map(fn(decode_error) { decode_error.expected })
+    _ -> Error(Nil)
+  }
+}
+
+fn is_infinite_value(error: decode.DecodeError) -> Bool {
+  list.contains(infinity_names, error.found)
+  && string.starts_with(error.expected, infinity_prefix)
+}
+
+fn infinity_of(raw: dynamic.Dynamic) -> Result(String, Nil) {
+  decode.run(raw, atom.decoder())
+  |> result.map(atom.to_string)
+  |> result.replace_error(Nil)
+  |> result.try(fn(name) {
+    case list.contains(infinity_names, name) {
+      True -> Ok(name)
+      False -> Error(Nil)
+    }
+  })
+}
+
+fn infinity_failure(
+  zero: a,
+  column: String,
+  value: String,
+  type_name: String,
+) -> decode.Decoder(a) {
+  let message =
+    infinity_prefix
+    <> column
+    <> " holds "
+    <> value
+    <> ", which the Gleam type "
+    <> type_name
+    <> " cannot hold"
+  decode.failure(zero, message)
+  |> decode.map_errors(fn(_errors) {
+    [decode.DecodeError(expected: message, found: value, path: [])]
+  })
+}
+
+/// The values of an infinite timestamp or date.
+const infinity_names = ["infinity", "-infinity"]
+
+/// The start of the message of an infinite value.
+const infinity_prefix = "the column "
 
 /// The schema fingerprint that a generated module expects.
 ///

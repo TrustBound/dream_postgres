@@ -1,5 +1,6 @@
 //// Tests for the functions of `dream_postgres/client` that code from
 //// dream_model calls: `violated_constraint`, `promised_not_null`,
+//// `finite_timestamp`, `finite_date`, `infinite_value`,
 //// `schema_fingerprint`, `check_schema` and `format_schema_check_error`,
 //// and for their snippets. The queries run on the real PostgreSQL server
 //// of docker-compose.yml, or on the server of `DREAM_POSTGRES_TEST_URL`.
@@ -20,6 +21,9 @@ import gleam/time/timestamp
 import snippets/client_broken_promise
 import snippets/client_check_schema
 import snippets/client_date_type
+import snippets/client_finite_date
+import snippets/client_finite_timestamp
+import snippets/client_infinite_value
 import snippets/client_promised_not_null
 import snippets/client_schema_fingerprint
 import snippets/client_schema_fingerprint_sql
@@ -33,6 +37,9 @@ pub fn tests() -> TestSuite {
     violated_constraint_tests(),
     promised_not_null_tests(),
     broken_promise_tests(),
+    finite_timestamp_tests(),
+    finite_date_tests(),
+    infinite_value_tests(),
     time_alias_tests(),
     fingerprint_value_tests(),
     fingerprint_stable_tests(),
@@ -402,6 +409,278 @@ fn broken_promise_tests() {
       |> or_fail_with("Expected the general message")
     }),
   ])
+}
+
+fn finite_timestamp_tests() {
+  group("finite_timestamp", [
+    it("decodes a finite timestamp", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_finite_timestamp.ends_at(
+          _,
+          "SELECT timestamp '1970-01-01 00:00:10'",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Ok(
+          dream_postgres_client.Returned(count: 1, rows: [
+            timestamp.from_unix_seconds(10),
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected the timestamp of second 10")
+    }),
+    it("fails infinity with the column and the path", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_finite_timestamp.ends_at(
+          _,
+          "SELECT timestamp 'infinity'",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(infinity_error(ends_at_infinity, "infinity"))
+      |> or_fail_with("Expected the infinity error of ends_at")
+    }),
+    it("fails -infinity with the column and the path", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_finite_timestamp.ends_at(
+          _,
+          "SELECT timestamp '-infinity'",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(infinity_error(
+        "the column ends_at holds -infinity, which the Gleam type Timestamp cannot hold",
+        "-infinity",
+      ))
+      |> or_fail_with("Expected the -infinity error of ends_at")
+    }),
+    it("fails an infinite timestamptz", fn() {
+      // Act
+      let result =
+        test_database.with_schema(fn(db) {
+          "SELECT timestamptz 'infinity'"
+          |> postgres.query
+          |> postgres.returning(decode.at(
+            [0],
+            postgres.finite_timestamp(
+              postgres.timestamp_with_time_zone_decoder(),
+              "ends_at",
+            ),
+          ))
+          |> postgres.execute(db)
+        })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(infinity_error(ends_at_infinity, "infinity"))
+      |> or_fail_with("Expected the infinity error of a timestamptz")
+    }),
+    it("keeps the error of the decoder for a value of the wrong type", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_finite_timestamp.ends_at(
+          _,
+          "SELECT 'x'::text",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Error(
+          dream_postgres_client.UnexpectedResultType([
+            decode.DecodeError(expected: "Int", found: "String", path: ["0"]),
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected the Int error at path 0")
+    }),
+  ])
+}
+
+fn finite_date_tests() {
+  group("finite_date", [
+    it("decodes a finite date", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_finite_date.valid_until(
+          _,
+          "SELECT date '2024-02-29'",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Ok(
+          dream_postgres_client.Returned(count: 1, rows: [
+            calendar.Date(2024, calendar.February, 29),
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected 2024-02-29")
+    }),
+    it("fails infinity with the column and the path", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_finite_date.valid_until(
+          _,
+          "SELECT date 'infinity'",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(infinity_error(
+        "the column valid_until holds infinity, which the Gleam type Date cannot hold",
+        "infinity",
+      ))
+      |> or_fail_with("Expected the infinity error of valid_until")
+    }),
+    it("fails -infinity with the column and the path", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_finite_date.valid_until(
+          _,
+          "SELECT date '-infinity'",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(infinity_error(
+        "the column valid_until holds -infinity, which the Gleam type Date cannot hold",
+        "-infinity",
+      ))
+      |> or_fail_with("Expected the -infinity error of valid_until")
+    }),
+    it("keeps the error of the decoder for a NULL", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_finite_date.valid_until(
+          _,
+          "SELECT NULL::date",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Error(
+          dream_postgres_client.UnexpectedResultType([
+            decode.DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
+            decode.DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
+            decode.DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
+            decode.DecodeError(expected: "Calendar date", found: "Nil", path: [
+              "0",
+            ]),
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected the errors of the date decoder")
+    }),
+  ])
+}
+
+fn infinite_value_tests() {
+  group("infinite_value", [
+    it("gives the message of an infinite value", fn() {
+      // Arrange
+      let assert Error(error) =
+        test_database.with_schema(client_finite_timestamp.ends_at(
+          _,
+          "SELECT timestamp 'infinity'",
+        ))
+
+      // Act
+      let result = postgres.infinite_value(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok(ends_at_infinity))
+      |> or_fail_with("Expected the message of the infinite value")
+    }),
+    it("gives Error(Nil) for a decode error of another kind", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.UnexpectedResultType([
+          decode.DecodeError(expected: "Int", found: "infinity", path: ["0"]),
+        ])
+
+      // Act
+      let result = postgres.infinite_value(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Error(Nil))
+      |> or_fail_with("Expected Error(Nil) for an Int error")
+    }),
+    it("gives Error(Nil) for an error that is not a decode error", fn() {
+      // Act
+      let result = postgres.infinite_value(dream_postgres_client.QueryTimeout)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Error(Nil))
+      |> or_fail_with("Expected Error(Nil) for a timeout")
+    }),
+    it("client_infinite_value shows the message of the infinite value", fn() {
+      // Arrange
+      let assert Error(error) =
+        test_database.with_schema(client_finite_timestamp.ends_at(
+          _,
+          "SELECT timestamp 'infinity'",
+        ))
+
+      // Act
+      let message = client_infinite_value.error_message(error)
+
+      // Assert
+      message
+      |> should
+      |> be_equal(ends_at_infinity)
+      |> or_fail_with("Expected the message of the infinite value")
+    }),
+    it("client_infinite_value gives the general message otherwise", fn() {
+      // Act
+      let message =
+        client_infinite_value.error_message(dream_postgres_client.QueryTimeout)
+
+      // Assert
+      message
+      |> should
+      |> be_equal("The query failed")
+      |> or_fail_with("Expected the general message")
+    }),
+  ])
+}
+
+const ends_at_infinity =
+  "the column ends_at holds infinity, which the Gleam type Timestamp cannot hold"
+
+fn infinity_error(
+  message: String,
+  found: String,
+) -> Result(a, postgres.QueryError) {
+  Error(
+    dream_postgres_client.UnexpectedResultType([
+      decode.DecodeError(expected: message, found:, path: ["0"]),
+    ]),
+  )
 }
 
 fn time_alias_tests() {

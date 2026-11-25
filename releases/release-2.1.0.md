@@ -60,6 +60,45 @@ pub fn error_message(error: postgres.QueryError) -> String {
 }
 ```
 
+### `finite_timestamp`, `finite_date` and `infinite_value`
+
+A `timestamp`, `timestamptz` or `date` column can hold `'infinity'` and `'-infinity'`. A `Timestamp` or a `Date` cannot hold them. `finite_timestamp(decoder, column)` and `finite_date(decoder, column)` wrap a column decoder. An infinite value fails the row with a `decode.DecodeError` at the path of the column, with `found: "infinity"` or `found: "-infinity"` and the message `the column ends_at holds infinity, which the Gleam type Timestamp cannot hold`. Every other value goes to `decoder`.
+
+#### Read a timestamp that can be infinity <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_finite_timestamp.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+import gleam/dynamic/decode
+
+pub fn ends_at(
+  connection: postgres.Connection,
+  sql: String,
+) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+  sql
+  |> postgres.query
+  |> postgres.returning(decode.at(
+    [0],
+    postgres.finite_timestamp(postgres.timestamp_decoder(), "ends_at"),
+  ))
+  |> postgres.execute(connection)
+}
+```
+
+`infinite_value(error)` gives that message from the error of `execute`, and `Error(Nil)` for every other error. Generated model modules return it as an `InternalServerError`, after the name of the model function.
+
+#### Show the infinite value of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_infinite_value.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+
+pub fn error_message(error: postgres.QueryError) -> String {
+  case postgres.infinite_value(error) {
+    Ok(message) -> message
+    Error(Nil) -> "The query failed"
+  }
+}
+```
+
 ### `timestamp_with_time_zone_decoder`
 
 `timestamp_with_time_zone_decoder()` reads a `timestamptz` column as a `Timestamp`. `timestamp_decoder` reads only a `timestamp` column: `dream_postgres_client` gives a `timestamptz` value as a date and a time of day in UTC, and this decoder reads that form. `timestamp` sends a `Timestamp` to either kind of column.
