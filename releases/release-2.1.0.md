@@ -60,6 +60,29 @@ pub fn error_message(error: postgres.QueryError) -> String {
 }
 ```
 
+### `timestamp_with_time_zone_decoder`
+
+`timestamp_with_time_zone_decoder()` reads a `timestamptz` column as a `Timestamp`. `timestamp_decoder` reads only a `timestamp` column: `dream_postgres_client` gives a `timestamptz` value as a date and a time of day in UTC, and this decoder reads that form. `timestamp` sends a `Timestamp` to either kind of column.
+
+#### Read a timestamptz <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timestamp_with_time_zone_decoder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+import gleam/dynamic/decode
+
+pub fn signed_up_at(
+  connection: postgres.Connection,
+) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+  "SELECT timestamptz '2024-01-02 03:04:05.25+00'"
+  |> postgres.query
+  |> postgres.returning(decode.at(
+    [0],
+    postgres.timestamp_with_time_zone_decoder(),
+  ))
+  |> postgres.execute(connection)
+}
+```
+
 ### `Timestamp`, `Date` and `TimeOfDay`
 
 `dream_postgres/client` has the type aliases `Timestamp`, `Date` and `TimeOfDay`. They are the types of `gleam/time/timestamp` and `gleam/time/calendar`, so code that names them through `dream_postgres/client` needs no `gleam_time` import.
@@ -91,8 +114,8 @@ The text holds no OIDs and no column numbers, and the `search_path` of the conne
 
 ## Testing
 
-- 472 tests run, 0 failed, 100.0% line coverage (617 of 617 lines). The test times add up to about 115 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
-- The 61 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19, with `DREAM_POSTGRES_TEST_URL` set to each server
+- 474 tests run, 0 failed, 100.0% line coverage (620 of 620 lines). The test times add up to about 122 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The 63 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19, with `DREAM_POSTGRES_TEST_URL` set to each server
 - The fingerprint tests show that the fingerprint does not change when the same DDL makes the tables again with new OIDs, when the columns are in another order, or when the `search_path` is different. Each kind of schema change changes it: a dropped `NOT NULL`, a new `CHECK`, a renamed constraint, a validated constraint, a new type, a new `BEFORE` row trigger, row level security, a changed policy, a new partition or child table, a changed domain and a new enum label
 
 ## Upgrading

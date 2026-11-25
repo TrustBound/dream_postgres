@@ -1424,6 +1424,47 @@ pub fn timestamp_decoder() -> decode.Decoder(Timestamp) {
   dream_postgres_client.timestamp_decoder()
 }
 
+/// Decode a timestamptz column
+///
+/// Reads a `timestamptz` (`timestamp with time zone`) column as a
+/// `Timestamp`. `timestamp_decoder` reads only a `timestamp` column:
+/// `dream_postgres_client` gives a `timestamptz` value as a date and a time
+/// of day in UTC, and this decoder reads that form. Send a `Timestamp` to a
+/// `timestamptz` column with `timestamp`.
+///
+/// ## Returns
+///
+/// A decoder for `returning`.
+///
+/// ## Example
+///
+/// ### Read a timestamptz <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timestamp_with_time_zone_decoder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn signed_up_at(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+///   "SELECT timestamptz '2024-01-02 03:04:05.25+00'"
+///   |> postgres.query
+///   |> postgres.returning(decode.at(
+///     [0],
+///     postgres.timestamp_with_time_zone_decoder(),
+///   ))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn timestamp_with_time_zone_decoder() -> decode.Decoder(Timestamp) {
+  use date <- decode.field(0, dream_postgres_client.calendar_date_decoder())
+  use time <- decode.field(
+    1,
+    dream_postgres_client.calendar_time_of_day_decoder(),
+  )
+  decode.success(timestamp.from_calendar(date, time, calendar.utc_offset))
+}
+
 /// A date parameter
 ///
 /// Gives a `Date` to PostgreSQL, for a `date` column. Read the column back

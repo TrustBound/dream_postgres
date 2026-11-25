@@ -25,6 +25,7 @@ import snippets/client_schema_fingerprint
 import snippets/client_schema_fingerprint_sql
 import snippets/client_time_of_day_type
 import snippets/client_timestamp_type
+import snippets/client_timestamp_with_time_zone_decoder
 import snippets/client_violated_constraint
 
 pub fn tests() -> TestSuite {
@@ -424,6 +425,56 @@ fn time_alias_tests() {
         ]),
       )
       |> or_fail_with("Expected 2024-01-02 03:04:05")
+    }),
+    it("client_timestamp_with_time_zone_decoder reads a timestamptz", fn() {
+      // Act
+      let result =
+        test_database.with_schema(
+          client_timestamp_with_time_zone_decoder.signed_up_at,
+        )
+        |> result.map(fn(returned) { returned.rows })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Ok([
+          timestamp.from_calendar(
+            calendar.Date(2024, calendar.January, 2),
+            calendar.TimeOfDay(3, 4, 5, 250_000_000),
+            calendar.utc_offset,
+          ),
+        ]),
+      )
+      |> or_fail_with("Expected 2024-01-02 03:04:05.25 UTC")
+    }),
+    it("timestamp_with_time_zone_decoder reads whole seconds", fn() {
+      // Act
+      let result =
+        test_database.with_schema(fn(db) {
+          "SELECT timestamptz '2024-01-02 03:04:05+02'"
+          |> postgres.query
+          |> postgres.returning(decode.at(
+            [0],
+            postgres.timestamp_with_time_zone_decoder(),
+          ))
+          |> postgres.execute(db)
+        })
+        |> result.map(fn(returned) { returned.rows })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Ok([
+          timestamp.from_calendar(
+            calendar.Date(2024, calendar.January, 2),
+            calendar.TimeOfDay(1, 4, 5, 0),
+            calendar.utc_offset,
+          ),
+        ]),
+      )
+      |> or_fail_with("Expected 2024-01-02 01:04:05 UTC")
     }),
     it("client_date_type reads a date", fn() {
       // Act
