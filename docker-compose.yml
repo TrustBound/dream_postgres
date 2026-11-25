@@ -7,6 +7,13 @@
 # GitHub Actions can't do it: it starts before the checkout, so it can't
 # mount the certificates of test/fixtures/ssl, and it can't change the
 # command that starts PostgreSQL.
+#
+# The test databases are thrown away, so each server keeps its data in
+# memory (tmpfs, 2 GB at most) and never on Docker's disk, and turns off the
+# settings that make data survive a crash (fsync, synchronous_commit,
+# full_page_writes). Never use these settings for data you want to keep.
+# The tmpfs is mounted on the data volume of the image:
+# /var/lib/postgresql/data up to PostgreSQL 17, /var/lib/postgresql from 18.
 
 services:
   # The server for most tests. SSL is off.
@@ -20,6 +27,16 @@ services:
       # Port 5436 on this machine, so the tests do not use a PostgreSQL
       # server that already listens on 5432.
       - "5436:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
       interval: 1s
@@ -38,6 +55,8 @@ services:
       POSTGRES_DB: dream_test
     ports:
       - "5437:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
     volumes:
       - ./test/fixtures/ssl:/certs:ro
     # PostgreSQL refuses a key file that the user `postgres` does not own,
@@ -53,6 +72,9 @@ services:
         -c ssl=on
         -c ssl_cert_file=/var/lib/postgresql/server.crt
         -c ssl_key_file=/var/lib/postgresql/server.key
+        -c fsync=off
+        -c synchronous_commit=off
+        -c full_page_writes=off
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
       interval: 1s

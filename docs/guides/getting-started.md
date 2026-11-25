@@ -35,9 +35,9 @@ gleam add dream_postgres dream_postgres_client
 
 dream_postgres has no dependency on Dream or on any web framework, so it works in any Gleam project on the Erlang target.
 
-You also need a PostgreSQL server. If you have Docker, put this `docker-compose.yml` in your project. It's the server this package's own tests run against: PostgreSQL 16 on port 5436, so it doesn't clash with a PostgreSQL you already run on 5432, and with no volume, so each start gives you an empty database:
+You also need a PostgreSQL server. If you have Docker, put this `docker-compose.yml` in your project. It's the server this package's own tests run against: PostgreSQL 16 on port 5436, so it doesn't clash with a PostgreSQL you already run on 5432, and with its data in memory (tmpfs), so each start gives you an empty database. It also turns off `fsync`, `synchronous_commit` and `full_page_writes`, which makes it faster, so use it only for data you can lose:
 
-### The PostgreSQL service of docker-compose.yml <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/docker-compose.yml#L11-L27"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+### The PostgreSQL service of docker-compose.yml <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/docker-compose.yml#L18-L44"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```yaml
 services:
@@ -52,6 +52,16 @@ services:
       # Port 5436 on this machine, so the tests do not use a PostgreSQL
       # server that already listens on 5432.
       - "5436:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
       interval: 1s

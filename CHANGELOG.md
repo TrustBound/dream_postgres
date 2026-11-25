@@ -92,6 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CONTRIBUTING.md`).
 
 ### Tests
+- The two test servers of `docker-compose.yml` keep their data in memory
+  (a tmpfs of 2 GB at most), not on Docker's disk, and run with `fsync`,
+  `synchronous_commit` and `full_page_writes` off. CI starts them from the
+  same file. The Getting started guide shows the new service.
 - The tests run every query of two generated modules from the Dream
   examples (`database` and `tasks`) through `dream_postgres/client`. Only
   the import line of each module changed. The tests record the queries
