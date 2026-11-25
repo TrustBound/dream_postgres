@@ -15,16 +15,24 @@ import gleam/dynamic/decode
 import gleam/list
 import gleam/option.{type Option}
 import gleam/result
+import gleam/time/calendar
+import gleam/time/timestamp
+import snippets/client_broken_promise
 import snippets/client_check_schema
+import snippets/client_date_type
 import snippets/client_promised_not_null
 import snippets/client_schema_fingerprint
 import snippets/client_schema_fingerprint_sql
+import snippets/client_time_of_day_type
+import snippets/client_timestamp_type
 import snippets/client_violated_constraint
 
 pub fn tests() -> TestSuite {
   describe("dream_postgres/client model helpers", [
     violated_constraint_tests(),
     promised_not_null_tests(),
+    broken_promise_tests(),
+    time_alias_tests(),
     fingerprint_value_tests(),
     fingerprint_stable_tests(),
     fingerprint_change_tests(),
@@ -304,6 +312,142 @@ fn promised_not_null_tests() {
         ),
       )
       |> or_fail_with("Expected the NULL promise error of total")
+    }),
+  ])
+}
+
+fn broken_promise_tests() {
+  group("broken_promise", [
+    it("gives the message of a broken promise", fn() {
+      // Arrange
+      let assert Error(error) =
+        test_database.with_schema(second_column(_, "SELECT 1, NULL::int"))
+
+      // Act
+      let result = postgres.broken_promise(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok(null_message))
+      |> or_fail_with("Expected the message of the promise")
+    }),
+    it("gives Error(Nil) for a decode error of another kind", fn() {
+      // Arrange
+      let assert Error(error) =
+        test_database.with_schema(second_column(_, "SELECT 1, 'x'::text"))
+
+      // Act
+      let result = postgres.broken_promise(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Error(Nil))
+      |> or_fail_with("Expected Error(Nil) for the Int error")
+    }),
+    it("gives Error(Nil) for a NULL error of another decoder", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.UnexpectedResultType([
+          decode.DecodeError(expected: "Int", found: "NULL", path: ["0"]),
+        ])
+
+      // Act
+      let result = postgres.broken_promise(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Error(Nil))
+      |> or_fail_with("Expected Error(Nil) for a NULL without a promise")
+    }),
+    it("gives Error(Nil) for an error that is not a decode error", fn() {
+      // Arrange
+      let error = dream_postgres_client.QueryTimeout
+
+      // Act
+      let result = postgres.broken_promise(error)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Error(Nil))
+      |> or_fail_with("Expected Error(Nil) for a timeout")
+    }),
+    it("client_broken_promise shows the message of the promise", fn() {
+      // Arrange
+      let assert Error(error) =
+        test_database.with_schema(second_column(_, "SELECT 1, NULL::int"))
+
+      // Act
+      let message = client_broken_promise.error_message(error)
+
+      // Assert
+      message
+      |> should
+      |> be_equal(null_message)
+      |> or_fail_with("Expected the message of the promise")
+    }),
+    it("client_broken_promise gives the general message otherwise", fn() {
+      // Act
+      let message =
+        client_broken_promise.error_message(dream_postgres_client.QueryTimeout)
+
+      // Assert
+      message
+      |> should
+      |> be_equal("The query failed")
+      |> or_fail_with("Expected the general message")
+    }),
+  ])
+}
+
+fn time_alias_tests() {
+  group("Timestamp, Date and TimeOfDay", [
+    it("client_timestamp_type reads a timestamp", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_timestamp_type.created_at)
+        |> result.map(fn(returned) { returned.rows })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Ok([
+          timestamp.from_calendar(
+            calendar.Date(2024, calendar.January, 2),
+            calendar.TimeOfDay(3, 4, 5, 0),
+            calendar.utc_offset,
+          ),
+        ]),
+      )
+      |> or_fail_with("Expected 2024-01-02 03:04:05")
+    }),
+    it("client_date_type reads a date", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_date_type.birthday)
+        |> result.map(fn(returned) { returned.rows })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok([calendar.Date(2024, calendar.January, 2)]))
+      |> or_fail_with("Expected 2024-01-02")
+    }),
+    it("client_time_of_day_type reads a time of day", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_time_of_day_type.opening_time)
+        |> result.map(fn(returned) { returned.rows })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok([calendar.TimeOfDay(3, 4, 5, 0)]))
+      |> or_fail_with("Expected 03:04:05")
     }),
   ])
 }

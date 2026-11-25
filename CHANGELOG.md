@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `promised_not_null(decoder, file, column)` decodes a column that a SQL
   file promised is never NULL. A NULL fails the row with a message that
   names the file and the column.
+- `broken_promise(error)` gives the message of a broken `-- not null:`
+  promise from the error of `execute`, and `Error(Nil)` for every other
+  error. Generated model modules return it as an `InternalServerError`.
+- The type aliases `Timestamp`, `Date` and `TimeOfDay`, for the types of
+  `gleam/time`. Generated model modules name these types through
+  `dream_postgres/client` and import no `gleam_time` module.
 - `schema_fingerprint(connection, tables)` gives the SHA-256 hash of the
   catalog facts of the tables, their child tables and their partitions.
   `schema_fingerprint_sql` is its SQL. `check_schema(connection, expected)`
@@ -50,14 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the import line of each module changed. The tests record the queries
   against PostgreSQL 16 and play the committed recordings back with no
   database.
-- The 52 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19,
+- The 61 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19,
   with `DREAM_POSTGRES_TEST_URL` set to each server. They show
   that the fingerprint does not change when the same DDL makes the tables
   again, when the columns are in another order, or when the
   `search_path` is different. They also show that each kind of schema
   change changes it.
-- 463 tests, 0 failed, 100.0% line coverage of `src/` (612 of 612 lines),
-  the Erlang files too. The test times add up to about 116 seconds, and 4
+- 472 tests, 0 failed, 100.0% line coverage of `src/` (617 of 617 lines),
+  the Erlang files too. The test times add up to about 115 seconds, and 4
   tests run at a time. The 20 SSL tests run one at a time. Apple M1 Max,
   10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 

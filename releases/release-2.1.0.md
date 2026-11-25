@@ -43,6 +43,27 @@ pub fn sign_up_error_message(error: postgres.QueryError) -> String {
 
 `promised_not_null(decoder, file, column)` wraps a column decoder. A value that is not NULL goes to `decoder`. A NULL fails the row with a `decode.DecodeError` at the path of the column, with `found: "NULL"` and the message `the SQL file order_total.sql promised the column total is never NULL, and PostgreSQL returned NULL`.
 
+### `broken_promise`
+
+`broken_promise(error)` gives the message of a broken promise from the error of `execute`: `Ok(message)` when a `promised_not_null` column was NULL, and `Error(Nil)` for every other error. Code that imports only `dream_postgres/client` can show the message without a match on `UnexpectedResultType`.
+
+#### Show the broken promise of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_broken_promise.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+
+pub fn error_message(error: postgres.QueryError) -> String {
+  case postgres.broken_promise(error) {
+    Ok(message) -> message
+    Error(Nil) -> "The query failed"
+  }
+}
+```
+
+### `Timestamp`, `Date` and `TimeOfDay`
+
+`dream_postgres/client` has the type aliases `Timestamp`, `Date` and `TimeOfDay`. They are the types of `gleam/time/timestamp` and `gleam/time/calendar`, so code that names them through `dream_postgres/client` needs no `gleam_time` import.
+
 ### The schema fingerprint
 
 The types of a generated module are true only for the schema that dream_model generated it from. Each generated module has a `SchemaFingerprint(module:, tables:, hash:)`. Call `check_schema` right after the pool starts:
@@ -70,8 +91,8 @@ The text holds no OIDs and no column numbers, and the `search_path` of the conne
 
 ## Testing
 
-- 463 tests run, 0 failed, 100.0% line coverage (612 of 612 lines). The test times add up to about 116 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
-- The 52 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19, with `DREAM_POSTGRES_TEST_URL` set to each server
+- 472 tests run, 0 failed, 100.0% line coverage (617 of 617 lines). The test times add up to about 115 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The 61 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19, with `DREAM_POSTGRES_TEST_URL` set to each server
 - The fingerprint tests show that the fingerprint does not change when the same DDL makes the tables again with new OIDs, when the columns are in another order, or when the `search_path` is different. Each kind of schema change changes it: a dropped `NOT NULL`, a new `CHECK`, a renamed constraint, a validated constraint, a new type, a new `BEFORE` row trigger, row level security, a changed policy, a new partition or child table, a changed domain and a new enum label
 
 ## Upgrading

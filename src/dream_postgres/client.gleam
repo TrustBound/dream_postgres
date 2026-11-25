@@ -43,8 +43,8 @@ import gleam/option.{type Option}
 import gleam/otp/actor
 import gleam/result
 import gleam/string
-import gleam/time/calendar.{type Date, type TimeOfDay}
-import gleam/time/timestamp.{type Timestamp}
+import gleam/time/calendar
+import gleam/time/timestamp
 import gleam/uri
 
 /// A connection to a PostgreSQL connection pool.
@@ -102,6 +102,84 @@ pub type Query(row) =
 /// returned.
 pub type TransactionError(error) =
   dream_postgres_client.TransactionError(error)
+
+/// A point in time, from a `timestamp` or `timestamptz` column.
+///
+/// The same type as `gleam/time/timestamp.Timestamp`. `timestamp` sends
+/// one, and `timestamp_decoder` reads one. Code that names the type through
+/// this module needs no `gleam_time` import.
+///
+/// ## Example
+///
+/// ### Read the time of a row <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timestamp_type.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn created_at(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+///   "SELECT timestamp '2024-01-02 03:04:05'"
+///   |> postgres.query
+///   |> postgres.returning(decode.at([0], postgres.timestamp_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub type Timestamp =
+  timestamp.Timestamp
+
+/// A calendar date, from a `date` column.
+///
+/// The same type as `gleam/time/calendar.Date`. `calendar_date` sends one,
+/// and `calendar_date_decoder` reads one. Code that names the type through
+/// this module needs no `gleam_time` import.
+///
+/// ## Example
+///
+/// ### Read a date <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_date_type.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn birthday(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(postgres.Date), postgres.QueryError) {
+///   "SELECT date '2024-01-02'"
+///   |> postgres.query
+///   |> postgres.returning(decode.at([0], postgres.calendar_date_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub type Date =
+  calendar.Date
+
+/// A time of day, from a `time` column.
+///
+/// The same type as `gleam/time/calendar.TimeOfDay`. `calendar_time_of_day`
+/// sends one, and `calendar_time_of_day_decoder` reads one. Code that names
+/// the type through this module needs no `gleam_time` import.
+///
+/// ## Example
+///
+/// ### Read a time of day <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_time_of_day_type.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn opening_time(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(postgres.TimeOfDay), postgres.QueryError) {
+///   "SELECT time '03:04:05'"
+///   |> postgres.query
+///   |> postgres.returning(decode.at([0], postgres.calendar_time_of_day_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub type TimeOfDay =
+  calendar.TimeOfDay
 
 /// Create a new default PostgreSQL configuration
 ///
@@ -1623,7 +1701,7 @@ pub fn promised_not_null(
 ) -> decode.Decoder(a) {
   let null_error =
     decode.DecodeError(
-      expected: "the SQL file "
+      expected: promise_prefix
         <> file
         <> " promised the column "
         <> column
@@ -1640,6 +1718,56 @@ pub fn promised_not_null(
       |> decode.map_errors(fn(_errors) { [null_error] })
   }
 }
+
+/// Read the message of a broken `-- not null:` promise
+///
+/// `promised_not_null` fails a NULL row with a message that names the SQL
+/// file and the column. `execute` then returns `UnexpectedResultType` with
+/// that message in a `decode.DecodeError`. This function gives the message,
+/// so that code that imports only this module can show it. Code that
+/// dream_model generates returns it as an `InternalServerError`.
+///
+/// ## Parameters
+///
+/// - `error`: The error from `execute`
+///
+/// ## Returns
+///
+/// - `Ok(message)`: A column that a SQL file promised is never NULL was
+///   NULL. The message is the `expected` text of the decode error, for
+///   example `the SQL file order_total.sql promised the column total is
+///   never NULL, and PostgreSQL returned NULL`
+/// - `Error(Nil)`: The error has no broken promise
+///
+/// ## Example
+///
+/// ### Show the broken promise of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_broken_promise.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+///
+/// pub fn error_message(error: postgres.QueryError) -> String {
+///   case postgres.broken_promise(error) {
+///     Ok(message) -> message
+///     Error(Nil) -> "The query failed"
+///   }
+/// }
+/// ```
+pub fn broken_promise(error: QueryError) -> Result(String, Nil) {
+  case error {
+    dream_postgres_client.UnexpectedResultType(errors) ->
+      list.find(errors, is_broken_promise)
+      |> result.map(fn(decode_error) { decode_error.expected })
+    _ -> Error(Nil)
+  }
+}
+
+fn is_broken_promise(error: decode.DecodeError) -> Bool {
+  error.found == "NULL" && string.starts_with(error.expected, promise_prefix)
+}
+
+/// The start of the message of a broken promise.
+const promise_prefix = "the SQL file "
 
 /// The schema fingerprint that a generated module expects.
 ///
