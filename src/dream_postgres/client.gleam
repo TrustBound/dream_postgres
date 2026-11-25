@@ -979,6 +979,49 @@ pub fn timeout(query: Query(row), timeout: Int) -> Query(row) {
   dream_postgres_client.timeout(query, timeout)
 }
 
+/// Read each numeric value of a query as exact text
+///
+/// Makes each `numeric` value of the result the exact text of the number, not
+/// a `Float`. The text is the same as `value::text` in PostgreSQL: the sign,
+/// all the digits of the scale with the trailing zeros, and `NaN`, `Infinity`
+/// and `-Infinity`. A `numeric(20,2)` of 1.5 is `"1.50"`. Decode such a
+/// column with `numeric_text_decoder`. The elements of a `numeric` array are
+/// text too. Other types do not change. The same function as
+/// `dream_postgres_client.numeric_as_text`.
+///
+/// Without this function, a `numeric` value is an `Int` or a `Float`, and a
+/// `Float` can lose digits.
+///
+/// ## Parameters
+///
+/// - `query`: The query to change
+///
+/// ## Returns
+///
+/// The query, which reads each `numeric` value as text.
+///
+/// ## Example
+///
+/// ### Add a cent to a large amount <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_as_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn exact_total(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+///   "SELECT 12345678901234567.89::numeric(20,2) + 0.01"
+///   |> postgres.query
+///   |> postgres.numeric_as_text
+///   |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn numeric_as_text(query: Query(row)) -> Query(row) {
+  dream_postgres_client.numeric_as_text(query)
+}
+
 /// Run a query
 ///
 /// Sends the query and its parameters to the database, and decodes each row
@@ -1278,6 +1321,49 @@ pub fn text(value: String) -> Value {
 /// ```
 pub fn bytea(value: BitArray) -> Value {
   dream_postgres_client.bytea(value)
+}
+
+/// Make a numeric parameter from exact text
+///
+/// Gives the text of a number to PostgreSQL for a `numeric` parameter.
+/// PostgreSQL reads the text itself, so the value keeps all its digits and
+/// its scale, which a `Float` cannot do. Any text that PostgreSQL accepts for
+/// `numeric` works, such as `"12345678901234567.89"`, `"1.50"`, `"NaN"`,
+/// `"Infinity"` and `"-Infinity"`. A text that is not a number makes the query
+/// fail with the `PostgresqlError` of code `22P02`
+/// (`invalid_text_representation`). The same function as
+/// `dream_postgres_client.numeric_text`.
+///
+/// ## Parameters
+///
+/// - `value`: The text of the number
+///
+/// ## Returns
+///
+/// A `Value` for `parameter`.
+///
+/// ## Example
+///
+/// ### Add a cent to an exact amount <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn add_one_cent(
+///   connection: postgres.Connection,
+///   amount: String,
+/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+///   "SELECT $1::numeric + 0.01"
+///   |> postgres.query
+///   |> postgres.parameter(postgres.numeric_text(amount))
+///   |> postgres.numeric_as_text
+///   |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn numeric_text(value: String) -> Value {
+  dream_postgres_client.numeric_text(value)
 }
 
 /// An array parameter
@@ -1612,7 +1698,8 @@ pub fn calendar_time_of_day_decoder() -> decode.Decoder(TimeOfDay) {
 /// Decode a numeric column
 ///
 /// Reads a `numeric` column as a `Float`. A whole number becomes a `Float`
-/// too. A `Float` can lose digits of a large or exact `numeric` value. The
+/// too. A `Float` can lose digits of a large or exact `numeric` value: for
+/// the exact value, use `numeric_as_text` and `numeric_text_decoder`. The
 /// same function as `dream_postgres_client.numeric_decoder`.
 ///
 /// ## Returns
@@ -1640,6 +1727,41 @@ pub fn calendar_time_of_day_decoder() -> decode.Decoder(TimeOfDay) {
 /// ```
 pub fn numeric_decoder() -> decode.Decoder(Float) {
   dream_postgres_client.numeric_decoder()
+}
+
+/// Decode a numeric column as exact text
+///
+/// Reads a `numeric` column as the exact text of the number, such as
+/// `"12345678901234567.89"`, `"1.50"`, `"NaN"` or `"-Infinity"`. The text is
+/// the same as `value::text` in PostgreSQL. Use it in a query that
+/// `numeric_as_text` changed: without that, a `numeric` value is a number, and
+/// this decoder fails with `UnexpectedResultType`. The same function as
+/// `dream_postgres_client.numeric_text_decoder`.
+///
+/// ## Returns
+///
+/// A decoder for `returning`.
+///
+/// ## Example
+///
+/// ### Read a price with its scale <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_text_decoder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/client as postgres
+/// import gleam/dynamic/decode
+///
+/// pub fn price(
+///   connection: postgres.Connection,
+/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+///   "SELECT 1.5::numeric(10,2)"
+///   |> postgres.query
+///   |> postgres.numeric_as_text
+///   |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
+///   |> postgres.execute(connection)
+/// }
+/// ```
+pub fn numeric_text_decoder() -> decode.Decoder(String) {
+  dream_postgres_client.numeric_text_decoder()
 }
 
 // Helpers for the code that dream_model generates. Generated code imports

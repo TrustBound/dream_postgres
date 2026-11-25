@@ -2,7 +2,7 @@
 
 **Release Date:** Unreleased
 
-This release lets generated code use `dream_postgres/client` alone. The module now has the query functions, the value functions and the decoders of `dream_postgres_client`, so code from `dream_sql_generator` compiles with `client_module = "dream_postgres/client"`. It also adds the helpers that the model modules of dream_model call: `violated_constraint`, `promised_not_null` and `broken_promise`, `finite_timestamp`, `finite_date` and `infinite_value`, `timestamp_with_time_zone_decoder`, the type aliases `Timestamp`, `Date` and `TimeOfDay`, and the schema fingerprint (`SchemaFingerprint`, `schema_fingerprint`, `schema_fingerprint_sql` and `check_schema`) that an app checks at startup.
+This release lets generated code use `dream_postgres/client` alone. The module now has the query functions, the value functions and the decoders of `dream_postgres_client`, so code from `dream_sql_generator` compiles with `client_module = "dream_postgres/client"`. It also adds the helpers that the model modules of dream_model call: `violated_constraint`, `promised_not_null` and `broken_promise`, `finite_timestamp`, `finite_date` and `infinite_value`, `timestamp_with_time_zone_decoder`, the type aliases `Timestamp`, `Date` and `TimeOfDay`, the exact `numeric` functions `numeric_as_text`, `numeric_text_decoder` and `numeric_text`, and the schema fingerprint (`SchemaFingerprint`, `schema_fingerprint`, `schema_fingerprint_sql` and `check_schema`) that an app checks at startup.
 
 It is a minor version. No existing function changed.
 
@@ -11,6 +11,7 @@ It is a minor version. No existing function changed.
 - **The query API in `dream_postgres/client`**: `query`, `parameter`, `returning`, `execute`, `transaction`, the value functions and the decoders
 - **`violated_constraint`**: get the name of the constraint that a query violated, for example `users_email_key`
 - **`promised_not_null`**: check on each row that a column that a SQL file promised is never NULL is not NULL
+- **Exact `numeric`**: read and write a `numeric` as the exact text of the number, with no loss of digits
 - **`check_schema`**: stop at startup when the schema changed after dream_model generated the modules
 
 ## What's New
@@ -122,6 +123,31 @@ pub fn signed_up_at(
 }
 ```
 
+### Exact `numeric`
+
+`numeric_decoder` reads a `numeric` column as a `Float`, and a `Float` can lose digits. `numeric_as_text(query)` makes each `numeric` value of the query the exact text of the number, the same text as `value::text` in PostgreSQL: the sign, all the digits of the scale with the trailing zeros (`"1.50"` for a `numeric(20,2)` of 1.5), and `"NaN"`, `"Infinity"` and `"-Infinity"`. `numeric_text_decoder()` decodes that text to a `String`. `numeric_text(value)` gives a `numeric` parameter as text, and PostgreSQL reads the text itself. A text that is not a number fails with the `PostgresqlError` of code `22P02` (`invalid_text_representation`). `numeric_decoder` does not change.
+
+#### Add a cent to an exact amount <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+import gleam/dynamic/decode
+
+pub fn add_one_cent(
+  connection: postgres.Connection,
+  amount: String,
+) -> Result(postgres.Returned(String), postgres.QueryError) {
+  "SELECT $1::numeric + 0.01"
+  |> postgres.query
+  |> postgres.parameter(postgres.numeric_text(amount))
+  |> postgres.numeric_as_text
+  |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
+  |> postgres.execute(connection)
+}
+```
+
+`add_one_cent(connection, "12345678901234567.89")` gives `"12345678901234567.90"`. The values come from `dream_postgres_client` 1.1.0 and `dream_postgres_driver` 1.1.0.
+
 ### `Timestamp`, `Date` and `TimeOfDay`
 
 `dream_postgres/client` has the type aliases `Timestamp`, `Date` and `TimeOfDay`. They are the types of `gleam/time/timestamp` and `gleam/time/calendar`, so code that names them through `dream_postgres/client` needs no `gleam_time` import.
@@ -153,7 +179,8 @@ The position of a column is its place among the columns that are not dropped, in
 
 ## Testing
 
-- 520 tests run, 0 failed, 100.0% line coverage (645 of 645 lines). The run took 2 minutes 8 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- 526 tests run, 0 failed, 100.0% line coverage (648 of 648 lines). The run took 2 minutes 16 seconds. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- The exact `numeric` functions: `dream_postgres_driver` 1.1.0 compares 2,000 random values in each direction with the text of the server on PostgreSQL 16, 17, 18 and 19, with no difference
 - The 109 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19, with `DREAM_POSTGRES_TEST_URL` set to each server
 - The fingerprint tests show that the fingerprint does not change when the same DDL makes the tables again with new OIDs, when a dropped column left a gap in the attribute numbers, when a statement-level or `AFTER` trigger is added, or when a session setting is different (each of the nine pinned settings, in a transaction and for a whole session). Each kind of schema change changes it: two columns that swap places, a dropped `NOT NULL`, a new `CHECK`, a renamed or validated constraint, a new type, a unique index that becomes a plain index, a new partial unique index, a rule, a changed view or materialized view, a renamed composite field, a new range subtype, a new row-level `BEFORE` or `INSTEAD OF` trigger, a view that gets `WITH CHECK OPTION`, a changed expression of a generated column, row level security on or forced, a changed policy `USING`, `WITH CHECK` or role, an identity or generated column, a new partition, child table or parent, a changed domain, domain over domain or enum label. One test compares the exact canonical text of a schema with each kind of fact
 

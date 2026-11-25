@@ -27,6 +27,15 @@ Many tests run queries on a real PostgreSQL server. `make db-up` starts two from
 
 When a server does not answer, `make test` stops at once with a message that says so. The SSL tests change the CA list of the whole BEAM, so they run one at a time, after the other tests.
 
+### Packages that are not on Hex yet
+
+Version 2.1.0 needs `dream_postgres_client` 1.1.0 and `dream_postgres_driver` 1.1.0. Until both are on Hex, the build uses local copies, and CI fails at `gleam deps download`. `manifest.toml` holds their entries with a checksum of zeros.
+
+1. Clone `dream_postgres_client` and `dream_postgres_driver`, and check out version 1.1.0 of each.
+2. Run `sh scripts/stand-ins.sh` in this repository. Set `DREAM_POSTGRES_CLIENT_SOURCE` and `DREAM_POSTGRES_DRIVER_SOURCE` to the clones, and `DREAM_POSTGRES_CLIENT_COMMIT` and `DREAM_POSTGRES_DRIVER_COMMIT` when version 1.1.0 is not the checked-out commit.
+
+The script copies each package into `build/packages` and lists it in `packages.toml`, so Gleam makes no Hex request for it. When both packages are on Hex, remove `scripts/stand-ins.sh` and this section, and run `gleam deps update dream_postgres_client dream_postgres_driver` to write the real checksums.
+
 ### Development Setup
 
 1. **Fork and clone:**

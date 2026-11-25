@@ -2,11 +2,13 @@
 //// value functions and the decoders of `dream_postgres/client`. Each
 //// example runs on the real PostgreSQL 16 server of docker-compose.yml.
 
-import dream_postgres_client.{Returned}
+import dream_postgres/client as postgres
+import dream_postgres_client.{PostgresqlError, Returned, UnexpectedResultType}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/test_database
+import gleam/dynamic/decode
 import gleam/option.{None, Some}
 import gleam/time/calendar
 import gleam/time/timestamp
@@ -19,7 +21,10 @@ import snippets/client_float
 import snippets/client_int
 import snippets/client_null
 import snippets/client_nullable
+import snippets/client_numeric_as_text
 import snippets/client_numeric_decoder
+import snippets/client_numeric_text
+import snippets/client_numeric_text_decoder
 import snippets/client_query
 import snippets/client_text
 import snippets/client_timeout
@@ -179,6 +184,93 @@ fn value_tests() {
       |> should
       |> be_equal(Ok(Returned(count: 1, rows: [12.5])))
       |> or_fail_with("Expected one row with 12.5")
+    }),
+    it("client_numeric_as_text.exact_total keeps every digit", fn() {
+      // Act
+      let result = test_database.with_schema(client_numeric_as_text.exact_total)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok(Returned(count: 1, rows: ["12345678901234567.90"])))
+      |> or_fail_with("Expected one row with 12345678901234567.90")
+    }),
+    it("client_numeric_text_decoder.price keeps the trailing zero", fn() {
+      // Act
+      let result = test_database.with_schema(client_numeric_text_decoder.price)
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok(Returned(count: 1, rows: ["1.50"])))
+      |> or_fail_with("Expected one row with 1.50")
+    }),
+    it("client_numeric_text.add_one_cent adds a cent to an exact amount", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_numeric_text.add_one_cent(
+          _,
+          "12345678901234567.89",
+        ))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok(Returned(count: 1, rows: ["12345678901234567.90"])))
+      |> or_fail_with("Expected one row with 12345678901234567.90")
+    }),
+    it("client_numeric_text.add_one_cent keeps NaN", fn() {
+      // Act
+      let result =
+        test_database.with_schema(client_numeric_text.add_one_cent(_, "NaN"))
+
+      // Assert
+      result
+      |> should
+      |> be_equal(Ok(Returned(count: 1, rows: ["NaN"])))
+      |> or_fail_with("Expected one row with NaN")
+    }),
+    it(
+      "client_numeric_text.add_one_cent refuses a text that is not a number",
+      fn() {
+        // Act
+        let result =
+          test_database.with_schema(client_numeric_text.add_one_cent(_, "abc"))
+
+        // Assert
+        result
+        |> should
+        |> be_equal(
+          Error(PostgresqlError(
+            code: "22P02",
+            name: "invalid_text_representation",
+            message: "invalid input syntax for type numeric: \"abc\"",
+          )),
+        )
+        |> or_fail_with("Expected the 22P02 error of PostgreSQL")
+      },
+    ),
+    it("client_numeric_text_decoder fails without numeric_as_text", fn() {
+      // Act
+      let result =
+        test_database.with_schema(fn(connection) {
+          "SELECT 1.5::numeric"
+          |> postgres.query
+          |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
+          |> postgres.execute(connection)
+        })
+
+      // Assert
+      result
+      |> should
+      |> be_equal(
+        Error(
+          UnexpectedResultType([
+            decode.DecodeError(expected: "String", found: "Float", path: ["0"]),
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected a decode error for a Float")
     }),
   ])
 }

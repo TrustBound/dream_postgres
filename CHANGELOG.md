@@ -67,6 +67,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SchemaCheckError`.
 - The OTP application `crypto` is now in `extra_applications`, for the SHA-256
   hash.
+- `numeric_as_text(query)`, `numeric_text_decoder()` and
+  `numeric_text(value)` read and write a `numeric` as its exact text, the
+  same text as `value::text` in PostgreSQL. `numeric_as_text` makes each
+  `numeric` value of a query a `String` such as `"1.50"`,
+  `"12345678901234567.89"`, `"NaN"`, `"Infinity"` or `"-Infinity"`, with all
+  the digits of the scale and the trailing zeros, and
+  `numeric_text_decoder` decodes it. `numeric_text` gives a `numeric`
+  parameter as text. PostgreSQL reads that text itself, so a text that is
+  not a number fails with the `PostgresqlError` of code `22P02`.
+  `numeric_decoder` still reads a `Float`, as before.
+
+### Changed
+- The package now needs `dream_postgres_client` 1.1.0 or later, which needs
+  `dream_postgres_driver` 1.1.0 or later. Until both are on Hex,
+  `scripts/stand-ins.sh` puts local copies into `build/packages` (see
+  `CONTRIBUTING.md`).
 
 ### Tests
 - The tests run every query of two generated modules from the Dream
@@ -80,8 +96,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   again, or when a session setting is different. They also show that each
   kind of schema change changes it, also a change of the column order,
   and they compare the exact canonical text of one schema.
-- 520 tests, 0 failed, 100.0% line coverage of `src/` (645 of 645 lines),
-  the Erlang files too. The run took 2 minutes 8 seconds, and 4 tests run
+- The exact `numeric` functions are tested in this package with
+  PostgreSQL 16. `dream_postgres_driver` 1.1.0 compares 2,000 random
+  values in each direction with the text of the server on PostgreSQL 16,
+  17, 18 and 19, with no difference.
+- 526 tests, 0 failed, 100.0% line coverage of `src/` (648 of 648 lines),
+  the Erlang files too. The run took 2 minutes 16 seconds, and 4 tests run
   at a time. The 20 SSL tests run one at a time. Apple M1 Max,
   10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 
