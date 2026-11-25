@@ -2,13 +2,14 @@
 
 **Release Date:** Unreleased
 
-This release lets generated code use `dream_postgres/client` alone. The module now has the query functions, the value functions and the decoders of `dream_postgres_client`, so code from `dream_sql_generator` compiles with `client_module = "dream_postgres/client"`. It also adds the helpers that the model modules of dream_model call: `violated_constraint`, `promised_not_null` and `broken_promise`, `finite_timestamp`, `finite_date` and `infinite_value`, `timestamp_with_time_zone_decoder`, the type aliases `Timestamp`, `Date` and `TimeOfDay`, the exact `numeric` functions `numeric_as_text`, `numeric_text_decoder` and `numeric_text`, and the schema fingerprint (`SchemaFingerprint`, `schema_fingerprint`, `schema_fingerprint_sql` and `check_schema`) that an app checks at startup.
+This release lets generated code use `dream_postgres/client` alone. The module now has the query functions, the value functions and the decoders of `dream_postgres_client`, so code from `dream_sql_generator` compiles with `client_module = "dream_postgres/client"`. It also adds the error type of the model modules of dream_model, `ModelError` with the alias `ModelQueryError`, and the helpers that these modules call: `more_than_one_row`, `violated_constraint`, `promised_not_null` and `broken_promise`, `finite_timestamp`, `finite_date` and `infinite_value`, `timestamp_with_time_zone_decoder`, the type aliases `Timestamp`, `Date` and `TimeOfDay`, the exact `numeric` functions `numeric_as_text`, `numeric_text_decoder` and `numeric_text`, and the schema fingerprint (`SchemaFingerprint`, `schema_fingerprint`, `schema_fingerprint_sql` and `check_schema`) that an app checks at startup.
 
 It is a minor version. No existing function changed.
 
 ## Key Highlights
 
 - **The query API in `dream_postgres/client`**: `query`, `parameter`, `returning`, `execute`, `transaction`, the value functions and the decoders
+- **`ModelError`**: the data error of a generated model function, `NotFound`, `Conflict(constraint)` or `QueryFailed(message, cause)`, with no HTTP status
 - **`violated_constraint`**: get the name of the constraint that a query violated, for example `users_email_key`
 - **`promised_not_null`**: check on each row that a column that a SQL file promised is never NULL is not NULL
 - **Exact `numeric`**: read and write a `numeric` as the exact text of the number, with no loss of digits
@@ -20,11 +21,74 @@ It is a minor version. No existing function changed.
 
 `dream_postgres/client` has `query`, `parameter`, `returning`, `timeout`, `execute`, `transaction`, `null`, `bool`, `int`, `float`, `text`, `bytea`, `array`, `nullable`, `timestamp`, `calendar_date`, `calendar_time_of_day` and the decoders `timestamp_decoder`, `calendar_date_decoder`, `calendar_time_of_day_decoder` and `numeric_decoder`. Each function calls the function of the same name in `dream_postgres_client`. The new type aliases are `Query(row)` and `TransactionError(error)`.
 
+### `ModelError`
+
+The functions that dream_model generates return `Result(T, ModelQueryError)`. `ModelQueryError` is the alias of `ModelError(QueryError)`. The error is data: it has no HTTP status and no text for a user, so the app maps it, for example in a controller. `ModelError(cause)` has three cases:
+
+- `NotFound`: a `-- returns: one` function found no row.
+- `Conflict(constraint)`: the statement violated a unique constraint that a `-- unique:` hint of the SQL file names.
+- `QueryFailed(message, cause)`: every other failure. `message` names the model function, and `cause` is the original error of the database call.
+
+#### Give each model error a status and a message <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_model_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+
+pub fn status_and_message(
+  error: postgres.ModelError(postgres.QueryError),
+) -> #(Int, String) {
+  case error {
+    postgres.NotFound -> #(404, "User not found")
+    postgres.Conflict("users_email_key") -> #(409, "Email already taken")
+    postgres.Conflict(constraint) -> #(409, "Conflict on " <> constraint)
+    postgres.QueryFailed(message:, cause: _) -> #(500, message)
+  }
+}
+```
+
+#### Log the cause of a failed model call <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_model_query_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+import gleam/string
+
+pub fn log_line(error: postgres.ModelQueryError) -> String {
+  case error {
+    postgres.QueryFailed(message:, cause:) ->
+      message <> ": " <> string.inspect(cause)
+    postgres.NotFound -> "not found"
+    postgres.Conflict(constraint:) -> "conflict on " <> constraint
+  }
+}
+```
+
+`more_than_one_row(count)` makes the cause of a `QueryFailed` when a function that expects at most one row gets more: an `UnexpectedResultType` with `expected` `at most one row` and `found` the number of rows, for example `2 rows`.
+
+#### Fail a lookup that found two rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_more_than_one_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+
+```gleam
+import dream_postgres/client as postgres
+
+pub fn one_email(
+  emails: List(String),
+) -> Result(String, postgres.ModelQueryError) {
+  case emails {
+    [email] -> Ok(email)
+    [] -> Error(postgres.NotFound)
+    _ ->
+      Error(postgres.QueryFailed(
+        message: "user.email returned more than one row",
+        cause: postgres.more_than_one_row(2),
+      ))
+  }
+}
+```
+
 ### `violated_constraint`
 
 `violated_constraint(error: QueryError) -> Result(String, Nil)` gives the name of the constraint that a query violated: a unique constraint, a primary key, a unique index, a foreign key, a check constraint or an exclusion constraint. Every other error gives `Error(Nil)`, also a `NOT NULL` violation.
 
-The function does not tell the kinds of constraints apart. To find a duplicate, compare the name with the names of constraints that you know are unique. dream_model makes sure at generation time that each `-- unique <name>` hint names a unique constraint, a primary key or a unique index of the table, and `check_schema` finds a schema that changed after that.
+The function does not tell the kinds of constraints apart. To find a duplicate, compare the name with the names of constraints that you know are unique. dream_model makes sure at generation time that each name of a `-- unique:` hint names a unique constraint, a primary key or a unique index of the table, and `check_schema` finds a schema that changed after that.
 
 #### Tell the user that the email is taken <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_violated_constraint.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -85,7 +149,7 @@ pub fn ends_at(
 }
 ```
 
-`infinite_value(error)` gives that message from the error of `execute`, and `Error(Nil)` for every other error. Generated model modules return it as an `InternalServerError`, after the name of the model function.
+`infinite_value(error)` gives that message from the error of `execute`, and `Error(Nil)` for every other error. Generated model modules return it as the message of a `QueryFailed`, after the name of the model function.
 
 #### Show the infinite value of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_infinite_value.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -179,7 +243,7 @@ The position of a column is its place among the columns that are not dropped, in
 
 ## Testing
 
-- 534 tests run, 0 failed, 100.0% line coverage (654 of 654 lines). The run took 1 minute 4 seconds of wall time, and the runner reports 2 minutes 6 seconds of test time. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- 545 tests run, 0 failed, 100.0% line coverage (655 of 655 lines). The run took 1 minute 5 seconds of wall time, and the runner reports 2 minutes 11 seconds of test time. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
 - The exact `numeric` functions: `dream_postgres_driver` 1.1.0 compares 2,000 random values in each direction with the text of the server on PostgreSQL 16, 17, 18 and 19, with no difference
 - The 109 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19, with `DREAM_POSTGRES_TEST_URL` set to each server
 - The fingerprint tests show that the fingerprint does not change when the same DDL makes the tables again with new OIDs, when a dropped column left a gap in the attribute numbers, when a statement-level or `AFTER` trigger is added, or when a session setting is different (each of the nine pinned settings, in a transaction and for a whole session). Each kind of schema change changes it: two columns that swap places, a dropped `NOT NULL`, a new `CHECK`, a renamed or validated constraint, a new type, a unique index that becomes a plain index, a new partial unique index, a rule, a changed view or materialized view, a renamed composite field, a new range subtype, a new row-level `BEFORE` or `INSTEAD OF` trigger, a view that gets `WITH CHECK OPTION`, a changed expression of a generated column, row level security on or forced, a changed policy `USING`, `WITH CHECK` or role, an identity or generated column, a new partition, child table or parent, a changed domain, domain over domain or enum label. One test compares the exact canonical text of a schema with each kind of fact

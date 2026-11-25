@@ -1,5 +1,6 @@
-//// Tests for the functions of `dream_postgres/client` that code from
-//// dream_model calls: `violated_constraint`, `promised_not_null`,
+//// Tests for the types and functions of `dream_postgres/client` that code
+//// from dream_model uses: `ModelError`, `more_than_one_row`,
+//// `violated_constraint`, `promised_not_null`,
 //// `finite_timestamp`, `finite_date`, `infinite_value`,
 //// `schema_fingerprint`, `check_schema` and `format_schema_check_error`,
 //// and for their snippets. The queries run on the real PostgreSQL server
@@ -25,6 +26,9 @@ import snippets/client_date_type
 import snippets/client_finite_date
 import snippets/client_finite_timestamp
 import snippets/client_infinite_value
+import snippets/client_model_error
+import snippets/client_model_query_error
+import snippets/client_more_than_one_row
 import snippets/client_promised_elements_not_null
 import snippets/client_promised_not_null
 import snippets/client_schema_fingerprint
@@ -36,6 +40,7 @@ import snippets/client_violated_constraint
 
 pub fn tests() -> TestSuite {
   describe("dream_postgres/client model helpers", [
+    model_error_tests(),
     violated_constraint_tests(),
     promised_not_null_tests(),
     promised_elements_not_null_tests(),
@@ -156,6 +161,157 @@ const promise_marker = "[dream_postgres promised_not_null] "
 
 const empty_text_hash =
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+fn model_error_tests() {
+  group("ModelError", [
+    it("more_than_one_row tells the number of rows", fn() {
+      // Act
+      let error = postgres.more_than_one_row(3)
+
+      // Assert
+      error
+      |> should
+      |> be_equal(
+        dream_postgres_client.UnexpectedResultType([
+          decode.DecodeError(
+            expected: "at most one row",
+            found: "3 rows",
+            path: [],
+          ),
+        ]),
+      )
+      |> or_fail_with("Expected an UnexpectedResultType with 3 rows")
+    }),
+    it("more_than_one_row is not a broken promise or an infinite value", fn() {
+      // Arrange
+      let error = postgres.more_than_one_row(2)
+
+      // Act
+      let found = #(
+        postgres.broken_promise(error),
+        postgres.infinite_value(error),
+      )
+
+      // Assert
+      found
+      |> should
+      |> be_equal(#(Error(Nil), Error(Nil)))
+      |> or_fail_with("Expected no promise and no infinite value")
+    }),
+    it("client_model_error gives NotFound a 404", fn() {
+      // Act
+      let found = client_model_error.status_and_message(postgres.NotFound)
+
+      // Assert
+      found
+      |> should
+      |> be_equal(#(404, "User not found"))
+      |> or_fail_with("Expected the 404")
+    }),
+    it("client_model_error gives the email conflict its message", fn() {
+      // Act
+      let found =
+        client_model_error.status_and_message(postgres.Conflict(
+          "users_email_key",
+        ))
+
+      // Assert
+      found
+      |> should
+      |> be_equal(#(409, "Email already taken"))
+      |> or_fail_with("Expected the email message")
+    }),
+    it("client_model_error names another constraint", fn() {
+      // Act
+      let found =
+        client_model_error.status_and_message(postgres.Conflict(
+          "users_nick_key",
+        ))
+
+      // Assert
+      found
+      |> should
+      |> be_equal(#(409, "Conflict on users_nick_key"))
+      |> or_fail_with("Expected the constraint name")
+    }),
+    it("client_model_error gives QueryFailed its message", fn() {
+      // Act
+      let found =
+        client_model_error.status_and_message(postgres.QueryFailed(
+          message: "user.find failed",
+          cause: dream_postgres_client.QueryTimeout,
+        ))
+
+      // Assert
+      found
+      |> should
+      |> be_equal(#(500, "user.find failed"))
+      |> or_fail_with("Expected the 500")
+    }),
+    it("client_model_query_error logs the cause", fn() {
+      // Act
+      let line =
+        client_model_query_error.log_line(postgres.QueryFailed(
+          message: "user.find failed",
+          cause: dream_postgres_client.QueryTimeout,
+        ))
+
+      // Assert
+      line
+      |> should
+      |> be_equal("user.find failed: QueryTimeout")
+      |> or_fail_with("Expected the message and the cause")
+    }),
+    it("client_model_query_error logs NotFound and Conflict", fn() {
+      // Act
+      let lines = [
+        client_model_query_error.log_line(postgres.NotFound),
+        client_model_query_error.log_line(postgres.Conflict("users_email_key")),
+      ]
+
+      // Assert
+      lines
+      |> should
+      |> be_equal(["not found", "conflict on users_email_key"])
+      |> or_fail_with("Expected both lines")
+    }),
+    it("client_more_than_one_row gives the one email", fn() {
+      // Act
+      let found = client_more_than_one_row.one_email(["a@b"])
+
+      // Assert
+      found
+      |> should
+      |> be_equal(Ok("a@b"))
+      |> or_fail_with("Expected the email")
+    }),
+    it("client_more_than_one_row gives NotFound for no email", fn() {
+      // Act
+      let found = client_more_than_one_row.one_email([])
+
+      // Assert
+      found
+      |> should
+      |> be_equal(Error(postgres.NotFound))
+      |> or_fail_with("Expected NotFound")
+    }),
+    it("client_more_than_one_row fails two emails", fn() {
+      // Act
+      let found = client_more_than_one_row.one_email(["a@b", "c@d"])
+
+      // Assert
+      found
+      |> should
+      |> be_equal(
+        Error(postgres.QueryFailed(
+          message: "user.email returned more than one row",
+          cause: postgres.more_than_one_row(2),
+        )),
+      )
+      |> or_fail_with("Expected QueryFailed")
+    }),
+  ])
+}
 
 fn violated_constraint_tests() {
   group("violated_constraint", [
