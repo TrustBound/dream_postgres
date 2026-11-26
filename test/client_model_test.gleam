@@ -11,10 +11,10 @@ import dream_errors.{Conflict, Failed, NotFound, Timeout, Unavailable}
 import dream_postgres/client.{
   type Connection, type QueryError, SchemaChanged, SchemaFingerprint,
   SchemaMismatch, SchemaUnreadable, broken_promise, check_schema, connect,
-  execute, finite_timestamp, format_schema_check_error, infinite_value,
-  more_than_one_row, pool_size, promised_elements_not_null, promised_not_null,
-  query, returning, schema_fingerprint, timestamp_with_time_zone_decoder,
-  to_error, violated_constraint,
+  finite_timestamp, format_schema_check_error, infinite_value, more_than_one_row,
+  pool_size, promised_elements_not_null, promised_not_null, query, returning,
+  schema_fingerprint, timestamp_with_time_zone_decoder, to_error,
+  violated_constraint,
 } as postgres
 import dream_postgres_client.{
   ConnectionUnavailable, InterceptorFailed, PostgresqlError, QueryTimeout,
@@ -33,7 +33,7 @@ import gleam/result
 import gleam/string.{replace}
 import gleam/time/calendar.{Date, February, January, TimeOfDay, utc_offset}
 import gleam/time/timestamp.{from_calendar, from_unix_seconds}
-import snippets/client_broken_promise.{error_message}
+import snippets/client_broken_promise
 import snippets/client_check_schema.{check_models}
 import snippets/client_date_type.{birthday}
 import snippets/client_finite_date.{valid_until}
@@ -868,7 +868,7 @@ fn broken_promise_tests() {
         with_schema(second_column(_, "SELECT 1, NULL::int"))
 
       // Act
-      let message = error_message(error)
+      let message = client_broken_promise.error_message(error)
 
       // Assert
       message
@@ -878,7 +878,7 @@ fn broken_promise_tests() {
     }),
     it("client_broken_promise gives the general message otherwise", fn() {
       // Act
-      let message = error_message(QueryTimeout)
+      let message = client_broken_promise.error_message(QueryTimeout)
 
       // Assert
       message
@@ -941,7 +941,7 @@ fn finite_timestamp_tests() {
             [0],
             finite_timestamp(timestamp_with_time_zone_decoder(), "ends_at"),
           ))
-          |> execute(db)
+          |> postgres.execute(db)
         })
 
       // Assert
@@ -1186,7 +1186,7 @@ fn time_alias_tests() {
           "SELECT timestamptz '2024-01-02 03:04:05+02'"
           |> query
           |> returning(at([0], timestamp_with_time_zone_decoder()))
-          |> execute(db)
+          |> postgres.execute(db)
         })
         |> result.map(fn(returned) { returned.rows })
 
@@ -2047,7 +2047,7 @@ fn second_column(db: Connection, sql: String) -> Result(List(Int), QueryError) {
   sql
   |> query
   |> returning(at([1], promised_not_null(int, "count.sql", "total")))
-  |> execute(db)
+  |> postgres.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
@@ -2057,7 +2057,7 @@ fn optional_second_column(
   "SELECT 1, NULL::int"
   |> query
   |> returning(at([1], promised_not_null(optional(int), "count.sql", "total")))
-  |> execute(db)
+  |> postgres.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
@@ -2073,7 +2073,7 @@ fn second_array(
   sql
   |> query
   |> returning(at([1], promised_elements_not_null(int, "list.sql", "numbers")))
-  |> execute(db)
+  |> postgres.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
@@ -2086,7 +2086,7 @@ fn optional_second_array(
     [1],
     optional(promised_elements_not_null(int, "list.sql", "numbers")),
   ))
-  |> execute(db)
+  |> postgres.execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 

@@ -37,9 +37,11 @@
 
 import dream_errors.{type Error, Conflict, Failed, Timeout, Unavailable}
 import dream_postgres_client.{
-  ConnectionUnavailable, ConstraintViolated, InterceptorFailed, PostgresqlError,
-  QueryTimeout, UnexpectedArgumentCount, UnexpectedArgumentType,
-  UnexpectedResultType,
+  type Message, type Ssl, ConnectionUnavailable, ConstraintViolated,
+  InterceptorFailed, Ipv6, PostgresqlError, QueryTimeout, SslDisabled,
+  SslUnverified, SslVerified, SslVerifiedCaFile, SslVerifiedChainOnly,
+  SslVerifiedChainOnlyCaFile, UnexpectedArgumentCount, UnexpectedArgumentType,
+  UnexpectedResultType, default_config, ip_version,
 }
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{
@@ -47,16 +49,19 @@ import gleam/dynamic/decode.{
   optional, run, success, then,
 }
 import gleam/erlang/atom.{to_string}
-import gleam/erlang/process
+import gleam/erlang/process.{type Name, new_name}
 import gleam/int
-import gleam/list.{contains, find, map, reverse}
-import gleam/option.{type Option, None, Some, all}
-import gleam/otp/actor
-import gleam/result.{map_error, replace_error, try}
-import gleam/string.{concat, drop_start, inspect, join, length, starts_with}
+import gleam/list.{append, find, flat_map, reverse, try_fold}
+import gleam/option.{type Option, None, Some, all, unwrap}
+import gleam/otp/actor.{type StartError, type Started, InitFailed, Started}
+import gleam/result.{map_error, replace, replace_error, try}
+import gleam/string.{
+  concat, drop_start, inspect, join, lowercase, split_once, starts_with,
+  to_graphemes,
+}
 import gleam/time/calendar.{January, utc_offset}
 import gleam/time/timestamp
-import gleam/uri
+import gleam/uri.{type Uri, parse, parse_query, percent_decode}
 
 /// A connection to a PostgreSQL connection pool.
 ///
@@ -225,8 +230,8 @@ pub type TimeOfDay =
 ///   postgres.new(pool_name)
 /// }
 /// ```
-pub fn new(pool_name: process.Name(dream_postgres_client.Message)) -> Config {
-  dream_postgres_client.default_config(pool_name: pool_name)
+pub fn new(pool_name: Name(Message)) -> Config {
+  default_config(pool_name: pool_name)
 }
 
 /// Set the database host
@@ -371,7 +376,7 @@ pub fn user(config: Config, value: String) -> Config {
 /// }
 /// ```
 pub fn password(config: Config, value: String) -> Config {
-  dream_postgres_client.Config(..config, password: option.Some(value))
+  dream_postgres_client.Config(..config, password: Some(value))
 }
 
 /// Set the connection pool size
@@ -473,8 +478,8 @@ pub fn pool_size(config: Config, value: Int) -> Config {
 ///   |> postgres.connect()
 /// }
 /// ```
-pub fn connect(config: Config) -> Result(Connection, actor.StartError) {
-  use Nil <- result.try(refuse_null_bytes(config))
+pub fn connect(config: Config) -> Result(Connection, StartError) {
+  use Nil <- try(refuse_null_bytes(config))
   config
   |> dream_postgres_client.start()
   |> result.map(extract_connection_from_started)
@@ -487,16 +492,16 @@ pub fn connect(config: Config) -> Result(Connection, actor.StartError) {
 // database name of "app\u{0}search_path\u{0}evil" sets `search_path`. A
 // PostgreSQL name or password is SQL text, which cannot hold a null byte, so no
 // correct config has one in these parts.
-fn refuse_null_bytes(config: Config) -> Result(Nil, actor.StartError) {
+fn refuse_null_bytes(config: Config) -> Result(Nil, StartError) {
   let parts = [
     #("the user", config.user),
     #("the database name", config.database),
-    #("the password", option.unwrap(config.password, "")),
-    ..list.flat_map(config.connection_parameters, parameter_parts)
+    #("the password", unwrap(config.password, "")),
+    ..flat_map(config.connection_parameters, parameter_parts)
   ]
-  case list.find(parts, holds_null_byte) {
+  case find(parts, holds_null_byte) {
     Ok(#(part, _value)) ->
-      Error(actor.InitFailed(
+      Error(InitFailed(
         part <> " holds a null byte, which PostgreSQL cannot take",
       ))
     Error(Nil) -> Ok(Nil)
@@ -514,10 +519,8 @@ fn holds_null_byte(part: #(String, String)) -> Bool {
   string.contains(part.1, "\u{0}")
 }
 
-fn extract_connection_from_started(
-  started: actor.Started(Connection),
-) -> Connection {
-  let actor.Started(_pid, connection) = started
+fn extract_connection_from_started(started: Started(Connection)) -> Connection {
+  let Started(_pid, connection) = started
   connection
 }
 
@@ -702,21 +705,21 @@ pub type FromUrlError {
 /// }
 /// ```
 pub fn parse_config(
-  pool_name: process.Name(dream_postgres_client.Message),
+  pool_name: Name(Message),
   url: String,
 ) -> Result(Config, UrlError) {
-  use parsed <- result.try(parse_uri(url))
-  use Nil <- result.try(check_scheme(parsed.scheme))
-  use Nil <- result.try(check_fragment(parsed.fragment))
-  use host_name <- result.try(require_host(parsed.host))
-  use port_number <- result.try(check_port(parsed.port))
-  use database_name <- result.try(parse_database(parsed.path))
+  use parsed <- try(parse_uri(url))
+  use Nil <- try(check_scheme(parsed.scheme))
+  use Nil <- try(check_fragment(parsed.fragment))
+  use host_name <- try(require_host(parsed.host))
+  use port_number <- try(check_port(parsed.port))
+  use database_name <- try(parse_database(parsed.path))
   let config =
     new(pool_name)
     |> set_host_and_ip_version(host_name)
     |> port(port_number)
     |> database(database_name)
-  use config <- result.try(apply_userinfo(config, parsed.userinfo))
+  use config <- try(apply_userinfo(config, parsed.userinfo))
   apply_query(config, parsed.query)
 }
 
@@ -776,9 +779,9 @@ pub fn parse_config(
 /// }
 /// ```
 pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
-  use config <- result.try(
-    parse_config(process.new_name("postgres_pool"), url)
-    |> result.map_error(InvalidUrl),
+  use config <- try(
+    parse_config(new_name("postgres_pool"), url)
+    |> map_error(InvalidUrl),
   )
   config
   |> pool_size(15)
@@ -786,7 +789,7 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
   // `dream_postgres_client.start` reports every start failure as
   // `actor.InitExited`, and the exit reason can hold the password, so it is not
   // kept.
-  |> result.replace_error(PoolStartExited)
+  |> replace_error(PoolStartExited)
 }
 
 /// Make sure that the database answers
@@ -830,7 +833,7 @@ pub fn from_url(url: String) -> Result(Connection, FromUrlError) {
 pub fn check(connection: Connection) -> Result(Nil, QueryError) {
   dream_postgres_client.query("SELECT 1")
   |> dream_postgres_client.execute(connection)
-  |> result.replace(Nil)
+  |> replace(Nil)
 }
 
 // Queries and values. Code that the SQL generator writes with
@@ -954,7 +957,7 @@ pub fn parameter(query: Query(row), parameter: Value) -> Query(row) {
 ///   |> postgres.execute(connection)
 /// }
 /// ```
-pub fn returning(query: Query(a), decoder: decode.Decoder(b)) -> Query(b) {
+pub fn returning(query: Query(a), decoder: Decoder(b)) -> Query(b) {
   dream_postgres_client.returning(query, decoder)
 }
 
@@ -1530,7 +1533,7 @@ pub fn timestamp(timestamp: Timestamp) -> Value {
 ///   |> postgres.execute(connection)
 /// }
 /// ```
-pub fn timestamp_decoder() -> decode.Decoder(Timestamp) {
+pub fn timestamp_decoder() -> Decoder(Timestamp) {
   dream_postgres_client.timestamp_decoder()
 }
 
@@ -1639,7 +1642,7 @@ pub fn calendar_date(date: Date) -> Value {
 ///   |> postgres.execute(connection)
 /// }
 /// ```
-pub fn calendar_date_decoder() -> decode.Decoder(Date) {
+pub fn calendar_date_decoder() -> Decoder(Date) {
   dream_postgres_client.calendar_date_decoder()
 }
 
@@ -1710,7 +1713,7 @@ pub fn calendar_time_of_day(time: TimeOfDay) -> Value {
 ///   |> postgres.execute(connection)
 /// }
 /// ```
-pub fn calendar_time_of_day_decoder() -> decode.Decoder(TimeOfDay) {
+pub fn calendar_time_of_day_decoder() -> Decoder(TimeOfDay) {
   dream_postgres_client.calendar_time_of_day_decoder()
 }
 
@@ -1744,7 +1747,7 @@ pub fn calendar_time_of_day_decoder() -> decode.Decoder(TimeOfDay) {
 ///   |> postgres.execute(connection)
 /// }
 /// ```
-pub fn numeric_decoder() -> decode.Decoder(Float) {
+pub fn numeric_decoder() -> Decoder(Float) {
   dream_postgres_client.numeric_decoder()
 }
 
@@ -1874,7 +1877,7 @@ pub fn to_error(error: QueryError) -> Error(QueryError) {
 
 fn decode_errors_text(errors: List(DecodeError)) -> String {
   errors
-  |> map(fn(error) {
+  |> list.map(fn(error) {
     "expected "
     <> error.expected
     <> ", found "
@@ -2173,7 +2176,7 @@ pub fn broken_promise(error: QueryError) -> Result(String, Nil) {
     UnexpectedResultType(errors) ->
       find(errors, is_broken_promise)
       |> result.map(fn(decode_error) {
-        drop_start(decode_error.expected, length(promise_marker))
+        drop_start(decode_error.expected, string.length(promise_marker))
       })
     _ -> Error(Nil)
   }
@@ -2336,14 +2339,14 @@ pub fn infinite_value(error: QueryError) -> Result(String, Nil) {
     UnexpectedResultType(errors) ->
       find(errors, is_infinite_value)
       |> result.map(fn(decode_error) {
-        drop_start(decode_error.expected, length(infinity_marker))
+        drop_start(decode_error.expected, string.length(infinity_marker))
       })
     _ -> Error(Nil)
   }
 }
 
 fn is_infinite_value(error: DecodeError) -> Bool {
-  contains(infinity_names, error.found)
+  list.contains(infinity_names, error.found)
   && starts_with(error.expected, infinity_marker)
 }
 
@@ -2352,7 +2355,7 @@ fn infinity_of(raw: Dynamic) -> Result(String, Nil) {
   |> result.map(to_string)
   |> replace_error(Nil)
   |> try(fn(name) {
-    case contains(infinity_names, name) {
+    case list.contains(infinity_names, name) {
       True -> Ok(name)
       False -> Error(Nil)
     }
@@ -2956,7 +2959,7 @@ pub fn format_schema_check_error(error: SchemaCheckError) -> String {
   case error {
     SchemaChanged(mismatches) ->
       "The database schema changed after dream_model generated these modules. Regenerate them with dream_model:\n"
-      <> join(map(mismatches, format_mismatch), "\n")
+      <> join(list.map(mismatches, format_mismatch), "\n")
     SchemaUnreadable(module, query_error) ->
       "The schema fingerprint query of "
       <> module
@@ -2978,45 +2981,45 @@ fn format_mismatch(mismatch: SchemaMismatch) -> String {
 
 // Private URL parsing - flat functions, no nesting
 
-fn parse_uri(url: String) -> Result(uri.Uri, UrlError) {
-  uri.parse(url)
-  |> result.replace_error(MalformedUrl)
+fn parse_uri(url: String) -> Result(Uri, UrlError) {
+  parse(url)
+  |> replace_error(MalformedUrl)
 }
 
 fn check_scheme(scheme: option.Option(String)) -> Result(Nil, UrlError) {
   case scheme {
-    option.Some("postgresql") | option.Some("postgres") -> Ok(Nil)
-    option.Some(other) -> Error(UnsupportedScheme(other))
-    option.None -> Error(MissingScheme)
+    Some("postgresql") | Some("postgres") -> Ok(Nil)
+    Some(other) -> Error(UnsupportedScheme(other))
+    None -> Error(MissingScheme)
   }
 }
 
 fn check_fragment(fragment: option.Option(String)) -> Result(Nil, UrlError) {
   case fragment {
-    option.None -> Ok(Nil)
-    option.Some(_) -> Error(UnsupportedFragment)
+    None -> Ok(Nil)
+    Some(_) -> Error(UnsupportedFragment)
   }
 }
 
 fn require_host(host_name: option.Option(String)) -> Result(String, UrlError) {
   case host_name {
-    option.None | option.Some("") -> Error(MissingHost)
-    option.Some(value) -> Ok(value)
+    None | Some("") -> Error(MissingHost)
+    Some(value) -> Ok(value)
   }
 }
 
 fn check_port(port_number: option.Option(Int)) -> Result(Int, UrlError) {
   case port_number {
-    option.None -> Ok(5432)
-    option.Some(value) if value >= 1 && value <= 65_535 -> Ok(value)
-    option.Some(value) -> Error(InvalidPort(value))
+    None -> Ok(5432)
+    Some(value) if value >= 1 && value <= 65_535 -> Ok(value)
+    Some(value) -> Error(InvalidPort(value))
   }
 }
 
 // When the URL has a host, `gleam/uri` gives a path that is empty or that
 // starts with `/`, so dropping the first character removes that `/`.
 fn parse_database(path: String) -> Result(String, UrlError) {
-  case string.drop_start(path, 1) {
+  case drop_start(path, 1) {
     "" -> Error(MissingDatabase)
     encoded_name -> decode_database_name(path, encoded_name)
   }
@@ -3036,7 +3039,7 @@ fn set_host_and_ip_version(config: Config, host_name: String) -> Config {
   case string.contains(host_name, ":") {
     True ->
       host(config, host_name)
-      |> dream_postgres_client.ip_version(dream_postgres_client.Ipv6)
+      |> ip_version(Ipv6)
     False -> host(config, host_name)
   }
 }
@@ -3046,8 +3049,8 @@ fn apply_userinfo(
   userinfo: option.Option(String),
 ) -> Result(Config, UrlError) {
   case userinfo {
-    option.None -> Ok(config)
-    option.Some(value) -> apply_user_and_password(config, value)
+    None -> Ok(config)
+    Some(value) -> apply_user_and_password(config, value)
   }
 }
 
@@ -3055,7 +3058,7 @@ fn apply_user_and_password(
   config: Config,
   userinfo: String,
 ) -> Result(Config, UrlError) {
-  case string.split_once(userinfo, ":") {
+  case split_once(userinfo, ":") {
     Ok(#(encoded_user, encoded_password)) ->
       apply_user_with_password(config, encoded_user, encoded_password)
     Error(Nil) -> apply_user(config, userinfo)
@@ -3067,8 +3070,8 @@ fn apply_user_with_password(
   encoded_user: String,
   encoded_password: String,
 ) -> Result(Config, UrlError) {
-  use config <- result.try(apply_user(config, encoded_user))
-  use decoded_password <- result.try(decode_password(encoded_password))
+  use config <- try(apply_user(config, encoded_user))
+  use decoded_password <- try(decode_password(encoded_password))
   Ok(password(config, decoded_password))
 }
 
@@ -3076,7 +3079,7 @@ fn apply_user(
   config: Config,
   encoded_user: String,
 ) -> Result(Config, UrlError) {
-  use decoded_user <- result.try(decode_user(encoded_user))
+  use decoded_user <- try(decode_user(encoded_user))
   Ok(user(config, decoded_user))
 }
 
@@ -3096,7 +3099,7 @@ fn decode_password(encoded_password: String) -> Result(String, UrlError) {
 // that ends with a null byte, so the rest would reach the server as another
 // parameter (see `refuse_null_bytes`).
 fn decode_part(encoded: String, error: UrlError) -> Result(String, UrlError) {
-  case uri.percent_decode(encoded) {
+  case percent_decode(encoded) {
     Ok(decoded) -> refuse_decoded_null_byte(decoded, error)
     Error(Nil) -> Error(error)
   }
@@ -3117,8 +3120,8 @@ fn apply_query(
   query: option.Option(String),
 ) -> Result(Config, UrlError) {
   case query {
-    option.None -> Ok(config)
-    option.Some(value) -> apply_query_string(config, value)
+    None -> Ok(config)
+    Some(value) -> apply_query_string(config, value)
   }
 }
 
@@ -3137,20 +3140,13 @@ fn apply_query_string(
   config: Config,
   query: String,
 ) -> Result(Config, UrlError) {
-  use parameters <- result.try(
-    uri.parse_query(query)
-    |> result.replace_error(MalformedUrl),
+  use parameters <- try(
+    parse_query(query)
+    |> replace_error(MalformedUrl),
   )
-  let start = #(
-    config,
-    SslSettings(mode: option.None, root_certificate: option.None),
-  )
-  use #(config, settings) <- result.try(list.try_fold(
-    parameters,
-    start,
-    apply_parameter,
-  ))
-  use ssl <- result.try(resolve_ssl(config.ssl, settings))
+  let start = #(config, SslSettings(mode: None, root_certificate: None))
+  use #(config, settings) <- try(try_fold(parameters, start, apply_parameter))
+  use ssl <- try(resolve_ssl(config.ssl, settings))
   Ok(dream_postgres_client.ssl(config, ssl))
 }
 
@@ -3164,10 +3160,7 @@ fn apply_parameter(
     True, _, _ | _, True, _ -> Error(MalformedUrl)
     False, False, "sslmode" -> apply_ssl_mode(config, settings, value)
     False, False, "sslrootcert" ->
-      Ok(#(
-        config,
-        SslSettings(..settings, root_certificate: option.Some(value)),
-      ))
+      Ok(#(config, SslSettings(..settings, root_certificate: Some(value))))
     False, False, _ ->
       apply_named_parameter(config, name, value)
       |> result.map(fn(config) { #(config, settings) })
@@ -3213,7 +3206,7 @@ fn append_connection_parameter(
 ) -> Config {
   dream_postgres_client.Config(
     ..config,
-    connection_parameters: list.append(config.connection_parameters, [
+    connection_parameters: append(config.connection_parameters, [
       #(name, value),
     ]),
   )
@@ -3253,7 +3246,7 @@ const refused_names = [
 // server parameter. The server refuses one that it does not know and closes
 // the connection, so the URL is refused here, where the error names it.
 fn is_refused_name(name: String) -> Bool {
-  list.contains(refused_names, name) || string.starts_with(name, "_pq_.")
+  list.contains(refused_names, name) || starts_with(name, "_pq_.")
 }
 
 // Gives the first keyword that the lower-case name is at most one edit
@@ -3263,10 +3256,10 @@ fn is_refused_name(name: String) -> Bool {
 // PostgreSQL 16 (`SELECT name FROM pg_settings`) is one edit from a
 // keyword without being that keyword, and a test checks this on each run.
 fn find_near_keyword(name: String) -> Result(String, Nil) {
-  let letters = string.to_graphemes(string.lowercase(name))
-  list.append(handled_keywords, refused_names)
-  |> list.find(fn(keyword) {
-    keyword != "" && within_one_edit(letters, string.to_graphemes(keyword))
+  let letters = to_graphemes(lowercase(name))
+  append(handled_keywords, refused_names)
+  |> find(fn(keyword) {
+    keyword != "" && within_one_edit(letters, to_graphemes(keyword))
   })
 }
 
@@ -3298,7 +3291,7 @@ fn apply_ssl_mode(
   mode: String,
 ) -> Result(#(Config, SslSettings), UrlError) {
   case list.contains(ssl_modes, mode) {
-    True -> Ok(#(config, SslSettings(..settings, mode: option.Some(mode))))
+    True -> Ok(#(config, SslSettings(..settings, mode: Some(mode))))
     False -> Error(UnsupportedSslMode(mode))
   }
 }
@@ -3310,29 +3303,19 @@ const ssl_modes = ["disable", "require", "verify-ca", "verify-full"]
 // `verify-ca` does, and `sslrootcert=system` needs `verify-full`.
 // `apply_ssl_mode` let only the four modes of `ssl_modes` through, so the last
 // two branches are `verify-full`.
-fn resolve_ssl(
-  current: dream_postgres_client.Ssl,
-  settings: SslSettings,
-) -> Result(dream_postgres_client.Ssl, UrlError) {
+fn resolve_ssl(current: Ssl, settings: SslSettings) -> Result(Ssl, UrlError) {
   case settings.mode, settings.root_certificate {
-    option.None, option.None -> Ok(current)
-    option.Some("verify-full"), option.Some("system")
-    | option.None, option.Some("system")
-    -> Ok(dream_postgres_client.SslVerified)
-    option.Some(mode), option.Some("system") ->
-      Error(SslRootCertSystemNeedsVerifyFull(mode))
-    option.None, option.Some(_path) -> Error(SslRootCertWithoutSslMode)
-    option.Some("disable"), _ -> Ok(dream_postgres_client.SslDisabled)
-    option.Some("require"), option.None ->
-      Ok(dream_postgres_client.SslUnverified)
-    option.Some("require"), option.Some(path)
-    | option.Some("verify-ca"), option.Some(path)
-    -> Ok(dream_postgres_client.SslVerifiedChainOnlyCaFile(path))
-    option.Some("verify-ca"), option.None ->
-      Ok(dream_postgres_client.SslVerifiedChainOnly)
-    option.Some(_verify_full), option.None ->
-      Ok(dream_postgres_client.SslVerified)
-    option.Some(_verify_full), option.Some(path) ->
-      Ok(dream_postgres_client.SslVerifiedCaFile(path))
+    None, None -> Ok(current)
+    Some("verify-full"), Some("system") | None, Some("system") ->
+      Ok(SslVerified)
+    Some(mode), Some("system") -> Error(SslRootCertSystemNeedsVerifyFull(mode))
+    None, Some(_path) -> Error(SslRootCertWithoutSslMode)
+    Some("disable"), _ -> Ok(SslDisabled)
+    Some("require"), None -> Ok(SslUnverified)
+    Some("require"), Some(path) | Some("verify-ca"), Some(path) ->
+      Ok(SslVerifiedChainOnlyCaFile(path))
+    Some("verify-ca"), None -> Ok(SslVerifiedChainOnly)
+    Some(_verify_full), None -> Ok(SslVerified)
+    Some(_verify_full), Some(path) -> Ok(SslVerifiedCaFile(path))
   }
 }

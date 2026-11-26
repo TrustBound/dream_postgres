@@ -5,30 +5,30 @@
 //// connects in the background, so the test needs no database.
 
 import dream_errors.{NotFound}
-import dream_postgres/client as postgres
-import dream_postgres_client.{Returned}
+import dream_postgres/client.{database, from_url, host, new, password, user}
+import dream_postgres_client.{ConnectionUnavailable, Returned, named_connection}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import fixtures/database_url
-import fixtures/test_database
-import gleam/erlang/process
+import fixtures/database_url.{unused_database_url}
+import fixtures/test_database.{with_own_pools}
+import gleam/erlang/process.{new_name}
 import gleam/option.{Some}
 import gleam/result
-import snippets/client_check
-import snippets/client_connect
-import snippets/client_database
-import snippets/client_from_url
-import snippets/client_host
-import snippets/client_new
-import snippets/client_parse_config
-import snippets/client_password
-import snippets/client_pool_size
-import snippets/client_port
-import snippets/client_user
-import snippets/query_all_rows
+import snippets/client_check.{describe_database}
+import snippets/client_connect.{connect_database}
+import snippets/client_database.{use_production_database}
+import snippets/client_from_url.{describe_connection}
+import snippets/client_host.{use_local_host}
+import snippets/client_new.{create_config}
+import snippets/client_parse_config.{read_database_url}
+import snippets/client_password.{use_password}
+import snippets/client_pool_size.{allow_twenty_connections}
+import snippets/client_port.{use_default_port}
+import snippets/client_user.{use_postgres_user}
+import snippets/query_all_rows.{find_names}
 import snippets/query_first_row
-import snippets/query_to_error.{find_name}
+import snippets/query_to_error
 
 pub fn tests() -> TestSuite {
   describe("hexdocs snippets", [client_tests(), query_tests()])
@@ -38,7 +38,7 @@ fn client_tests() {
   group("dream_postgres/client", [
     it("client_new.create_config keeps the default port", fn() {
       // Act
-      let config = client_new.create_config()
+      let config = create_config()
 
       // Assert
       config.port
@@ -48,10 +48,10 @@ fn client_tests() {
     }),
     it("client_host.use_local_host sets the host", fn() {
       // Arrange
-      let config = postgres.new(process.new_name("hexdocs_test_pool"))
+      let config = new(new_name("hexdocs_test_pool"))
 
       // Act
-      let updated = client_host.use_local_host(config)
+      let updated = use_local_host(config)
 
       // Assert
       updated.host
@@ -61,10 +61,10 @@ fn client_tests() {
     }),
     it("client_port.use_default_port sets the port", fn() {
       // Arrange
-      let config = postgres.new(process.new_name("hexdocs_test_pool"))
+      let config = new(new_name("hexdocs_test_pool"))
 
       // Act
-      let updated = client_port.use_default_port(config)
+      let updated = use_default_port(config)
 
       // Assert
       updated.port
@@ -74,10 +74,10 @@ fn client_tests() {
     }),
     it("client_database.use_production_database sets the database", fn() {
       // Arrange
-      let config = postgres.new(process.new_name("hexdocs_test_pool"))
+      let config = new(new_name("hexdocs_test_pool"))
 
       // Act
-      let updated = client_database.use_production_database(config)
+      let updated = use_production_database(config)
 
       // Assert
       updated.database
@@ -87,10 +87,10 @@ fn client_tests() {
     }),
     it("client_user.use_postgres_user sets the user", fn() {
       // Arrange
-      let config = postgres.new(process.new_name("hexdocs_test_pool"))
+      let config = new(new_name("hexdocs_test_pool"))
 
       // Act
-      let updated = client_user.use_postgres_user(config)
+      let updated = use_postgres_user(config)
 
       // Assert
       updated.user
@@ -100,10 +100,10 @@ fn client_tests() {
     }),
     it("client_password.use_password sets the password", fn() {
       // Arrange
-      let config = postgres.new(process.new_name("hexdocs_test_pool"))
+      let config = new(new_name("hexdocs_test_pool"))
 
       // Act
-      let updated = client_password.use_password(config)
+      let updated = use_password(config)
 
       // Assert
       updated.password
@@ -113,10 +113,10 @@ fn client_tests() {
     }),
     it("client_pool_size.allow_twenty_connections sets the pool size", fn() {
       // Arrange
-      let config = postgres.new(process.new_name("hexdocs_test_pool"))
+      let config = new(new_name("hexdocs_test_pool"))
 
       // Act
-      let updated = client_pool_size.allow_twenty_connections(config)
+      let updated = allow_twenty_connections(config)
 
       // Assert
       updated.pool_size
@@ -128,30 +128,30 @@ fn client_tests() {
       "client_connect.connect_database returns a connection to the named pool",
       fn() {
         // Arrange
-        let pool_name = process.new_name("hexdocs_test_pool")
+        let pool_name = new_name("hexdocs_test_pool")
 
         // Act
-        let result = client_connect.connect_database(pool_name)
+        let result = connect_database(pool_name)
 
         // Assert
         result
         |> should
-        |> be_equal(Ok(dream_postgres_client.named_connection(pool_name)))
+        |> be_equal(Ok(named_connection(pool_name)))
         |> or_fail_with("Expected a connection to the named pool")
       },
     ),
     it("client_parse_config.read_database_url reads every value", fn() {
       // Arrange
-      let pool_name = process.new_name("hexdocs_test_pool")
+      let pool_name = new_name("hexdocs_test_pool")
       let expected =
-        postgres.new(pool_name)
-        |> postgres.host("localhost")
-        |> postgres.database("myapp")
-        |> postgres.user("user")
-        |> postgres.password("pass")
+        new(pool_name)
+        |> host("localhost")
+        |> database("myapp")
+        |> user("user")
+        |> password("pass")
 
       // Act
-      let config = client_parse_config.read_database_url(pool_name)
+      let config = read_database_url(pool_name)
 
       // Assert
       config
@@ -161,10 +161,10 @@ fn client_tests() {
     }),
     it("client_from_url.describe_connection says the pool started", fn() {
       // Arrange
-      let url = database_url.unused_database_url()
+      let url = unused_database_url()
 
       // Act
-      let description = client_from_url.describe_connection(url)
+      let description = describe_connection(url)
 
       // Assert
       description
@@ -174,8 +174,7 @@ fn client_tests() {
     }),
     it("client_from_url.describe_connection describes an invalid URL", fn() {
       // Act
-      let description =
-        client_from_url.describe_connection("postgresql://localhost")
+      let description = describe_connection("postgresql://localhost")
 
       // Assert
       description
@@ -186,9 +185,9 @@ fn client_tests() {
     it("client_check.describe_database says the database answers", fn() {
       // Act
       let description = {
-        use <- test_database.with_own_pools()
-        postgres.from_url(test_database.url())
-        |> result.map(client_check.describe_database)
+        use <- with_own_pools()
+        from_url(test_database.url())
+        |> result.map(describe_database)
       }
 
       // Assert
@@ -202,9 +201,9 @@ fn client_tests() {
       fn() {
         // Act
         let description = {
-          use <- test_database.with_own_pools()
-          postgres.from_url(database_url.unused_database_url())
-          |> result.map(client_check.describe_database)
+          use <- with_own_pools()
+          from_url(unused_database_url())
+          |> result.map(describe_database)
         }
 
         // Assert
@@ -221,8 +220,7 @@ fn query_tests() {
   group("dream_postgres/query", [
     it("query_first_row.find_name returns the first name", fn() {
       // Arrange
-      let result =
-        Ok(dream_postgres_client.Returned(count: 2, rows: ["Ada", "Grace"]))
+      let result = Ok(Returned(count: 2, rows: ["Ada", "Grace"]))
 
       // Act
       let name = query_first_row.find_name(result)
@@ -235,7 +233,7 @@ fn query_tests() {
     }),
     it("query_first_row.find_name returns User not found for no rows", fn() {
       // Arrange
-      let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
+      let result = Ok(Returned(count: 0, rows: []))
 
       // Act
       let name = query_first_row.find_name(result)
@@ -250,7 +248,7 @@ fn query_tests() {
       "query_first_row.find_name returns Database error for a query error",
       fn() {
         // Arrange
-        let result = Error(dream_postgres_client.ConnectionUnavailable)
+        let result = Error(ConnectionUnavailable)
 
         // Act
         let name = query_first_row.find_name(result)
@@ -264,11 +262,10 @@ fn query_tests() {
     ),
     it("query_all_rows.find_names returns every name", fn() {
       // Arrange
-      let result =
-        Ok(dream_postgres_client.Returned(count: 2, rows: ["Ada", "Grace"]))
+      let result = Ok(Returned(count: 2, rows: ["Ada", "Grace"]))
 
       // Act
-      let names = query_all_rows.find_names(result)
+      let names = find_names(result)
 
       // Assert
       names
@@ -278,10 +275,10 @@ fn query_tests() {
     }),
     it("query_all_rows.find_names returns the error for a query error", fn() {
       // Arrange
-      let result = Error(dream_postgres_client.ConnectionUnavailable)
+      let result = Error(ConnectionUnavailable)
 
       // Act
-      let names = query_all_rows.find_names(result)
+      let names = find_names(result)
 
       // Assert
       names
@@ -294,7 +291,7 @@ fn query_tests() {
       let result = Ok(Returned(count: 1, rows: ["Ada"]))
 
       // Act
-      let name = find_name(result)
+      let name = query_to_error.find_name(result)
 
       // Assert
       name
@@ -307,7 +304,7 @@ fn query_tests() {
       let result = Ok(Returned(count: 0, rows: []))
 
       // Act
-      let name = find_name(result)
+      let name = query_to_error.find_name(result)
 
       // Assert
       name

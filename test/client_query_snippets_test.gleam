@@ -10,26 +10,26 @@ import dream_test/unit.{describe, group, it}
 import fixtures/test_database.{with_schema}
 import gleam/dynamic/decode.{DecodeError, at}
 import gleam/option.{None, Some}
-import gleam/time/calendar
-import gleam/time/timestamp
-import snippets/client_array
-import snippets/client_bool
-import snippets/client_bytea
-import snippets/client_calendar_date
-import snippets/client_calendar_time_of_day
-import snippets/client_float
-import snippets/client_int
-import snippets/client_null
-import snippets/client_nullable
+import gleam/time/calendar.{Date, December, January, TimeOfDay}
+import gleam/time/timestamp.{from_unix_seconds}
+import snippets/client_array.{sort_numbers}
+import snippets/client_bool.{negate}
+import snippets/client_bytea.{byte_count}
+import snippets/client_calendar_date.{next_day}
+import snippets/client_calendar_time_of_day.{one_minute_later}
+import snippets/client_float.{double}
+import snippets/client_int.{next_number}
+import snippets/client_null.{null_is_null}
+import snippets/client_nullable.{nickname_or_none}
 import snippets/client_numeric_as_text.{exact_total}
-import snippets/client_numeric_decoder
+import snippets/client_numeric_decoder.{price_with_tax}
 import snippets/client_numeric_text.{add_one_cent}
 import snippets/client_numeric_text_decoder.{price}
-import snippets/client_query
-import snippets/client_text
-import snippets/client_timeout
-import snippets/client_timestamp
-import snippets/client_transaction
+import snippets/client_query.{add}
+import snippets/client_text.{shout}
+import snippets/client_timeout.{one_in_a_second}
+import snippets/client_timestamp.{one_hour_later}
+import snippets/client_transaction.{answer_in_transaction}
 
 pub fn tests() -> TestSuite {
   describe("dream_postgres/client query snippets", [
@@ -43,7 +43,7 @@ fn query_tests() {
   group("query, parameter, returning, execute, timeout and transaction", [
     it("client_query.add adds 2 and 3", fn() {
       // Act
-      let result = test_database.with_schema(client_query.add(_, 2, 3))
+      let result = with_schema(add(_, 2, 3))
 
       // Assert
       result
@@ -53,7 +53,7 @@ fn query_tests() {
     }),
     it("client_timeout.one_in_a_second gives 1", fn() {
       // Act
-      let result = test_database.with_schema(client_timeout.one_in_a_second)
+      let result = with_schema(one_in_a_second)
 
       // Assert
       result
@@ -63,8 +63,7 @@ fn query_tests() {
     }),
     it("client_transaction.answer_in_transaction gives [42]", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_transaction.answer_in_transaction)
+      let result = with_schema(answer_in_transaction)
 
       // Assert
       result
@@ -79,7 +78,7 @@ fn value_tests() {
   group("value functions", [
     it("client_null.null_is_null gives True", fn() {
       // Act
-      let result = test_database.with_schema(client_null.null_is_null)
+      let result = with_schema(null_is_null)
 
       // Assert
       result
@@ -89,7 +88,7 @@ fn value_tests() {
     }),
     it("client_bool.negate turns True into False", fn() {
       // Act
-      let result = test_database.with_schema(client_bool.negate(_, True))
+      let result = with_schema(negate(_, True))
 
       // Assert
       result
@@ -99,7 +98,7 @@ fn value_tests() {
     }),
     it("client_int.next_number turns 41 into 42", fn() {
       // Act
-      let result = test_database.with_schema(client_int.next_number(_, 41))
+      let result = with_schema(next_number(_, 41))
 
       // Assert
       result
@@ -109,7 +108,7 @@ fn value_tests() {
     }),
     it("client_float.double turns 2.5 into 5.0", fn() {
       // Act
-      let result = test_database.with_schema(client_float.double(_, 2.5))
+      let result = with_schema(double(_, 2.5))
 
       // Assert
       result
@@ -119,7 +118,7 @@ fn value_tests() {
     }),
     it("client_text.shout turns ada into ADA", fn() {
       // Act
-      let result = test_database.with_schema(client_text.shout(_, "ada"))
+      let result = with_schema(shout(_, "ada"))
 
       // Assert
       result
@@ -129,8 +128,7 @@ fn value_tests() {
     }),
     it("client_bytea.byte_count counts 3 bytes", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_bytea.byte_count(_, <<1, 2, 3>>))
+      let result = with_schema(byte_count(_, <<1, 2, 3>>))
 
       // Assert
       result
@@ -140,8 +138,7 @@ fn value_tests() {
     }),
     it("client_array.sort_numbers sorts [3, 1, 2]", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_array.sort_numbers(_, [3, 1, 2]))
+      let result = with_schema(sort_numbers(_, [3, 1, 2]))
 
       // Assert
       result
@@ -151,8 +148,7 @@ fn value_tests() {
     }),
     it("client_nullable.nickname_or_none gives none for None", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_nullable.nickname_or_none(_, None))
+      let result = with_schema(nickname_or_none(_, None))
 
       // Assert
       result
@@ -162,11 +158,7 @@ fn value_tests() {
     }),
     it("client_nullable.nickname_or_none gives the nickname for Some", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_nullable.nickname_or_none(
-          _,
-          Some("Ace"),
-        ))
+      let result = with_schema(nickname_or_none(_, Some("Ace")))
 
       // Assert
       result
@@ -176,8 +168,7 @@ fn value_tests() {
     }),
     it("client_numeric_decoder.price_with_tax turns 1000 cents into 12.5", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_numeric_decoder.price_with_tax(_, 1000))
+      let result = with_schema(price_with_tax(_, 1000))
 
       // Assert
       result
@@ -273,49 +264,38 @@ fn time_tests() {
   group("time values and decoders", [
     it("client_timestamp.one_hour_later adds one hour", fn() {
       // Arrange
-      let start = timestamp.from_unix_seconds(1_764_000_000)
+      let start = from_unix_seconds(1_764_000_000)
 
       // Act
-      let result =
-        test_database.with_schema(client_timestamp.one_hour_later(_, start))
+      let result = with_schema(one_hour_later(_, start))
 
       // Assert
       result
       |> should
       |> be_equal(
-        Ok(
-          Returned(count: 1, rows: [timestamp.from_unix_seconds(1_764_003_600)]),
-        ),
+        Ok(Returned(count: 1, rows: [from_unix_seconds(1_764_003_600)])),
       )
       |> or_fail_with("Expected one row one hour later")
     }),
     it("client_calendar_date.next_day goes from 31 December to 1 January", fn() {
       // Arrange
-      let last_day = calendar.Date(2025, calendar.December, 31)
+      let last_day = Date(2025, December, 31)
 
       // Act
-      let result =
-        test_database.with_schema(client_calendar_date.next_day(_, last_day))
+      let result = with_schema(next_day(_, last_day))
 
       // Assert
       result
       |> should
-      |> be_equal(
-        Ok(Returned(count: 1, rows: [calendar.Date(2026, calendar.January, 1)])),
-      )
+      |> be_equal(Ok(Returned(count: 1, rows: [Date(2026, January, 1)])))
       |> or_fail_with("Expected one row with 1 January 2026")
     }),
     it("client_calendar_time_of_day.one_minute_later adds one minute", fn() {
       // Arrange
-      let time =
-        calendar.TimeOfDay(hours: 9, minutes: 59, seconds: 30, nanoseconds: 0)
+      let time = TimeOfDay(hours: 9, minutes: 59, seconds: 30, nanoseconds: 0)
 
       // Act
-      let result =
-        test_database.with_schema(client_calendar_time_of_day.one_minute_later(
-          _,
-          time,
-        ))
+      let result = with_schema(one_minute_later(_, time))
 
       // Assert
       result
@@ -323,12 +303,7 @@ fn time_tests() {
       |> be_equal(
         Ok(
           Returned(count: 1, rows: [
-            calendar.TimeOfDay(
-              hours: 10,
-              minutes: 0,
-              seconds: 30,
-              nanoseconds: 0,
-            ),
+            TimeOfDay(hours: 10, minutes: 0, seconds: 30, nanoseconds: 0),
           ]),
         ),
       )

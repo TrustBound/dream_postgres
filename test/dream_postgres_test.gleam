@@ -1,18 +1,21 @@
 import architecture_snippets_test
-import client_model_test.{tests}
+import client_model_test
 import client_query_snippets_test
 import client_test
 import deployment_guide_snippets_test
-import dream_test/coverage
-import dream_test/parallel
+import dream_test/coverage.{json_path, minimum_percent, show_missing}
+import dream_test/parallel.{ParallelConfig}
 import dream_test/reporters/bdd
 import dream_test/reporters/progress
-import dream_test/runner
-import fixtures/ssl_database
+import dream_test/runner.{
+  add_suites_with_config, exit_on_failure, progress_reporter, results_reporters,
+  run,
+}
+import fixtures/ssl_database.{drop_tls_alert_reports}
 import fixtures/test_database
 import generated_sql_test
-import gleam/io
-import gleam/result
+import gleam/io.{println_error}
+import gleam/result.{try}
 import guide_connecting_test
 import guide_getting_started_test
 import guide_queries_test
@@ -43,15 +46,15 @@ fn drop_pool_shutdown_reports() -> Nil
 // one message, not with a failure in each of those tests.
 pub fn main() {
   drop_pool_shutdown_reports()
-  ssl_database.drop_tls_alert_reports()
+  drop_tls_alert_reports()
   let reachable = {
-    use Nil <- result.try(test_database.check_reachable())
+    use Nil <- try(test_database.check_reachable())
     ssl_database.check_reachable()
   }
   case reachable {
     Ok(Nil) -> run_tests()
     Error(message) -> {
-      io.println_error(message)
+      println_error(message)
       halt(1)
     }
   }
@@ -61,7 +64,7 @@ fn run_tests() -> Nil {
   runner.new([
     client_test.tests(),
     client_query_snippets_test.tests(),
-    tests(),
+    client_model_test.tests(),
     generated_sql_test.tests(),
     query_test.tests(),
     hexdocs_snippets_test.tests(),
@@ -85,19 +88,19 @@ fn run_tests() -> Nil {
   ])
   // The SSL tests change the CA list of the whole BEAM, so they run one at
   // a time, after the other suites.
-  |> runner.add_suites_with_config(
-    parallel.ParallelConfig(max_concurrency: 1, default_timeout_ms: 30_000),
+  |> add_suites_with_config(
+    ParallelConfig(max_concurrency: 1, default_timeout_ms: 30_000),
     [postgres_ssl_test.tests()],
   )
-  |> runner.progress_reporter(progress.new())
-  |> runner.results_reporters([bdd.new()])
+  |> progress_reporter(progress.new())
+  |> results_reporters([bdd.new()])
   |> runner.coverage(
     coverage.new()
-    |> coverage.show_missing()
-    |> coverage.minimum_percent(100.0)
-    |> coverage.json_path("build/coverage/coverage.json"),
+    |> show_missing()
+    |> minimum_percent(100.0)
+    |> json_path("build/coverage/coverage.json"),
   )
-  |> runner.exit_on_failure()
-  |> runner.run()
+  |> exit_on_failure()
+  |> run()
   Nil
 }

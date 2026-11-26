@@ -26,8 +26,8 @@
 //// ```
 
 import dream_errors.{type Error, Failed}
-import dream_postgres_client
-import gleam/list
+import dream_postgres_client.{type Returned}
+import gleam/list.{first}
 import gleam/result
 
 /// Query error types
@@ -91,10 +91,7 @@ pub type QueryError {
 /// }
 /// ```
 pub fn first_row(
-  result: Result(
-    dream_postgres_client.Returned(row),
-    dream_postgres_client.QueryError,
-  ),
+  result: Result(Returned(row), dream_postgres_client.QueryError),
 ) -> Result(row, QueryError) {
   case result {
     Ok(db_result) -> first_of_rows(db_result.rows)
@@ -103,7 +100,7 @@ pub fn first_row(
 }
 
 fn first_of_rows(rows: List(row)) -> Result(row, QueryError) {
-  list.first(rows)
+  first(rows)
   |> result.replace_error(NotFound)
 }
 
@@ -150,10 +147,7 @@ fn first_of_rows(rows: List(row)) -> Result(row, QueryError) {
 /// }
 /// ```
 pub fn all_rows(
-  result: Result(
-    dream_postgres_client.Returned(row),
-    dream_postgres_client.QueryError,
-  ),
+  result: Result(Returned(row), dream_postgres_client.QueryError),
 ) -> Result(List(row), QueryError) {
   case result {
     Ok(db_result) -> Ok(db_result.rows)
