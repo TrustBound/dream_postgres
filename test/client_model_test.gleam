@@ -1,5 +1,5 @@
 //// Tests for the types and functions of `dream_postgres/client` that code
-//// from dream_model uses: `ModelError`, `more_than_one_row`,
+//// from dream_model uses: `to_error`, `more_than_one_row`,
 //// `violated_constraint`, `promised_not_null`,
 //// `finite_timestamp`, `finite_date`, `infinite_value`,
 //// `schema_fingerprint`, `check_schema` and `format_schema_check_error`,
@@ -7,12 +7,14 @@
 //// of docker-compose.yml, or on the server of `DREAM_POSTGRES_TEST_URL`.
 //// No test depends on the major version of PostgreSQL.
 
+import dream_errors
 import dream_postgres/client as postgres
 import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/test_database
+import gleam/dynamic
 import gleam/dynamic/decode
 import gleam/list
 import gleam/option.{type Option}
@@ -26,8 +28,6 @@ import snippets/client_date_type
 import snippets/client_finite_date
 import snippets/client_finite_timestamp
 import snippets/client_infinite_value
-import snippets/client_model_error
-import snippets/client_model_query_error
 import snippets/client_more_than_one_row
 import snippets/client_promised_elements_not_null
 import snippets/client_promised_not_null
@@ -36,11 +36,13 @@ import snippets/client_schema_fingerprint_sql
 import snippets/client_time_of_day_type
 import snippets/client_timestamp_type
 import snippets/client_timestamp_with_time_zone_decoder
+import snippets/client_to_error
 import snippets/client_violated_constraint
 
 pub fn tests() -> TestSuite {
   describe("dream_postgres/client model helpers", [
-    model_error_tests(),
+    to_error_tests(),
+    more_than_one_row_tests(),
     violated_constraint_tests(),
     promised_not_null_tests(),
     promised_elements_not_null_tests(),
@@ -162,9 +164,182 @@ const promise_marker = "[dream_postgres promised_not_null] "
 const empty_text_hash =
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-fn model_error_tests() {
-  group("ModelError", [
-    it("more_than_one_row tells the number of rows", fn() {
+fn to_error_tests() {
+  group("to_error", [
+    it(
+      "gives Conflict for a duplicate email, with the error as the cause",
+      fn() {
+        // Arrange
+        let error =
+          users_error("INSERT INTO users (id, email) VALUES (2, 'a@b')")
+
+        // Act
+        let shared = postgres.to_error(error)
+
+        // Assert
+        #(
+          shared,
+          shared
+            |> dream_errors.cause
+            |> option.to_result(Nil)
+            |> result.try(postgres.violated_constraint),
+        )
+        |> should
+        |> be_equal(#(
+          dream_errors.Conflict(
+            "the query violated the constraint users_email_key",
+            error,
+          ),
+          Ok("users_email_key"),
+        ))
+        |> or_fail_with("Expected Conflict with the constraint in the cause")
+      },
+    ),
+    it("gives Timeout for QueryTimeout", fn() {
+      // Act
+      let shared = postgres.to_error(dream_postgres_client.QueryTimeout)
+
+      // Assert
+      shared
+      |> should
+      |> be_equal(dream_errors.Timeout(
+        "the database did not answer the query in time",
+        dream_postgres_client.QueryTimeout,
+      ))
+      |> or_fail_with("Expected Timeout")
+    }),
+    it("gives Unavailable for ConnectionUnavailable", fn() {
+      // Act
+      let shared =
+        postgres.to_error(dream_postgres_client.ConnectionUnavailable)
+
+      // Assert
+      shared
+      |> should
+      |> be_equal(dream_errors.Unavailable(
+        "no database connection was available",
+        dream_postgres_client.ConnectionUnavailable,
+      ))
+      |> or_fail_with("Expected Unavailable")
+    }),
+    it("gives Failed with the name and the code of a PostgreSQL error", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.PostgresqlError(
+          code: "42P01",
+          name: "undefined_table",
+          message: "relation \"nope\" does not exist",
+        )
+
+      // Act
+      let shared = postgres.to_error(error)
+
+      // Assert
+      shared
+      |> should
+      |> be_equal(dream_errors.Failed(
+        "the database failed the query with undefined_table (42P01): relation \"nope\" does not exist",
+        error,
+      ))
+      |> or_fail_with("Expected Failed with the PostgreSQL error")
+    }),
+    it("gives Failed for a wrong number of arguments", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.UnexpectedArgumentCount(expected: 2, got: 1)
+
+      // Act
+      let shared = postgres.to_error(error)
+
+      // Assert
+      shared
+      |> should
+      |> be_equal(dream_errors.Failed(
+        "the query expected 2 arguments and got 1",
+        error,
+      ))
+      |> or_fail_with("Expected Failed with the counts")
+    }),
+    it("gives Failed for an argument of the wrong type", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.UnexpectedArgumentType(
+          expected: "int4",
+          got: "text",
+        )
+
+      // Act
+      let shared = postgres.to_error(error)
+
+      // Assert
+      shared
+      |> should
+      |> be_equal(dream_errors.Failed(
+        "the query expected an argument of type int4 and got text",
+        error,
+      ))
+      |> or_fail_with("Expected Failed with the types")
+    }),
+    it("gives Failed with each decode error of a row", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.UnexpectedResultType([
+          decode.DecodeError(expected: "Int", found: "String", path: ["0"]),
+          decode.DecodeError(expected: "String", found: "Nil", path: [
+            "1",
+            "name",
+          ]),
+        ])
+
+      // Act
+      let shared = postgres.to_error(error)
+
+      // Assert
+      shared
+      |> should
+      |> be_equal(dream_errors.Failed(
+        "a row did not decode: expected Int, found String at 0, expected String, found Nil at 1.name",
+        error,
+      ))
+      |> or_fail_with("Expected Failed with both decode errors")
+    }),
+    it("gives Failed for an interceptor", fn() {
+      // Arrange
+      let error =
+        dream_postgres_client.InterceptorFailed(dynamic.string("no queries"))
+
+      // Act
+      let shared = postgres.to_error(error)
+
+      // Assert
+      shared
+      |> should
+      |> be_equal(dream_errors.Failed("an interceptor failed the query", error))
+      |> or_fail_with("Expected Failed for the interceptor")
+    }),
+    it("client_to_error gives each kind its status", fn() {
+      // Act
+      let statuses = [
+        client_to_error.status(users_error(
+          "INSERT INTO users (id, email) VALUES (2, 'a@b')",
+        )),
+        client_to_error.status(dream_postgres_client.ConnectionUnavailable),
+        client_to_error.status(dream_postgres_client.QueryTimeout),
+        client_to_error.status(postgres.more_than_one_row(2)),
+      ]
+
+      // Assert
+      statuses
+      |> should
+      |> be_equal([409, 503, 504, 500])
+      |> or_fail_with("Expected 409, 503, 504 and 500")
+    }),
+  ])
+}
+
+fn more_than_one_row_tests() {
+  group("more_than_one_row", [
+    it("tells the number of rows", fn() {
       // Act
       let error = postgres.more_than_one_row(3)
 
@@ -182,7 +357,7 @@ fn model_error_tests() {
       )
       |> or_fail_with("Expected an UnexpectedResultType with 3 rows")
     }),
-    it("more_than_one_row is not a broken promise or an infinite value", fn() {
+    it("is not a broken promise or an infinite value", fn() {
       // Arrange
       let error = postgres.more_than_one_row(2)
 
@@ -197,83 +372,6 @@ fn model_error_tests() {
       |> should
       |> be_equal(#(Error(Nil), Error(Nil)))
       |> or_fail_with("Expected no promise and no infinite value")
-    }),
-    it("client_model_error gives NotFound a 404", fn() {
-      // Act
-      let found = client_model_error.status_and_message(postgres.NotFound)
-
-      // Assert
-      found
-      |> should
-      |> be_equal(#(404, "User not found"))
-      |> or_fail_with("Expected the 404")
-    }),
-    it("client_model_error gives the email conflict its message", fn() {
-      // Act
-      let found =
-        client_model_error.status_and_message(postgres.Conflict(
-          "users_email_key",
-        ))
-
-      // Assert
-      found
-      |> should
-      |> be_equal(#(409, "Email already taken"))
-      |> or_fail_with("Expected the email message")
-    }),
-    it("client_model_error names another constraint", fn() {
-      // Act
-      let found =
-        client_model_error.status_and_message(postgres.Conflict(
-          "users_nick_key",
-        ))
-
-      // Assert
-      found
-      |> should
-      |> be_equal(#(409, "Conflict on users_nick_key"))
-      |> or_fail_with("Expected the constraint name")
-    }),
-    it("client_model_error gives QueryFailed its message", fn() {
-      // Act
-      let found =
-        client_model_error.status_and_message(postgres.QueryFailed(
-          message: "user.find failed",
-          cause: dream_postgres_client.QueryTimeout,
-        ))
-
-      // Assert
-      found
-      |> should
-      |> be_equal(#(500, "user.find failed"))
-      |> or_fail_with("Expected the 500")
-    }),
-    it("client_model_query_error logs the cause", fn() {
-      // Act
-      let line =
-        client_model_query_error.log_line(postgres.QueryFailed(
-          message: "user.find failed",
-          cause: dream_postgres_client.QueryTimeout,
-        ))
-
-      // Assert
-      line
-      |> should
-      |> be_equal("user.find failed: QueryTimeout")
-      |> or_fail_with("Expected the message and the cause")
-    }),
-    it("client_model_query_error logs NotFound and Conflict", fn() {
-      // Act
-      let lines = [
-        client_model_query_error.log_line(postgres.NotFound),
-        client_model_query_error.log_line(postgres.Conflict("users_email_key")),
-      ]
-
-      // Assert
-      lines
-      |> should
-      |> be_equal(["not found", "conflict on users_email_key"])
-      |> or_fail_with("Expected both lines")
     }),
     it("client_more_than_one_row gives the one email", fn() {
       // Act
@@ -292,7 +390,7 @@ fn model_error_tests() {
       // Assert
       found
       |> should
-      |> be_equal(Error(postgres.NotFound))
+      |> be_equal(Error(dream_errors.NotFound("user.email found no row")))
       |> or_fail_with("Expected NotFound")
     }),
     it("client_more_than_one_row fails two emails", fn() {
@@ -303,12 +401,12 @@ fn model_error_tests() {
       found
       |> should
       |> be_equal(
-        Error(postgres.QueryFailed(
+        Error(dream_errors.Failed(
           message: "user.email returned more than one row",
           cause: postgres.more_than_one_row(2),
         )),
       )
-      |> or_fail_with("Expected QueryFailed")
+      |> or_fail_with("Expected Failed")
     }),
   ])
 }

@@ -35,6 +35,7 @@
 //// }
 //// ```
 
+import dream_errors
 import dream_postgres_client
 import gleam/dynamic
 import gleam/dynamic/decode
@@ -1766,78 +1767,121 @@ pub fn numeric_text_decoder() -> decode.Decoder(String) {
 }
 
 // Helpers for the code that dream_model generates. Generated code imports
-// only this module, so it cannot match a `QueryError` variant itself.
+// only this module and dream_errors, so it cannot match a `QueryError`
+// variant itself.
 
-/// Why a function of a model failed, as data
+/// Map an error of `execute` to the shared error of the Dream ecosystem
 ///
-/// The functions that dream_model generates return this error. It has no
-/// HTTP status and no text for a user. The app decides what each case
-/// means, for example in a controller: a 404 for `NotFound` and a 409 for
-/// a `Conflict` on `users_email_key`.
+/// Each case of `QueryError` becomes one case of `dream_errors.Error`, and
+/// the `QueryError` stays whole as the `cause`:
 ///
-/// `cause` is the type of the error of the database call. Generated code
-/// uses `QueryError`, through the alias `ModelQueryError`.
+/// - `ConstraintViolated` gives `Conflict`.
+/// - `QueryTimeout` gives `Timeout`.
+/// - `ConnectionUnavailable` gives `Unavailable`.
+/// - Every other error gives `Failed`.
+///
+/// The message is for developers and logs. It names the constraint, the
+/// PostgreSQL error or the decode error. Never show it to the users of an
+/// app, because it can name tables, columns and values.
+///
+/// Each `ConstraintViolated` gives `Conflict`, also a foreign key or a
+/// check. To tell a duplicate apart from other violations, compare the
+/// name from `violated_constraint` with the unique constraints that you
+/// know.
+///
+/// ## Parameters
+///
+/// - `error`: The error from `execute`
+///
+/// ## Returns
+///
+/// A `dream_errors.Error` with `error` as its `cause`.
 ///
 /// ## Example
 ///
-/// ### Give each model error a status and a message <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_model_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Give each database error a status <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_to_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
+/// import dream_errors
 /// import dream_postgres/client as postgres
 ///
-/// pub fn status_and_message(
-///   error: postgres.ModelError(postgres.QueryError),
-/// ) -> #(Int, String) {
-///   case error {
-///     postgres.NotFound -> #(404, "User not found")
-///     postgres.Conflict("users_email_key") -> #(409, "Email already taken")
-///     postgres.Conflict(constraint) -> #(409, "Conflict on " <> constraint)
-///     postgres.QueryFailed(message:, cause: _) -> #(500, message)
+/// pub fn status(error: postgres.QueryError) -> Int {
+///   case postgres.to_error(error) {
+///     dream_errors.Conflict(..) -> 409
+///     dream_errors.Unavailable(..) -> 503
+///     dream_errors.Timeout(..) -> 504
+///     _ -> 500
 ///   }
 /// }
 /// ```
-pub type ModelError(cause) {
-  /// A `-- returns: one` function found no row.
-  NotFound
-  /// The statement violated a unique constraint that a `-- unique:` hint
-  /// of the SQL file names. `constraint` is that name, for example
-  /// `users_email_key`.
-  Conflict(constraint: String)
-  /// Every other failure. `message` names the model function and the
-  /// problem, for example `user.find returned more than one row`. `cause`
-  /// is the original error of the database call.
-  QueryFailed(message: String, cause: cause)
+pub fn to_error(error: QueryError) -> dream_errors.Error(QueryError) {
+  case error {
+    dream_postgres_client.ConstraintViolated(constraint:, ..) ->
+      dream_errors.Conflict(
+        "the query violated the constraint " <> constraint,
+        error,
+      )
+    dream_postgres_client.QueryTimeout ->
+      dream_errors.Timeout(
+        "the database did not answer the query in time",
+        error,
+      )
+    dream_postgres_client.ConnectionUnavailable ->
+      dream_errors.Unavailable("no database connection was available", error)
+    dream_postgres_client.PostgresqlError(code:, name:, message:) ->
+      dream_errors.Failed(
+        "the database failed the query with "
+          <> name
+          <> " ("
+          <> code
+          <> "): "
+          <> message,
+        error,
+      )
+    dream_postgres_client.UnexpectedArgumentCount(expected:, got:) ->
+      dream_errors.Failed(
+        "the query expected "
+          <> int.to_string(expected)
+          <> " arguments and got "
+          <> int.to_string(got),
+        error,
+      )
+    dream_postgres_client.UnexpectedArgumentType(expected:, got:) ->
+      dream_errors.Failed(
+        "the query expected an argument of type "
+          <> expected
+          <> " and got "
+          <> got,
+        error,
+      )
+    dream_postgres_client.UnexpectedResultType(errors) ->
+      dream_errors.Failed(
+        "a row did not decode: " <> decode_errors_text(errors),
+        error,
+      )
+    dream_postgres_client.InterceptorFailed(..) ->
+      dream_errors.Failed("an interceptor failed the query", error)
+  }
 }
 
-/// The error of a function that dream_model generates
-///
-/// A `ModelError` whose `cause` is the `QueryError` of `execute`.
-///
-/// ## Example
-///
-/// ### Log the cause of a failed model call <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_model_query_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/string
-///
-/// pub fn log_line(error: postgres.ModelQueryError) -> String {
-///   case error {
-///     postgres.QueryFailed(message:, cause:) ->
-///       message <> ": " <> string.inspect(cause)
-///     postgres.NotFound -> "not found"
-///     postgres.Conflict(constraint:) -> "conflict on " <> constraint
-///   }
-/// }
-/// ```
-pub type ModelQueryError =
-  ModelError(QueryError)
+fn decode_errors_text(errors: List(decode.DecodeError)) -> String {
+  errors
+  |> list.map(fn(error) {
+    "expected "
+    <> error.expected
+    <> ", found "
+    <> error.found
+    <> " at "
+    <> string.join(error.path, ".")
+  })
+  |> string.join(", ")
+}
 
 /// Make the cause of a query that returned too many rows
 ///
 /// A `-- returns: one` or `-- returns: maybe` function of dream_model
 /// expects at most one row. When the database returns more, the generated
-/// code returns a `QueryFailed` with this error as its `cause`. The error
+/// code returns a `dream_errors.Failed` with this error as its `cause`. The error
 /// is an `UnexpectedResultType` with one `decode.DecodeError`: `expected`
 /// is `at most one row`, and `found` is the number of rows, for example
 /// `2 rows`.
@@ -1855,16 +1899,17 @@ pub type ModelQueryError =
 /// ### Fail a lookup that found two rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_more_than_one_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
+/// import dream_errors
 /// import dream_postgres/client as postgres
 ///
 /// pub fn one_email(
 ///   emails: List(String),
-/// ) -> Result(String, postgres.ModelQueryError) {
+/// ) -> Result(String, dream_errors.Error(postgres.QueryError)) {
 ///   case emails {
 ///     [email] -> Ok(email)
-///     [] -> Error(postgres.NotFound)
+///     [] -> Error(dream_errors.NotFound("user.email found no row"))
 ///     _ ->
-///       Error(postgres.QueryFailed(
+///       Error(dream_errors.Failed(
 ///         message: "user.email returned more than one row",
 ///         cause: postgres.more_than_one_row(2),
 ///       ))
@@ -2087,7 +2132,8 @@ pub fn promised_elements_not_null(
 /// file and the column. `execute` then returns `UnexpectedResultType` with
 /// that message in a `decode.DecodeError`. This function gives the message,
 /// so that code that imports only this module can show it. Code that
-/// dream_model generates returns it as the message of a `QueryFailed`.
+/// dream_model generates returns it as the message of a
+/// `dream_errors.Failed`.
 ///
 /// ## Parameters
 ///
@@ -2253,8 +2299,8 @@ fn finite(
 /// message that names the column. `execute` then returns
 /// `UnexpectedResultType` with that message in a `decode.DecodeError`.
 /// This function gives the message. Code that dream_model generates
-/// returns it as the message of a `QueryFailed`, after the name of the
-/// model function.
+/// returns it as the message of a `dream_errors.Failed`, after the name
+/// of the model function.
 ///
 /// ## Parameters
 ///

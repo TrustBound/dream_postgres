@@ -25,13 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the queries guide show the `gleam.toml` setting.
 - `gleam_time` is now a direct dependency, for the `Timestamp`, `Date` and
   `TimeOfDay` types of the new functions.
-- The type `ModelError(cause)` with the cases `NotFound`,
-  `Conflict(constraint)` and `QueryFailed(message, cause)`, and the alias
-  `ModelQueryError` for `ModelError(QueryError)`. The functions that
-  dream_model generates return it. It is data, with no HTTP status, so the
-  app maps it to a response.
+- `to_error(error)` in `dream_postgres/client` maps a `QueryError` to
+  `dream_errors.Error(QueryError)`, the shared error of the Dream
+  ecosystem: `ConstraintViolated` gives `Conflict`, `QueryTimeout` gives
+  `Timeout`, `ConnectionUnavailable` gives `Unavailable`, and every other
+  error gives `Failed`. The `QueryError` is the cause. The functions that
+  dream_model generates return this error.
+- `to_error(error)` in `dream_postgres/query` maps `NotFound` to
+  `dream_errors.NotFound` and `DatabaseError` to `dream_errors.Failed`,
+  with the cause `Nil`.
+- `dream_errors` 1.0.0 is a new dependency.
 - `more_than_one_row(count)` makes the `QueryError` cause of a
-  `QueryFailed` when a function that expects at most one row gets more.
+  `dream_errors.Failed` when a function that expects at most one row gets
+  more.
 - `violated_constraint(error)` gives the name of the constraint that a
   query violated, for example `Ok("users_email_key")`: a unique
   constraint, a primary key, a unique index, a foreign key, a check or an
@@ -55,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `broken_promise(error)` gives the message of a broken `-- not null:`
   promise from the error of `execute`, and `Error(Nil)` for every other
   error. Generated model modules return it as the message of a
-  `QueryFailed`.
+  `dream_errors.Failed`.
 - `finite_timestamp(decoder, column)` and `finite_date(decoder, column)`
   decode a `timestamp`, `timestamptz` or `date` column that can hold
   `'infinity'` or `'-infinity'`. Such a value fails the row with a message
@@ -119,9 +125,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PostgreSQL 16. `dream_postgres_driver` 1.1.0 compares 2,000 random
   values in each direction with the text of the server on PostgreSQL 16,
   17, 18 and 19, with no difference.
-- 545 tests, 0 failed, 100.0% line coverage of `src/` (655 of 655 lines),
-  the Erlang files too. The run took 1 minute 5 seconds of wall time, and
-  the runner reports 2 minutes 11 seconds of test time. 4 tests run
+- 552 tests, 0 failed, 100.0% line coverage of `src/` (671 of 671 lines),
+  the Erlang files too. The run took 1 minute 7 seconds of wall time,
+  with the format check, the build, the docs build and the snippet
+  check, and the runner reports 2 minutes 10 seconds of test time. The
+  load average was 8 from other work. 4 tests run
   at a time. The 20 SSL tests run one at a time. Apple M1 Max,
   10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2.
 

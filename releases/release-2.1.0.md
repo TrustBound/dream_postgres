@@ -2,14 +2,14 @@
 
 **Release Date:** Unreleased
 
-This release lets generated code use `dream_postgres/client` alone. The module now has the query functions, the value functions and the decoders of `dream_postgres_client`, so code from `dream_sql_generator` compiles with `client_module = "dream_postgres/client"`. It also adds the error type of the model modules of dream_model, `ModelError` with the alias `ModelQueryError`, and the helpers that these modules call: `more_than_one_row`, `violated_constraint`, `promised_not_null` and `broken_promise`, `finite_timestamp`, `finite_date` and `infinite_value`, `timestamp_with_time_zone_decoder`, the type aliases `Timestamp`, `Date` and `TimeOfDay`, the exact `numeric` functions `numeric_as_text`, `numeric_text_decoder` and `numeric_text`, and the schema fingerprint (`SchemaFingerprint`, `schema_fingerprint`, `schema_fingerprint_sql` and `check_schema`) that an app checks at startup.
+This release lets generated code use `dream_postgres/client` alone. The module now has the query functions, the value functions and the decoders of `dream_postgres_client`, so code from `dream_sql_generator` compiles with `client_module = "dream_postgres/client"`. It also maps each `QueryError` to `dream_errors.Error`, the shared error of the Dream ecosystem, with `to_error` in `dream_postgres/client` and in `dream_postgres/query`. It adds the helpers that the model modules of dream_model call: `more_than_one_row`, `violated_constraint`, `promised_not_null` and `broken_promise`, `finite_timestamp`, `finite_date` and `infinite_value`, `timestamp_with_time_zone_decoder`, the type aliases `Timestamp`, `Date` and `TimeOfDay`, the exact `numeric` functions `numeric_as_text`, `numeric_text_decoder` and `numeric_text`, and the schema fingerprint (`SchemaFingerprint`, `schema_fingerprint`, `schema_fingerprint_sql` and `check_schema`) that an app checks at startup.
 
-It is a minor version. No existing function changed.
+It is a minor version. No existing function changed. The new dependency is `dream_errors` 1.0.0.
 
 ## Key Highlights
 
 - **The query API in `dream_postgres/client`**: `query`, `parameter`, `returning`, `execute`, `transaction`, the value functions and the decoders
-- **`ModelError`**: the data error of a generated model function, `NotFound`, `Conflict(constraint)` or `QueryFailed(message, cause)`, with no HTTP status
+- **`to_error`**: map a `QueryError` to `dream_errors.Error`, the shared error of the Dream ecosystem, with the `QueryError` as the cause
 - **`violated_constraint`**: get the name of the constraint that a query violated, for example `users_email_key`
 - **`promised_not_null`**: check on each row that a column that a SQL file promised is never NULL is not NULL
 - **Exact `numeric`**: read and write a `numeric` as the exact text of the number, with no loss of digits
@@ -21,62 +21,70 @@ It is a minor version. No existing function changed.
 
 `dream_postgres/client` has `query`, `parameter`, `returning`, `timeout`, `execute`, `transaction`, `null`, `bool`, `int`, `float`, `text`, `bytea`, `array`, `nullable`, `timestamp`, `calendar_date`, `calendar_time_of_day` and the decoders `timestamp_decoder`, `calendar_date_decoder`, `calendar_time_of_day_decoder` and `numeric_decoder`. Each function calls the function of the same name in `dream_postgres_client`. The new type aliases are `Query(row)` and `TransactionError(error)`.
 
-### `ModelError`
+### `to_error`
 
-The functions that dream_model generates return `Result(T, ModelQueryError)`. `ModelQueryError` is the alias of `ModelError(QueryError)`. The error is data: it has no HTTP status and no text for a user, so the app maps it, for example in a controller. `ModelError(cause)` has three cases:
+`to_error(error: QueryError) -> dream_errors.Error(QueryError)` in `dream_postgres/client` maps an error of `execute` to the shared error of the Dream ecosystem. The `QueryError` stays whole as the `cause`:
 
-- `NotFound`: a `-- returns: one` function found no row.
-- `Conflict(constraint)`: the statement violated a unique constraint that a `-- unique:` hint of the SQL file names.
-- `QueryFailed(message, cause)`: every other failure. `message` names the model function, and `cause` is the original error of the database call.
+- `ConstraintViolated` gives `Conflict`, with a message that names the constraint.
+- `QueryTimeout` gives `Timeout`.
+- `ConnectionUnavailable` gives `Unavailable`.
+- Every other error gives `Failed`, with a message that names the PostgreSQL error, the arguments or the decode error.
 
-#### Give each model error a status and a message <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_model_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+The message is for developers and logs. Never show it to the users of an app. The functions that dream_model generates return `Result(T, dream_errors.Error(QueryError))`.
+
+#### Give each database error a status <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_to_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_errors
 import dream_postgres/client as postgres
 
-pub fn status_and_message(
-  error: postgres.ModelError(postgres.QueryError),
-) -> #(Int, String) {
-  case error {
-    postgres.NotFound -> #(404, "User not found")
-    postgres.Conflict("users_email_key") -> #(409, "Email already taken")
-    postgres.Conflict(constraint) -> #(409, "Conflict on " <> constraint)
-    postgres.QueryFailed(message:, cause: _) -> #(500, message)
+pub fn status(error: postgres.QueryError) -> Int {
+  case postgres.to_error(error) {
+    dream_errors.Conflict(..) -> 409
+    dream_errors.Unavailable(..) -> 503
+    dream_errors.Timeout(..) -> 504
+    _ -> 500
   }
 }
 ```
 
-#### Log the cause of a failed model call <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_model_query_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+`to_error(error: query.QueryError) -> dream_errors.Error(Nil)` in `dream_postgres/query` maps `NotFound` to `NotFound` and `DatabaseError` to `Failed`. The cause is `Nil`, because `DatabaseError` does not keep the error of the database.
+
+#### Map the first row to the shared error <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/query_to_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
-import gleam/string
+import dream_errors
+import dream_postgres/query
+import dream_postgres_client
+import gleam/result
 
-pub fn log_line(error: postgres.ModelQueryError) -> String {
-  case error {
-    postgres.QueryFailed(message:, cause:) ->
-      message <> ": " <> string.inspect(cause)
-    postgres.NotFound -> "not found"
-    postgres.Conflict(constraint:) -> "conflict on " <> constraint
-  }
+pub fn find_name(
+  result: Result(
+    dream_postgres_client.Returned(String),
+    dream_postgres_client.QueryError,
+  ),
+) -> Result(String, dream_errors.Error(Nil)) {
+  query.first_row(result)
+  |> result.map_error(query.to_error)
 }
 ```
 
-`more_than_one_row(count)` makes the cause of a `QueryFailed` when a function that expects at most one row gets more: an `UnexpectedResultType` with `expected` `at most one row` and `found` the number of rows, for example `2 rows`.
+`more_than_one_row(count)` makes the cause of a `dream_errors.Failed` when a function that expects at most one row gets more: an `UnexpectedResultType` with `expected` `at most one row` and `found` the number of rows, for example `2 rows`.
 
 #### Fail a lookup that found two rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_more_than_one_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
+import dream_errors
 import dream_postgres/client as postgres
 
 pub fn one_email(
   emails: List(String),
-) -> Result(String, postgres.ModelQueryError) {
+) -> Result(String, dream_errors.Error(postgres.QueryError)) {
   case emails {
     [email] -> Ok(email)
-    [] -> Error(postgres.NotFound)
+    [] -> Error(dream_errors.NotFound("user.email found no row"))
     _ ->
-      Error(postgres.QueryFailed(
+      Error(dream_errors.Failed(
         message: "user.email returned more than one row",
         cause: postgres.more_than_one_row(2),
       ))
@@ -149,7 +157,7 @@ pub fn ends_at(
 }
 ```
 
-`infinite_value(error)` gives that message from the error of `execute`, and `Error(Nil)` for every other error. Generated model modules return it as the message of a `QueryFailed`, after the name of the model function.
+`infinite_value(error)` gives that message from the error of `execute`, and `Error(Nil)` for every other error. Generated model modules return it as the message of a `dream_errors.Failed`, after the name of the model function.
 
 #### Show the infinite value of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_infinite_value.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -243,7 +251,7 @@ The position of a column is its place among the columns that are not dropped, in
 
 ## Testing
 
-- 545 tests run, 0 failed, 100.0% line coverage (655 of 655 lines). The run took 1 minute 5 seconds of wall time, and the runner reports 2 minutes 11 seconds of test time. 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
+- 552 tests run, 0 failed, 100.0% line coverage (671 of 671 lines). The run took 1 minute 7 seconds of wall time, with the format check, the build, the docs build and the snippet check, and the runner reports 2 minutes 10 seconds of test time (load average 8 from other work). 4 tests run at a time, and the 20 SSL tests run one at a time (Apple M1 Max, 10 cores, 64 GB, macOS 26.5.1, OTP 29, Gleam 1.19.2)
 - The exact `numeric` functions: `dream_postgres_driver` 1.1.0 compares 2,000 random values in each direction with the text of the server on PostgreSQL 16, 17, 18 and 19, with no difference
 - The 109 tests of the new helpers passed on PostgreSQL 16, 17, 18 and 19, with `DREAM_POSTGRES_TEST_URL` set to each server
 - The fingerprint tests show that the fingerprint does not change when the same DDL makes the tables again with new OIDs, when a dropped column left a gap in the attribute numbers, when a statement-level or `AFTER` trigger is added, or when a session setting is different (each of the nine pinned settings, in a transaction and for a whole session). Each kind of schema change changes it: two columns that swap places, a dropped `NOT NULL`, a new `CHECK`, a renamed or validated constraint, a new type, a unique index that becomes a plain index, a new partial unique index, a rule, a changed view or materialized view, a renamed composite field, a new range subtype, a new row-level `BEFORE` or `INSTEAD OF` trigger, a view that gets `WITH CHECK OPTION`, a changed expression of a generated column, row level security on or forced, a changed policy `USING`, `WITH CHECK` or role, an identity or generated column, a new partition, child table or parent, a changed domain, domain over domain or enum label. One test compares the exact canonical text of a schema with each kind of fact

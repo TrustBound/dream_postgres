@@ -23,6 +23,7 @@ gleam_otp = ">= 1.0.0 and < 2.0.0"
 dream_postgres_client = ">= 1.1.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
 gleam_time = ">= 1.0.0 and < 2.0.0"
+dream_errors = ">= 1.0.0 and < 2.0.0"
 
 [dev-dependencies]
 dream_test = ">= 3.0.0 and < 4.0.0"

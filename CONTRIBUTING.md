@@ -29,12 +29,12 @@ When a server does not answer, `make test` stops at once with a message that say
 
 ### Packages that are not on Hex yet
 
-Version 2.1.0 needs `dream_postgres_client` 1.1.0 and `dream_postgres_driver` 1.1.0. Until both are on Hex, the build uses local copies, and CI fails at `gleam deps download`. `manifest.toml` holds their entries with a checksum of zeros.
+Version 2.1.0 needs `dream_postgres_client` 1.1.0, `dream_postgres_driver` 1.1.0 and `dream_errors` 1.0.0. Until these are on Hex, the build uses local copies, and CI fails at `gleam deps download`. `manifest.toml` holds their entries with a checksum of zeros.
 
-1. Clone `dream_postgres_client` and `dream_postgres_driver`, and check out version 1.1.0 of each.
-2. Run `sh scripts/stand-ins.sh` in this repository. Set `DREAM_POSTGRES_CLIENT_SOURCE` and `DREAM_POSTGRES_DRIVER_SOURCE` to the clones, and `DREAM_POSTGRES_CLIENT_COMMIT` and `DREAM_POSTGRES_DRIVER_COMMIT` when version 1.1.0 is not the checked-out commit.
+1. Clone `dream_postgres_client`, `dream_postgres_driver` and `dream_errors`, and check out the release version of each.
+2. Run `sh scripts/stand-ins.sh` in this repository. Set `DREAM_POSTGRES_CLIENT_SOURCE`, `DREAM_POSTGRES_DRIVER_SOURCE` and `DREAM_ERRORS_SOURCE` to the clones, and `DREAM_POSTGRES_CLIENT_COMMIT`, `DREAM_POSTGRES_DRIVER_COMMIT` and `DREAM_ERRORS_COMMIT` when the release version is not the checked-out commit.
 
-The script copies each package into `build/packages` and lists it in `packages.toml`, so Gleam makes no Hex request for it. When both packages are on Hex, remove `scripts/stand-ins.sh` and this section, and run `gleam deps update dream_postgres_client dream_postgres_driver` to write the real checksums.
+The script copies each package into `build/packages` and lists it in `packages.toml`, so Gleam makes no Hex request for it. When these packages are on Hex, remove `scripts/stand-ins.sh` and this section, and run `gleam deps update dream_postgres_client dream_postgres_driver dream_errors` to write the real checksums.
 
 ### Development Setup
 

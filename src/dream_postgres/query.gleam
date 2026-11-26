@@ -25,6 +25,7 @@
 //// }
 //// ```
 
+import dream_errors
 import dream_postgres_client
 import gleam/list
 import gleam/result
@@ -157,5 +158,51 @@ pub fn all_rows(
   case result {
     Ok(db_result) -> Ok(db_result.rows)
     Error(_) -> Error(DatabaseError)
+  }
+}
+
+/// Map a `QueryError` of this module to the shared error of the Dream
+/// ecosystem
+///
+/// `NotFound` gives `dream_errors.NotFound`, and `DatabaseError` gives
+/// `dream_errors.Failed`. The cause is `Nil`, because `DatabaseError` does
+/// not keep the error of the database. To keep that error, use `execute`
+/// of `dream_postgres/client` and `client.to_error`.
+///
+/// The message is for developers and logs. Never show it to the users of
+/// an app.
+///
+/// ## Parameters
+///
+/// - `error`: The error from `first_row` or `all_rows`
+///
+/// ## Returns
+///
+/// A `dream_errors.Error(Nil)`.
+///
+/// ## Example
+///
+/// ### Map the first row to the shared error <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/query_to_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_errors
+/// import dream_postgres/query
+/// import dream_postgres_client
+/// import gleam/result
+///
+/// pub fn find_name(
+///   result: Result(
+///     dream_postgres_client.Returned(String),
+///     dream_postgres_client.QueryError,
+///   ),
+/// ) -> Result(String, dream_errors.Error(Nil)) {
+///   query.first_row(result)
+///   |> result.map_error(query.to_error)
+/// }
+/// ```
+pub fn to_error(error: QueryError) -> dream_errors.Error(Nil) {
+  case error {
+    NotFound -> dream_errors.NotFound("the query returned no rows")
+    DatabaseError -> dream_errors.Failed("the query failed", Nil)
   }
 }

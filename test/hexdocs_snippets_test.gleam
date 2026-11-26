@@ -4,6 +4,7 @@
 //// The `connect` example starts a pool for localhost:5432. The pool
 //// connects in the background, so the test needs no database.
 
+import dream_errors
 import dream_postgres/client as postgres
 import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
@@ -27,6 +28,7 @@ import snippets/client_port
 import snippets/client_user
 import snippets/query_all_rows
 import snippets/query_first_row
+import snippets/query_to_error
 
 pub fn tests() -> TestSuite {
   describe("hexdocs snippets", [client_tests(), query_tests()])
@@ -286,6 +288,32 @@ fn query_tests() {
       |> should
       |> be_equal(Error("Database error: DatabaseError"))
       |> or_fail_with("Expected Error(Database error: DatabaseError)")
+    }),
+    it("query_to_error.find_name returns the first name", fn() {
+      // Arrange
+      let result = Ok(dream_postgres_client.Returned(count: 1, rows: ["Ada"]))
+
+      // Act
+      let name = query_to_error.find_name(result)
+
+      // Assert
+      name
+      |> should
+      |> be_equal(Ok("Ada"))
+      |> or_fail_with("Expected Ok(Ada)")
+    }),
+    it("query_to_error.find_name gives NotFound for no rows", fn() {
+      // Arrange
+      let result = Ok(dream_postgres_client.Returned(count: 0, rows: []))
+
+      // Act
+      let name = query_to_error.find_name(result)
+
+      // Assert
+      name
+      |> should
+      |> be_equal(Error(dream_errors.NotFound("the query returned no rows")))
+      |> or_fail_with("Expected the shared NotFound")
     }),
   ])
 }

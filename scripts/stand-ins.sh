@@ -2,21 +2,23 @@
 # Puts local copies of the packages that are not on Hex yet into
 # build/packages, so that the build and the tests run with no Hex request.
 #
-# dream_postgres 2.1.0 needs dream_postgres_client 1.1.0 and
-# dream_postgres_driver 1.1.0. manifest.toml already names these versions,
+# dream_postgres 2.1.0 needs dream_postgres_client 1.1.0,
+# dream_postgres_driver 1.1.0 and dream_errors 1.0.0. manifest.toml already names these versions,
 # with a checksum of zeros. Gleam does not download a package that
 # build/packages/packages.toml lists with the version of the manifest, so
 # this script copies each package and lists it.
 #
-# Remove this script when both packages are on Hex. Then run
-# `gleam deps update dream_postgres_client dream_postgres_driver` to write
-# the real checksums into manifest.toml.
+# Remove this script when these packages are on Hex. Then run
+# `gleam deps update dream_postgres_client dream_postgres_driver
+# dream_errors` to write the real checksums into manifest.toml.
 #
 # The sources (each one can be changed with an environment variable):
 #   DREAM_POSTGRES_CLIENT_SOURCE  a clone of the client at version 1.1.0
 #   DREAM_POSTGRES_CLIENT_COMMIT  the commit of version 1.1.0 (default HEAD)
 #   DREAM_POSTGRES_DRIVER_SOURCE  a clone of the driver at version 1.1.0
 #   DREAM_POSTGRES_DRIVER_COMMIT  the commit of version 1.1.0 (default HEAD)
+#   DREAM_ERRORS_SOURCE           a clone of dream_errors at version 1.0.0
+#   DREAM_ERRORS_COMMIT           the commit of version 1.0.0 (default HEAD)
 #
 # Usage: sh scripts/stand-ins.sh
 set -eu
@@ -26,6 +28,8 @@ client_source="${DREAM_POSTGRES_CLIENT_SOURCE:-$root/../dream_postgres_client-nu
 client_commit="${DREAM_POSTGRES_CLIENT_COMMIT:-HEAD}"
 driver_source="${DREAM_POSTGRES_DRIVER_SOURCE:-$root/../dream_postgres_driver-numeric}"
 driver_commit="${DREAM_POSTGRES_DRIVER_COMMIT:-HEAD}"
+errors_source="${DREAM_ERRORS_SOURCE:-$root/../dream_errors}"
+errors_commit="${DREAM_ERRORS_COMMIT:-HEAD}"
 packages="$root/build/packages"
 
 # list_package <name> <version>
@@ -59,10 +63,12 @@ copy_package() {
   list_package "$name" "$(version_of_manifest "$name")"
 }
 
-# The client is a Gleam package. The driver is a rebar3 package: the files
+# The client and dream_errors are Gleam packages. The driver is a rebar3 package: the files
 # of its Hex package, without gleam.toml.
 copy_package "$client_source" "$client_commit" dream_postgres_client \
   src gleam.toml LICENSE README.md
 copy_package "$driver_source" "$driver_commit" dream_postgres_driver \
   src rebar.config rebar.lock README.md LICENSE CHANGELOG.md
-echo "Copied dream_postgres_client and dream_postgres_driver into build/packages"
+copy_package "$errors_source" "$errors_commit" dream_errors \
+  src gleam.toml LICENSE README.md
+echo "Copied dream_postgres_client, dream_postgres_driver and dream_errors into build/packages"
