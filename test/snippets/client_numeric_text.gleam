@@ -1,14 +1,17 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, execute, numeric_as_text,
+  numeric_text, numeric_text_decoder, parameter, query, returning,
+}
+import gleam/dynamic/decode.{at}
 
 pub fn add_one_cent(
-  connection: postgres.Connection,
+  connection: Connection,
   amount: String,
-) -> Result(postgres.Returned(String), postgres.QueryError) {
+) -> Result(Returned(String), QueryError) {
   "SELECT $1::numeric + 0.01"
-  |> postgres.query
-  |> postgres.parameter(postgres.numeric_text(amount))
-  |> postgres.numeric_as_text
-  |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
-  |> postgres.execute(connection)
+  |> query
+  |> parameter(numeric_text(amount))
+  |> numeric_as_text
+  |> returning(at([0], numeric_text_decoder()))
+  |> execute(connection)
 }

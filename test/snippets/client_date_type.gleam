@@ -1,11 +1,12 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type Date, type QueryError, type Returned,
+  calendar_date_decoder, execute, query, returning,
+}
+import gleam/dynamic/decode.{at}
 
-pub fn birthday(
-  connection: postgres.Connection,
-) -> Result(postgres.Returned(postgres.Date), postgres.QueryError) {
+pub fn birthday(connection: Connection) -> Result(Returned(Date), QueryError) {
   "SELECT date '2024-01-02'"
-  |> postgres.query
-  |> postgres.returning(decode.at([0], postgres.calendar_date_decoder()))
-  |> postgres.execute(connection)
+  |> query
+  |> returning(at([0], calendar_date_decoder()))
+  |> execute(connection)
 }

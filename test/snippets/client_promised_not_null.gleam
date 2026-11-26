@@ -1,14 +1,14 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, execute, promised_not_null,
+  query, returning,
+}
+import gleam/dynamic/decode.{at, int}
 
 pub fn order_total(
-  connection: postgres.Connection,
-) -> Result(postgres.Returned(Int), postgres.QueryError) {
+  connection: Connection,
+) -> Result(Returned(Int), QueryError) {
   "SELECT sum(amount)::int AS total FROM orders"
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [0],
-    postgres.promised_not_null(decode.int, "order_total.sql", "total"),
-  ))
-  |> postgres.execute(connection)
+  |> query
+  |> returning(at([0], promised_not_null(int, "order_total.sql", "total")))
+  |> execute(connection)
 }

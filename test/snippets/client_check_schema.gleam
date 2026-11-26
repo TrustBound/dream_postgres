@@ -1,10 +1,13 @@
-import dream_postgres/client as postgres
-import gleam/result
+import dream_postgres/client.{
+  type Connection, type SchemaFingerprint, check_schema,
+  format_schema_check_error,
+}
+import gleam/result.{map_error}
 
 pub fn check_models(
-  connection: postgres.Connection,
-  models: List(postgres.SchemaFingerprint),
+  connection: Connection,
+  models: List(SchemaFingerprint),
 ) -> Result(Nil, String) {
-  postgres.check_schema(connection, models)
-  |> result.map_error(postgres.format_schema_check_error)
+  check_schema(connection, models)
+  |> map_error(format_schema_check_error)
 }

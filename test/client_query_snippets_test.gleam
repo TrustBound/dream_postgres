@@ -2,13 +2,13 @@
 //// value functions and the decoders of `dream_postgres/client`. Each
 //// example runs on the real PostgreSQL 16 server of docker-compose.yml.
 
-import dream_postgres/client as postgres
+import dream_postgres/client.{execute, numeric_text_decoder, query, returning}
 import dream_postgres_client.{PostgresqlError, Returned, UnexpectedResultType}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import fixtures/test_database
-import gleam/dynamic/decode
+import fixtures/test_database.{with_schema}
+import gleam/dynamic/decode.{DecodeError, at}
 import gleam/option.{None, Some}
 import gleam/time/calendar
 import gleam/time/timestamp
@@ -21,10 +21,10 @@ import snippets/client_float
 import snippets/client_int
 import snippets/client_null
 import snippets/client_nullable
-import snippets/client_numeric_as_text
+import snippets/client_numeric_as_text.{exact_total}
 import snippets/client_numeric_decoder
-import snippets/client_numeric_text
-import snippets/client_numeric_text_decoder
+import snippets/client_numeric_text.{add_one_cent}
+import snippets/client_numeric_text_decoder.{price}
 import snippets/client_query
 import snippets/client_text
 import snippets/client_timeout
@@ -187,7 +187,7 @@ fn value_tests() {
     }),
     it("client_numeric_as_text.exact_total keeps every digit", fn() {
       // Act
-      let result = test_database.with_schema(client_numeric_as_text.exact_total)
+      let result = with_schema(exact_total)
 
       // Assert
       result
@@ -197,7 +197,7 @@ fn value_tests() {
     }),
     it("client_numeric_text_decoder.price keeps the trailing zero", fn() {
       // Act
-      let result = test_database.with_schema(client_numeric_text_decoder.price)
+      let result = with_schema(price)
 
       // Assert
       result
@@ -207,11 +207,7 @@ fn value_tests() {
     }),
     it("client_numeric_text.add_one_cent adds a cent to an exact amount", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_numeric_text.add_one_cent(
-          _,
-          "12345678901234567.89",
-        ))
+      let result = with_schema(add_one_cent(_, "12345678901234567.89"))
 
       // Assert
       result
@@ -221,8 +217,7 @@ fn value_tests() {
     }),
     it("client_numeric_text.add_one_cent keeps NaN", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_numeric_text.add_one_cent(_, "NaN"))
+      let result = with_schema(add_one_cent(_, "NaN"))
 
       // Assert
       result
@@ -234,8 +229,7 @@ fn value_tests() {
       "client_numeric_text.add_one_cent refuses a text that is not a number",
       fn() {
         // Act
-        let result =
-          test_database.with_schema(client_numeric_text.add_one_cent(_, "abc"))
+        let result = with_schema(add_one_cent(_, "abc"))
 
         // Assert
         result
@@ -253,11 +247,11 @@ fn value_tests() {
     it("client_numeric_text_decoder fails without numeric_as_text", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(connection) {
+        with_schema(fn(connection) {
           "SELECT 1.5::numeric"
-          |> postgres.query
-          |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
-          |> postgres.execute(connection)
+          |> query
+          |> returning(at([0], numeric_text_decoder()))
+          |> execute(connection)
         })
 
       // Assert
@@ -266,7 +260,7 @@ fn value_tests() {
       |> be_equal(
         Error(
           UnexpectedResultType([
-            decode.DecodeError(expected: "String", found: "Float", path: ["0"]),
+            DecodeError(expected: "String", found: "Float", path: ["0"]),
           ]),
         ),
       )

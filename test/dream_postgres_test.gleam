@@ -1,5 +1,5 @@
 import architecture_snippets_test
-import client_model_test
+import client_model_test.{tests}
 import client_query_snippets_test
 import client_test
 import deployment_guide_snippets_test
@@ -61,7 +61,7 @@ fn run_tests() -> Nil {
   runner.new([
     client_test.tests(),
     client_query_snippets_test.tests(),
-    client_model_test.tests(),
+    tests(),
     generated_sql_test.tests(),
     query_test.tests(),
     hexdocs_snippets_test.tests(),

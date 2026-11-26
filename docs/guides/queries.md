@@ -196,15 +196,18 @@ Code from dream_model returns `dream_errors.Error(QueryError)`, the shared error
 ### Check the generated modules at startup <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_check_schema.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
-import gleam/result
+import dream_postgres/client.{
+  type Connection, type SchemaFingerprint, check_schema,
+  format_schema_check_error,
+}
+import gleam/result.{map_error}
 
 pub fn check_models(
-  connection: postgres.Connection,
-  models: List(postgres.SchemaFingerprint),
+  connection: Connection,
+  models: List(SchemaFingerprint),
 ) -> Result(Nil, String) {
-  postgres.check_schema(connection, models)
-  |> result.map_error(postgres.format_schema_check_error)
+  check_schema(connection, models)
+  |> map_error(format_schema_check_error)
 }
 ```
 

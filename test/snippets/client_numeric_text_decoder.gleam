@@ -1,12 +1,13 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, execute, numeric_as_text,
+  numeric_text_decoder, query, returning,
+}
+import gleam/dynamic/decode.{at}
 
-pub fn price(
-  connection: postgres.Connection,
-) -> Result(postgres.Returned(String), postgres.QueryError) {
+pub fn price(connection: Connection) -> Result(Returned(String), QueryError) {
   "SELECT 1.5::numeric(10,2)"
-  |> postgres.query
-  |> postgres.numeric_as_text
-  |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
-  |> postgres.execute(connection)
+  |> query
+  |> numeric_as_text
+  |> returning(at([0], numeric_text_decoder()))
+  |> execute(connection)
 }

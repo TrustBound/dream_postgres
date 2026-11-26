@@ -3,8 +3,8 @@
 //// The query helpers take a Pog result value, so these tests build the
 //// results by hand and need no database.
 
-import dream_errors
-import dream_postgres/query
+import dream_errors.{Failed, NotFound}
+import dream_postgres/query.{DatabaseError, to_error}
 import dream_postgres_client
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -99,22 +99,22 @@ pub fn tests() -> TestSuite {
     group("to_error", [
       it("gives NotFound for NotFound", fn() {
         // Act
-        let error = query.to_error(query.NotFound)
+        let error = to_error(query.NotFound)
 
         // Assert
         error
         |> should
-        |> be_equal(dream_errors.NotFound("the query returned no rows"))
+        |> be_equal(NotFound("the query returned no rows"))
         |> or_fail_with("Expected the shared NotFound")
       }),
       it("gives Failed with the cause Nil for DatabaseError", fn() {
         // Act
-        let error = query.to_error(query.DatabaseError)
+        let error = to_error(DatabaseError)
 
         // Assert
         error
         |> should
-        |> be_equal(dream_errors.Failed("the query failed", Nil))
+        |> be_equal(Failed("the query failed", Nil))
         |> or_fail_with("Expected the shared Failed")
       }),
     ]),

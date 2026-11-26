@@ -35,14 +35,14 @@ The message is for developers and logs. Never show it to the users of an app. Th
 #### Give each database error a status <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_to_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_errors
-import dream_postgres/client as postgres
+import dream_errors.{Conflict, Timeout, Unavailable}
+import dream_postgres/client.{type QueryError, to_error}
 
-pub fn status(error: postgres.QueryError) -> Int {
-  case postgres.to_error(error) {
-    dream_errors.Conflict(..) -> 409
-    dream_errors.Unavailable(..) -> 503
-    dream_errors.Timeout(..) -> 504
+pub fn status(error: QueryError) -> Int {
+  case to_error(error) {
+    Conflict(..) -> 409
+    Unavailable(..) -> 503
+    Timeout(..) -> 504
     _ -> 500
   }
 }
@@ -53,19 +53,16 @@ pub fn status(error: postgres.QueryError) -> Int {
 #### Map the first row to the shared error <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/query_to_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_errors
-import dream_postgres/query
-import dream_postgres_client
+import dream_errors.{type Error}
+import dream_postgres/query.{first_row, to_error}
+import dream_postgres_client.{type QueryError, type Returned}
 import gleam/result
 
 pub fn find_name(
-  result: Result(
-    dream_postgres_client.Returned(String),
-    dream_postgres_client.QueryError,
-  ),
-) -> Result(String, dream_errors.Error(Nil)) {
-  query.first_row(result)
-  |> result.map_error(query.to_error)
+  result: Result(Returned(String), QueryError),
+) -> Result(String, Error(Nil)) {
+  first_row(result)
+  |> result.map_error(to_error)
 }
 ```
 
@@ -74,19 +71,17 @@ pub fn find_name(
 #### Fail a lookup that found two rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_more_than_one_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_errors
-import dream_postgres/client as postgres
+import dream_errors.{type Error, Failed, NotFound}
+import dream_postgres/client.{type QueryError, more_than_one_row}
 
-pub fn one_email(
-  emails: List(String),
-) -> Result(String, dream_errors.Error(postgres.QueryError)) {
+pub fn one_email(emails: List(String)) -> Result(String, Error(QueryError)) {
   case emails {
     [email] -> Ok(email)
-    [] -> Error(dream_errors.NotFound("user.email found no row"))
+    [] -> Error(NotFound("user.email found no row"))
     _ ->
-      Error(dream_errors.Failed(
+      Error(Failed(
         message: "user.email returned more than one row",
-        cause: postgres.more_than_one_row(2),
+        cause: more_than_one_row(2),
       ))
   }
 }
@@ -101,10 +96,10 @@ The function does not tell the kinds of constraints apart. To find a duplicate, 
 #### Tell the user that the email is taken <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_violated_constraint.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
+import dream_postgres/client.{type QueryError, violated_constraint}
 
-pub fn sign_up_error_message(error: postgres.QueryError) -> String {
-  case postgres.violated_constraint(error) {
+pub fn sign_up_error_message(error: QueryError) -> String {
+  case violated_constraint(error) {
     Ok("users_email_key") -> "Email already taken"
     Ok(constraint) -> "The sign-up broke the constraint " <> constraint
     Error(Nil) -> "The sign-up failed"
@@ -123,10 +118,10 @@ pub fn sign_up_error_message(error: postgres.QueryError) -> String {
 #### Show the broken promise of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_broken_promise.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
+import dream_postgres/client.{type QueryError, broken_promise}
 
-pub fn error_message(error: postgres.QueryError) -> String {
-  case postgres.broken_promise(error) {
+pub fn error_message(error: QueryError) -> String {
+  case broken_promise(error) {
     Ok(message) -> message
     Error(Nil) -> "The query failed"
   }
@@ -140,20 +135,20 @@ A `timestamp`, `timestamptz` or `date` column can hold `'infinity'` and `'-infin
 #### Read a timestamp that can be infinity <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_finite_timestamp.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, type Timestamp, execute,
+  finite_timestamp, query, returning, timestamp_decoder,
+}
+import gleam/dynamic/decode.{at}
 
 pub fn ends_at(
-  connection: postgres.Connection,
+  connection: Connection,
   sql: String,
-) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+) -> Result(Returned(Timestamp), QueryError) {
   sql
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [0],
-    postgres.finite_timestamp(postgres.timestamp_decoder(), "ends_at"),
-  ))
-  |> postgres.execute(connection)
+  |> query
+  |> returning(at([0], finite_timestamp(timestamp_decoder(), "ends_at")))
+  |> execute(connection)
 }
 ```
 
@@ -162,10 +157,10 @@ pub fn ends_at(
 #### Show the infinite value of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_infinite_value.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
+import dream_postgres/client.{type QueryError, infinite_value}
 
-pub fn error_message(error: postgres.QueryError) -> String {
-  case postgres.infinite_value(error) {
+pub fn error_message(error: QueryError) -> String {
+  case infinite_value(error) {
     Ok(message) -> message
     Error(Nil) -> "The query failed"
   }
@@ -179,19 +174,19 @@ pub fn error_message(error: postgres.QueryError) -> String {
 #### Read a timestamptz <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timestamp_with_time_zone_decoder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, type Timestamp, execute,
+  query, returning, timestamp_with_time_zone_decoder,
+}
+import gleam/dynamic/decode.{at}
 
 pub fn signed_up_at(
-  connection: postgres.Connection,
-) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+  connection: Connection,
+) -> Result(Returned(Timestamp), QueryError) {
   "SELECT timestamptz '2024-01-02 03:04:05.25+00'"
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [0],
-    postgres.timestamp_with_time_zone_decoder(),
-  ))
-  |> postgres.execute(connection)
+  |> query
+  |> returning(at([0], timestamp_with_time_zone_decoder()))
+  |> execute(connection)
 }
 ```
 
@@ -202,19 +197,22 @@ pub fn signed_up_at(
 #### Add a cent to an exact amount <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, execute, numeric_as_text,
+  numeric_text, numeric_text_decoder, parameter, query, returning,
+}
+import gleam/dynamic/decode.{at}
 
 pub fn add_one_cent(
-  connection: postgres.Connection,
+  connection: Connection,
   amount: String,
-) -> Result(postgres.Returned(String), postgres.QueryError) {
+) -> Result(Returned(String), QueryError) {
   "SELECT $1::numeric + 0.01"
-  |> postgres.query
-  |> postgres.parameter(postgres.numeric_text(amount))
-  |> postgres.numeric_as_text
-  |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
-  |> postgres.execute(connection)
+  |> query
+  |> parameter(numeric_text(amount))
+  |> numeric_as_text
+  |> returning(at([0], numeric_text_decoder()))
+  |> execute(connection)
 }
 ```
 
@@ -231,15 +229,18 @@ The types of a generated module are true only for the schema that dream_model ge
 #### Check the generated modules at startup <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_check_schema.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/client as postgres
-import gleam/result
+import dream_postgres/client.{
+  type Connection, type SchemaFingerprint, check_schema,
+  format_schema_check_error,
+}
+import gleam/result.{map_error}
 
 pub fn check_models(
-  connection: postgres.Connection,
-  models: List(postgres.SchemaFingerprint),
+  connection: Connection,
+  models: List(SchemaFingerprint),
 ) -> Result(Nil, String) {
-  postgres.check_schema(connection, models)
-  |> result.map_error(postgres.format_schema_check_error)
+  check_schema(connection, models)
+  |> map_error(format_schema_check_error)
 }
 ```
 

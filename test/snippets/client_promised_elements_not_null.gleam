@@ -1,14 +1,14 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, execute,
+  promised_elements_not_null, query, returning,
+}
+import gleam/dynamic/decode.{at, string}
 
 pub fn tags(
-  connection: postgres.Connection,
-) -> Result(postgres.Returned(List(String)), postgres.QueryError) {
+  connection: Connection,
+) -> Result(Returned(List(String)), QueryError) {
   "SELECT tags FROM posts"
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [0],
-    postgres.promised_elements_not_null(decode.string, "find.sql", "tags"),
-  ))
-  |> postgres.execute(connection)
+  |> query
+  |> returning(at([0], promised_elements_not_null(string, "find.sql", "tags")))
+  |> execute(connection)
 }

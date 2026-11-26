@@ -1,15 +1,15 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, type Timestamp, execute,
+  finite_timestamp, query, returning, timestamp_decoder,
+}
+import gleam/dynamic/decode.{at}
 
 pub fn ends_at(
-  connection: postgres.Connection,
+  connection: Connection,
   sql: String,
-) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+) -> Result(Returned(Timestamp), QueryError) {
   sql
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [0],
-    postgres.finite_timestamp(postgres.timestamp_decoder(), "ends_at"),
-  ))
-  |> postgres.execute(connection)
+  |> query
+  |> returning(at([0], finite_timestamp(timestamp_decoder(), "ends_at")))
+  |> execute(connection)
 }

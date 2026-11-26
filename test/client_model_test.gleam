@@ -7,37 +7,48 @@
 //// of docker-compose.yml, or on the server of `DREAM_POSTGRES_TEST_URL`.
 //// No test depends on the major version of PostgreSQL.
 
-import dream_errors
-import dream_postgres/client as postgres
-import dream_postgres_client
+import dream_errors.{Conflict, Failed, NotFound, Timeout, Unavailable}
+import dream_postgres/client.{
+  type Connection, type QueryError, SchemaChanged, SchemaFingerprint,
+  SchemaMismatch, SchemaUnreadable, broken_promise, check_schema, connect,
+  execute, finite_timestamp, format_schema_check_error, infinite_value,
+  more_than_one_row, pool_size, promised_elements_not_null, promised_not_null,
+  query, returning, schema_fingerprint, timestamp_with_time_zone_decoder,
+  to_error, violated_constraint,
+} as postgres
+import dream_postgres_client.{
+  ConnectionUnavailable, InterceptorFailed, PostgresqlError, QueryTimeout,
+  Returned, TransactionRolledBack, UnexpectedArgumentCount,
+  UnexpectedArgumentType, UnexpectedResultType, connection_parameter,
+}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
-import dream_test/unit.{describe, group, it}
-import fixtures/test_database
+import dream_test/unit.{type UnitNode, describe, group, it}
+import fixtures/test_database.{config, texts, with_schema}
 import gleam/dynamic
-import gleam/dynamic/decode
-import gleam/list
-import gleam/option.{type Option}
+import gleam/dynamic/decode.{DecodeError, at, int, optional}
+import gleam/list.{each, map}
+import gleam/option.{type Option, None, to_result}
 import gleam/result
-import gleam/string
-import gleam/time/calendar
-import gleam/time/timestamp
-import snippets/client_broken_promise
-import snippets/client_check_schema
-import snippets/client_date_type
-import snippets/client_finite_date
-import snippets/client_finite_timestamp
+import gleam/string.{replace}
+import gleam/time/calendar.{Date, February, January, TimeOfDay, utc_offset}
+import gleam/time/timestamp.{from_calendar, from_unix_seconds}
+import snippets/client_broken_promise.{error_message}
+import snippets/client_check_schema.{check_models}
+import snippets/client_date_type.{birthday}
+import snippets/client_finite_date.{valid_until}
+import snippets/client_finite_timestamp.{ends_at}
 import snippets/client_infinite_value
-import snippets/client_more_than_one_row
-import snippets/client_promised_elements_not_null
-import snippets/client_promised_not_null
-import snippets/client_schema_fingerprint
-import snippets/client_schema_fingerprint_sql
-import snippets/client_time_of_day_type
-import snippets/client_timestamp_type
-import snippets/client_timestamp_with_time_zone_decoder
-import snippets/client_to_error
-import snippets/client_violated_constraint
+import snippets/client_more_than_one_row.{one_email}
+import snippets/client_promised_elements_not_null.{tags}
+import snippets/client_promised_not_null.{order_total}
+import snippets/client_schema_fingerprint.{users_fingerprint}
+import snippets/client_schema_fingerprint_sql.{fingerprint_text}
+import snippets/client_time_of_day_type.{opening_time}
+import snippets/client_timestamp_type.{created_at}
+import snippets/client_timestamp_with_time_zone_decoder.{signed_up_at}
+import snippets/client_to_error.{status}
+import snippets/client_violated_constraint.{sign_up_error_message}
 
 pub fn tests() -> TestSuite {
   describe("dream_postgres/client model helpers", [
@@ -174,22 +185,19 @@ fn to_error_tests() {
           users_error("INSERT INTO users (id, email) VALUES (2, 'a@b')")
 
         // Act
-        let shared = postgres.to_error(error)
+        let shared = to_error(error)
 
         // Assert
         #(
           shared,
           shared
             |> dream_errors.cause
-            |> option.to_result(Nil)
-            |> result.try(postgres.violated_constraint),
+            |> to_result(Nil)
+            |> result.try(violated_constraint),
         )
         |> should
         |> be_equal(#(
-          dream_errors.Conflict(
-            "the query violated the constraint users_email_key",
-            error,
-          ),
+          Conflict("the query violated the constraint users_email_key", error),
           Ok("users_email_key"),
         ))
         |> or_fail_with("Expected Conflict with the constraint in the cause")
@@ -197,47 +205,46 @@ fn to_error_tests() {
     ),
     it("gives Timeout for QueryTimeout", fn() {
       // Act
-      let shared = postgres.to_error(dream_postgres_client.QueryTimeout)
+      let shared = to_error(QueryTimeout)
 
       // Assert
       shared
       |> should
-      |> be_equal(dream_errors.Timeout(
+      |> be_equal(Timeout(
         "the database did not answer the query in time",
-        dream_postgres_client.QueryTimeout,
+        QueryTimeout,
       ))
       |> or_fail_with("Expected Timeout")
     }),
     it("gives Unavailable for ConnectionUnavailable", fn() {
       // Act
-      let shared =
-        postgres.to_error(dream_postgres_client.ConnectionUnavailable)
+      let shared = to_error(ConnectionUnavailable)
 
       // Assert
       shared
       |> should
-      |> be_equal(dream_errors.Unavailable(
+      |> be_equal(Unavailable(
         "no database connection was available",
-        dream_postgres_client.ConnectionUnavailable,
+        ConnectionUnavailable,
       ))
       |> or_fail_with("Expected Unavailable")
     }),
     it("gives Failed with the name and the code of a PostgreSQL error", fn() {
       // Arrange
       let error =
-        dream_postgres_client.PostgresqlError(
+        PostgresqlError(
           code: "42P01",
           name: "undefined_table",
           message: "relation \"nope\" does not exist",
         )
 
       // Act
-      let shared = postgres.to_error(error)
+      let shared = to_error(error)
 
       // Assert
       shared
       |> should
-      |> be_equal(dream_errors.Failed(
+      |> be_equal(Failed(
         "the database failed the query with undefined_table (42P01): relation \"nope\" does not exist",
         error,
       ))
@@ -245,36 +252,28 @@ fn to_error_tests() {
     }),
     it("gives Failed for a wrong number of arguments", fn() {
       // Arrange
-      let error =
-        dream_postgres_client.UnexpectedArgumentCount(expected: 2, got: 1)
+      let error = UnexpectedArgumentCount(expected: 2, got: 1)
 
       // Act
-      let shared = postgres.to_error(error)
+      let shared = to_error(error)
 
       // Assert
       shared
       |> should
-      |> be_equal(dream_errors.Failed(
-        "the query expected 2 arguments and got 1",
-        error,
-      ))
+      |> be_equal(Failed("the query expected 2 arguments and got 1", error))
       |> or_fail_with("Expected Failed with the counts")
     }),
     it("gives Failed for an argument of the wrong type", fn() {
       // Arrange
-      let error =
-        dream_postgres_client.UnexpectedArgumentType(
-          expected: "int4",
-          got: "text",
-        )
+      let error = UnexpectedArgumentType(expected: "int4", got: "text")
 
       // Act
-      let shared = postgres.to_error(error)
+      let shared = to_error(error)
 
       // Assert
       shared
       |> should
-      |> be_equal(dream_errors.Failed(
+      |> be_equal(Failed(
         "the query expected an argument of type int4 and got text",
         error,
       ))
@@ -283,21 +282,21 @@ fn to_error_tests() {
     it("gives Failed with each decode error of a row", fn() {
       // Arrange
       let error =
-        dream_postgres_client.UnexpectedResultType([
-          decode.DecodeError(expected: "Int", found: "String", path: ["0"]),
-          decode.DecodeError(expected: "String", found: "Nil", path: [
+        UnexpectedResultType([
+          DecodeError(expected: "Int", found: "String", path: ["0"]),
+          DecodeError(expected: "String", found: "Nil", path: [
             "1",
             "name",
           ]),
         ])
 
       // Act
-      let shared = postgres.to_error(error)
+      let shared = to_error(error)
 
       // Assert
       shared
       |> should
-      |> be_equal(dream_errors.Failed(
+      |> be_equal(Failed(
         "a row did not decode: expected Int, found String at 0, expected String, found Nil at 1.name",
         error,
       ))
@@ -305,27 +304,24 @@ fn to_error_tests() {
     }),
     it("gives Failed for an interceptor", fn() {
       // Arrange
-      let error =
-        dream_postgres_client.InterceptorFailed(dynamic.string("no queries"))
+      let error = InterceptorFailed(dynamic.string("no queries"))
 
       // Act
-      let shared = postgres.to_error(error)
+      let shared = to_error(error)
 
       // Assert
       shared
       |> should
-      |> be_equal(dream_errors.Failed("an interceptor failed the query", error))
+      |> be_equal(Failed("an interceptor failed the query", error))
       |> or_fail_with("Expected Failed for the interceptor")
     }),
     it("client_to_error gives each kind its status", fn() {
       // Act
       let statuses = [
-        client_to_error.status(users_error(
-          "INSERT INTO users (id, email) VALUES (2, 'a@b')",
-        )),
-        client_to_error.status(dream_postgres_client.ConnectionUnavailable),
-        client_to_error.status(dream_postgres_client.QueryTimeout),
-        client_to_error.status(postgres.more_than_one_row(2)),
+        status(users_error("INSERT INTO users (id, email) VALUES (2, 'a@b')")),
+        status(ConnectionUnavailable),
+        status(QueryTimeout),
+        status(more_than_one_row(2)),
       ]
 
       // Assert
@@ -341,31 +337,24 @@ fn more_than_one_row_tests() {
   group("more_than_one_row", [
     it("tells the number of rows", fn() {
       // Act
-      let error = postgres.more_than_one_row(3)
+      let error = more_than_one_row(3)
 
       // Assert
       error
       |> should
       |> be_equal(
-        dream_postgres_client.UnexpectedResultType([
-          decode.DecodeError(
-            expected: "at most one row",
-            found: "3 rows",
-            path: [],
-          ),
+        UnexpectedResultType([
+          DecodeError(expected: "at most one row", found: "3 rows", path: []),
         ]),
       )
       |> or_fail_with("Expected an UnexpectedResultType with 3 rows")
     }),
     it("is not a broken promise or an infinite value", fn() {
       // Arrange
-      let error = postgres.more_than_one_row(2)
+      let error = more_than_one_row(2)
 
       // Act
-      let found = #(
-        postgres.broken_promise(error),
-        postgres.infinite_value(error),
-      )
+      let found = #(broken_promise(error), infinite_value(error))
 
       // Assert
       found
@@ -375,7 +364,7 @@ fn more_than_one_row_tests() {
     }),
     it("client_more_than_one_row gives the one email", fn() {
       // Act
-      let found = client_more_than_one_row.one_email(["a@b"])
+      let found = one_email(["a@b"])
 
       // Assert
       found
@@ -385,25 +374,25 @@ fn more_than_one_row_tests() {
     }),
     it("client_more_than_one_row gives NotFound for no email", fn() {
       // Act
-      let found = client_more_than_one_row.one_email([])
+      let found = one_email([])
 
       // Assert
       found
       |> should
-      |> be_equal(Error(dream_errors.NotFound("user.email found no row")))
+      |> be_equal(Error(NotFound("user.email found no row")))
       |> or_fail_with("Expected NotFound")
     }),
     it("client_more_than_one_row fails two emails", fn() {
       // Act
-      let found = client_more_than_one_row.one_email(["a@b", "c@d"])
+      let found = one_email(["a@b", "c@d"])
 
       // Assert
       found
       |> should
       |> be_equal(
-        Error(dream_errors.Failed(
+        Error(Failed(
           message: "user.email returned more than one row",
-          cause: postgres.more_than_one_row(2),
+          cause: more_than_one_row(2),
         )),
       )
       |> or_fail_with("Expected Failed")
@@ -418,7 +407,7 @@ fn violated_constraint_tests() {
       let error = users_error("INSERT INTO users (id, email) VALUES (2, 'a@b')")
 
       // Act
-      let result = postgres.violated_constraint(error)
+      let result = violated_constraint(error)
 
       // Assert
       result
@@ -431,7 +420,7 @@ fn violated_constraint_tests() {
       let error = users_error("INSERT INTO users (id) VALUES (1)")
 
       // Act
-      let result = postgres.violated_constraint(error)
+      let result = violated_constraint(error)
 
       // Assert
       result
@@ -444,7 +433,7 @@ fn violated_constraint_tests() {
       let error = users_error("INSERT INTO users (id, nick) VALUES (2, 'ace')")
 
       // Act
-      let result = postgres.violated_constraint(error)
+      let result = violated_constraint(error)
 
       // Assert
       result
@@ -457,7 +446,7 @@ fn violated_constraint_tests() {
       let error = users_error("INSERT INTO users (id, team_id) VALUES (2, 99)")
 
       // Act
-      let result = postgres.violated_constraint(error)
+      let result = violated_constraint(error)
 
       // Assert
       result
@@ -470,7 +459,7 @@ fn violated_constraint_tests() {
       let error = users_error("INSERT INTO users (id, age) VALUES (2, 0)")
 
       // Act
-      let result = postgres.violated_constraint(error)
+      let result = violated_constraint(error)
 
       // Assert
       result
@@ -483,7 +472,7 @@ fn violated_constraint_tests() {
       let error = users_error("INSERT INTO users (id, code) VALUES (2, NULL)")
 
       // Act
-      let result = postgres.violated_constraint(error)
+      let result = violated_constraint(error)
 
       // Assert
       result
@@ -496,7 +485,7 @@ fn violated_constraint_tests() {
       let error = users_error("SELECT 1 / 0")
 
       // Act
-      let result = postgres.violated_constraint(error)
+      let result = violated_constraint(error)
 
       // Assert
       result
@@ -509,7 +498,7 @@ fn violated_constraint_tests() {
       let error = users_error("INSERT INTO users (id, email) VALUES (2, 'a@b')")
 
       // Act
-      let message = client_violated_constraint.sign_up_error_message(error)
+      let message = sign_up_error_message(error)
 
       // Assert
       message
@@ -522,7 +511,7 @@ fn violated_constraint_tests() {
       let error = users_error("INSERT INTO users (id, age) VALUES (2, 0)")
 
       // Act
-      let message = client_violated_constraint.sign_up_error_message(error)
+      let message = sign_up_error_message(error)
 
       // Assert
       message
@@ -532,10 +521,10 @@ fn violated_constraint_tests() {
     }),
     it("client_violated_constraint gives the general message otherwise", fn() {
       // Arrange
-      let error = dream_postgres_client.QueryTimeout
+      let error = QueryTimeout
 
       // Act
-      let message = client_violated_constraint.sign_up_error_message(error)
+      let message = sign_up_error_message(error)
 
       // Assert
       message
@@ -550,7 +539,7 @@ fn promised_not_null_tests() {
   group("promised_not_null", [
     it("decodes a value that is not NULL", fn() {
       // Act
-      let result = test_database.with_schema(second_column(_, "SELECT 1, 5"))
+      let result = with_schema(second_column(_, "SELECT 1, 5"))
 
       // Assert
       result
@@ -560,16 +549,15 @@ fn promised_not_null_tests() {
     }),
     it("fails a NULL with the file, the column and the column path", fn() {
       // Act
-      let result =
-        test_database.with_schema(second_column(_, "SELECT 1, NULL::int"))
+      let result = with_schema(second_column(_, "SELECT 1, NULL::int"))
 
       // Assert
       result
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(
+          UnexpectedResultType([
+            DecodeError(
               expected: promise_marker <> null_message,
               found: "NULL",
               path: [
@@ -583,16 +571,15 @@ fn promised_not_null_tests() {
     }),
     it("keeps the error of the decoder for a value of the wrong type", fn() {
       // Act
-      let result =
-        test_database.with_schema(second_column(_, "SELECT 1, 'x'::text"))
+      let result = with_schema(second_column(_, "SELECT 1, 'x'::text"))
 
       // Assert
       result
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(expected: "Int", found: "String", path: ["1"]),
+          UnexpectedResultType([
+            DecodeError(expected: "Int", found: "String", path: ["1"]),
           ]),
         ),
       )
@@ -600,15 +587,15 @@ fn promised_not_null_tests() {
     }),
     it("fails a NULL when the decoder accepts NULL", fn() {
       // Act
-      let result = test_database.with_schema(optional_second_column)
+      let result = with_schema(optional_second_column)
 
       // Assert
       result
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(
+          UnexpectedResultType([
+            DecodeError(
               expected: promise_marker <> null_message,
               found: "NULL",
               path: [
@@ -623,26 +610,26 @@ fn promised_not_null_tests() {
     it("client_promised_not_null gives the sum of the orders", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           run_all(db, [
             "CREATE TABLE orders (amount int)",
             "INSERT INTO orders VALUES (3), (4)",
           ])
-          client_promised_not_null.order_total(db)
+          order_total(db)
         })
 
       // Assert
       result
       |> should
-      |> be_equal(Ok(dream_postgres_client.Returned(count: 1, rows: [7])))
+      |> be_equal(Ok(Returned(count: 1, rows: [7])))
       |> or_fail_with("Expected one row with 7")
     }),
     it("client_promised_not_null fails when there are no orders", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           run_all(db, ["CREATE TABLE orders (amount int)"])
-          client_promised_not_null.order_total(db)
+          order_total(db)
         })
 
       // Assert
@@ -650,8 +637,8 @@ fn promised_not_null_tests() {
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(
+          UnexpectedResultType([
+            DecodeError(
               expected: promise_marker
                 <> "the SQL file order_total.sql promised the column total is never NULL, and PostgreSQL returned NULL",
               found: "NULL",
@@ -669,8 +656,7 @@ fn promised_elements_not_null_tests() {
   group("promised_elements_not_null", [
     it("decodes an array with no NULL element", fn() {
       // Act
-      let result =
-        test_database.with_schema(second_array(_, "SELECT 1, ARRAY[4, 5]"))
+      let result = with_schema(second_array(_, "SELECT 1, ARRAY[4, 5]"))
 
       // Assert
       result
@@ -680,8 +666,7 @@ fn promised_elements_not_null_tests() {
     }),
     it("decodes an empty array", fn() {
       // Act
-      let result =
-        test_database.with_schema(second_array(_, "SELECT 1, '{}'::int[]"))
+      let result = with_schema(second_array(_, "SELECT 1, '{}'::int[]"))
 
       // Assert
       result
@@ -693,16 +678,15 @@ fn promised_elements_not_null_tests() {
       "fails a NULL element with the file, the column and the column path",
       fn() {
         // Act
-        let result =
-          test_database.with_schema(second_array(_, "SELECT 1, ARRAY[4, NULL]"))
+        let result = with_schema(second_array(_, "SELECT 1, ARRAY[4, NULL]"))
 
         // Assert
         result
         |> should
         |> be_equal(
           Error(
-            dream_postgres_client.UnexpectedResultType([
-              decode.DecodeError(
+            UnexpectedResultType([
+              DecodeError(
                 expected: promise_marker <> elements_message,
                 found: "NULL",
                 path: ["1"],
@@ -715,18 +699,15 @@ fn promised_elements_not_null_tests() {
     ),
     it("keeps the error of the decoder for an element of the wrong type", fn() {
       // Act
-      let result =
-        test_database.with_schema(second_array(_, "SELECT 1, ARRAY['x']"))
+      let result = with_schema(second_array(_, "SELECT 1, ARRAY['x']"))
 
       // Assert
       result
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(expected: "Int", found: "String", path: [
-              "1", "0",
-            ]),
+          UnexpectedResultType([
+            DecodeError(expected: "Int", found: "String", path: ["1", "0"]),
           ]),
         ),
       )
@@ -734,21 +715,21 @@ fn promised_elements_not_null_tests() {
     }),
     it("lets decode.optional take a NULL array", fn() {
       // Act
-      let result = test_database.with_schema(optional_second_array)
+      let result = with_schema(optional_second_array)
 
       // Assert
       result
       |> should
-      |> be_equal(Ok([option.None]))
+      |> be_equal(Ok([None]))
       |> or_fail_with("Expected [None]")
     }),
     it("gives broken_promise the message of a NULL element", fn() {
       // Arrange
       let assert Error(error) =
-        test_database.with_schema(second_array(_, "SELECT 1, ARRAY[NULL::int]"))
+        with_schema(second_array(_, "SELECT 1, ARRAY[NULL::int]"))
 
       // Act
-      let result = postgres.broken_promise(error)
+      let result = broken_promise(error)
 
       // Assert
       result
@@ -759,31 +740,29 @@ fn promised_elements_not_null_tests() {
     it("client_promised_elements_not_null gives the tags of the posts", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           run_all(db, [
             "CREATE TABLE posts (tags text[])",
             "INSERT INTO posts VALUES (ARRAY['gleam', 'sql'])",
           ])
-          client_promised_elements_not_null.tags(db)
+          tags(db)
         })
 
       // Assert
       result
       |> should
-      |> be_equal(
-        Ok(dream_postgres_client.Returned(count: 1, rows: [["gleam", "sql"]])),
-      )
+      |> be_equal(Ok(Returned(count: 1, rows: [["gleam", "sql"]])))
       |> or_fail_with("Expected one row with gleam and sql")
     }),
     it("client_promised_elements_not_null fails a NULL tag", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           run_all(db, [
             "CREATE TABLE posts (tags text[])",
             "INSERT INTO posts VALUES (ARRAY['gleam', NULL])",
           ])
-          client_promised_elements_not_null.tags(db)
+          tags(db)
         })
 
       // Assert
@@ -791,8 +770,8 @@ fn promised_elements_not_null_tests() {
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(
+          UnexpectedResultType([
+            DecodeError(
               expected: promise_marker
                 <> "the SQL file find.sql promised the elements of tags are never NULL, and PostgreSQL returned NULL",
               found: "NULL",
@@ -811,10 +790,10 @@ fn broken_promise_tests() {
     it("gives the message of a broken promise", fn() {
       // Arrange
       let assert Error(error) =
-        test_database.with_schema(second_column(_, "SELECT 1, NULL::int"))
+        with_schema(second_column(_, "SELECT 1, NULL::int"))
 
       // Act
-      let result = postgres.broken_promise(error)
+      let result = broken_promise(error)
 
       // Assert
       result
@@ -825,10 +804,10 @@ fn broken_promise_tests() {
     it("gives Error(Nil) for a decode error of another kind", fn() {
       // Arrange
       let assert Error(error) =
-        test_database.with_schema(second_column(_, "SELECT 1, 'x'::text"))
+        with_schema(second_column(_, "SELECT 1, 'x'::text"))
 
       // Act
-      let result = postgres.broken_promise(error)
+      let result = broken_promise(error)
 
       // Assert
       result
@@ -839,12 +818,12 @@ fn broken_promise_tests() {
     it("gives Error(Nil) for a NULL error of another decoder", fn() {
       // Arrange
       let error =
-        dream_postgres_client.UnexpectedResultType([
-          decode.DecodeError(expected: "Int", found: "NULL", path: ["0"]),
+        UnexpectedResultType([
+          DecodeError(expected: "Int", found: "NULL", path: ["0"]),
         ])
 
       // Act
-      let result = postgres.broken_promise(error)
+      let result = broken_promise(error)
 
       // Assert
       result
@@ -855,14 +834,14 @@ fn broken_promise_tests() {
     it("gives Error(Nil) for a lookalike error of another decoder", fn() {
       // Arrange
       let error =
-        dream_postgres_client.UnexpectedResultType([
-          decode.DecodeError(expected: null_message, found: "NULL", path: [
+        UnexpectedResultType([
+          DecodeError(expected: null_message, found: "NULL", path: [
             "0",
           ]),
         ])
 
       // Act
-      let result = postgres.broken_promise(error)
+      let result = broken_promise(error)
 
       // Assert
       result
@@ -872,10 +851,10 @@ fn broken_promise_tests() {
     }),
     it("gives Error(Nil) for an error that is not a decode error", fn() {
       // Arrange
-      let error = dream_postgres_client.QueryTimeout
+      let error = QueryTimeout
 
       // Act
-      let result = postgres.broken_promise(error)
+      let result = broken_promise(error)
 
       // Assert
       result
@@ -886,10 +865,10 @@ fn broken_promise_tests() {
     it("client_broken_promise shows the message of the promise", fn() {
       // Arrange
       let assert Error(error) =
-        test_database.with_schema(second_column(_, "SELECT 1, NULL::int"))
+        with_schema(second_column(_, "SELECT 1, NULL::int"))
 
       // Act
-      let message = client_broken_promise.error_message(error)
+      let message = error_message(error)
 
       // Assert
       message
@@ -899,8 +878,7 @@ fn broken_promise_tests() {
     }),
     it("client_broken_promise gives the general message otherwise", fn() {
       // Act
-      let message =
-        client_broken_promise.error_message(dream_postgres_client.QueryTimeout)
+      let message = error_message(QueryTimeout)
 
       // Assert
       message
@@ -916,18 +894,15 @@ fn finite_timestamp_tests() {
     it("decodes a finite timestamp", fn() {
       // Act
       let result =
-        test_database.with_schema(client_finite_timestamp.ends_at(
-          _,
-          "SELECT timestamp '1970-01-01 00:00:10'",
-        ))
+        with_schema(ends_at(_, "SELECT timestamp '1970-01-01 00:00:10'"))
 
       // Assert
       result
       |> should
       |> be_equal(
         Ok(
-          dream_postgres_client.Returned(count: 1, rows: [
-            timestamp.from_unix_seconds(10),
+          Returned(count: 1, rows: [
+            from_unix_seconds(10),
           ]),
         ),
       )
@@ -935,11 +910,7 @@ fn finite_timestamp_tests() {
     }),
     it("fails infinity with the column and the path", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_finite_timestamp.ends_at(
-          _,
-          "SELECT timestamp 'infinity'",
-        ))
+      let result = with_schema(ends_at(_, "SELECT timestamp 'infinity'"))
 
       // Assert
       result
@@ -949,11 +920,7 @@ fn finite_timestamp_tests() {
     }),
     it("fails -infinity with the column and the path", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_finite_timestamp.ends_at(
-          _,
-          "SELECT timestamp '-infinity'",
-        ))
+      let result = with_schema(ends_at(_, "SELECT timestamp '-infinity'"))
 
       // Assert
       result
@@ -967,17 +934,14 @@ fn finite_timestamp_tests() {
     it("fails an infinite timestamptz", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           "SELECT timestamptz 'infinity'"
-          |> postgres.query
-          |> postgres.returning(decode.at(
+          |> query
+          |> returning(at(
             [0],
-            postgres.finite_timestamp(
-              postgres.timestamp_with_time_zone_decoder(),
-              "ends_at",
-            ),
+            finite_timestamp(timestamp_with_time_zone_decoder(), "ends_at"),
           ))
-          |> postgres.execute(db)
+          |> execute(db)
         })
 
       // Assert
@@ -988,19 +952,15 @@ fn finite_timestamp_tests() {
     }),
     it("keeps the error of the decoder for a value of the wrong type", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_finite_timestamp.ends_at(
-          _,
-          "SELECT 'x'::text",
-        ))
+      let result = with_schema(ends_at(_, "SELECT 'x'::text"))
 
       // Assert
       result
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(expected: "Int", found: "String", path: ["0"]),
+          UnexpectedResultType([
+            DecodeError(expected: "Int", found: "String", path: ["0"]),
           ]),
         ),
       )
@@ -1013,19 +973,15 @@ fn finite_date_tests() {
   group("finite_date", [
     it("decodes a finite date", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_finite_date.valid_until(
-          _,
-          "SELECT date '2024-02-29'",
-        ))
+      let result = with_schema(valid_until(_, "SELECT date '2024-02-29'"))
 
       // Assert
       result
       |> should
       |> be_equal(
         Ok(
-          dream_postgres_client.Returned(count: 1, rows: [
-            calendar.Date(2024, calendar.February, 29),
+          Returned(count: 1, rows: [
+            Date(2024, February, 29),
           ]),
         ),
       )
@@ -1033,11 +989,7 @@ fn finite_date_tests() {
     }),
     it("fails infinity with the column and the path", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_finite_date.valid_until(
-          _,
-          "SELECT date 'infinity'",
-        ))
+      let result = with_schema(valid_until(_, "SELECT date 'infinity'"))
 
       // Assert
       result
@@ -1050,11 +1002,7 @@ fn finite_date_tests() {
     }),
     it("fails -infinity with the column and the path", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_finite_date.valid_until(
-          _,
-          "SELECT date '-infinity'",
-        ))
+      let result = with_schema(valid_until(_, "SELECT date '-infinity'"))
 
       // Assert
       result
@@ -1067,22 +1015,18 @@ fn finite_date_tests() {
     }),
     it("keeps the error of the decoder for a NULL", fn() {
       // Act
-      let result =
-        test_database.with_schema(client_finite_date.valid_until(
-          _,
-          "SELECT NULL::date",
-        ))
+      let result = with_schema(valid_until(_, "SELECT NULL::date"))
 
       // Assert
       result
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.UnexpectedResultType([
-            decode.DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
-            decode.DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
-            decode.DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
-            decode.DecodeError(expected: "Calendar date", found: "Nil", path: [
+          UnexpectedResultType([
+            DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
+            DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
+            DecodeError(expected: "Indexable", found: "Nil", path: ["0"]),
+            DecodeError(expected: "Calendar date", found: "Nil", path: [
               "0",
             ]),
           ]),
@@ -1098,13 +1042,10 @@ fn infinite_value_tests() {
     it("gives the message of an infinite value", fn() {
       // Arrange
       let assert Error(error) =
-        test_database.with_schema(client_finite_timestamp.ends_at(
-          _,
-          "SELECT timestamp 'infinity'",
-        ))
+        with_schema(ends_at(_, "SELECT timestamp 'infinity'"))
 
       // Act
-      let result = postgres.infinite_value(error)
+      let result = infinite_value(error)
 
       // Assert
       result
@@ -1115,12 +1056,12 @@ fn infinite_value_tests() {
     it("gives Error(Nil) for a decode error of another kind", fn() {
       // Arrange
       let error =
-        dream_postgres_client.UnexpectedResultType([
-          decode.DecodeError(expected: "Int", found: "infinity", path: ["0"]),
+        UnexpectedResultType([
+          DecodeError(expected: "Int", found: "infinity", path: ["0"]),
         ])
 
       // Act
-      let result = postgres.infinite_value(error)
+      let result = infinite_value(error)
 
       // Assert
       result
@@ -1131,16 +1072,12 @@ fn infinite_value_tests() {
     it("gives Error(Nil) for a lookalike error of another decoder", fn() {
       // Arrange
       let error =
-        dream_postgres_client.UnexpectedResultType([
-          decode.DecodeError(
-            expected: ends_at_infinity,
-            found: "infinity",
-            path: ["0"],
-          ),
+        UnexpectedResultType([
+          DecodeError(expected: ends_at_infinity, found: "infinity", path: ["0"]),
         ])
 
       // Act
-      let result = postgres.infinite_value(error)
+      let result = infinite_value(error)
 
       // Assert
       result
@@ -1150,7 +1087,7 @@ fn infinite_value_tests() {
     }),
     it("gives Error(Nil) for an error that is not a decode error", fn() {
       // Act
-      let result = postgres.infinite_value(dream_postgres_client.QueryTimeout)
+      let result = infinite_value(QueryTimeout)
 
       // Assert
       result
@@ -1161,10 +1098,7 @@ fn infinite_value_tests() {
     it("client_infinite_value shows the message of the infinite value", fn() {
       // Arrange
       let assert Error(error) =
-        test_database.with_schema(client_finite_timestamp.ends_at(
-          _,
-          "SELECT timestamp 'infinity'",
-        ))
+        with_schema(ends_at(_, "SELECT timestamp 'infinity'"))
 
       // Act
       let message = client_infinite_value.error_message(error)
@@ -1177,8 +1111,7 @@ fn infinite_value_tests() {
     }),
     it("client_infinite_value gives the general message otherwise", fn() {
       // Act
-      let message =
-        client_infinite_value.error_message(dream_postgres_client.QueryTimeout)
+      let message = client_infinite_value.error_message(QueryTimeout)
 
       // Assert
       message
@@ -1192,13 +1125,10 @@ fn infinite_value_tests() {
 const ends_at_infinity =
   "the column ends_at holds infinity, which the Gleam type Timestamp cannot hold"
 
-fn infinity_error(
-  message: String,
-  found: String,
-) -> Result(a, postgres.QueryError) {
+fn infinity_error(message: String, found: String) -> Result(a, QueryError) {
   Error(
-    dream_postgres_client.UnexpectedResultType([
-      decode.DecodeError(
+    UnexpectedResultType([
+      DecodeError(
         expected: "[dream_postgres finite] " <> message,
         found:,
         path: ["0"],
@@ -1212,7 +1142,7 @@ fn time_alias_tests() {
     it("client_timestamp_type reads a timestamp", fn() {
       // Act
       let result =
-        test_database.with_schema(client_timestamp_type.created_at)
+        with_schema(created_at)
         |> result.map(fn(returned) { returned.rows })
 
       // Assert
@@ -1220,10 +1150,10 @@ fn time_alias_tests() {
       |> should
       |> be_equal(
         Ok([
-          timestamp.from_calendar(
-            calendar.Date(2024, calendar.January, 2),
-            calendar.TimeOfDay(3, 4, 5, 0),
-            calendar.utc_offset,
+          from_calendar(
+            Date(2024, January, 2),
+            TimeOfDay(3, 4, 5, 0),
+            utc_offset,
           ),
         ]),
       )
@@ -1232,9 +1162,7 @@ fn time_alias_tests() {
     it("client_timestamp_with_time_zone_decoder reads a timestamptz", fn() {
       // Act
       let result =
-        test_database.with_schema(
-          client_timestamp_with_time_zone_decoder.signed_up_at,
-        )
+        with_schema(signed_up_at)
         |> result.map(fn(returned) { returned.rows })
 
       // Assert
@@ -1242,10 +1170,10 @@ fn time_alias_tests() {
       |> should
       |> be_equal(
         Ok([
-          timestamp.from_calendar(
-            calendar.Date(2024, calendar.January, 2),
-            calendar.TimeOfDay(3, 4, 5, 250_000_000),
-            calendar.utc_offset,
+          from_calendar(
+            Date(2024, January, 2),
+            TimeOfDay(3, 4, 5, 250_000_000),
+            utc_offset,
           ),
         ]),
       )
@@ -1254,14 +1182,11 @@ fn time_alias_tests() {
     it("timestamp_with_time_zone_decoder reads whole seconds", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           "SELECT timestamptz '2024-01-02 03:04:05+02'"
-          |> postgres.query
-          |> postgres.returning(decode.at(
-            [0],
-            postgres.timestamp_with_time_zone_decoder(),
-          ))
-          |> postgres.execute(db)
+          |> query
+          |> returning(at([0], timestamp_with_time_zone_decoder()))
+          |> execute(db)
         })
         |> result.map(fn(returned) { returned.rows })
 
@@ -1270,10 +1195,10 @@ fn time_alias_tests() {
       |> should
       |> be_equal(
         Ok([
-          timestamp.from_calendar(
-            calendar.Date(2024, calendar.January, 2),
-            calendar.TimeOfDay(1, 4, 5, 0),
-            calendar.utc_offset,
+          from_calendar(
+            Date(2024, January, 2),
+            TimeOfDay(1, 4, 5, 0),
+            utc_offset,
           ),
         ]),
       )
@@ -1282,25 +1207,25 @@ fn time_alias_tests() {
     it("client_date_type reads a date", fn() {
       // Act
       let result =
-        test_database.with_schema(client_date_type.birthday)
+        with_schema(birthday)
         |> result.map(fn(returned) { returned.rows })
 
       // Assert
       result
       |> should
-      |> be_equal(Ok([calendar.Date(2024, calendar.January, 2)]))
+      |> be_equal(Ok([Date(2024, January, 2)]))
       |> or_fail_with("Expected 2024-01-02")
     }),
     it("client_time_of_day_type reads a time of day", fn() {
       // Act
       let result =
-        test_database.with_schema(client_time_of_day_type.opening_time)
+        with_schema(opening_time)
         |> result.map(fn(returned) { returned.rows })
 
       // Assert
       result
       |> should
-      |> be_equal(Ok([calendar.TimeOfDay(3, 4, 5, 0)]))
+      |> be_equal(Ok([TimeOfDay(3, 4, 5, 0)]))
       |> or_fail_with("Expected 03:04:05")
     }),
   ])
@@ -1310,7 +1235,7 @@ fn fingerprint_value_tests() {
   group("schema_fingerprint values", [
     it("is the SHA-256 of the empty text for no tables", fn() {
       // Act
-      let result = test_database.with_schema(postgres.schema_fingerprint(_, []))
+      let result = with_schema(schema_fingerprint(_, []))
 
       // Assert
       result
@@ -1323,9 +1248,9 @@ fn fingerprint_value_tests() {
       fn() {
         // Act
         let result =
-          test_database.with_schema(fn(db) {
+          with_schema(fn(db) {
             let schema = schema_name(db)
-            client_schema_fingerprint_sql.fingerprint_text(db, [
+            fingerprint_text(db, [
               schema <> ".ghost",
             ])
             |> result.map(fn(returned) {
@@ -1345,16 +1270,16 @@ fn fingerprint_value_tests() {
       fn() {
         // Act
         let result =
-          test_database.with_schema(fn(db) {
+          with_schema(fn(db) {
             run_all(db, exact_ddl)
             let schema = schema_name(db)
-            client_schema_fingerprint_sql.fingerprint_text(db, [
+            fingerprint_text(db, [
               schema <> ".items",
               schema <> ".item_labels",
               schema <> ".events",
             ])
             |> result.map(fn(returned) {
-              list.map(returned.rows, string.replace(_, schema <> ".", "fp."))
+              map(returned.rows, replace(_, schema <> ".", "fp."))
             })
           })
 
@@ -1368,13 +1293,11 @@ fn fingerprint_value_tests() {
     it("client_schema_fingerprint changes when the users table is made", fn() {
       // Act
       let changed =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           let schema = schema_name(db)
-          let assert Ok(missing) =
-            client_schema_fingerprint.users_fingerprint(db, schema)
+          let assert Ok(missing) = users_fingerprint(db, schema)
           run_all(db, [teams_table, users_table])
-          let assert Ok(present) =
-            client_schema_fingerprint.users_fingerprint(db, schema)
+          let assert Ok(present) = users_fingerprint(db, schema)
           missing != present
         })
 
@@ -1581,23 +1504,17 @@ fn fingerprint_stable_tests() {
     it("when the session has other time and date settings", fn() {
       // Act
       let same =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           run_all(db, settings_ddl)
           let tables = settings_tables(db)
-          let assert Ok(baseline) = postgres.schema_fingerprint(db, tables)
+          let assert Ok(baseline) = schema_fingerprint(db, tables)
           let assert Ok(other) =
-            test_database.config()
-            |> postgres.pool_size(1)
-            |> dream_postgres_client.connection_parameter(
-              name: "TimeZone",
-              value: "Asia/Kolkata",
-            )
-            |> dream_postgres_client.connection_parameter(
-              name: "DateStyle",
-              value: "German, DMY",
-            )
-            |> postgres.connect()
-          postgres.schema_fingerprint(other, tables) == Ok(baseline)
+            config()
+            |> pool_size(1)
+            |> connection_parameter(name: "TimeZone", value: "Asia/Kolkata")
+            |> connection_parameter(name: "DateStyle", value: "German, DMY")
+            |> connect()
+          schema_fingerprint(other, tables) == Ok(baseline)
         })
 
       // Assert
@@ -1609,18 +1526,18 @@ fn fingerprint_stable_tests() {
     it("when the search_path of the connection is different", fn() {
       // Act
       let same =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           run_all(db, [
             "CREATE DOMAIN positive AS int CHECK (VALUE > 0)",
             "CREATE TABLE amounts (amount positive)",
           ])
           let tables = [schema_name(db) <> ".amounts"]
-          let assert Ok(in_schema) = postgres.schema_fingerprint(db, tables)
+          let assert Ok(in_schema) = schema_fingerprint(db, tables)
           let assert Ok(other) =
-            test_database.config()
-            |> postgres.pool_size(1)
-            |> postgres.connect()
-          let assert Ok(in_public) = postgres.schema_fingerprint(other, tables)
+            config()
+            |> pool_size(1)
+            |> connect()
+          let assert Ok(in_public) = schema_fingerprint(other, tables)
           in_schema == in_public
         })
 
@@ -1633,12 +1550,12 @@ fn fingerprint_stable_tests() {
     it("leaves the search_path of a transaction as it was", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           let schema = schema_name(db)
           postgres.transaction(db, fn(transaction) {
             let assert Ok(_fingerprint) =
-              postgres.schema_fingerprint(transaction, [schema <> ".ghost"])
-            test_database.texts(transaction, "SHOW search_path")
+              schema_fingerprint(transaction, [schema <> ".ghost"])
+            texts(transaction, "SHOW search_path")
             |> result.map(fn(paths) { paths == [schema] })
           })
         })
@@ -1901,7 +1818,7 @@ fn change_test(
   name: String,
   setup: List(String),
   change: List(String),
-) -> unit.UnitNode {
+) -> UnitNode {
   it(name, fn() {
     // Act
     let changed = changes_fingerprint(setup, change)
@@ -1919,12 +1836,12 @@ fn check_schema_tests() {
     it("gives Ok(Nil) when each module matches", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           run_all(db, [items_table])
           let tables = [schema_name(db) <> ".items"]
-          let assert Ok(hash) = postgres.schema_fingerprint(db, tables)
-          postgres.check_schema(db, [
-            postgres.SchemaFingerprint(module: "app/sql/items", tables:, hash:),
+          let assert Ok(hash) = schema_fingerprint(db, tables)
+          check_schema(db, [
+            SchemaFingerprint(module: "app/sql/items", tables:, hash:),
           ])
         })
 
@@ -1936,7 +1853,7 @@ fn check_schema_tests() {
     }),
     it("gives Ok(Nil) for no modules", fn() {
       // Act
-      let result = test_database.with_schema(postgres.check_schema(_, []))
+      let result = with_schema(check_schema(_, []))
 
       // Assert
       result
@@ -1947,26 +1864,21 @@ fn check_schema_tests() {
     it("names each module whose fingerprint differs", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           run_all(db, [items_table])
           let tables = [schema_name(db) <> ".items"]
-          let assert Ok(hash) = postgres.schema_fingerprint(db, tables)
+          let assert Ok(hash) = schema_fingerprint(db, tables)
           let result =
-            postgres.check_schema(db, [
-              postgres.SchemaFingerprint(module: "a", tables:, hash: "old"),
-              postgres.SchemaFingerprint(module: "b", tables:, hash:),
-              postgres.SchemaFingerprint(module: "c", tables:, hash: "older"),
+            check_schema(db, [
+              SchemaFingerprint(module: "a", tables:, hash: "old"),
+              SchemaFingerprint(module: "b", tables:, hash:),
+              SchemaFingerprint(module: "c", tables:, hash: "older"),
             ])
           result
           == Error(
-            postgres.SchemaChanged([
-              postgres.SchemaMismatch(
-                module: "a",
-                tables:,
-                expected: "old",
-                found: hash,
-              ),
-              postgres.SchemaMismatch(
+            SchemaChanged([
+              SchemaMismatch(module: "a", tables:, expected: "old", found: hash),
+              SchemaMismatch(
                 module: "c",
                 tables:,
                 expected: "older",
@@ -1985,13 +1897,13 @@ fn check_schema_tests() {
     it("gives SchemaUnreadable when the fingerprint query fails", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           postgres.transaction(db, fn(transaction) {
             let assert Error(_division_by_zero) =
               test_database.execute(transaction, "SELECT 1 / 0")
             Error(
-              postgres.check_schema(transaction, [
-                postgres.SchemaFingerprint(
+              check_schema(transaction, [
+                SchemaFingerprint(
                   module: "app/sql/items",
                   tables: ["public.items"],
                   hash: "old",
@@ -2006,10 +1918,10 @@ fn check_schema_tests() {
       |> should
       |> be_equal(
         Error(
-          dream_postgres_client.TransactionRolledBack(
-            Error(postgres.SchemaUnreadable(
+          TransactionRolledBack(
+            Error(SchemaUnreadable(
               module: "app/sql/items",
-              error: dream_postgres_client.PostgresqlError(
+              error: PostgresqlError(
                 code: "25P02",
                 name: "in_failed_sql_transaction",
                 message: "current transaction is aborted, commands ignored until end of transaction block",
@@ -2023,14 +1935,14 @@ fn check_schema_tests() {
     it("format_schema_check_error lists the changed modules", fn() {
       // Arrange
       let error =
-        postgres.SchemaChanged([
-          postgres.SchemaMismatch(
+        SchemaChanged([
+          SchemaMismatch(
             module: "app/sql/users",
             tables: ["public.users", "public.teams"],
             expected: "aa",
             found: "bb",
           ),
-          postgres.SchemaMismatch(
+          SchemaMismatch(
             module: "app/sql/items",
             tables: ["public.items"],
             expected: "cc",
@@ -2039,7 +1951,7 @@ fn check_schema_tests() {
         ])
 
       // Act
-      let message = postgres.format_schema_check_error(error)
+      let message = format_schema_check_error(error)
 
       // Assert
       message
@@ -2053,14 +1965,10 @@ fn check_schema_tests() {
     }),
     it("format_schema_check_error names the module of a failed query", fn() {
       // Arrange
-      let error =
-        postgres.SchemaUnreadable(
-          module: "app/sql/items",
-          error: dream_postgres_client.QueryTimeout,
-        )
+      let error = SchemaUnreadable(module: "app/sql/items", error: QueryTimeout)
 
       // Act
-      let message = postgres.format_schema_check_error(error)
+      let message = format_schema_check_error(error)
 
       // Assert
       message
@@ -2073,18 +1981,14 @@ fn check_schema_tests() {
     it("client_check_schema gives the message of a changed module", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           let tables = [schema_name(db) <> ".items"]
-          let assert Ok(missing) = postgres.schema_fingerprint(db, tables)
+          let assert Ok(missing) = schema_fingerprint(db, tables)
           run_all(db, [items_table])
-          let assert Ok(present) = postgres.schema_fingerprint(db, tables)
+          let assert Ok(present) = schema_fingerprint(db, tables)
           let message =
-            client_check_schema.check_models(db, [
-              postgres.SchemaFingerprint(
-                module: "app/sql/items",
-                tables:,
-                hash: missing,
-              ),
+            check_models(db, [
+              SchemaFingerprint(module: "app/sql/items", tables:, hash: missing),
             ])
           message
           == Error(
@@ -2106,11 +2010,11 @@ fn check_schema_tests() {
     it("client_check_schema gives Ok(Nil) when the module matches", fn() {
       // Act
       let result =
-        test_database.with_schema(fn(db) {
+        with_schema(fn(db) {
           let tables = [schema_name(db) <> ".items"]
-          let assert Ok(hash) = postgres.schema_fingerprint(db, tables)
-          client_check_schema.check_models(db, [
-            postgres.SchemaFingerprint(module: "app/sql/items", tables:, hash:),
+          let assert Ok(hash) = schema_fingerprint(db, tables)
+          check_models(db, [
+            SchemaFingerprint(module: "app/sql/items", tables:, hash:),
           ])
         })
 
@@ -2127,8 +2031,8 @@ fn check_schema_tests() {
 
 // Makes the teams and users tables with one user, runs `sql`, and gives
 // its error.
-fn users_error(sql: String) -> postgres.QueryError {
-  use db <- test_database.with_schema
+fn users_error(sql: String) -> QueryError {
+  use db <- with_schema
   run_all(db, [
     teams_table,
     users_table,
@@ -2139,75 +2043,55 @@ fn users_error(sql: String) -> postgres.QueryError {
   error
 }
 
-fn second_column(
-  db: postgres.Connection,
-  sql: String,
-) -> Result(List(Int), postgres.QueryError) {
+fn second_column(db: Connection, sql: String) -> Result(List(Int), QueryError) {
   sql
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [1],
-    postgres.promised_not_null(decode.int, "count.sql", "total"),
-  ))
-  |> postgres.execute(db)
+  |> query
+  |> returning(at([1], promised_not_null(int, "count.sql", "total")))
+  |> execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
 fn optional_second_column(
-  db: postgres.Connection,
-) -> Result(List(Option(Int)), postgres.QueryError) {
+  db: Connection,
+) -> Result(List(Option(Int)), QueryError) {
   "SELECT 1, NULL::int"
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [1],
-    postgres.promised_not_null(
-      decode.optional(decode.int),
-      "count.sql",
-      "total",
-    ),
-  ))
-  |> postgres.execute(db)
+  |> query
+  |> returning(at([1], promised_not_null(optional(int), "count.sql", "total")))
+  |> execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
-fn schema_name(db: postgres.Connection) -> String {
-  let assert Ok([name]) = test_database.texts(db, "SELECT current_schema()")
+fn schema_name(db: Connection) -> String {
+  let assert Ok([name]) = texts(db, "SELECT current_schema()")
   name
 }
 
 fn second_array(
-  db: postgres.Connection,
+  db: Connection,
   sql: String,
-) -> Result(List(List(Int)), postgres.QueryError) {
+) -> Result(List(List(Int)), QueryError) {
   sql
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [1],
-    postgres.promised_elements_not_null(decode.int, "list.sql", "numbers"),
-  ))
-  |> postgres.execute(db)
+  |> query
+  |> returning(at([1], promised_elements_not_null(int, "list.sql", "numbers")))
+  |> execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
 fn optional_second_array(
-  db: postgres.Connection,
-) -> Result(List(Option(List(Int))), postgres.QueryError) {
+  db: Connection,
+) -> Result(List(Option(List(Int))), QueryError) {
   "SELECT 1, NULL::int[]"
-  |> postgres.query
-  |> postgres.returning(decode.at(
+  |> query
+  |> returning(at(
     [1],
-    decode.optional(postgres.promised_elements_not_null(
-      decode.int,
-      "list.sql",
-      "numbers",
-    )),
+    optional(promised_elements_not_null(int, "list.sql", "numbers")),
   ))
-  |> postgres.execute(db)
+  |> execute(db)
   |> result.map(fn(returned) { returned.rows })
 }
 
-fn run_all(db: postgres.Connection, statements: List(String)) -> Nil {
-  list.each(statements, fn(statement) {
+fn run_all(db: Connection, statements: List(String)) -> Nil {
+  each(statements, fn(statement) {
     let assert Ok(_returned) = test_database.execute(db, statement)
     Nil
   })
@@ -2216,17 +2100,17 @@ fn run_all(db: postgres.Connection, statements: List(String)) -> Nil {
 // Runs `setup` in a new schema, then `change`, and tells if the fingerprint
 // of the tables items, events and item_view changed.
 fn changes_fingerprint(setup: List(String), change: List(String)) -> Bool {
-  use db <- test_database.with_schema
+  use db <- with_schema
   let schema = schema_name(db)
   let tables = [schema <> ".items", schema <> ".events", schema <> ".item_view"]
   run_all(db, setup)
-  let assert Ok(before) = postgres.schema_fingerprint(db, tables)
+  let assert Ok(before) = schema_fingerprint(db, tables)
   run_all(db, change)
-  let assert Ok(after) = postgres.schema_fingerprint(db, tables)
+  let assert Ok(after) = schema_fingerprint(db, tables)
   before != after
 }
 
-fn settings_tables(db: postgres.Connection) -> List(String) {
+fn settings_tables(db: Connection) -> List(String) {
   let schema = schema_name(db)
   [schema <> ".items", schema <> ".events"]
 }
@@ -2235,10 +2119,10 @@ fn settings_tables(db: postgres.Connection) -> List(String) {
 // transaction. Tells if the fingerprint in the transaction is the
 // fingerprint outside it, and gives the value of `name` after the query.
 fn fingerprint_with_setting(name: String, value: String) -> #(Bool, String) {
-  use db <- test_database.with_schema
+  use db <- with_schema
   run_all(db, settings_ddl)
   let tables = settings_tables(db)
-  let assert Ok(baseline) = postgres.schema_fingerprint(db, tables)
+  let assert Ok(baseline) = schema_fingerprint(db, tables)
   let assert Ok(result) =
     postgres.transaction(db, fn(transaction) {
       let assert Ok(_set) =
@@ -2246,8 +2130,8 @@ fn fingerprint_with_setting(name: String, value: String) -> #(Bool, String) {
           transaction,
           "SET LOCAL " <> name <> " = '" <> value <> "'",
         )
-      let assert Ok(hash) = postgres.schema_fingerprint(transaction, tables)
-      let assert Ok([shown]) = test_database.texts(transaction, "SHOW " <> name)
+      let assert Ok(hash) = schema_fingerprint(transaction, tables)
+      let assert Ok([shown]) = texts(transaction, "SHOW " <> name)
       Ok(#(hash == baseline, shown))
     })
   result
@@ -2258,7 +2142,7 @@ fn fingerprint_with_setting(name: String, value: String) -> #(Bool, String) {
 // keeps it.
 fn fingerprint_with_old_strings() -> #(Bool, Bool) {
   let assert Ok([version]) =
-    test_database.with_schema(test_database.texts(
+    with_schema(texts(
       _,
       "SELECT (current_setting('server_version_num')::int >= 190000)::text",
     ))

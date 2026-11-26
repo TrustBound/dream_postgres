@@ -1,15 +1,15 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type Date, type QueryError, type Returned,
+  calendar_date_decoder, execute, finite_date, query, returning,
+}
+import gleam/dynamic/decode.{at}
 
 pub fn valid_until(
-  connection: postgres.Connection,
+  connection: Connection,
   sql: String,
-) -> Result(postgres.Returned(postgres.Date), postgres.QueryError) {
+) -> Result(Returned(Date), QueryError) {
   sql
-  |> postgres.query
-  |> postgres.returning(decode.at(
-    [0],
-    postgres.finite_date(postgres.calendar_date_decoder(), "valid_until"),
-  ))
-  |> postgres.execute(connection)
+  |> query
+  |> returning(at([0], finite_date(calendar_date_decoder(), "valid_until")))
+  |> execute(connection)
 }

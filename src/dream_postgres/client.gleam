@@ -35,19 +35,26 @@
 //// }
 //// ```
 
-import dream_errors
-import dream_postgres_client
-import gleam/dynamic
-import gleam/dynamic/decode
-import gleam/erlang/atom
+import dream_errors.{type Error, Conflict, Failed, Timeout, Unavailable}
+import dream_postgres_client.{
+  ConnectionUnavailable, ConstraintViolated, InterceptorFailed, PostgresqlError,
+  QueryTimeout, UnexpectedArgumentCount, UnexpectedArgumentType,
+  UnexpectedResultType,
+}
+import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode.{
+  type DecodeError, type Decoder, DecodeError, at, failure, field, map_errors,
+  optional, run, success, then,
+}
+import gleam/erlang/atom.{to_string}
 import gleam/erlang/process
 import gleam/int
-import gleam/list
-import gleam/option.{type Option}
+import gleam/list.{contains, find, map, reverse}
+import gleam/option.{type Option, None, Some, all}
 import gleam/otp/actor
-import gleam/result
-import gleam/string
-import gleam/time/calendar
+import gleam/result.{map_error, replace_error, try}
+import gleam/string.{concat, drop_start, inspect, join, length, starts_with}
+import gleam/time/calendar.{January, utc_offset}
 import gleam/time/timestamp
 import gleam/uri
 
@@ -118,16 +125,19 @@ pub type TransactionError(error) =
 /// ### Read the time of a row <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timestamp_type.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, type Timestamp, execute,
+///   query, returning, timestamp_decoder,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
 /// pub fn created_at(
-///   connection: postgres.Connection,
-/// ) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+///   connection: Connection,
+/// ) -> Result(Returned(Timestamp), QueryError) {
 ///   "SELECT timestamp '2024-01-02 03:04:05'"
-///   |> postgres.query
-///   |> postgres.returning(decode.at([0], postgres.timestamp_decoder()))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> returning(at([0], timestamp_decoder()))
+///   |> execute(connection)
 /// }
 /// ```
 pub type Timestamp =
@@ -144,16 +154,17 @@ pub type Timestamp =
 /// ### Read a date <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_date_type.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type Date, type QueryError, type Returned,
+///   calendar_date_decoder, execute, query, returning,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
-/// pub fn birthday(
-///   connection: postgres.Connection,
-/// ) -> Result(postgres.Returned(postgres.Date), postgres.QueryError) {
+/// pub fn birthday(connection: Connection) -> Result(Returned(Date), QueryError) {
 ///   "SELECT date '2024-01-02'"
-///   |> postgres.query
-///   |> postgres.returning(decode.at([0], postgres.calendar_date_decoder()))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> returning(at([0], calendar_date_decoder()))
+///   |> execute(connection)
 /// }
 /// ```
 pub type Date =
@@ -170,16 +181,19 @@ pub type Date =
 /// ### Read a time of day <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_time_of_day_type.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, type TimeOfDay,
+///   calendar_time_of_day_decoder, execute, query, returning,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
 /// pub fn opening_time(
-///   connection: postgres.Connection,
-/// ) -> Result(postgres.Returned(postgres.TimeOfDay), postgres.QueryError) {
+///   connection: Connection,
+/// ) -> Result(Returned(TimeOfDay), QueryError) {
 ///   "SELECT time '03:04:05'"
-///   |> postgres.query
-///   |> postgres.returning(decode.at([0], postgres.calendar_time_of_day_decoder()))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> returning(at([0], calendar_time_of_day_decoder()))
+///   |> execute(connection)
 /// }
 /// ```
 pub type TimeOfDay =
@@ -1007,17 +1021,20 @@ pub fn timeout(query: Query(row), timeout: Int) -> Query(row) {
 /// ### Add a cent to a large amount <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_as_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, execute, numeric_as_text,
+///   numeric_text_decoder, query, returning,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
 /// pub fn exact_total(
-///   connection: postgres.Connection,
-/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+///   connection: Connection,
+/// ) -> Result(Returned(String), QueryError) {
 ///   "SELECT 12345678901234567.89::numeric(20,2) + 0.01"
-///   |> postgres.query
-///   |> postgres.numeric_as_text
-///   |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> numeric_as_text
+///   |> returning(at([0], numeric_text_decoder()))
+///   |> execute(connection)
 /// }
 /// ```
 pub fn numeric_as_text(query: Query(row)) -> Query(row) {
@@ -1349,19 +1366,22 @@ pub fn bytea(value: BitArray) -> Value {
 /// ### Add a cent to an exact amount <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, execute, numeric_as_text,
+///   numeric_text, numeric_text_decoder, parameter, query, returning,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
 /// pub fn add_one_cent(
-///   connection: postgres.Connection,
+///   connection: Connection,
 ///   amount: String,
-/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+/// ) -> Result(Returned(String), QueryError) {
 ///   "SELECT $1::numeric + 0.01"
-///   |> postgres.query
-///   |> postgres.parameter(postgres.numeric_text(amount))
-///   |> postgres.numeric_as_text
-///   |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> parameter(numeric_text(amount))
+///   |> numeric_as_text
+///   |> returning(at([0], numeric_text_decoder()))
+///   |> execute(connection)
 /// }
 /// ```
 pub fn numeric_text(value: String) -> Value {
@@ -1531,28 +1551,25 @@ pub fn timestamp_decoder() -> decode.Decoder(Timestamp) {
 /// ### Read a timestamptz <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_timestamp_with_time_zone_decoder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, type Timestamp, execute,
+///   query, returning, timestamp_with_time_zone_decoder,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
 /// pub fn signed_up_at(
-///   connection: postgres.Connection,
-/// ) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+///   connection: Connection,
+/// ) -> Result(Returned(Timestamp), QueryError) {
 ///   "SELECT timestamptz '2024-01-02 03:04:05.25+00'"
-///   |> postgres.query
-///   |> postgres.returning(decode.at(
-///     [0],
-///     postgres.timestamp_with_time_zone_decoder(),
-///   ))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> returning(at([0], timestamp_with_time_zone_decoder()))
+///   |> execute(connection)
 /// }
 /// ```
-pub fn timestamp_with_time_zone_decoder() -> decode.Decoder(Timestamp) {
-  use date <- decode.field(0, dream_postgres_client.calendar_date_decoder())
-  use time <- decode.field(
-    1,
-    dream_postgres_client.calendar_time_of_day_decoder(),
-  )
-  decode.success(timestamp.from_calendar(date, time, calendar.utc_offset))
+pub fn timestamp_with_time_zone_decoder() -> Decoder(Timestamp) {
+  use date <- field(0, dream_postgres_client.calendar_date_decoder())
+  use time <- field(1, dream_postgres_client.calendar_time_of_day_decoder())
+  success(timestamp.from_calendar(date, time, utc_offset))
 }
 
 /// A date parameter
@@ -1749,20 +1766,21 @@ pub fn numeric_decoder() -> decode.Decoder(Float) {
 /// ### Read a price with its scale <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_numeric_text_decoder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, execute, numeric_as_text,
+///   numeric_text_decoder, query, returning,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
-/// pub fn price(
-///   connection: postgres.Connection,
-/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
+/// pub fn price(connection: Connection) -> Result(Returned(String), QueryError) {
 ///   "SELECT 1.5::numeric(10,2)"
-///   |> postgres.query
-///   |> postgres.numeric_as_text
-///   |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> numeric_as_text
+///   |> returning(at([0], numeric_text_decoder()))
+///   |> execute(connection)
 /// }
 /// ```
-pub fn numeric_text_decoder() -> decode.Decoder(String) {
+pub fn numeric_text_decoder() -> Decoder(String) {
   dream_postgres_client.numeric_text_decoder()
 }
 
@@ -1802,34 +1820,28 @@ pub fn numeric_text_decoder() -> decode.Decoder(String) {
 /// ### Give each database error a status <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_to_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_errors
-/// import dream_postgres/client as postgres
+/// import dream_errors.{Conflict, Timeout, Unavailable}
+/// import dream_postgres/client.{type QueryError, to_error}
 ///
-/// pub fn status(error: postgres.QueryError) -> Int {
-///   case postgres.to_error(error) {
-///     dream_errors.Conflict(..) -> 409
-///     dream_errors.Unavailable(..) -> 503
-///     dream_errors.Timeout(..) -> 504
+/// pub fn status(error: QueryError) -> Int {
+///   case to_error(error) {
+///     Conflict(..) -> 409
+///     Unavailable(..) -> 503
+///     Timeout(..) -> 504
 ///     _ -> 500
 ///   }
 /// }
 /// ```
-pub fn to_error(error: QueryError) -> dream_errors.Error(QueryError) {
+pub fn to_error(error: QueryError) -> Error(QueryError) {
   case error {
-    dream_postgres_client.ConstraintViolated(constraint:, ..) ->
-      dream_errors.Conflict(
-        "the query violated the constraint " <> constraint,
-        error,
-      )
-    dream_postgres_client.QueryTimeout ->
-      dream_errors.Timeout(
-        "the database did not answer the query in time",
-        error,
-      )
-    dream_postgres_client.ConnectionUnavailable ->
-      dream_errors.Unavailable("no database connection was available", error)
-    dream_postgres_client.PostgresqlError(code:, name:, message:) ->
-      dream_errors.Failed(
+    ConstraintViolated(constraint:, ..) ->
+      Conflict("the query violated the constraint " <> constraint, error)
+    QueryTimeout ->
+      Timeout("the database did not answer the query in time", error)
+    ConnectionUnavailable ->
+      Unavailable("no database connection was available", error)
+    PostgresqlError(code:, name:, message:) ->
+      Failed(
         "the database failed the query with "
           <> name
           <> " ("
@@ -1838,43 +1850,39 @@ pub fn to_error(error: QueryError) -> dream_errors.Error(QueryError) {
           <> message,
         error,
       )
-    dream_postgres_client.UnexpectedArgumentCount(expected:, got:) ->
-      dream_errors.Failed(
+    UnexpectedArgumentCount(expected:, got:) ->
+      Failed(
         "the query expected "
           <> int.to_string(expected)
           <> " arguments and got "
           <> int.to_string(got),
         error,
       )
-    dream_postgres_client.UnexpectedArgumentType(expected:, got:) ->
-      dream_errors.Failed(
+    UnexpectedArgumentType(expected:, got:) ->
+      Failed(
         "the query expected an argument of type "
           <> expected
           <> " and got "
           <> got,
         error,
       )
-    dream_postgres_client.UnexpectedResultType(errors) ->
-      dream_errors.Failed(
-        "a row did not decode: " <> decode_errors_text(errors),
-        error,
-      )
-    dream_postgres_client.InterceptorFailed(..) ->
-      dream_errors.Failed("an interceptor failed the query", error)
+    UnexpectedResultType(errors) ->
+      Failed("a row did not decode: " <> decode_errors_text(errors), error)
+    InterceptorFailed(..) -> Failed("an interceptor failed the query", error)
   }
 }
 
-fn decode_errors_text(errors: List(decode.DecodeError)) -> String {
+fn decode_errors_text(errors: List(DecodeError)) -> String {
   errors
-  |> list.map(fn(error) {
+  |> map(fn(error) {
     "expected "
     <> error.expected
     <> ", found "
     <> error.found
     <> " at "
-    <> string.join(error.path, ".")
+    <> join(error.path, ".")
   })
-  |> string.join(", ")
+  |> join(", ")
 }
 
 /// Make the cause of a query that returned too many rows
@@ -1899,26 +1907,24 @@ fn decode_errors_text(errors: List(decode.DecodeError)) -> String {
 /// ### Fail a lookup that found two rows <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_more_than_one_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_errors
-/// import dream_postgres/client as postgres
+/// import dream_errors.{type Error, Failed, NotFound}
+/// import dream_postgres/client.{type QueryError, more_than_one_row}
 ///
-/// pub fn one_email(
-///   emails: List(String),
-/// ) -> Result(String, dream_errors.Error(postgres.QueryError)) {
+/// pub fn one_email(emails: List(String)) -> Result(String, Error(QueryError)) {
 ///   case emails {
 ///     [email] -> Ok(email)
-///     [] -> Error(dream_errors.NotFound("user.email found no row"))
+///     [] -> Error(NotFound("user.email found no row"))
 ///     _ ->
-///       Error(dream_errors.Failed(
+///       Error(Failed(
 ///         message: "user.email returned more than one row",
-///         cause: postgres.more_than_one_row(2),
+///         cause: more_than_one_row(2),
 ///       ))
 ///   }
 /// }
 /// ```
 pub fn more_than_one_row(count: Int) -> QueryError {
-  dream_postgres_client.UnexpectedResultType([
-    decode.DecodeError(
+  UnexpectedResultType([
+    DecodeError(
       expected: "at most one row",
       found: int.to_string(count) <> " rows",
       path: [],
@@ -1957,10 +1963,10 @@ pub fn more_than_one_row(count: Int) -> QueryError {
 /// ### Tell the user that the email is taken <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_violated_constraint.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
+/// import dream_postgres/client.{type QueryError, violated_constraint}
 ///
-/// pub fn sign_up_error_message(error: postgres.QueryError) -> String {
-///   case postgres.violated_constraint(error) {
+/// pub fn sign_up_error_message(error: QueryError) -> String {
+///   case violated_constraint(error) {
 ///     Ok("users_email_key") -> "Email already taken"
 ///     Ok(constraint) -> "The sign-up broke the constraint " <> constraint
 ///     Error(Nil) -> "The sign-up failed"
@@ -1969,7 +1975,7 @@ pub fn more_than_one_row(count: Int) -> QueryError {
 /// ```
 pub fn violated_constraint(error: QueryError) -> Result(String, Nil) {
   case error {
-    dream_postgres_client.ConstraintViolated(constraint:, ..) -> Ok(constraint)
+    ConstraintViolated(constraint:, ..) -> Ok(constraint)
     _ -> Error(Nil)
   }
 }
@@ -2007,28 +2013,28 @@ pub fn violated_constraint(error: QueryError) -> Result(String, Nil) {
 /// ### Read a sum that the SQL file promised is never NULL <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_promised_not_null.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, execute, promised_not_null,
+///   query, returning,
+/// }
+/// import gleam/dynamic/decode.{at, int}
 ///
 /// pub fn order_total(
-///   connection: postgres.Connection,
-/// ) -> Result(postgres.Returned(Int), postgres.QueryError) {
+///   connection: Connection,
+/// ) -> Result(Returned(Int), QueryError) {
 ///   "SELECT sum(amount)::int AS total FROM orders"
-///   |> postgres.query
-///   |> postgres.returning(decode.at(
-///     [0],
-///     postgres.promised_not_null(decode.int, "order_total.sql", "total"),
-///   ))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> returning(at([0], promised_not_null(int, "order_total.sql", "total")))
+///   |> execute(connection)
 /// }
 /// ```
 pub fn promised_not_null(
-  decoder: decode.Decoder(a),
+  decoder: Decoder(a),
   file: String,
   column: String,
-) -> decode.Decoder(a) {
+) -> Decoder(a) {
   let null_error =
-    decode.DecodeError(
+    DecodeError(
       expected: promise_marker
         <> "the SQL file "
         <> file
@@ -2038,13 +2044,13 @@ pub fn promised_not_null(
       found: "NULL",
       path: [],
     )
-  use found <- decode.then(decode.optional(decoder))
+  use found <- then(optional(decoder))
   case found {
-    option.Some(value) -> decode.success(value)
-    option.None ->
+    Some(value) -> success(value)
+    None ->
       decoder
-      |> decode.then(decode.failure(_, null_error.expected))
-      |> decode.map_errors(fn(_errors) { [null_error] })
+      |> then(failure(_, null_error.expected))
+      |> map_errors(fn(_errors) { [null_error] })
   }
 }
 
@@ -2086,28 +2092,28 @@ pub fn promised_not_null(
 /// ### Read tags that the SQL file promised have no NULL element <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_promised_elements_not_null.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, execute,
+///   promised_elements_not_null, query, returning,
+/// }
+/// import gleam/dynamic/decode.{at, string}
 ///
 /// pub fn tags(
-///   connection: postgres.Connection,
-/// ) -> Result(postgres.Returned(List(String)), postgres.QueryError) {
+///   connection: Connection,
+/// ) -> Result(Returned(List(String)), QueryError) {
 ///   "SELECT tags FROM posts"
-///   |> postgres.query
-///   |> postgres.returning(decode.at(
-///     [0],
-///     postgres.promised_elements_not_null(decode.string, "find.sql", "tags"),
-///   ))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> returning(at([0], promised_elements_not_null(string, "find.sql", "tags")))
+///   |> execute(connection)
 /// }
 /// ```
 pub fn promised_elements_not_null(
-  decoder: decode.Decoder(a),
+  decoder: Decoder(a),
   file: String,
   column: String,
-) -> decode.Decoder(List(a)) {
+) -> Decoder(List(a)) {
   let null_error =
-    decode.DecodeError(
+    DecodeError(
       expected: promise_marker
         <> "the SQL file "
         <> file
@@ -2117,12 +2123,12 @@ pub fn promised_elements_not_null(
       found: "NULL",
       path: [],
     )
-  use found <- decode.then(decode.list(decode.optional(decoder)))
-  case option.all(found) {
-    option.Some(values) -> decode.success(values)
-    option.None ->
-      decode.failure([], null_error.expected)
-      |> decode.map_errors(fn(_errors) { [null_error] })
+  use found <- then(decode.list(optional(decoder)))
+  case all(found) {
+    Some(values) -> success(values)
+    None ->
+      failure([], null_error.expected)
+      |> map_errors(fn(_errors) { [null_error] })
   }
 }
 
@@ -2153,10 +2159,10 @@ pub fn promised_elements_not_null(
 /// ### Show the broken promise of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_broken_promise.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
+/// import dream_postgres/client.{type QueryError, broken_promise}
 ///
-/// pub fn error_message(error: postgres.QueryError) -> String {
-///   case postgres.broken_promise(error) {
+/// pub fn error_message(error: QueryError) -> String {
+///   case broken_promise(error) {
 ///     Ok(message) -> message
 ///     Error(Nil) -> "The query failed"
 ///   }
@@ -2164,17 +2170,17 @@ pub fn promised_elements_not_null(
 /// ```
 pub fn broken_promise(error: QueryError) -> Result(String, Nil) {
   case error {
-    dream_postgres_client.UnexpectedResultType(errors) ->
-      list.find(errors, is_broken_promise)
+    UnexpectedResultType(errors) ->
+      find(errors, is_broken_promise)
       |> result.map(fn(decode_error) {
-        string.drop_start(decode_error.expected, string.length(promise_marker))
+        drop_start(decode_error.expected, length(promise_marker))
       })
     _ -> Error(Nil)
   }
 }
 
-fn is_broken_promise(error: decode.DecodeError) -> Bool {
-  error.found == "NULL" && string.starts_with(error.expected, promise_marker)
+fn is_broken_promise(error: DecodeError) -> Bool {
+  error.found == "NULL" && starts_with(error.expected, promise_marker)
 }
 
 // The start of the `expected` text of a broken promise. A decoder of the
@@ -2209,26 +2215,26 @@ const promise_marker = "[dream_postgres promised_not_null] "
 /// ### Read a timestamp that can be infinity <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_finite_timestamp.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, type Timestamp, execute,
+///   finite_timestamp, query, returning, timestamp_decoder,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
 /// pub fn ends_at(
-///   connection: postgres.Connection,
+///   connection: Connection,
 ///   sql: String,
-/// ) -> Result(postgres.Returned(postgres.Timestamp), postgres.QueryError) {
+/// ) -> Result(Returned(Timestamp), QueryError) {
 ///   sql
-///   |> postgres.query
-///   |> postgres.returning(decode.at(
-///     [0],
-///     postgres.finite_timestamp(postgres.timestamp_decoder(), "ends_at"),
-///   ))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> returning(at([0], finite_timestamp(timestamp_decoder(), "ends_at")))
+///   |> execute(connection)
 /// }
 /// ```
 pub fn finite_timestamp(
-  decoder: decode.Decoder(Timestamp),
+  decoder: Decoder(Timestamp),
   column: String,
-) -> decode.Decoder(Timestamp) {
+) -> Decoder(Timestamp) {
   finite(decoder, timestamp.unix_epoch, column, "Timestamp")
 }
 
@@ -2257,36 +2263,33 @@ pub fn finite_timestamp(
 /// ### Read a date that can be infinity <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_finite_date.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type Date, type QueryError, type Returned,
+///   calendar_date_decoder, execute, finite_date, query, returning,
+/// }
+/// import gleam/dynamic/decode.{at}
 ///
 /// pub fn valid_until(
-///   connection: postgres.Connection,
+///   connection: Connection,
 ///   sql: String,
-/// ) -> Result(postgres.Returned(postgres.Date), postgres.QueryError) {
+/// ) -> Result(Returned(Date), QueryError) {
 ///   sql
-///   |> postgres.query
-///   |> postgres.returning(decode.at(
-///     [0],
-///     postgres.finite_date(postgres.calendar_date_decoder(), "valid_until"),
-///   ))
-///   |> postgres.execute(connection)
+///   |> query
+///   |> returning(at([0], finite_date(calendar_date_decoder(), "valid_until")))
+///   |> execute(connection)
 /// }
 /// ```
-pub fn finite_date(
-  decoder: decode.Decoder(Date),
-  column: String,
-) -> decode.Decoder(Date) {
-  finite(decoder, calendar.Date(1970, calendar.January, 1), column, "Date")
+pub fn finite_date(decoder: Decoder(Date), column: String) -> Decoder(Date) {
+  finite(decoder, calendar.Date(1970, January, 1), column, "Date")
 }
 
 fn finite(
-  decoder: decode.Decoder(a),
+  decoder: Decoder(a),
   zero: a,
   column: String,
   type_name: String,
-) -> decode.Decoder(a) {
-  use raw <- decode.then(decode.dynamic)
+) -> Decoder(a) {
+  use raw <- then(decode.dynamic)
   case infinity_of(raw) {
     Ok(value) -> infinity_failure(zero, column, value, type_name)
     Error(Nil) -> decoder
@@ -2319,10 +2322,10 @@ fn finite(
 /// ### Show the infinite value of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_infinite_value.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
+/// import dream_postgres/client.{type QueryError, infinite_value}
 ///
-/// pub fn error_message(error: postgres.QueryError) -> String {
-///   case postgres.infinite_value(error) {
+/// pub fn error_message(error: QueryError) -> String {
+///   case infinite_value(error) {
 ///     Ok(message) -> message
 ///     Error(Nil) -> "The query failed"
 ///   }
@@ -2330,26 +2333,26 @@ fn finite(
 /// ```
 pub fn infinite_value(error: QueryError) -> Result(String, Nil) {
   case error {
-    dream_postgres_client.UnexpectedResultType(errors) ->
-      list.find(errors, is_infinite_value)
+    UnexpectedResultType(errors) ->
+      find(errors, is_infinite_value)
       |> result.map(fn(decode_error) {
-        string.drop_start(decode_error.expected, string.length(infinity_marker))
+        drop_start(decode_error.expected, length(infinity_marker))
       })
     _ -> Error(Nil)
   }
 }
 
-fn is_infinite_value(error: decode.DecodeError) -> Bool {
-  list.contains(infinity_names, error.found)
-  && string.starts_with(error.expected, infinity_marker)
+fn is_infinite_value(error: DecodeError) -> Bool {
+  contains(infinity_names, error.found)
+  && starts_with(error.expected, infinity_marker)
 }
 
-fn infinity_of(raw: dynamic.Dynamic) -> Result(String, Nil) {
-  decode.run(raw, atom.decoder())
-  |> result.map(atom.to_string)
-  |> result.replace_error(Nil)
-  |> result.try(fn(name) {
-    case list.contains(infinity_names, name) {
+fn infinity_of(raw: Dynamic) -> Result(String, Nil) {
+  run(raw, atom.decoder())
+  |> result.map(to_string)
+  |> replace_error(Nil)
+  |> try(fn(name) {
+    case contains(infinity_names, name) {
       True -> Ok(name)
       False -> Error(Nil)
     }
@@ -2361,7 +2364,7 @@ fn infinity_failure(
   column: String,
   value: String,
   type_name: String,
-) -> decode.Decoder(a) {
+) -> Decoder(a) {
   let message =
     infinity_marker
     <> "the column "
@@ -2371,9 +2374,9 @@ fn infinity_failure(
     <> ", which the Gleam type "
     <> type_name
     <> " cannot hold"
-  decode.failure(zero, message)
-  |> decode.map_errors(fn(_errors) {
-    [decode.DecodeError(expected: message, found: value, path: [])]
+  failure(zero, message)
+  |> map_errors(fn(_errors) {
+    [DecodeError(expected: message, found: value, path: [])]
   })
 }
 
@@ -2500,18 +2503,21 @@ pub type SchemaCheckError {
 /// ### Read the canonical text of the fingerprint <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_schema_fingerprint_sql.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/dynamic/decode
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, type Returned, array, execute, parameter,
+///   query, returning, schema_fingerprint_sql, text,
+/// }
+/// import gleam/dynamic/decode.{at, string}
 ///
 /// pub fn fingerprint_text(
-///   connection: postgres.Connection,
+///   connection: Connection,
 ///   tables: List(String),
-/// ) -> Result(postgres.Returned(String), postgres.QueryError) {
-///   postgres.schema_fingerprint_sql
-///   |> postgres.query
-///   |> postgres.parameter(postgres.array(postgres.text, tables))
-///   |> postgres.returning(decode.at([0], decode.string))
-///   |> postgres.execute(connection)
+/// ) -> Result(Returned(String), QueryError) {
+///   schema_fingerprint_sql
+///   |> query
+///   |> parameter(array(text, tables))
+///   |> returning(at([0], string))
+///   |> execute(connection)
 /// }
 /// ```
 pub const schema_fingerprint_sql =
@@ -2794,13 +2800,15 @@ CROSS JOIN LATERAL (
 /// ### Get the fingerprint of the users table <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_schema_fingerprint.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
+/// import dream_postgres/client.{
+///   type Connection, type QueryError, schema_fingerprint,
+/// }
 ///
 /// pub fn users_fingerprint(
-///   connection: postgres.Connection,
+///   connection: Connection,
 ///   schema: String,
-/// ) -> Result(String, postgres.QueryError) {
-///   postgres.schema_fingerprint(connection, [schema <> ".users"])
+/// ) -> Result(String, QueryError) {
+///   schema_fingerprint(connection, [schema <> ".users"])
 /// }
 /// ```
 pub fn schema_fingerprint(
@@ -2810,10 +2818,10 @@ pub fn schema_fingerprint(
   schema_fingerprint_sql
   |> query
   |> parameter(array(text, tables))
-  |> returning(decode.at([0], decode.string))
+  |> returning(at([0], decode.string))
   |> execute(connection)
   // The query always gives exactly one row.
-  |> result.map(fn(returned) { sha256_hex(string.concat(returned.rows)) })
+  |> result.map(fn(returned) { sha256_hex(concat(returned.rows)) })
 }
 
 @external(erlang, "dream_postgres_schema_ffi", "sha256_hex")
@@ -2849,22 +2857,25 @@ fn sha256_hex(text: String) -> String
 /// ### Check the generated modules at startup <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_check_schema.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/result
+/// import dream_postgres/client.{
+///   type Connection, type SchemaFingerprint, check_schema,
+///   format_schema_check_error,
+/// }
+/// import gleam/result.{map_error}
 ///
 /// pub fn check_models(
-///   connection: postgres.Connection,
-///   models: List(postgres.SchemaFingerprint),
+///   connection: Connection,
+///   models: List(SchemaFingerprint),
 /// ) -> Result(Nil, String) {
-///   postgres.check_schema(connection, models)
-///   |> result.map_error(postgres.format_schema_check_error)
+///   check_schema(connection, models)
+///   |> map_error(format_schema_check_error)
 /// }
 /// ```
 pub fn check_schema(
   connection: Connection,
   expected: List(SchemaFingerprint),
 ) -> Result(Nil, SchemaCheckError) {
-  use mismatches <- result.try(find_mismatches(connection, expected, []))
+  use mismatches <- try(find_mismatches(connection, expected, []))
   case mismatches {
     [] -> Ok(Nil)
     _ -> Error(SchemaChanged(mismatches))
@@ -2877,11 +2888,11 @@ fn find_mismatches(
   found: List(SchemaMismatch),
 ) -> Result(List(SchemaMismatch), SchemaCheckError) {
   case remaining {
-    [] -> Ok(list.reverse(found))
+    [] -> Ok(reverse(found))
     [fingerprint, ..rest] -> {
-      use hash <- result.try(
+      use hash <- try(
         schema_fingerprint(connection, fingerprint.tables)
-        |> result.map_error(SchemaUnreadable(fingerprint.module, _)),
+        |> map_error(SchemaUnreadable(fingerprint.module, _)),
       )
       find_mismatches(connection, rest, add_mismatch(found, fingerprint, hash))
     }
@@ -2927,27 +2938,30 @@ fn add_mismatch(
 /// ### Check the generated modules at startup <a href="https://github.com/TrustBound/dream_postgres/blob/2.1.0/test/snippets/client_check_schema.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import gleam/result
+/// import dream_postgres/client.{
+///   type Connection, type SchemaFingerprint, check_schema,
+///   format_schema_check_error,
+/// }
+/// import gleam/result.{map_error}
 ///
 /// pub fn check_models(
-///   connection: postgres.Connection,
-///   models: List(postgres.SchemaFingerprint),
+///   connection: Connection,
+///   models: List(SchemaFingerprint),
 /// ) -> Result(Nil, String) {
-///   postgres.check_schema(connection, models)
-///   |> result.map_error(postgres.format_schema_check_error)
+///   check_schema(connection, models)
+///   |> map_error(format_schema_check_error)
 /// }
 /// ```
 pub fn format_schema_check_error(error: SchemaCheckError) -> String {
   case error {
     SchemaChanged(mismatches) ->
       "The database schema changed after dream_model generated these modules. Regenerate them with dream_model:\n"
-      <> string.join(list.map(mismatches, format_mismatch), "\n")
+      <> join(map(mismatches, format_mismatch), "\n")
     SchemaUnreadable(module, query_error) ->
       "The schema fingerprint query of "
       <> module
       <> " failed: "
-      <> string.inspect(query_error)
+      <> inspect(query_error)
   }
 }
 
@@ -2955,7 +2969,7 @@ fn format_mismatch(mismatch: SchemaMismatch) -> String {
   "- "
   <> mismatch.module
   <> " ("
-  <> string.join(mismatch.tables, ", ")
+  <> join(mismatch.tables, ", ")
   <> "): expected fingerprint "
   <> mismatch.expected
   <> ", found "

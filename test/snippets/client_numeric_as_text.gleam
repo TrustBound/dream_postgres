@@ -1,12 +1,15 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, execute, numeric_as_text,
+  numeric_text_decoder, query, returning,
+}
+import gleam/dynamic/decode.{at}
 
 pub fn exact_total(
-  connection: postgres.Connection,
-) -> Result(postgres.Returned(String), postgres.QueryError) {
+  connection: Connection,
+) -> Result(Returned(String), QueryError) {
   "SELECT 12345678901234567.89::numeric(20,2) + 0.01"
-  |> postgres.query
-  |> postgres.numeric_as_text
-  |> postgres.returning(decode.at([0], postgres.numeric_text_decoder()))
-  |> postgres.execute(connection)
+  |> query
+  |> numeric_as_text
+  |> returning(at([0], numeric_text_decoder()))
+  |> execute(connection)
 }

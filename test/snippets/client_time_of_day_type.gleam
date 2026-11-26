@@ -1,11 +1,14 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, type TimeOfDay,
+  calendar_time_of_day_decoder, execute, query, returning,
+}
+import gleam/dynamic/decode.{at}
 
 pub fn opening_time(
-  connection: postgres.Connection,
-) -> Result(postgres.Returned(postgres.TimeOfDay), postgres.QueryError) {
+  connection: Connection,
+) -> Result(Returned(TimeOfDay), QueryError) {
   "SELECT time '03:04:05'"
-  |> postgres.query
-  |> postgres.returning(decode.at([0], postgres.calendar_time_of_day_decoder()))
-  |> postgres.execute(connection)
+  |> query
+  |> returning(at([0], calendar_time_of_day_decoder()))
+  |> execute(connection)
 }

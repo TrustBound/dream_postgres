@@ -1,13 +1,16 @@
-import dream_postgres/client as postgres
-import gleam/dynamic/decode
+import dream_postgres/client.{
+  type Connection, type QueryError, type Returned, array, execute, parameter,
+  query, returning, schema_fingerprint_sql, text,
+}
+import gleam/dynamic/decode.{at, string}
 
 pub fn fingerprint_text(
-  connection: postgres.Connection,
+  connection: Connection,
   tables: List(String),
-) -> Result(postgres.Returned(String), postgres.QueryError) {
-  postgres.schema_fingerprint_sql
-  |> postgres.query
-  |> postgres.parameter(postgres.array(postgres.text, tables))
-  |> postgres.returning(decode.at([0], decode.string))
-  |> postgres.execute(connection)
+) -> Result(Returned(String), QueryError) {
+  schema_fingerprint_sql
+  |> query
+  |> parameter(array(text, tables))
+  |> returning(at([0], string))
+  |> execute(connection)
 }
