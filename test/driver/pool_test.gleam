@@ -301,6 +301,13 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
 fn status_tests() -> ContextNode(PoolSession) {
   group("status", [
     before_each(start_test_pool(first_driver_server, 2)),
+    it("gives the attachment of its settings", fn(session: PoolSession) {
+      pool.attachment(session.pool)
+      |> should
+      |> be_ok
+      |> be_equal(Nil)
+      |> or_fail_with("Expected the attachment Nil")
+    }),
     it("gives its status", fn(session: PoolSession) {
       // Act
       let status =
@@ -741,7 +748,7 @@ fn proxied_tests() -> TestSuite {
 /// A health check every 10 milliseconds, and connections that connect
 /// again only after the test, so a replaced connection's Disconnected
 /// waits in the member's mailbox.
-fn checked_and_slow_config(config: PoolConfig) -> PoolConfig {
+fn checked_and_slow_config(config: PoolConfig(Nil)) -> PoolConfig(Nil) {
   config |> health_check_config(10, 5000) |> slow_reconnect_config
 }
 
@@ -750,7 +757,11 @@ fn checked_and_slow_config(config: PoolConfig) -> PoolConfig {
 /// The settings of the start tests: a pool to the first driver server,
 /// and a pool through a proxy.
 type StartInputs {
-  StartInputs(config: PoolConfig, proxy: Proxy, proxied_config: PoolConfig)
+  StartInputs(
+    config: PoolConfig(Nil),
+    proxy: Proxy,
+    proxied_config: PoolConfig(Nil),
+  )
 }
 
 fn build_start_inputs() -> Result(StartInputs, String) {
@@ -831,6 +842,24 @@ fn start_tests() -> TestSuite {
           |> or_fail_with("Expected the pool to stop with an error")
         },
       ),
+      it(
+        "gives PoolStopped for the attachment of a name that no pool has",
+        fn(_inputs) {
+          // Arrange
+          let handle: Pool(String) =
+            pool.from_name(process.new_name("pool_test_unused"))
+
+          // Act
+          let answer = pool.attachment(handle)
+
+          // Assert
+          answer
+          |> should
+          |> be_error
+          |> be_equal(PoolStopped)
+          |> or_fail_with("Expected PoolStopped")
+        },
+      ),
       it("gives PoolStopped for a name that no pool has", fn(_inputs) {
         // Arrange
         let handle = pool.from_name(process.new_name("pool_test_unused"))
@@ -870,7 +899,7 @@ fn start_tests() -> TestSuite {
 
 /// Two pools with other users on the first driver server.
 type TwoPools {
-  TwoPools(first: Pool, second: Pool)
+  TwoPools(first: Pool(Nil), second: Pool(Nil))
 }
 
 fn start_two_pools() -> Result(TwoPools, String) {
@@ -927,6 +956,16 @@ fn named_tests() -> TestSuite {
   describe("under a name", named_pool_setup(first_driver_server), [
     before_each(start_test_named_pool(first_driver_server)),
     after_each(stop_named_pool),
+    it(
+      "gives its attachment through a handle of its name",
+      fn(named: NamedPool) {
+        pool.attachment(named.handle)
+        |> should
+        |> be_ok
+        |> be_equal("the settings of a named pool")
+        |> or_fail_with("Expected the attachment of the pool's settings")
+      },
+    ),
     it("refuses a name that another pool has", fn(named: NamedPool) {
       // Act
       let second =
@@ -981,7 +1020,11 @@ fn named_tests() -> TestSuite {
 /// supervisor, with the backends of a hold before and after, through the
 /// same handle.
 type RestartedPool {
-  RestartedPool(named: NamedPool, backends: Result(#(String, String), String))
+  RestartedPool(
+    named: NamedPool,
+    backends: Result(#(String, String), String),
+    attachment: Result(String, HoldError),
+  )
 }
 
 fn start_restarted_pool() -> Result(RestartedPool, String) {
@@ -1002,7 +1045,7 @@ fn restart_named_pool(named: NamedPool) -> Result(RestartedPool, String) {
   let backends =
     held_backend_pid(named.handle)
     |> result.map(fn(second) { #(first, second) })
-  Ok(RestartedPool(named:, backends:))
+  Ok(RestartedPool(named:, backends:, attachment: pool.attachment(named.handle)))
 }
 
 fn stop_restarted_pool(restarted: RestartedPool) -> Result(Nil, String) {
@@ -1022,6 +1065,16 @@ fn restarted_tests() -> TestSuite {
           |> be_ok
           |> be_different_parts
           |> or_fail_with("Expected a new connection through the same handle")
+        },
+      ),
+      it(
+        "gives the attachment of its child spec again",
+        fn(restarted: RestartedPool) {
+          restarted.attachment
+          |> should
+          |> be_ok
+          |> be_equal("the settings of a named pool")
+          |> or_fail_with("Expected the attachment after the restart")
         },
       ),
       it(

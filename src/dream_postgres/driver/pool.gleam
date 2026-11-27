@@ -61,13 +61,17 @@ import gleam/string
 // Types -----------------------------------------------------------------------
 
 /// Everything a pool needs.
-pub type PoolConfig {
+pub type PoolConfig(attachment) {
   PoolConfig(
     /// The settings of each connection process. The `events` subject of
     /// these settings gets every event of every connection process of the
     /// pool: a connection that replaces another starts with its own
     /// `Connected`.
     connection: ConnectionConfig,
+    /// A value of the pool's user, kept by the pool process and read with
+    /// `attachment`, also through a handle of the pool's name. The driver
+    /// never looks inside it.
+    attachment: attachment,
     /// Where the pool tells what each member does, in the order it changed
     /// its state: a hold sent after an event sees the state of that event.
     events: Option(Subject(PoolEvent)),
@@ -162,8 +166,8 @@ pub type PoolStatus {
 /// A pool: the subject of its manager process. For a pool that started
 /// under a name, the subject is the name's, so a handle stays valid when a
 /// supervisor starts the pool again under the same name.
-pub opaque type Pool {
-  Pool(subject: Subject(PoolMessage))
+pub opaque type Pool(attachment) {
+  Pool(subject: Subject(PoolMessage(attachment)))
 }
 
 /// A connection that a checkout gives, with the ID of the hold and the
@@ -174,15 +178,15 @@ type Lease {
 
 /// Sends a request to the manager's process (see the FFI module).
 @external(erlang, "dream_postgres_pool_ffi", "deliver")
-fn deliver(manager: Pid, message: PoolMessage) -> Nil
+fn deliver(manager: Pid, message: PoolMessage(attachment)) -> Nil
 
 /// The request inside a message of `deliver`.
 @external(erlang, "dream_postgres_pool_ffi", "request_of")
-fn request_of(message: Dynamic) -> PoolMessage
+fn request_of(message: Dynamic) -> PoolMessage(attachment)
 
 /// A message to the manager process of a pool. A name for `start_named`
 /// is a name for these messages.
-pub opaque type PoolMessage {
+pub opaque type PoolMessage(attachment) {
   CheckOut(
     caller: Pid,
     deadline_milliseconds: Int,
@@ -192,6 +196,7 @@ pub opaque type PoolMessage {
   WaiterExpired(waiter_id: Int)
   StatusRequest(reply: Subject(PoolStatus))
   CatalogRequest(reply: Subject(Catalog))
+  AttachmentRequest(reply: Subject(attachment))
   StopRequest(deadline_milliseconds: Int, reply: Subject(Nil))
   DrainDeadlinePassed
   HealthCheckDue
@@ -201,12 +206,13 @@ pub opaque type PoolMessage {
 }
 
 /// The settings that the manager reads after it started.
-type Settings {
+type Settings(attachment) {
   Settings(
     size: Int,
     health_check_interval_milliseconds: Int,
     shutdown_deadline_milliseconds: Int,
     events: Option(Subject(PoolEvent)),
+    attachment: attachment,
   )
 }
 
@@ -264,10 +270,10 @@ type Phase {
   Draining
 }
 
-type State {
+type State(attachment) {
   State(
-    subject: Subject(PoolMessage),
-    settings: Settings,
+    subject: Subject(PoolMessage(attachment)),
+    settings: Settings(attachment),
     supervisor: Pid,
     /// The pool's type catalog, and its process.
     catalog: Catalog,
@@ -303,10 +309,13 @@ type State {
 ///
 /// ## Returns
 ///
-/// - `Ok(Pool)`: the pool runs, and its members connect
+/// - `Ok(Pool(attachment))`: the pool runs, and its members connect
 /// - `Error(StartError)`: a setting is not valid, or the manager did not
 ///   start
-pub fn start(config: PoolConfig, size: Int) -> Result(Pool, StartError) {
+pub fn start(
+  config: PoolConfig(attachment),
+  size: Int,
+) -> Result(Pool(attachment), StartError) {
   use Nil <- try(check_settings(config, size))
   start_manager(config, size, None)
   |> map_error(PoolProcessStartFailed)
@@ -334,20 +343,20 @@ pub fn start(config: PoolConfig, size: Int) -> Result(Pool, StartError) {
 /// the child has the shutdown deadline of the settings and 10 seconds more
 /// to close its connections.
 pub fn supervised(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   size: Int,
-  name: Name(PoolMessage),
-) -> ChildSpecification(Pool) {
+  name: Name(PoolMessage(attachment)),
+) -> ChildSpecification(Pool(attachment)) {
   supervision.worker(fn() { start_child(config, size, name) })
   |> supervision.restart(Transient)
   |> supervision.timeout(config.shutdown_deadline_milliseconds + 10_000)
 }
 
 fn start_child(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   size: Int,
-  name: Name(PoolMessage),
-) -> Result(actor.Started(Pool), actor.StartError) {
+  name: Name(PoolMessage(attachment)),
+) -> Result(actor.Started(Pool(attachment)), actor.StartError) {
   use Nil <- try(check_settings(config, size) |> map_error(setting_refused))
   start_manager(config, size, Some(name)) |> result.map(started_child)
 }
@@ -357,8 +366,8 @@ fn setting_refused(error: StartError) -> actor.StartError {
 }
 
 fn started_child(
-  started: actor.Started(Subject(PoolMessage)),
-) -> actor.Started(Pool) {
+  started: actor.Started(Subject(PoolMessage(attachment))),
+) -> actor.Started(Pool(attachment)) {
   actor.Started(pid: started.pid, data: started_pool(started))
 }
 
@@ -374,32 +383,38 @@ fn started_child(
 ///
 /// A handle of the pool. While no pool has the name, each call with it
 /// gives `PoolStopped`.
-pub fn from_name(name: Name(PoolMessage)) -> Pool {
+pub fn from_name(name: Name(PoolMessage(attachment))) -> Pool(attachment) {
   Pool(subject: process.named_subject(name))
 }
 
-fn check_settings(config: PoolConfig, size: Int) -> Result(Nil, StartError) {
+fn check_settings(
+  config: PoolConfig(attachment),
+  size: Int,
+) -> Result(Nil, StartError) {
   use <- guard(size < 1, Error(InvalidSize(size)))
   let interval = config.health_check_interval_milliseconds
   use <- guard(interval < 1, Error(InvalidHealthCheckInterval(interval)))
   Ok(Nil)
 }
 
-fn started_pool(started: actor.Started(Subject(PoolMessage))) -> Pool {
+fn started_pool(
+  started: actor.Started(Subject(PoolMessage(attachment))),
+) -> Pool(attachment) {
   Pool(subject: started.data)
 }
 
 fn start_manager(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   size: Int,
-  name: Option(Name(PoolMessage)),
-) -> Result(actor.Started(Subject(PoolMessage)), actor.StartError) {
+  name: Option(Name(PoolMessage(attachment))),
+) -> Result(actor.Started(Subject(PoolMessage(attachment))), actor.StartError) {
   let settings =
     Settings(
       size:,
       health_check_interval_milliseconds: config.health_check_interval_milliseconds,
       shutdown_deadline_milliseconds: config.shutdown_deadline_milliseconds,
       events: config.events,
+      attachment: config.attachment,
     )
   let member_config =
     MemberConfig(
@@ -414,9 +429,17 @@ fn start_manager(
 }
 
 fn with_name(
-  builder: actor.Builder(State, PoolMessage, Subject(PoolMessage)),
-  name: Option(Name(PoolMessage)),
-) -> actor.Builder(State, PoolMessage, Subject(PoolMessage)) {
+  builder: actor.Builder(
+    State(attachment),
+    PoolMessage(attachment),
+    Subject(PoolMessage(attachment)),
+  ),
+  name: Option(Name(PoolMessage(attachment))),
+) -> actor.Builder(
+  State(attachment),
+  PoolMessage(attachment),
+  Subject(PoolMessage(attachment)),
+) {
   case name {
     Some(name) -> actor.named(builder, name)
     None -> builder
@@ -428,10 +451,17 @@ fn with_name(
 /// child specification, because its start gives the process ID that the
 /// manager needs to know the catalog's exit.
 fn initialise(
-  subject: Subject(PoolMessage),
-  settings: Settings,
+  subject: Subject(PoolMessage(attachment)),
+  settings: Settings(attachment),
   member_config: pool_member.MemberConfig,
-) -> Result(actor.Initialised(State, PoolMessage, Subject(PoolMessage)), String) {
+) -> Result(
+  actor.Initialised(
+    State(attachment),
+    PoolMessage(attachment),
+    Subject(PoolMessage(attachment)),
+  ),
+  String,
+) {
   process.trap_exits(True)
   use catalog <- try(
     catalog.supervised(None).start()
@@ -463,10 +493,14 @@ fn add_member(
 fn initialised(
   supervisor: actor.Started(static_supervisor.Supervisor),
   catalog: actor.Started(Catalog),
-  subject: Subject(PoolMessage),
-  settings: Settings,
+  subject: Subject(PoolMessage(attachment)),
+  settings: Settings(attachment),
   reports: Subject(MemberReport),
-) -> actor.Initialised(State, PoolMessage, Subject(PoolMessage)) {
+) -> actor.Initialised(
+  State(attachment),
+  PoolMessage(attachment),
+  Subject(PoolMessage(attachment)),
+) {
   let selector =
     process.new_selector()
     |> process.select(subject)
@@ -490,11 +524,11 @@ fn initialised(
 }
 
 fn new_state(
-  subject: Subject(PoolMessage),
-  settings: Settings,
+  subject: Subject(PoolMessage(attachment)),
+  settings: Settings(attachment),
   supervisor: Pid,
   catalog: actor.Started(Catalog),
-) -> State {
+) -> State(attachment) {
   State(
     subject:,
     settings:,
@@ -511,7 +545,7 @@ fn new_state(
   )
 }
 
-fn monitor_fired(down: Down) -> PoolMessage {
+fn monitor_fired(down: Down) -> PoolMessage(attachment) {
   MonitorFired(down.monitor)
 }
 
@@ -529,7 +563,7 @@ fn monitor_fired(down: Down) -> PoolMessage {
 ///
 /// `Nil` when every connection is closed, also when the pool is gone
 /// already.
-pub fn stop(pool: Pool, deadline_milliseconds: Int) -> Nil {
+pub fn stop(pool: Pool(attachment), deadline_milliseconds: Int) -> Nil {
   ask(pool, StopRequest(deadline_milliseconds, _)) |> result.unwrap(Nil)
 }
 
@@ -556,7 +590,7 @@ pub fn stop(pool: Pool, deadline_milliseconds: Int) -> Nil {
 ///   last connect failed with `error`
 /// - `Error(PoolStopped)`: the pool stops, or it is gone
 pub fn hold(
-  pool: Pool,
+  pool: Pool(attachment),
   deadline_milliseconds: Int,
   callback: fn(Connection) -> value,
 ) -> Result(value, HoldError) {
@@ -573,7 +607,7 @@ fn check_in_lease(lease: Lease) -> Nil {
 }
 
 fn check_out(
-  pool: Pool,
+  pool: Pool(attachment),
   deadline_milliseconds: Int,
 ) -> Result(Lease, HoldError) {
   ask(pool, CheckOut(process.self(), deadline_milliseconds, _))
@@ -593,8 +627,26 @@ fn check_out(
 /// - `Ok(Catalog)`: the catalog of the manager that runs now, for the
 ///   lookups of the codecs
 /// - `Error(PoolStopped)`: the pool is gone
-pub fn catalog(pool: Pool) -> Result(Catalog, HoldError) {
+pub fn catalog(pool: Pool(attachment)) -> Result(Catalog, HoldError) {
   ask(pool, CatalogRequest)
+}
+
+/// The value that the pool's user attached to the pool in its settings.
+/// It is read from the pool process, so a handle of a name gives the value
+/// of the pool that runs under the name now: after a restart by a
+/// supervisor, the one of the child spec again.
+///
+/// ## Parameters
+///
+/// - `pool`: the pool, or a handle of its name
+///
+/// ## Returns
+///
+/// - `Ok(attachment)`: the value of the pool's settings
+/// - `Error(PoolStopped)`: the pool is gone, or no pool runs under the
+///   name now, as a hold through the handle gives
+pub fn attachment(pool: Pool(attachment)) -> Result(attachment, HoldError) {
+  ask(pool, AttachmentRequest)
 }
 
 /// The state of the pool now: its connections, its holds, its queue and
@@ -608,7 +660,7 @@ pub fn catalog(pool: Pool) -> Result(Catalog, HoldError) {
 ///
 /// - `Ok(PoolStatus)`: the counts and the last connect error
 /// - `Error(PoolStopped)`: the pool is gone
-pub fn status(pool: Pool) -> Result(PoolStatus, HoldError) {
+pub fn status(pool: Pool(attachment)) -> Result(PoolStatus, HoldError) {
   ask(pool, StatusRequest)
 }
 
@@ -618,8 +670,8 @@ pub fn status(pool: Pool) -> Result(PoolStatus, HoldError) {
 /// that the subject has now, never to the name, so a manager that exits
 /// at that moment gives `PoolStopped` too, not a crash of the caller.
 fn ask(
-  pool: Pool,
-  make: fn(Subject(reply)) -> PoolMessage,
+  pool: Pool(attachment),
+  make: fn(Subject(reply)) -> PoolMessage(attachment),
 ) -> Result(reply, HoldError) {
   use manager <- try(manager_pid(pool))
   let reply_to = process.new_subject()
@@ -635,7 +687,7 @@ fn ask(
 }
 
 /// The manager process of the pool, or of its name now.
-fn manager_pid(pool: Pool) -> Result(Pid, HoldError) {
+fn manager_pid(pool: Pool(attachment)) -> Result(Pid, HoldError) {
   process.subject_owner(pool.subject) |> result.replace_error(PoolStopped)
 }
 
@@ -646,9 +698,9 @@ fn pool_down(_down: Down) -> Result(reply, HoldError) {
 // The process -----------------------------------------------------------------
 
 fn handle_message(
-  state: State,
-  message: PoolMessage,
-) -> actor.Next(State, PoolMessage) {
+  state: State(attachment),
+  message: PoolMessage(attachment),
+) -> actor.Next(State(attachment), PoolMessage(attachment)) {
   case message {
     CheckOut(caller:, deadline_milliseconds:, reply:) ->
       check_out_request(state, caller, deadline_milliseconds, reply) |> next
@@ -660,6 +712,10 @@ fn handle_message(
     }
     CatalogRequest(reply:) -> {
       process.send(reply, state.catalog)
+      actor.continue(state)
+    }
+    AttachmentRequest(reply:) -> {
+      process.send(reply, state.settings.attachment)
       actor.continue(state)
     }
     StopRequest(deadline_milliseconds:, reply:) ->
@@ -674,14 +730,18 @@ fn handle_message(
 
 /// While the pool serves, it hands each free connection to the oldest
 /// waiter. While it drains, it closes when the last hold ended.
-fn next(state: State) -> actor.Next(State, PoolMessage) {
+fn next(
+  state: State(attachment),
+) -> actor.Next(State(attachment), PoolMessage(attachment)) {
   case state.phase {
     Serving -> actor.continue(settle(state))
     Draining -> drained(state)
   }
 }
 
-fn drained(state: State) -> actor.Next(State, PoolMessage) {
+fn drained(
+  state: State(attachment),
+) -> actor.Next(State(attachment), PoolMessage(attachment)) {
   case dict.is_empty(state.holders) {
     True -> shut_down(state)
     False -> actor.continue(state)
@@ -693,11 +753,11 @@ fn drained(state: State) -> actor.Next(State, PoolMessage) {
 /// Each checkout waits in the queue, with a timer for its deadline. The
 /// settle after it hands it a free connection at once, if there is one.
 fn check_out_request(
-  state: State,
+  state: State(attachment),
   caller: Pid,
   deadline_milliseconds: Int,
   reply: Subject(Result(Lease, HoldError)),
-) -> State {
+) -> State(attachment) {
   let id = state.next_id
   let timer =
     process.send_after(state.subject, deadline_milliseconds, WaiterExpired(id))
@@ -709,7 +769,10 @@ fn check_out_request(
 
 /// A checkout that no free connection serves at once waits, and the
 /// subscriber hears how many wait.
-fn settle_checkout(state: State, waiter_id: Int) -> State {
+fn settle_checkout(
+  state: State(attachment),
+  waiter_id: Int,
+) -> State(attachment) {
   let state = settle(state)
   case list.any(state.waiters, waiter_has_id(_, waiter_id)) {
     True -> tell(state, HoldWaiting(list.length(state.waiters)))
@@ -719,14 +782,14 @@ fn settle_checkout(state: State, waiter_id: Int) -> State {
 }
 
 /// A pool that drains refuses each checkout at once.
-fn refuse_while_draining(state: State) -> State {
+fn refuse_while_draining(state: State(attachment)) -> State(attachment) {
   case state.phase {
     Serving -> state
     Draining -> refuse_waiters(state, PoolStopped)
   }
 }
 
-fn expire(state: State, waiter_id: Int) -> State {
+fn expire(state: State(attachment), waiter_id: Int) -> State(attachment) {
   let #(expired, others) = partition(state.waiters, waiter_has_id(_, waiter_id))
   each(expired, refuse_waiter(state, _, HoldDeadlinePassed))
   State(..state, waiters: others)
@@ -736,12 +799,19 @@ fn waiter_has_id(waiter: Waiter, id: Int) -> Bool {
   waiter.id == id
 }
 
-fn refuse_waiters(state: State, error: HoldError) -> State {
+fn refuse_waiters(
+  state: State(attachment),
+  error: HoldError,
+) -> State(attachment) {
   each(state.waiters, refuse_waiter(state, _, error))
   State(..state, waiters: [])
 }
 
-fn refuse_waiter(state: State, waiter: Waiter, error: HoldError) -> Nil {
+fn refuse_waiter(
+  state: State(attachment),
+  waiter: Waiter,
+  error: HoldError,
+) -> Nil {
   process.cancel_timer(waiter.timer)
   process.send(waiter.reply, Error(error))
   tell(state, HoldRefused(error))
@@ -749,7 +819,7 @@ fn refuse_waiter(state: State, waiter: Waiter, error: HoldError) -> Nil {
 
 /// Hands free connections to the waiters, oldest first. When none is
 /// connected and the last connect failed, every waiter gets that error.
-fn settle(state: State) -> State {
+fn settle(state: State(attachment)) -> State(attachment) {
   let state = serve(state)
   case unreachable_error(state) {
     Some(error) -> refuse_waiters(state, ConnectFailed(error))
@@ -757,7 +827,7 @@ fn settle(state: State) -> State {
   }
 }
 
-fn serve(state: State) -> State {
+fn serve(state: State(attachment)) -> State(attachment) {
   case state.waiters, find_map(dict.to_list(state.slots), free_entry) {
     [oldest, ..others], Ok(#(slot_id, slot, connection)) ->
       State(..state, waiters: others)
@@ -801,12 +871,12 @@ fn is_connected(slot: Slot) -> Bool {
 /// Gives the slot's connection to the waiter. The pool monitors the
 /// caller, so the hold ends also when the caller exits.
 fn hand_out(
-  state: State,
+  state: State(attachment),
   waiter: Waiter,
   slot_id: Int,
   slot: Slot,
   connection: Connection,
-) -> State {
+) -> State(attachment) {
   process.cancel_timer(waiter.timer)
   let lease_id = state.next_id
   let holder = Holder(slot: slot_id, monitor: process.monitor(waiter.caller))
@@ -824,14 +894,14 @@ fn hand_out(
 }
 
 /// The last connect error, while no connection is connected.
-fn unreachable_error(state: State) -> Option(ConnectError) {
+fn unreachable_error(state: State(attachment)) -> Option(ConnectError) {
   case count(dict.values(state.slots), is_connected) {
     0 -> state.last_connect_error
     _connected -> None
   }
 }
 
-fn status_of(state: State) -> PoolStatus {
+fn status_of(state: State(attachment)) -> PoolStatus {
   let slots = dict.values(state.slots)
   PoolStatus(
     size: state.settings.size,
@@ -847,13 +917,17 @@ fn status_of(state: State) -> PoolStatus {
 
 /// Ends a hold. The connection goes to its member for a reset, unless the
 /// member replaced it during the hold.
-fn check_in(state: State, lease_id: Int) -> State {
+fn check_in(state: State(attachment), lease_id: Int) -> State(attachment) {
   dict.get(state.holders, lease_id)
   |> result.map(release(state, lease_id, _))
   |> result.unwrap(state)
 }
 
-fn release(state: State, lease_id: Int, holder: Holder) -> State {
+fn release(
+  state: State(attachment),
+  lease_id: Int,
+  holder: Holder,
+) -> State(attachment) {
   process.demonitor_process(holder.monitor)
   let holders = dict.delete(state.holders, lease_id)
   let state =
@@ -877,7 +951,7 @@ fn returned(slot: Slot, lease_id: Int) -> Slot {
 
 /// A monitor of a holder ends its hold. A monitor of a member removes
 /// its slot until the supervisor starts the member again.
-fn after_down(state: State, monitor: Monitor) -> State {
+fn after_down(state: State(attachment), monitor: Monitor) -> State(attachment) {
   case find(dict.to_list(state.holders), holder_has_monitor(_, monitor)) {
     Ok(#(lease_id, holder)) -> release(state, lease_id, holder)
     Error(Nil) ->
@@ -904,7 +978,10 @@ fn member_has_other_monitor(slot: Slot, monitor: Monitor) -> Bool {
 /// Changes the state for the report, then tells the subscriber the event
 /// of the report, and `MemberFree` when the report freed the member's
 /// connection.
-fn after_report(state: State, report: MemberReport) -> State {
+fn after_report(
+  state: State(attachment),
+  report: MemberReport,
+) -> State(attachment) {
   let changed = state_after_report(state, report)
   let slot_id = report_slot(report)
   option.map(event_of_report(report), tell(changed, _))
@@ -915,12 +992,12 @@ fn after_report(state: State, report: MemberReport) -> State {
   changed
 }
 
-fn tell(state: State, event: PoolEvent) -> Nil {
+fn tell(state: State(attachment), event: PoolEvent) -> Nil {
   option.map(state.settings.events, process.send(_, event))
   Nil
 }
 
-fn slot_is_free(state: State, slot_id: Int) -> Bool {
+fn slot_is_free(state: State(attachment), slot_id: Int) -> Bool {
   dict.get(state.slots, slot_id) |> result.map(is_free) |> result.unwrap(False)
 }
 
@@ -940,7 +1017,10 @@ fn event_of_report(report: MemberReport) -> Option(PoolEvent) {
   }
 }
 
-fn state_after_report(state: State, report: MemberReport) -> State {
+fn state_after_report(
+  state: State(attachment),
+  report: MemberReport,
+) -> State(attachment) {
   case report {
     MemberStarted(slot:, member:) -> member_started(state, slot, member)
     pool_member.MemberConnected(slot:, connection:) ->
@@ -958,7 +1038,11 @@ fn state_after_report(state: State, report: MemberReport) -> State {
   }
 }
 
-fn member_started(state: State, slot_id: Int, member: Member) -> State {
+fn member_started(
+  state: State(attachment),
+  slot_id: Int,
+  member: Member,
+) -> State(attachment) {
   let monitor = process.monitor(pool_member.member_pid(member))
   let slot =
     Slot(
@@ -995,7 +1079,11 @@ fn without_connection(slot: Slot) -> Slot {
 
 /// Changes the slot of a member that runs. A member's reports all come
 /// before the monitor of its exit, so the slot is there.
-fn update_slot(state: State, slot_id: Int, change: fn(Slot) -> Slot) -> State {
+fn update_slot(
+  state: State(attachment),
+  slot_id: Int,
+  change: fn(Slot) -> Slot,
+) -> State(attachment) {
   dict.get(state.slots, slot_id)
   |> result.map(change)
   |> result.map(dict.insert(state.slots, slot_id, _))
@@ -1003,7 +1091,10 @@ fn update_slot(state: State, slot_id: Int, change: fn(Slot) -> Slot) -> State {
   |> result.unwrap(state)
 }
 
-fn with_slots(state: State, slots: Dict(Int, Slot)) -> State {
+fn with_slots(
+  state: State(attachment),
+  slots: Dict(Int, Slot),
+) -> State(attachment) {
   State(..state, slots:)
 }
 
@@ -1011,7 +1102,7 @@ fn with_slots(state: State, slots: Dict(Int, Slot)) -> State {
 /// its member for a health check, and sets the timer for the next one. A
 /// connection that was used in the interval proved itself: it waits for
 /// the next interval.
-fn check_health(state: State) -> State {
+fn check_health(state: State(attachment)) -> State(attachment) {
   process.send_after(
     state.subject,
     state.settings.health_check_interval_milliseconds,
@@ -1036,10 +1127,10 @@ fn health_checked(_slot_id: Int, slot: Slot) -> Slot {
 /// pool closes when the last hold ended, or at the deadline. A second stop
 /// keeps the earlier deadline when it is shorter.
 fn drain(
-  state: State,
+  state: State(attachment),
   deadline_milliseconds: Int,
   replies: List(Subject(Nil)),
-) -> State {
+) -> State(attachment) {
   process.send_after(state.subject, deadline_milliseconds, DrainDeadlinePassed)
   let first_stop = state.phase == Serving
   guard(when: !first_stop, return: Nil, otherwise: fn() {
@@ -1057,9 +1148,9 @@ fn drain(
 /// with an error. Any other exit is the one of the pool's owner, and the
 /// pool drains and closes.
 fn exit_received(
-  state: State,
+  state: State(attachment),
   exit: ExitMessage,
-) -> actor.Next(State, PoolMessage) {
+) -> actor.Next(State(attachment), PoolMessage(attachment)) {
   case exit.pid == state.supervisor || exit.pid == state.catalog_pid {
     True -> stop_with_error("a process of the pool stopped")
     False ->
@@ -1070,7 +1161,9 @@ fn exit_received(
 /// Stops the manager with an exit reason that is not normal. The manager
 /// traps exits, so the exit signal that `stop_abnormal` sends to its own
 /// process would only be a message: the manager stops trapping first.
-fn stop_with_error(reason: String) -> actor.Next(State, PoolMessage) {
+fn stop_with_error(
+  reason: String,
+) -> actor.Next(State(attachment), PoolMessage(attachment)) {
   process.trap_exits(False)
   actor.stop_abnormal(reason)
 }
@@ -1078,7 +1171,9 @@ fn stop_with_error(reason: String) -> actor.Next(State, PoolMessage) {
 /// Shuts the members' supervisor down, which makes each member send
 /// Terminate on its connection, and waits until it is down. Then the
 /// catalog stops, and each caller of `stop` gets its answer.
-fn shut_down(state: State) -> actor.Next(State, PoolMessage) {
+fn shut_down(
+  state: State(attachment),
+) -> actor.Next(State(attachment), PoolMessage(attachment)) {
   let monitor = process.monitor(state.supervisor)
   process.send_abnormal_exit(state.supervisor, atom.create("shutdown"))
   process.new_selector()

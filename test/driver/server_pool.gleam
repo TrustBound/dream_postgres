@@ -45,7 +45,7 @@ import gleam/string.{inspect}
 
 /// The settings of a pool of connections with `connection`, with no health
 /// check in the time of a test, and deadlines of 5 seconds.
-pub fn pool_config(connection: connection.ConnectionConfig) -> PoolConfig {
+pub fn pool_config(connection: connection.ConnectionConfig) -> PoolConfig(Nil) {
   PoolConfig(
     connection:,
     health_check_interval_milliseconds: 60_000,
@@ -53,12 +53,13 @@ pub fn pool_config(connection: connection.ConnectionConfig) -> PoolConfig {
     rollback_deadline_milliseconds: 5000,
     shutdown_deadline_milliseconds: 5000,
     events: None,
+    attachment: Nil,
   )
 }
 
 /// The settings of a pool of connections as `dream` to localhost on
 /// `port`.
-pub fn dream_pool_config(port: Int) -> Result(PoolConfig, String) {
+pub fn dream_pool_config(port: Int) -> Result(PoolConfig(Nil), String) {
   connection_config(port) |> result.map(pool_config)
 }
 
@@ -68,17 +69,17 @@ pub fn user_pool_config(
   port: Int,
   user: String,
   password: String,
-) -> Result(PoolConfig, String) {
+) -> Result(PoolConfig(Nil), String) {
   user_config(port, user, password) |> result.map(pool_config)
 }
 
 /// The config with a health check every `interval` milliseconds, whose
 /// query may take `deadline` milliseconds.
 pub fn health_check_config(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   interval: Int,
   deadline: Int,
-) -> PoolConfig {
+) -> PoolConfig(attachment) {
   PoolConfig(
     ..config,
     health_check_interval_milliseconds: interval,
@@ -88,14 +89,16 @@ pub fn health_check_config(
 
 /// The config with a rollback deadline of `deadline` milliseconds.
 pub fn rollback_deadline_config(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   deadline: Int,
-) -> PoolConfig {
+) -> PoolConfig(attachment) {
   PoolConfig(..config, rollback_deadline_milliseconds: deadline)
 }
 
 /// The config of connections that connect again only after a test.
-pub fn slow_reconnect_config(config: PoolConfig) -> PoolConfig {
+pub fn slow_reconnect_config(
+  config: PoolConfig(attachment),
+) -> PoolConfig(attachment) {
   PoolConfig(
     ..config,
     connection: ConnectionConfig(
@@ -106,10 +109,10 @@ pub fn slow_reconnect_config(config: PoolConfig) -> PoolConfig {
 }
 
 fn watched_pool_config(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   events: Subject(ConnectionEvent),
   pool_events: Subject(PoolEvent),
-) -> PoolConfig {
+) -> PoolConfig(attachment) {
   PoolConfig(
     ..config,
     connection: ConnectionConfig(..config.connection, events: Some(events)),
@@ -120,14 +123,17 @@ fn watched_pool_config(
 // Started pools ---------------------------------------------------------------
 
 /// Starts a pool of `size` connections with `config`.
-pub fn start_pool(config: PoolConfig, size: Int) -> Result(Pool, String) {
+pub fn start_pool(
+  config: PoolConfig(attachment),
+  size: Int,
+) -> Result(Pool(attachment), String) {
   pool.start(config, size)
   |> map_error(fn(error) { "could not start a pool: " <> inspect(error) })
 }
 
 /// Stops the pool with a deadline of 1 second for its holds. A pool that
 /// stopped already stays stopped.
-pub fn stop_pool(pool: Pool) -> Result(Nil, String) {
+pub fn stop_pool(pool: Pool(attachment)) -> Result(Nil, String) {
   Ok(pool.stop(pool, 1000))
 }
 
@@ -135,7 +141,7 @@ pub fn stop_pool(pool: Pool) -> Result(Nil, String) {
 /// to the server, and an advisory lock key that no other test uses.
 pub type PoolSession {
   PoolSession(
-    pool: Pool,
+    pool: Pool(Nil),
     control: Connection,
     events: Subject(ConnectionEvent),
     /// The events of the pool's members.
@@ -148,7 +154,7 @@ pub type PoolSession {
 /// to a new subject, and a control connection to `server`.
 pub fn start_pool_session(
   server: Server,
-  config: Result(PoolConfig, String),
+  config: Result(PoolConfig(Nil), String),
   size: Int,
 ) -> Result(PoolSession, String) {
   use config <- try(config)
@@ -168,7 +174,7 @@ pub fn start_pool_session(
 
 /// Stops the pool and gives `error`: for a setup that fails after it
 /// started the pool.
-pub fn stop_pool_after_error(pool: Pool, error: String) -> String {
+pub fn stop_pool_after_error(pool: Pool(attachment), error: String) -> String {
   pool.stop(pool, 1000)
   error
 }
@@ -221,7 +227,7 @@ pub fn start_test_pool(
 /// `config` for the test, with a control connection to `server`.
 pub fn start_test_pool_configured(
   server: Server,
-  config: Result(PoolConfig, String),
+  config: Result(PoolConfig(Nil), String),
   size: Int,
 ) -> fn(PoolSession) -> Result(PoolSession, String) {
   fn(_tree_session) { start_pool_session(server, config, size) }
@@ -235,7 +241,7 @@ pub fn start_test_pool_configured(
 /// after the other, so the pool has one connection.
 pub type ProxiedPool {
   ProxiedPool(
-    pool: Pool,
+    pool: Pool(Nil),
     proxy: Proxy,
     control: Connection,
     events: Subject(ConnectionEvent),
@@ -248,7 +254,7 @@ pub type ProxiedPool {
 /// the dream config that `configure` changes, and a control connection.
 pub fn start_proxied_pool(
   server: Server,
-  configure: fn(PoolConfig) -> PoolConfig,
+  configure: fn(PoolConfig(Nil)) -> PoolConfig(Nil),
 ) -> Result(ProxiedPool, String) {
   use #(port, proxy) <- try(start_proxy(server.port))
   {
@@ -299,13 +305,15 @@ pub fn start_test_proxied_pool(
 /// that `configure` changes for the test.
 pub fn start_test_proxied_pool_configured(
   server: Server,
-  configure: fn(PoolConfig) -> PoolConfig,
+  configure: fn(PoolConfig(Nil)) -> PoolConfig(Nil),
 ) -> fn(ProxiedPool) -> Result(ProxiedPool, String) {
   fn(_tree_proxied) { start_proxied_pool(server, configure) }
 }
 
 /// The config as it is: for a proxied pool with the dream config.
-pub fn unchanged_config(config: PoolConfig) -> PoolConfig {
+pub fn unchanged_config(
+  config: PoolConfig(attachment),
+) -> PoolConfig(attachment) {
   config
 }
 
@@ -342,7 +350,7 @@ pub fn pool_act_setup(
 /// the dream config that `configure` changes.
 pub fn proxied_pool_act_setup(
   server: Server,
-  configure: fn(PoolConfig) -> PoolConfig,
+  configure: fn(PoolConfig(Nil)) -> PoolConfig(Nil),
   act: fn(ProxiedPool) -> Result(outcome, String),
 ) -> Context(ActOutcome(ProxiedPool, outcome)) {
   act_setup(
@@ -357,7 +365,7 @@ pub fn proxied_pool_act_setup(
 /// Holds a connection of the pool for `callback`, with a deadline of 5
 /// seconds, and gives what the callback gave.
 pub fn hold_connection(
-  pool: Pool,
+  pool: Pool(attachment),
   callback: fn(Connection) -> Result(value, String),
 ) -> Result(value, String) {
   pool.hold(pool, 5000, callback)
@@ -366,19 +374,19 @@ pub fn hold_connection(
 }
 
 /// The backend process ID of a connection that the pool hands out.
-pub fn held_backend_pid(pool: Pool) -> Result(String, String) {
+pub fn held_backend_pid(pool: Pool(attachment)) -> Result(String, String) {
   hold_connection(pool, backend_pid)
 }
 
 /// The status of the pool.
-pub fn pool_status(pool: Pool) -> Result(PoolStatus, String) {
+pub fn pool_status(pool: Pool(attachment)) -> Result(PoolStatus, String) {
   pool.status(pool)
   |> map_error(fn(error) { "could not ask for the status: " <> inspect(error) })
 }
 
 /// The transaction status of a connection that the pool hands out.
 pub fn held_transaction_status(
-  pool: Pool,
+  pool: Pool(attachment),
 ) -> Result(TransactionStatus, String) {
   hold_connection(pool, connection_status)
 }
@@ -417,7 +425,7 @@ pub fn stop_on_backend(connection: Connection) -> Result(String, String) {
 /// Holds `count` connections of the pool at the same time, and gives what
 /// `act` gives with them.
 pub fn while_holding(
-  pool: Pool,
+  pool: Pool(attachment),
   count: Int,
   act: fn(List(Connection)) -> value,
 ) -> Result(value, String) {
@@ -425,7 +433,7 @@ pub fn while_holding(
 }
 
 fn hold_more(
-  pool: Pool,
+  pool: Pool(attachment),
   count: Int,
   held: List(Connection),
   act: fn(List(Connection)) -> value,
@@ -453,7 +461,7 @@ pub fn backend_pid_and_time(
 /// holds again inside the hold: it gives the backend process IDs of the
 /// killed connection and of the one that the pool hands out after it.
 pub fn kill_and_hold_again(
-  pool: Pool,
+  pool: Pool(attachment),
 ) -> fn(Connection) -> Result(#(String, String), String) {
   fn(connection) {
     use first <- try(backend_pid(connection))
@@ -466,7 +474,7 @@ pub fn kill_and_hold_again(
 /// The call that holds a connection of the pool and gives the one text
 /// cell that `sql` gives on it, for `start_caller`.
 pub fn query_in_hold(
-  pool: Pool,
+  pool: Pool(attachment),
   sql: String,
 ) -> fn() -> Result(String, String) {
   fn() { hold_connection(pool, query_text(_, sql)) }
@@ -475,7 +483,7 @@ pub fn query_in_hold(
 /// The call that holds a connection of the pool and runs the script `sql`
 /// on it, for `start_caller`.
 pub fn script_in_hold(
-  pool: Pool,
+  pool: Pool(attachment),
   sql: String,
 ) -> fn() -> Result(Result(List(Outcome), DriverError), HoldError) {
   fn() { pool.hold(pool, 5000, run_script(_, sql, 5000)) }
@@ -483,7 +491,7 @@ pub fn script_in_hold(
 
 /// The callback of a hold that stops the pool of `handle` with a deadline
 /// of 20 milliseconds, and gives `"stopped"`.
-pub fn stop_pool_inside(handle: Pool) -> fn(Connection) -> String {
+pub fn stop_pool_inside(handle: Pool(attachment)) -> fn(Connection) -> String {
   fn(_connection) {
     pool.stop(handle, 20)
     "stopped"
@@ -507,7 +515,7 @@ pub type Holder(prepared) {
 /// Starts a holder of a connection of the pool, runs `prepare` on the
 /// connection, and waits until it did. An error after 5 seconds.
 pub fn start_holder(
-  pool: Pool,
+  pool: Pool(attachment),
   prepare: fn(Connection) -> prepared,
 ) -> Result(Holder(prepared), String) {
   let ready = process.new_subject()
@@ -536,7 +544,9 @@ fn keep_held(
 
 /// Starts a holder of a connection of the pool that does nothing with the
 /// connection.
-pub fn start_idle_holder(pool: Pool) -> Result(Holder(Nil), String) {
+pub fn start_idle_holder(
+  pool: Pool(attachment),
+) -> Result(Holder(Nil), String) {
   start_holder(pool, fn(_connection) { Nil })
 }
 
@@ -598,13 +608,13 @@ pub fn release_pool_lock(session: PoolSession) -> Result(Nil, String) {
 /// the subject that ends the owner. The owner ends after 10 seconds at
 /// most.
 pub type OwnedPool {
-  OwnedPool(pool: Pool, owner: Subject(Nil))
+  OwnedPool(pool: Pool(Nil), owner: Subject(Nil))
 }
 
 /// Starts a pool of `size` connections with `config` in a new owner
 /// process. An error after 5 seconds.
 pub fn start_owned_pool(
-  config: PoolConfig,
+  config: PoolConfig(Nil),
   size: Int,
 ) -> Result(OwnedPool, String) {
   let started = process.new_subject()
@@ -615,7 +625,7 @@ pub fn start_owned_pool(
 }
 
 fn own_pool(
-  config: PoolConfig,
+  config: PoolConfig(Nil),
   size: Int,
   started: Subject(Result(OwnedPool, String)),
 ) -> Result(Nil, Nil) {
@@ -636,7 +646,7 @@ pub fn end_owner(owned: OwnedPool) -> Nil {
 /// exits, kills the supervisor of the pool's members, and gives the exit
 /// reason of the pool. An error after 5 seconds.
 pub fn exit_after_supervisor_kill(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
 ) -> Result(ExitReason, String) {
   let exits = process.new_subject()
   process.spawn_unlinked(fn() { kill_supervisor(config, exits) })
@@ -646,7 +656,7 @@ pub fn exit_after_supervisor_kill(
 }
 
 fn kill_supervisor(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   exits: Subject(Result(ExitReason, String)),
 ) -> Nil {
   process.trap_exits(True)
@@ -673,9 +683,9 @@ fn exit_reason(exit: ExitMessage) -> ExitReason {
 /// supervisor.
 pub type NamedPool {
   NamedPool(
-    name: Name(PoolMessage),
-    handle: Pool,
-    config: PoolConfig,
+    name: Name(PoolMessage(String)),
+    handle: Pool(String),
+    config: PoolConfig(String),
     owner: Subject(Nil),
     supervisor: Pid,
     /// The events of each pool that the supervisor starts under the name.
@@ -691,8 +701,13 @@ pub fn start_named_pool(
 ) -> Result(NamedPool, String) {
   use config <- try(dream_pool_config(server.port))
   let pool_events = process.new_subject()
-  let config = PoolConfig(..config, events: Some(pool_events))
   let name = process.new_name("pool_test_named")
+  let config =
+    PoolConfig(
+      ..config,
+      events: Some(pool_events),
+      attachment: "the settings of a named pool",
+    )
   let started = process.new_subject()
   process.spawn_unlinked(fn() { supervise_pool(config, size, name, started) })
   use #(supervisor, owner) <- try(
@@ -711,9 +726,9 @@ pub fn start_named_pool(
 }
 
 fn supervise_pool(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   size: Int,
-  name: Name(PoolMessage),
+  name: Name(PoolMessage(attachment)),
   started: Subject(Result(#(Pid, Subject(Nil)), String)),
 ) -> Result(Nil, Nil) {
   process.trap_exits(True)
@@ -732,9 +747,9 @@ fn supervise_pool(
 /// Starts a supervisor of a pool of `size` connections with `config` under
 /// `name`, linked to the process that calls it.
 pub fn start_supervised_pool(
-  config: PoolConfig,
+  config: PoolConfig(attachment),
   size: Int,
-  name: Name(PoolMessage),
+  name: Name(PoolMessage(attachment)),
 ) -> Result(Started(Supervisor), actor.StartError) {
   static_supervisor.new(static_supervisor.OneForOne)
   |> static_supervisor.add(pool.supervised(config, size, name))
@@ -782,7 +797,9 @@ pub fn start_test_named_pool(
 
 /// Kills the manager process of the name, and waits until it is down, so
 /// the name is free.
-pub fn kill_named_manager(name: Name(PoolMessage)) -> Result(Nil, String) {
+pub fn kill_named_manager(
+  name: Name(PoolMessage(attachment)),
+) -> Result(Nil, String) {
   use pid <- try(
     process.named(name) |> map_error(fn(_nil) { "no process has the name" }),
   )
@@ -793,14 +810,14 @@ pub fn kill_named_manager(name: Name(PoolMessage)) -> Result(Nil, String) {
 
 /// The supervisor of the members of the pool.
 @external(erlang, "pool_test_ffi", "supervisor_of")
-pub fn supervisor_of(pool: Pool) -> Result(Pid, String)
+pub fn supervisor_of(pool: Pool(attachment)) -> Result(Pid, String)
 
 @external(erlang, "pool_test_ffi", "members_of")
-fn pool_members(pool: Pool) -> Result(List(Pid), String)
+fn pool_members(pool: Pool(attachment)) -> Result(List(Pid), String)
 
 /// Kills the first member process of the pool, and waits until it is
 /// down.
-pub fn kill_member(pool: Pool) -> Result(Nil, String) {
+pub fn kill_member(pool: Pool(attachment)) -> Result(Nil, String) {
   use members <- try(pool_members(pool))
   use member <- try(
     list.first(members) |> map_error(fn(_nil) { "the pool has no members" }),
