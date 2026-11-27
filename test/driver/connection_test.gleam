@@ -51,11 +51,12 @@ import driver/server_connection.{
   proxied_act_setup, proxied_setup, release_advisory_lock, run_control_script,
   run_control_setup_script, run_failing_script, run_failing_statement,
   run_setup_script, run_setup_statement, send_stray_message, start_caller,
-  start_configured, start_connection, start_in_ended_owner, start_test_caching,
+  start_connection, start_in_ended_owner, start_test_caching,
   start_test_configured, start_test_connection, start_test_proxied,
-  start_test_proxied_with_caching, stop_after_error, stop_connection,
-  stop_proxied, terminate_backend, terminate_session, tls_config, user_config,
-  wait_for_lock_waiter, wait_for_table_waiter, watched_config,
+  start_test_proxied_with_caching, start_watched, stop_after_error,
+  stop_connection, stop_proxied, terminate_backend, terminate_session,
+  tls_config, user_config, wait_for_lock_waiter, wait_for_table_waiter,
+  watched_config,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/driver_tls.{verify_full}
@@ -713,7 +714,7 @@ fn start_tests() -> TestSuite {
         |> or_fail_with("Expected the supervisor to start the connection")
       }),
       it(
-        "fails the supervisor's start when it cannot connect",
+        "keeps the supervisor up when it cannot connect",
         fn(inputs: StartInputs) {
           // Arrange
           let supervisor =
@@ -728,8 +729,8 @@ fn start_tests() -> TestSuite {
           started
           |> should
           |> be_ok
-          |> be_error
-          |> or_fail_with("Expected the supervisor's start to fail")
+          |> be_ok
+          |> or_fail_with("Expected the supervisor to start, with no server")
         },
       ),
     ],
@@ -1212,7 +1213,10 @@ fn start_refused_reconnect() -> Result(RefusedReconnect, String) {
   let events = process.new_subject()
   let port = first_driver_server.port
   use config <- try(user_config(port, "dream_reconnect", "dream"))
-  use connection <- try(start_configured(watched_config(config, events, 10)))
+  use connection <- try(start_watched(
+    watched_config(config, events, 10),
+    events,
+  ))
   use control <- try(
     start_connection(port) |> map_error(stop_after_error(connection, _)),
   )
