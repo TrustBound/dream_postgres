@@ -66,15 +66,28 @@ jobs:
         run: gleam build
 
       - name: Start the PostgreSQL servers
-        # The tests run queries on two real PostgreSQL servers: a plain one
-        # and one with SSL on and the certificates of test/fixtures/ssl.
-        # scripts/db-up.sh starts both from docker-compose.yml, the same as
-        # `make db-up`. The docs show lines of that script and of that file.
+        # The tests run queries on real PostgreSQL servers: PostgreSQL 16
+        # with SSL off, PostgreSQL 16 with SSL on and the certificates of
+        # test/fixtures/ssl, PostgreSQL 17, 18 and 19 for the type proof, and
+        # the driver servers for PostgreSQL 16, 17, 18 and 19, each with SSL
+        # on and one database user for each login method. The driver tests
+        # (test/driver) run on all four driver servers in this one job, so
+        # the run downloads the Hex packages once. Each server has pgvector,
+        # hstore, ltree and citext. scripts/db-up.sh
+        # builds the image dream-test-postgres:<version> from
+        # test/docker/Dockerfile and starts the servers from
+        # docker-compose.yml, the same as `make db-up`. The docs show lines
+        # of that script and of that file.
         run: sh scripts/db-up.sh
 
       - name: Run tests
+        # The coverage gate of the test main fails the run below 100% line
+        # coverage of every module in src, the driver modules
+        # (src/dream_postgres/driver) included.
         env:
           CI: "true"
+          # The type proof runs on PostgreSQL 16, 17, 18 and 19.
+          DREAM_POSTGRES_PROOF_URLS: postgresql://dream:dream@localhost:5436/dream_test,postgresql://dream:dream@localhost:5438/dream_test,postgresql://dream:dream@localhost:5439/dream_test,postgresql://dream:dream@localhost:5440/dream_test
         run: gleam test
 
       - name: Build documentation

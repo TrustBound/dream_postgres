@@ -6,6 +6,7 @@ import dream_test/parallel
 import dream_test/reporters/bdd
 import dream_test/reporters/progress
 import dream_test/runner
+import driver/server_test as driver_server_test
 import fixtures/ssl_database
 import fixtures/test_database
 import gleam/io
@@ -76,6 +77,7 @@ fn run_tests() -> Nil {
     recorder_snippets_test.tests(),
     guide_recording_test.tests(),
     guide_recording_testing.tests(),
+    driver_server_test.tests(),
   ])
   // The SSL tests change the CA list of the whole BEAM, so they run one at
   // a time, after the other suites.
