@@ -133,6 +133,55 @@ pub fn copy_refusal() -> BitArray {
   <<"f", { byte_size(body) + 4 }:32, body:bits>>
 }
 
+/// The reason in the CopyFail that abandons a `COPY ... FROM STDIN`: the
+/// app's function failed, its caller left, or the deadline passed. The
+/// server puts it in its 57014 error.
+pub const copy_abandon_reason = "the client abandoned the COPY"
+
+/// The bytes of the CopyFail that abandons a COPY, with
+/// `copy_abandon_reason`. Its text has no zero byte, so it cannot fail.
+///
+/// ## Returns
+///
+/// The bytes of the CopyFail.
+pub fn copy_abandonment() -> BitArray {
+  let body = <<copy_abandon_reason:utf8, 0>>
+  <<"f", { byte_size(body) + 4 }:32, body:bits>>
+}
+
+/// The largest data of one CopyData that `copy_data_messages` writes.
+pub const copy_data_piece_limit = 65_536
+
+/// The bytes of the CopyData messages that carry `data` in a
+/// `COPY ... FROM STDIN`: one message for each piece of at most
+/// `copy_data_piece_limit` bytes, in order. The server joins the pieces,
+/// because the boundaries of CopyData messages need not match the rows. A
+/// piece is never longer than a length field holds, so it cannot fail.
+///
+/// ## Parameters
+///
+/// - `data`: bytes of the COPY data stream, in the format of the COPY
+///
+/// ## Returns
+///
+/// The bytes of the messages, or no bytes for empty data.
+pub fn copy_data_messages(data: BitArray) -> BitArray {
+  copy_data_pieces(data, <<>>)
+}
+
+fn copy_data_pieces(data: BitArray, written: BitArray) -> BitArray {
+  case data {
+    <<>> -> written
+    <<piece:bytes-size(copy_data_piece_limit), rest:bits>> ->
+      copy_data_pieces(rest, <<written:bits, copy_data_message(piece):bits>>)
+    last -> <<written:bits, copy_data_message(last):bits>>
+  }
+}
+
+fn copy_data_message(piece: BitArray) -> BitArray {
+  <<"d", { byte_size(piece) + 4 }:32, piece:bits>>
+}
+
 /// The bytes of a Terminate. It has no field, so it cannot fail.
 ///
 /// ## Returns

@@ -1,6 +1,7 @@
 //// The query steps of the PostgreSQL wire protocol, as pure state machines:
 //// prepare a statement, run a prepared statement, prepare and run in one
-//// round trip, and run a script with the simple query protocol.
+//// round trip, run a script with the simple query protocol, and run a
+//// COPY that streams rows into a table or out of one.
 ////
 //// Each step has a start function and a step function. The start function
 //// gives the messages to send and the first state. The step function takes
@@ -12,6 +13,7 @@
 ////
 //// Each step reads up to ReadyForQuery, also after an error and after a
 //// COPY that it refuses, so that the connection can take the next command.
+//// Only the copy step takes a COPY; the other steps refuse it.
 //// The outcome gives the transaction status of that ReadyForQuery. Each
 //// ParameterStatus, NoticeResponse and NotificationResponse that arrives
 //// during a step comes back with the outcome, in the order of arrival.
@@ -23,7 +25,9 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/driver/encode.{copy_done, copy_refusal, sync}
+import dream_postgres/driver/encode.{
+  copy_abandonment, copy_data_messages, copy_done, copy_refusal, sync,
+}
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ResultColumn, Bind,
   BindComplete, Close, CloseComplete, CommandComplete, CopyBothResponse,
@@ -46,8 +50,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string.{split, split_once}
 
-/// The message of the CopyFail that a step sends when the server asks for
-/// the data of a `COPY ... FROM STDIN`.
 /// The commands whose tag ends with a row count (docs, "CommandComplete").
 const counted_commands = [
   "INSERT", "UPDATE", "DELETE", "MERGE", "SELECT", "MOVE", "FETCH", "COPY",
@@ -94,11 +96,15 @@ pub type Phase {
   /// DataRow or CommandComplete, after the RowDescription of a statement of
   /// a script.
   ReadingScriptRows
-  /// CopyData or CopyDone from the server, in a COPY that the step refused.
+  /// CopyData or CopyDone from the server: the rows of a
+  /// `COPY ... TO STDOUT`, or of a COPY that the step refused.
   ReadingCopyOut
   /// The CommandComplete or the ErrorResponse that ends a COPY that the
-  /// step refused.
+  /// step refused, or the end of the rows of a `COPY ... TO STDOUT`.
   AwaitingCopyComplete
+  /// The server reads the CopyData of a `COPY ... FROM STDIN`, up to the
+  /// CommandComplete or the ErrorResponse that ends it.
+  CopyingIn
   /// ReadyForQuery, after the last answer of the step.
   AwaitingReadyForQuery
   /// ReadyForQuery, after an ErrorResponse.
@@ -122,10 +128,11 @@ pub type UnexpectedMessage {
 pub type Failure {
   /// The server sent an ErrorResponse, with every field.
   ServerError(report: ServerReport)
-  /// The server started a COPY, which a query step does not do. The step
-  /// refused it and read up to ReadyForQuery. The error is the
-  /// ErrorResponse that came after the COPY started, if one came: for a
-  /// `COPY ... FROM STDIN` it is the server's answer to the CopyFail.
+  /// The server started a COPY, which a query step does not do, or a COPY
+  /// of the other direction than the copy step's. The step refused it and
+  /// read up to ReadyForQuery. The error is the ErrorResponse that came
+  /// after the COPY started, if one came: for a `COPY ... FROM STDIN` it is
+  /// the server's answer to the CopyFail.
   CopyNotSupported(error: Option(ServerReport))
 }
 
@@ -200,6 +207,67 @@ pub opaque type SimpleQueryState {
   SimpleQueryState(machine: Machine)
 }
 
+/// The state of a copy step.
+pub opaque type CopyState {
+  CopyState(machine: Machine)
+}
+
+/// The direction of a COPY that the copy step takes.
+pub type CopyDirection {
+  /// A `COPY ... FROM STDIN`: rows from the app into a table.
+  CopyFrom
+  /// A `COPY ... TO STDOUT`: rows from a table to the app.
+  CopyTo
+}
+
+/// What a copy step gave, when it read its ReadyForQuery with no error.
+pub type CopyResult {
+  /// The COPY ended. `count` is the number of rows of its CommandComplete:
+  /// the rows that the server stored, or the rows that it sent.
+  CopyCompleted(count: Int)
+  /// The statement was not a COPY. It ran to its end, and its result is
+  /// dropped.
+  NoCopyStarted
+}
+
+/// What a copy step gives after one message from the server.
+pub type CopyStep {
+  /// The server started the COPY of the step's direction. In a
+  /// `COPY ... FROM STDIN` it now reads CopyData; in a
+  /// `COPY ... TO STDOUT` the rows follow.
+  CopyStarted(state: CopyState)
+  /// One row of a `COPY ... TO STDOUT`: the data of one CopyData, in the
+  /// format of the COPY.
+  CopyRow(row: BitArray, state: CopyState)
+  /// Send these bytes, then wait for the next message.
+  CopySend(bytes: BitArray, state: CopyState)
+  /// Wait for the next message.
+  CopyWait(state: CopyState)
+  /// The step read its ReadyForQuery.
+  CopyFinished(outcome: Outcome(CopyResult, Failure))
+  /// The server sent an ErrorResponse with the severity `FATAL` or `PANIC`
+  /// and closes the connection.
+  CopyConnectionEnded(
+    report: ServerReport,
+    asynchronous_messages: List(AsynchronousMessage),
+  )
+}
+
+/// What a step does with a COPY that the server starts.
+type CopyMode {
+  /// A query step refuses every COPY.
+  RefuseCopy
+  /// The copy step takes a COPY of this direction, and refuses the others.
+  ExpectCopy(direction: CopyDirection)
+}
+
+/// What the last message started in a copy step, for the step to tell.
+type CopySignal {
+  NoCopySignal
+  CopyBeganSignal
+  CopyRowSignal(row: BitArray)
+}
+
 type QueryProtocol {
   ExtendedProtocol
   SimpleProtocol
@@ -232,6 +300,16 @@ type Machine {
     error: Option(ServerReport),
     copy_refused: Bool,
     messages: List(AsynchronousMessage),
+    copy_mode: CopyMode,
+    /// The COPY of the copy step's direction started.
+    copy_began: Bool,
+    /// The step sent the CopyDone or the CopyFail, and its Sync, that end
+    /// a `COPY ... FROM STDIN`, or the server ended it with an error.
+    copy_in_ended: Bool,
+    /// The app gave up the COPY: a `COPY ... FROM STDIN` gets a CopyFail,
+    /// and the rows of a `COPY ... TO STDOUT` are dropped.
+    copy_abandoned: Bool,
+    copy_signal: CopySignal,
   )
 }
 
@@ -521,6 +599,162 @@ pub fn step_simple_query(
   |> result.map(to_step(_, SimpleQueryState, simple_query_outcome))
 }
 
+/// Starts a copy step: Parse, Bind and Execute of one statement on the
+/// unnamed statement and portal, and Sync. The extended protocol takes one
+/// statement only, so a script cannot hide a second one. The server reads
+/// past the Sync during a `COPY ... FROM STDIN`, so the step sends a new
+/// one when the COPY ends.
+///
+/// A COPY of the other direction is refused as the query steps refuse it,
+/// and a statement that is not a COPY runs to its end.
+///
+/// ## Parameters
+///
+/// - `query`: the SQL of one COPY statement
+/// - `direction`: the direction that the COPY must have
+///
+/// ## Returns
+///
+/// The messages to send and the state for `step_copy`.
+pub fn start_copy(query: String, direction: CopyDirection) -> Start(CopyState) {
+  let machine =
+    Machine(
+      ..new_machine(
+        ExtendedProtocol,
+        AwaitingParseComplete,
+        [AwaitingBindComplete, ReadingExecuteRows],
+        BoundFormats([]),
+      ),
+      copy_mode: ExpectCopy(direction),
+    )
+  Start(
+    messages: [
+      Parse(statement: "", query:, parameter_type_ids: []),
+      Bind(portal: "", statement: "", parameters: [], result_formats: []),
+      Execute(portal: "", row_limit: 0),
+      Sync,
+    ],
+    state: CopyState(machine),
+  )
+}
+
+/// Reads one message from the server in a copy step. After an error in a
+/// `COPY ... FROM STDIN` the step sends the Sync that the server waits for.
+///
+/// ## Parameters
+///
+/// - `state`: the state from `start_copy` or from the last step
+/// - `message`: the message from the server
+///
+/// ## Returns
+///
+/// - `Ok(step)`: the start of the COPY, a row, what to do next, or the
+///   outcome
+/// - `Error(UnexpectedMessage)`: the protocol does not allow the message
+///   here
+pub fn step_copy(
+  state: CopyState,
+  message: BackendMessage,
+) -> Result(CopyStep, UnexpectedMessage) {
+  receive(state.machine, message)
+  |> result.map(to_copy_step)
+}
+
+/// Whether the server reads CopyData now: the `COPY ... FROM STDIN`
+/// started, and neither side ended it.
+///
+/// ## Parameters
+///
+/// - `state`: the state of a copy step
+///
+/// ## Returns
+///
+/// `True` while CopyData may go to the server.
+pub fn accepts_copy_data(state: CopyState) -> Bool {
+  state.machine.phase == CopyingIn && !state.machine.copy_in_ended
+}
+
+/// The bytes of the CopyData messages for a chunk of a
+/// `COPY ... FROM STDIN`. Send them only while `accepts_copy_data` is
+/// `True`.
+///
+/// ## Parameters
+///
+/// - `chunk`: bytes of the COPY data stream, in the format of the COPY
+///
+/// ## Returns
+///
+/// The bytes to send.
+pub fn copy_data(chunk: BitArray) -> BitArray {
+  copy_data_messages(chunk)
+}
+
+/// The app is done with the COPY. A `COPY ... FROM STDIN` that reads data
+/// gets CopyDone and Sync, so the server stores the rows. In any other
+/// phase the step abandons the COPY, as `abandon_copy` does: the app wants
+/// no more rows.
+///
+/// ## Parameters
+///
+/// - `state`: the state of a copy step
+///
+/// ## Returns
+///
+/// The next state and the bytes to send, which may be none.
+pub fn finish_copy(state: CopyState) -> #(CopyState, BitArray) {
+  case accepts_copy_data(state) {
+    True -> #(CopyState(Machine(..state.machine, copy_in_ended: True)), <<
+      copy_done():bits,
+      sync():bits,
+    >>)
+    False -> abandon_copy(state)
+  }
+}
+
+/// The app gives up the COPY. A `COPY ... FROM STDIN` that reads data gets
+/// CopyFail and Sync, so the server stores no row of it. One that has not
+/// started gets them when it starts. The rows of a `COPY ... TO STDOUT`
+/// are dropped up to its end, because the protocol has no message that
+/// stops it.
+///
+/// ## Parameters
+///
+/// - `state`: the state of a copy step
+///
+/// ## Returns
+///
+/// The next state and the bytes to send, which may be none.
+pub fn abandon_copy(state: CopyState) -> #(CopyState, BitArray) {
+  let machine = Machine(..state.machine, copy_abandoned: True)
+  case accepts_copy_data(state) {
+    True -> #(CopyState(Machine(..machine, copy_in_ended: True)), <<
+      copy_abandonment():bits,
+      sync():bits,
+    >>)
+    False -> #(CopyState(machine), <<>>)
+  }
+}
+
+/// What the deadline of a copy step does: the rows of a
+/// `COPY ... TO STDOUT` are dropped up to its end, as `abandon_copy` does,
+/// so that the server can act on the cancel. A `COPY ... FROM STDIN` stays
+/// as it is until the cancel reached the server; then `abandon_copy` ends
+/// it.
+///
+/// ## Parameters
+///
+/// - `state`: the state of a copy step
+///
+/// ## Returns
+///
+/// The next state and the bytes to send, which are none.
+pub fn stop_at_deadline(state: CopyState) -> #(CopyState, BitArray) {
+  case state.machine.copy_mode {
+    ExpectCopy(CopyTo) -> abandon_copy(state)
+    _ -> #(state, <<>>)
+  }
+}
+
 /// The server error of a failure, if it has one.
 ///
 /// ## Parameters
@@ -558,6 +792,11 @@ fn new_machine(
     error: None,
     copy_refused: False,
     messages: [],
+    copy_mode: RefuseCopy,
+    copy_began: False,
+    copy_in_ended: False,
+    copy_abandoned: False,
+    copy_signal: NoCopySignal,
   )
 }
 
@@ -573,6 +812,39 @@ fn to_step(
     Ended(report:, machine:) ->
       ConnectionEnded(report, reverse(machine.messages))
   }
+}
+
+fn to_copy_step(transition: Transition) -> CopyStep {
+  case transition {
+    Continue(send:, machine:) -> continued_copy(send, machine)
+    Ready(status:, machine:) -> CopyFinished(copy_outcome(machine, status))
+    Ended(report:, machine:) ->
+      CopyConnectionEnded(report, reverse(machine.messages))
+  }
+}
+
+/// Tells the start of the COPY or a row, if the last message gave one,
+/// else sends or waits.
+fn continued_copy(send: BitArray, machine: Machine) -> CopyStep {
+  let state = CopyState(Machine(..machine, copy_signal: NoCopySignal))
+  case machine.copy_signal, send {
+    CopyBeganSignal, _ -> CopyStarted(state)
+    CopyRowSignal(row:), _ -> CopyRow(row, state)
+    NoCopySignal, <<>> -> CopyWait(state)
+    NoCopySignal, _ -> CopySend(send, state)
+  }
+}
+
+fn copy_outcome(
+  machine: Machine,
+  status: TransactionStatus,
+) -> Outcome(CopyResult, Failure) {
+  let copy_result = case machine.copy_began {
+    True -> CopyCompleted(machine.count)
+    False -> NoCopyStarted
+  }
+  step_result(machine, copy_result)
+  |> outcome(machine, status, _)
 }
 
 fn prepare_outcome(
@@ -672,7 +944,7 @@ fn receive_in_phase(
     AwaitingStatementResult -> statement_answer(machine, message)
     ReadingScriptRows -> script_row_answer(machine, message)
     ReadingCopyOut -> copy_out_answer(machine, message)
-    AwaitingCopyComplete -> copy_end_answer(machine, message)
+    AwaitingCopyComplete | CopyingIn -> copy_end_answer(machine, message)
     AwaitingReadyForQuery | AwaitingReadyForQueryAfterError ->
       ready_answer(machine, message)
   }
@@ -683,7 +955,10 @@ fn keep(machine: Machine, message: AsynchronousMessage) -> Transition {
 }
 
 /// An ErrorResponse ends the work of the step: the server skips to the
-/// Sync, or to the end of the Query, and sends ReadyForQuery.
+/// Sync, or to the end of the Query, and sends ReadyForQuery. During a
+/// `COPY ... FROM STDIN` the server read the Sync of the Execute already,
+/// so the step sends a new one, unless it sent the one after its CopyDone
+/// or CopyFail.
 fn server_error(
   machine: Machine,
   report: ServerReport,
@@ -692,12 +967,17 @@ fn server_error(
   use <- guard(ends_connection, Ok(Ended(report:, machine:)))
   let after_error = machine.phase == AwaitingReadyForQueryAfterError
   use <- guard(after_error, unexpected(machine, ErrorResponse(report:)))
+  let send = case accepts_copy_data(CopyState(machine)) {
+    True -> sync()
+    False -> <<>>
+  }
   Machine(
     ..machine,
     phase: AwaitingReadyForQueryAfterError,
     error: Some(report),
+    copy_in_ended: True,
   )
-  |> wait_with
+  |> Continue(send:, machine: _)
   |> Ok
 }
 
@@ -799,20 +1079,56 @@ fn script_row_answer(
   }
 }
 
-/// Refuses a COPY. For a `COPY ... FROM STDIN` the step sends CopyFail;
-/// for a copy in both directions it sends CopyDone. The server ignores a
-/// Sync during a copy, so in the extended protocol a new Sync follows.
+/// Takes the COPY of the copy step's direction, and refuses any other. To
+/// refuse a `COPY ... FROM STDIN` the step sends CopyFail; for a copy in
+/// both directions it sends CopyDone. The server ignores a Sync during a
+/// copy, so in the extended protocol a new Sync follows.
 fn copy_answer(
   machine: Machine,
   message: BackendMessage,
 ) -> Result(Transition, UnexpectedMessage) {
   case message {
-    CopyInResponse(..) ->
-      Ok(refuse_copy(machine, copy_refusal(), AwaitingCopyComplete))
-    CopyOutResponse(..) -> Ok(refuse_copy_out(machine))
+    CopyInResponse(..) -> Ok(copy_in_started(machine))
+    CopyOutResponse(..) -> Ok(copy_out_started(machine))
     CopyBothResponse(..) ->
       Ok(refuse_copy(machine, copy_done(), ReadingCopyOut))
     _ -> unexpected(machine, message)
+  }
+}
+
+/// The copy step's `COPY ... FROM STDIN` reads data now, unless the app
+/// abandoned it before it started: then it gets CopyFail and Sync at once.
+fn copy_in_started(machine: Machine) -> Transition {
+  let began = Machine(..machine, phase: CopyingIn, copy_began: True)
+  case machine.copy_mode, machine.copy_abandoned {
+    ExpectCopy(CopyFrom), False ->
+      wait_with(Machine(..began, copy_signal: CopyBeganSignal))
+    ExpectCopy(CopyFrom), True ->
+      Continue(
+        send: <<copy_abandonment():bits, sync():bits>>,
+        machine: Machine(..began, copy_in_ended: True),
+      )
+    _, _ -> refuse_copy(machine, copy_refusal(), AwaitingCopyComplete)
+  }
+}
+
+/// The rows of the copy step's `COPY ... TO STDOUT` follow now. The step
+/// tells the start only when the app did not abandon the COPY before.
+fn copy_out_started(machine: Machine) -> Transition {
+  let signal = case machine.copy_abandoned {
+    True -> NoCopySignal
+    False -> CopyBeganSignal
+  }
+  case machine.copy_mode {
+    ExpectCopy(CopyTo) ->
+      Machine(
+        ..machine,
+        phase: ReadingCopyOut,
+        copy_began: True,
+        copy_signal: signal,
+      )
+      |> wait_with
+    _ -> refuse_copy_out(machine)
   }
 }
 
@@ -835,13 +1151,24 @@ fn copy_out_answer(
   message: BackendMessage,
 ) -> Result(Transition, UnexpectedMessage) {
   case message {
-    CopyDataFromServer(..) -> Ok(wait_with(machine))
+    CopyDataFromServer(data:) -> Ok(wait_with(copied_row(machine, data)))
     CopyDoneFromServer ->
       Ok(wait_with(Machine(..machine, phase: AwaitingCopyComplete)))
     _ -> unexpected(machine, message)
   }
 }
 
+/// A row of the copy step's own `COPY ... TO STDOUT` goes to the app,
+/// unless the app abandoned the COPY. The rows of a refused COPY are
+/// dropped.
+fn copied_row(machine: Machine, row: BitArray) -> Machine {
+  case machine.copy_began && !machine.copy_abandoned {
+    True -> Machine(..machine, copy_signal: CopyRowSignal(row))
+    False -> machine
+  }
+}
+
+/// The CommandComplete that ends a COPY, with the row count of its tag.
 fn copy_end_answer(
   machine: Machine,
   message: BackendMessage,
@@ -851,7 +1178,10 @@ fn copy_end_answer(
     SimpleProtocol -> AwaitingStatementResult
   }
   case message {
-    CommandComplete(..) -> Ok(wait_with(Machine(..machine, phase:)))
+    CommandComplete(tag:) ->
+      complete_command(machine, tag)
+      |> result.map(with_phase(_, phase))
+      |> result.map(wait_with)
     _ -> unexpected(machine, message)
   }
 }
@@ -864,6 +1194,10 @@ fn ready_answer(
     ReadyForQuery(status:) -> Ok(Ready(status:, machine:))
     _ -> unexpected(machine, message)
   }
+}
+
+fn with_phase(machine: Machine, phase: Phase) -> Machine {
+  Machine(..machine, phase:)
 }
 
 fn advance(machine: Machine) -> Machine {

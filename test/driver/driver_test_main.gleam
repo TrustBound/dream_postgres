@@ -19,6 +19,7 @@ import driver/login_server_test
 import driver/login_test
 import driver/parity_test
 import driver/pool_test
+import driver/query_copy_test
 import driver/query_server_test
 import driver/query_test
 import driver/recorded_test
@@ -36,6 +37,7 @@ pub fn suites() -> List(TestSuite) {
     encode_test.tests(),
     decode_test.tests(),
     query_test.tests(),
+    query_copy_test.tests(),
     transaction_test.tests(),
     recorded_test.tests(),
     saslprep_test.tests(),
