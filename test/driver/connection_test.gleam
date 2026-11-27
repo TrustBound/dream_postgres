@@ -27,7 +27,7 @@ import dream_postgres/driver/message.{
   BindComplete, Protocol32, TooManyItems, UnknownMessageType, ZeroByteInString,
 }
 import dream_postgres/driver/transport.{
-  ConnectRefused, ConnectionReset, SendTimedOut, SocketClosed,
+  ConnectRefused, ConnectionReset, SendFailed, SendTimedOut, SocketClosed,
 }
 import dream_postgres/internal/cell.{
   type TransactionStatus, Binary, BinaryFormat, ColumnDescription, CommandResult,
@@ -48,8 +48,8 @@ import driver/cancel_gate.{
   record_gate, release_gate, start_cancel_gate, stop_cancel_gate,
 }
 import driver/fake_server.{
-  Answer, free_port, start_closing_server, start_deaf_server, start_fake_server,
-  start_silent_server,
+  Answer, free_port, start_closing_server, start_deaf_server,
+  start_deaf_then_reset_server, start_fake_server, start_silent_server,
 }
 import driver/proxy.{
   type Proxy, answer_next_request, client_end, close_client, inject,
@@ -878,6 +878,40 @@ fn start_tests() -> TestSuite {
           |> be_error
           |> be_equal(LoginSendFailed(SendTimedOut))
           |> or_fail_with("Expected LoginSendFailed(SendTimedOut)")
+        },
+      ),
+      it(
+        "gives LoginSendFailed when the server resets during a blocked send",
+        fn(_inputs: StartInputs) {
+          // Arrange
+          // As in the test above, the send of the PasswordMessage waits
+          // behind the StartupMessage of 4 MB. The server resets the
+          // connection once that send began, and the send timeout is
+          // longer than any test, so the reset ends the send.
+          let large_name = repeat("x", 4_000_000)
+
+          // Act
+          let started = {
+            use port <- try(start_deaf_then_reset_server(
+              cleartext_password_request,
+            ))
+            use config <- try(parameter_config(
+              port,
+              "application_name",
+              large_name,
+            ))
+            Ok(start(send_timeout_config(config, 60_000)))
+          }
+
+          // Assert
+          started
+          |> should
+          |> be_ok
+          |> be_error
+          |> be_equal(LoginSendFailed(SendFailed(ConnectionReset)))
+          |> or_fail_with(
+            "Expected LoginSendFailed(SendFailed(ConnectionReset))",
+          )
         },
       ),
       it(

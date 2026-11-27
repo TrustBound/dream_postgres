@@ -26,7 +26,8 @@ import dream_test/unit
 import dream_test/unit_context.{after_each, before_each, describe, group, it}
 import driver/fake_server.{free_port}
 import driver/listener_gate.{
-  break_gate, cut_first_query, open_gate, wait_refused,
+  answer_first_query, break_gate, cut_first_query, hold_first_query, open_gate,
+  wait_held, wait_refused,
 }
 import driver/proxy.{answer_next_request}
 import driver/reconnect_server.{
@@ -40,15 +41,15 @@ import driver/server_listener.{
   type GatedListener, type GatedOutcome, type ListenerOutcome,
   type ListenerSession, type ProxiedListener, type SubscribedListener,
   end_session_backend, end_subscription, gated_act_setup, listener_act_setup,
-  listener_config, listener_session_setup, listener_statement,
-  proxied_listener_setup, receive_message, refusal_bytes,
+  listener_config, listener_connection_pid, listener_session_setup,
+  listener_statement, proxied_listener_setup, receive_message, refusal_bytes,
   result_then_refusal_bytes, resume_listener_connection, send_notification,
-  start_test_listener, start_test_proxied_listener, start_test_subscribed,
-  stop_listener_connection, stop_listener_session, stop_proxied_listener,
-  stop_subscribed_listener, subscribe_and_unsubscribe_first, subscribe_first,
-  subscribe_first_to, subscribe_second, subscribe_second_to_other, subscribe_to,
-  subscribed_setup, suspend_listener_connection, wait_for_first_message,
-  wait_for_statement,
+  short_gated_act_setup, start_test_listener, start_test_proxied_listener,
+  start_test_subscribed, stop_connection_process, stop_listener_connection,
+  stop_listener_session, stop_proxied_listener, stop_subscribed_listener,
+  subscribe_and_unsubscribe_first, subscribe_first, subscribe_first_to,
+  subscribe_second, subscribe_second_to_other, subscribe_to, subscribed_setup,
+  suspend_listener_connection, wait_for_first_message, wait_for_statement,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/server_report.{server_report}
@@ -73,6 +74,7 @@ pub fn tests() -> TestSuite {
     ),
     gate_tests(),
     cut_query_tests(),
+    reconnect_listen_failure_tests(),
     listen_failure_tests(),
     subscription_tests(),
     start_tests(),
@@ -855,6 +857,122 @@ fn cut_query_tests() -> TestSuite {
       ),
     ],
   )
+}
+
+// A LISTEN that fails after a reconnect: one act per failure -------------------
+
+/// What the subscriber got after the gate cut its connection and answered
+/// the first `LISTEN` after the reconnect with a refusal.
+fn refuse_listen_after_reconnect(
+  gated: GatedListener,
+) -> Result(#(ListenerMessage, ListenerMessage), String) {
+  use _first <- try(subscribe_to(gated.listener, "svc895_refused", gated.first))
+  answer_first_query(gated.gate, refusal_bytes())
+  use lost <- try(receive_message(gated.first))
+  use next <- try(receive_message(gated.first))
+  Ok(#(lost, next))
+}
+
+/// What the subscriber got after the gate cut its connection and kept the
+/// first `LISTEN` after the reconnect from the server, so the deadline of
+/// 100 milliseconds passed.
+fn hold_listen_after_reconnect(
+  gated: GatedListener,
+) -> Result(#(ListenerMessage, ListenerMessage), String) {
+  use _first <- try(subscribe_to(gated.listener, "svc895_held", gated.first))
+  hold_first_query(gated.gate)
+  use lost <- try(receive_message(gated.first))
+  use next <- try(receive_message(gated.first))
+  Ok(#(lost, next))
+}
+
+/// What the subscriber got after the gate cut its connection, kept the
+/// first `LISTEN` after the reconnect, and the connection process was
+/// stopped while the listener waited for that `LISTEN`.
+fn stop_connection_in_listen_after_reconnect(
+  gated: GatedListener,
+) -> Result(#(ListenerMessage, ListenerMessage), String) {
+  use _first <- try(subscribe_to(gated.listener, "svc895_down", gated.first))
+  let connection = listener_connection_pid(gated.listener)
+  hold_first_query(gated.gate)
+  use lost <- try(receive_message(gated.first))
+  wait_held(gated.gate)
+  stop_connection_process(connection)
+  use next <- try(receive_message(gated.first))
+  Ok(#(lost, next))
+}
+
+fn reconnect_listen_failure_tests() -> TestSuite {
+  suite.group("a LISTEN that fails after a reconnect", [
+    describe(
+      "a refused LISTEN after a reconnect",
+      gated_act_setup(first_driver_server, refuse_listen_after_reconnect),
+      [
+        it(
+          "gives NotListening, then ListenRefused with the report",
+          fn(shared: GatedOutcome(#(ListenerMessage, ListenerMessage))) {
+            shared.outcome
+            |> should
+            |> be_equal(#(
+              NotListening,
+              ListenFailed(
+                "svc895_refused",
+                ListenRefused(
+                  server_report("ERROR", "42501", "permission denied"),
+                  Idle,
+                ),
+              ),
+            ))
+            |> or_fail_with("Expected NotListening, then ListenRefused")
+          },
+        ),
+      ],
+    ),
+    describe(
+      "a LISTEN with no answer after a reconnect",
+      short_gated_act_setup(first_driver_server, hold_listen_after_reconnect),
+      [
+        it(
+          "gives NotListening, then ListenDeadlinePassed",
+          fn(shared: GatedOutcome(#(ListenerMessage, ListenerMessage))) {
+            shared.outcome
+            |> should
+            |> be_equal(#(
+              NotListening,
+              ListenFailed(
+                "svc895_held",
+                ListenDeadlinePassed(cancelled: False),
+              ),
+            ))
+            |> or_fail_with("Expected NotListening, then ListenDeadlinePassed")
+          },
+        ),
+      ],
+    ),
+    describe(
+      "a LISTEN after a reconnect whose connection process stops",
+      gated_act_setup(
+        first_driver_server,
+        stop_connection_in_listen_after_reconnect,
+      ),
+      [
+        it(
+          "gives NotListening, then ListenerConnectionDown",
+          fn(shared: GatedOutcome(#(ListenerMessage, ListenerMessage))) {
+            shared.outcome
+            |> should
+            |> be_equal(#(
+              NotListening,
+              ListenFailed("svc895_down", ListenerConnectionDown),
+            ))
+            |> or_fail_with(
+              "Expected NotListening, then ListenerConnectionDown",
+            )
+          },
+        ),
+      ],
+    ),
+  ])
 }
 
 // A LISTEN that fails on a session that is up -----------------------------------

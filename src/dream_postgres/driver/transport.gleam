@@ -802,6 +802,16 @@ fn tls_error(reason: SocketFailure) -> TransportError {
 /// - `Ok(Nil)`: the next bytes, the close or the error comes as a message
 /// - `Error(SocketError)`: the socket failed, for example `SocketClosed`
 ///   when it is closed already
+///
+/// A reset by the peer is never an error of this call, also when it came
+/// before the call: the socket gives it as a message, which `socket_event`
+/// reads as `SocketFailed(ConnectionReset)`. The call only sets the option
+/// `{active, once}`. On a socket that is closed already it fails with
+/// `einval` for TCP (`prim_inet:ctl_cmd`, which gives `einval` when the
+/// port is gone) and `closed` for TLS (`ssl_gen_statem:call`), both
+/// `SocketClosed`. The type stays `SocketError` because another reply of
+/// the inet driver to the option, which `prim_inet` passes on as an
+/// atom, has no proof that it cannot come.
 pub fn receive_next(connection: Connection) -> Result(Nil, SocketError) {
   case connection {
     PlainConnection(socket:) -> tcp_receive_next(socket)

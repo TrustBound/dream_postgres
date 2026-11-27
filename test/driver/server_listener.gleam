@@ -389,8 +389,19 @@ pub type GatedOutcome(outcome) {
 
 /// Starts a gate proxy to `server` and a listener through it.
 pub fn start_gated_listener(server: Server) -> Result(GatedListener, String) {
-  use #(port, gate) <- try(start_gate(server.port))
+  start_gated_with(server, gated_listener_config)
+}
+
+fn gated_listener_config(port: Int) -> Result(ListenerConfig, String) {
   listener_config(port, "svc827_gate", Backoff(10, 50))
+}
+
+fn start_gated_with(
+  server: Server,
+  config: fn(Int) -> Result(ListenerConfig, String),
+) -> Result(GatedListener, String) {
+  use #(port, gate) <- try(start_gate(server.port))
+  config(port)
   |> try(start_configured_listener)
   |> result.map(GatedListener(
     _,
@@ -423,6 +434,23 @@ pub fn gated_act_setup(
 ) -> Context(GatedOutcome(outcome)) {
   context.setup(
     setup: fn() { start_gated_listener(server) |> try(run_gated_act(_, act)) },
+    teardown: fn(shared: GatedOutcome(outcome)) {
+      stop_gated_listener(shared.gated)
+    },
+  )
+}
+
+/// The context of `gated_act_setup`, with the short timeouts of
+/// `start_proxied_listener`: each `LISTEN` has 100 milliseconds.
+pub fn short_gated_act_setup(
+  server: Server,
+  act: fn(GatedListener) -> Result(outcome, String),
+) -> Context(GatedOutcome(outcome)) {
+  context.setup(
+    setup: fn() {
+      start_gated_with(server, short_listener_config)
+      |> try(run_gated_act(_, act))
+    },
     teardown: fn(shared: GatedOutcome(outcome)) {
       stop_gated_listener(shared.gated)
     },
@@ -549,6 +577,17 @@ fn resume(pid: Pid) -> Nil
 
 @external(erlang, "driver_listener_test_ffi", "connection_pid")
 fn connection_pid(listener: Listener) -> Pid
+
+/// The connection process of the listener. A listener that waits for its
+/// connection does not answer this read, so a test reads it before.
+pub fn listener_connection_pid(listener: Listener) -> Pid {
+  connection_pid(listener)
+}
+
+/// Stops a connection process of a listener with an exit signal, as
+/// `stop_listener_connection` does, and waits until it is gone.
+@external(erlang, "driver_listener_test_ffi", "stop_connection_process")
+pub fn stop_connection_process(pid: Pid) -> Nil
 
 /// Stops the connection process of the listener with an exit signal, and
 /// waits until it is gone. The listener stays.

@@ -46,6 +46,19 @@ pub fn start_silent_server() -> Result(Int, String)
 @external(erlang, "driver_fake_server_ffi", "start_deaf")
 pub fn start_deaf_server(bytes: BitArray) -> Result(Int, String)
 
+/// The next message of a TCP or TLS socket of the calling process, for a
+/// test that reads a socket message itself while other messages, such as
+/// the fake server's own report, may come first.
+@external(erlang, "driver_fake_server_ffi", "next_socket_message")
+pub fn next_socket_message() -> Result(Dynamic, String)
+
+/// Starts a server that accepts a connection, sends `bytes` at once, and
+/// never reads from it, as `start_deaf_server` does. Once the client's
+/// socket gets a PasswordMessage to send, which waits behind the full
+/// queue, the server resets the connection. Gives its port.
+@external(erlang, "driver_fake_server_ffi", "start_deaf_then_reset")
+pub fn start_deaf_then_reset_server(bytes: BitArray) -> Result(Int, String)
+
 /// A server that answers `S`, does a TLS handshake with this certificate
 /// and key, and waits for `send_bad_record`.
 pub type BadRecordServer

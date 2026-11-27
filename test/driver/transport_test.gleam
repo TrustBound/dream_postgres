@@ -25,7 +25,8 @@ import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/fake_server.{
   type FakeBehavior, Answer, NotTls, Reset, Tls, free_port, next_message,
-  send_bad_record, start_fake_server, start_tls_then_bad_record,
+  next_socket_message, send_bad_record, start_fake_server,
+  start_tls_then_bad_record,
 }
 import driver/servers.{
   type Server, driver_servers, first_driver_server, server_without_tls,
@@ -687,6 +688,31 @@ fn socket_tests() {
       |> be_ok
       |> be_equal(transport.SocketFailed(TlsAlertRaised("bad_record_mac")))
       |> or_fail_with("Expected the TLS alert as a typed error")
+    }),
+    it("gives a reset of the server after receive_next as a message", fn() {
+      // Act
+      let event = {
+        use #(port, _server) <- try(start_fake_server(Reset))
+        use connection <- try(
+          transport_config("localhost", port, NoTls)
+          |> try(connect_with_minute_deadline)
+          |> map_error(inspect),
+        )
+        use Nil <- try(transport.receive_next(connection) |> map_error(inspect))
+        // The fake server resets once it read 8 bytes.
+        use Nil <- try(
+          transport.send(connection, <<8:32, 0:32>>) |> map_error(inspect),
+        )
+        use message <- try(next_socket_message())
+        Ok(transport.socket_event(connection, message))
+      }
+
+      // Assert
+      event
+      |> should
+      |> be_ok
+      |> be_equal(transport.SocketFailed(ConnectionReset))
+      |> or_fail_with("Expected the reset as SocketFailed(ConnectionReset)")
     }),
     it("gives SocketClosed for a receive on a closed TLS connection", fn() {
       // Arrange

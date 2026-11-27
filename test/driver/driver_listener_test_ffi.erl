@@ -1,5 +1,5 @@
 -module(driver_listener_test_ffi).
--export([connection_pid/1, stop_connection/1]).
+-export([connection_pid/1, stop_connection/1, stop_connection_process/1]).
 
 %% The connection process of a listener, read from the state of the
 %% listener's actor. A Listener is the record {listener, Subject, Pid}, and
@@ -17,7 +17,11 @@ state_connection({state, {connection, _Subject, Pid, _Margin, _Target}, _Starter
 %% traps exits and stops with the reason normal, so the linked listener
 %% stays.
 stop_connection(Listener) ->
-    Pid = connection_pid(Listener),
+    stop_connection_process(connection_pid(Listener)).
+
+%% As stop_connection, for a connection process read before: the listener
+%% answers no sys:get_state while it waits for its connection.
+stop_connection_process(Pid) ->
     Monitor = erlang:monitor(process, Pid),
     exit(Pid, shutdown),
     receive

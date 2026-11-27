@@ -1,5 +1,6 @@
 -module(driver_fake_server_ffi).
 -export([start/1, client_closed/1, start_silent/0, start_deaf/1,
+         start_deaf_then_reset/1, next_socket_message/0,
          start_tls_then_bad_record/2, send_bad_record/1]).
 
 %% A fake PostgreSQL server for the transport tests: it does one thing a
@@ -37,6 +38,10 @@
 
 -define(WAIT, 5000).
 
+%% next_socket_message() gives the next message of a TCP or TLS socket of
+%% the calling process, and leaves the other messages, for example the
+%% fake server's own report, or {error, Text} after 5 seconds.
+
 start(Behavior) ->
     Caller = self(),
     Reference = make_ref(),
@@ -72,6 +77,82 @@ start_deaf(Bytes) ->
     case open(self(), make_ref(), Deaf) of
         {ok, {Port, _Reference}} -> {ok, Port};
         {error, Reason} -> {error, Reason}
+    end.
+
+%% start_deaf_then_reset(Bytes) gives {ok, Port} of a server that
+%% accepts one connection, sends Bytes, and reads nothing, as start_deaf
+%% does. It watches the commands that the client's socket gets (a trace of
+%% the port, which is in this VM), and resets the connection (linger 0)
+%% once a command starts with p, the type byte of a PasswordMessage. The
+%% client's queue is full and the server reads nothing, so that send is
+%% still waiting when the reset comes. The trace starts before Bytes go
+%% out, so no p can come before it.
+start_deaf_then_reset(Bytes) ->
+    Deaf = fun(Listen) ->
+        then(gen_tcp:accept(Listen, ?WAIT), fun(Socket) ->
+            then(inet:peername(Socket), fun(Peer) ->
+                then(client_port(Peer), fun(ClientPort) ->
+                    erlang:trace(ClientPort, true, ['receive']),
+                    gen_tcp:send(Socket, Bytes),
+                    reset_after(wait_for_password_send(), Socket)
+                end)
+            end)
+        end),
+        gen_tcp:close(Listen)
+    end,
+    case open(self(), make_ref(), Deaf) of
+        {ok, {Port, _Reference}} -> {ok, Port};
+        {error, Reason} -> {error, Reason}
+    end.
+
+%% The client's socket: the port of this VM whose own address is the
+%% server's peer.
+client_port(Peer) ->
+    Ports = [Port || Port <- erlang:ports(),
+                     erlang:port_info(Port, name) =:= {name, "tcp_inet"},
+                     inet:sockname(Port) =:= {ok, Peer}],
+    one_port(Ports).
+
+one_port([Port]) -> {ok, Port};
+one_port(_Ports) -> {error, no_single_client_port}.
+
+%% With no PasswordMessage within 5 seconds the server closes without a
+%% reset, so the test fails with another error.
+reset_after(ok, Socket) ->
+    inet:setopts(Socket, [{linger, {true, 0}}]),
+    gen_tcp:close(Socket);
+reset_after(timeout, Socket) ->
+    gen_tcp:close(Socket).
+
+%% prim_inet:send gives the port a header with the reference of the
+%% reply, then the bytes (prim_inet.erl, send/3).
+wait_for_password_send() ->
+    receive
+        {trace, _Port, 'receive', {_Owner, {command, [_Header, Data]}}} ->
+            password_send(first_byte(Data));
+        {trace, _Port, 'receive', _Other} ->
+            wait_for_password_send()
+    after ?WAIT -> timeout
+    end.
+
+password_send($p) -> ok;
+password_send(_Byte) -> wait_for_password_send().
+
+first_byte(<<Byte, _/binary>>) -> Byte;
+first_byte([First | Rest]) -> first_byte_of_list(first_byte(First), Rest);
+first_byte(_Empty) -> none.
+
+first_byte_of_list(none, Rest) -> first_byte(Rest);
+first_byte_of_list(Byte, _Rest) -> Byte.
+
+next_socket_message() ->
+    receive
+        {Tag, _Socket, _Value} = Message
+          when Tag =:= tcp; Tag =:= tcp_error; Tag =:= ssl; Tag =:= ssl_error ->
+            {ok, Message};
+        {Tag, _Socket} = Message when Tag =:= tcp_closed; Tag =:= ssl_closed ->
+            {ok, Message}
+    after ?WAIT -> {error, <<"no socket message within 5 seconds">>}
     end.
 
 start_tls_then_bad_record(CertificateFile, KeyFile) ->
