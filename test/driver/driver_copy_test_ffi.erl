@@ -49,11 +49,21 @@ mailbox_length(Pid) ->
 
 %% Waits until the TCP socket of Pid has no peer any more: the reset of
 %% the peer reached it. Gives whether it did.
+%% Gives false when Pid has no TCP socket.
 wait_for_reset(Pid, Attempts) ->
-    [Socket | _] = [Port || Port <- element(2, erlang:process_info(Pid, links)),
-                            is_port(Port),
-                            erlang:port_info(Port, name) =:= {name, "tcp_inet"}],
-    wait_for(fun() -> element(1, inet:peername(Socket)) =:= error end, Attempts).
+    case tcp_sockets(Pid) of
+        [Socket | _] ->
+            wait_for(fun() -> element(1, inet:peername(Socket)) =:= error end,
+                     Attempts);
+        [] ->
+            false
+    end.
+
+tcp_sockets(Pid) ->
+    {links, Links} = erlang:process_info(Pid, links),
+    [Port || Port <- Links,
+             is_port(Port),
+             erlang:port_info(Port, name) =:= {name, "tcp_inet"}].
 
 wait_for(_Check, 0) -> false;
 wait_for(Check, Attempts) ->

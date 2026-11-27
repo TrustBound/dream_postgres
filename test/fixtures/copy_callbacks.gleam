@@ -1,6 +1,7 @@
 //// The functions that the COPY tests give to `copy_from` and `copy_to`:
-//// the app's produce functions and folds, and the caller processes that
-//// run a COPY and never end by themselves.
+//// the app's produce functions and folds, the caller processes that run a
+//// COPY and never end by themselves, and the setup hooks that run a COPY
+//// before a test.
 
 import dream_postgres/driver/connection.{
   type Connection, type CopyError, type CopySender, type DriverError,
@@ -9,7 +10,9 @@ import dream_postgres/driver/connection.{
 }
 import dream_postgres/driver/transport.{SocketClosed}
 import driver/proxy.{type Proxy, close_client, inject}
-import driver/server_connection.{memory_of, wait_for_idle_backend}
+import driver/server_connection.{
+  memory_of, require_failure, setup_step, wait_for_idle_backend,
+}
 import gleam/bit_array
 import gleam/bool
 import gleam/erlang/process.{type Pid, type Subject}
@@ -190,13 +193,10 @@ pub fn keep_sender(
   Ok(Nil)
 }
 
-/// The sender that `keep_sender` sent. It panics when there is none: that
-/// is a setup failure.
-pub fn kept_sender(senders: Subject(CopySender)) -> CopySender {
-  case process.receive(senders, 0) {
-    Ok(sender) -> sender
-    Error(Nil) -> panic as "no sender was kept"
-  }
+/// The sender that `keep_sender` sent, or an error when there is none.
+pub fn kept_sender(senders: Subject(CopySender)) -> Result(CopySender, String) {
+  process.receive(senders, 0)
+  |> result.replace_error("no sender was kept")
 }
 
 /// Sends a row, tells `started` where to say go, waits for go, and sends
@@ -212,13 +212,13 @@ pub fn send_after_go(
   send_chunk(sender, <<"2\ttwo\n":utf8>>)
 }
 
-/// Where `send_after_go` waits for go. It panics when it does not come in
-/// 5 seconds: that is a setup failure.
-pub fn await_go(started: Subject(Subject(Nil))) -> Subject(Nil) {
-  case process.receive(started, 5000) {
-    Ok(go) -> go
-    Error(Nil) -> panic as "the COPY did not start"
-  }
+/// Where `send_after_go` waits for go, or an error when it does not come
+/// in 5 seconds.
+pub fn await_go(
+  started: Subject(Subject(Nil)),
+) -> Result(Subject(Nil), String) {
+  process.receive(started, 5000)
+  |> result.replace_error("the COPY did not start")
 }
 
 // Folds -----------------------------------------------------------------------
@@ -280,7 +280,7 @@ pub fn close_at_first_row(
 fn watch_until_idle(
   control: Connection,
   pid: String,
-) -> Subject(Result(Nil, Nil)) {
+) -> Subject(Result(Nil, String)) {
   let idle = process.new_subject()
   process.spawn(fn() { tell_when_idle(control, pid, idle) })
   idle
@@ -289,13 +289,14 @@ fn watch_until_idle(
 fn tell_when_idle(
   control: Connection,
   pid: String,
-  idle: Subject(Result(Nil, Nil)),
+  idle: Subject(Result(Nil, String)),
 ) -> Nil {
   process.send(idle, wait_for_idle_backend(control, pid))
 }
 
-fn await_idle(idle: Subject(Result(Nil, Nil))) -> Result(Nil, DriverError) {
+fn await_idle(idle: Subject(Result(Nil, String))) -> Result(Nil, DriverError) {
   process.receive(idle, 10_000)
+  |> result.replace_error("no answer")
   |> result.flatten
   |> result.replace_error(no_answer())
 }
@@ -442,4 +443,53 @@ fn hang_at_row(
 ) -> Result(Nil, Nil) {
   process.send(started, "row")
   process.receive_forever(process.new_subject())
+}
+
+// Setup hooks -----------------------------------------------------------------
+
+/// Runs the COPY FROM STDIN `sql` with `produce` and a deadline of 5
+/// seconds, which must work: for a step of a setup or of an act.
+pub fn copy_rows_in(
+  connection: Connection,
+  sql: String,
+  produce: fn(CopySender) -> Result(Nil, error),
+) -> Result(Int, String) {
+  copy_from(connection, sql, 5000, produce)
+  |> result.map_error(fn(error) {
+    "could not run " <> sql <> ": " <> string.inspect(error)
+  })
+}
+
+/// A hook that runs the COPY FROM STDIN `sql` with `produce`, which must
+/// work.
+pub fn copy_in_setup(
+  sql: String,
+  produce: fn(CopySender) -> Result(Nil, error),
+) -> fn(Connection) -> Result(Connection, String) {
+  setup_step(copy_rows_in(_, sql, produce))
+}
+
+/// A hook that runs `sql` with `copy_from` and `produce`, which must fail:
+/// for a test of the state after the failure.
+pub fn failing_copy_in_setup(
+  sql: String,
+  produce: fn(CopySender) -> Result(Nil, error),
+) -> fn(Connection) -> Result(Connection, String) {
+  fn(connection) {
+    copy_from(connection, sql, 5000, produce)
+    |> require_failure(connection, sql)
+  }
+}
+
+/// A hook that runs `sql` with `copy_to`, `initial` and `fold`, which must
+/// fail: for a test of the state after the failure.
+pub fn failing_copy_out_setup(
+  sql: String,
+  initial: value,
+  fold: fn(value, BitArray) -> Result(value, error),
+) -> fn(Connection) -> Result(Connection, String) {
+  fn(connection) {
+    copy_to(connection, sql, 5000, initial, fold)
+    |> require_failure(connection, sql)
+  }
 }

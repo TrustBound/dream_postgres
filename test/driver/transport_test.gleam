@@ -22,8 +22,7 @@ import dream_test/matchers.{
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/fake_server.{
-  type FakeBehavior, Answer, NotTls, Reset, Tls, client_closed, free_port,
-  start_fake_server,
+  type FakeBehavior, Answer, NotTls, Reset, Tls, free_port, start_fake_server,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/driver_tls.{certificate_authority, verify_full}
@@ -34,6 +33,7 @@ import gleam/option.{None, Some}
 import gleam/result.{replace_error, try}
 import matchers/close_connection.{close_connection}
 import matchers/extract_address_parts.{extract_address_parts}
+import matchers/extract_client_closed.{extract_client_closed}
 import matchers/extract_receive_result.{extract_receive_result}
 import matchers/extract_send_result.{extract_send_result}
 import matchers/extract_server_certificate.{extract_server_certificate}
@@ -462,11 +462,13 @@ fn fake_closed_test(name: String, behavior: FakeBehavior) {
     let config = transport_config("localhost", port, verify_full())
 
     // Act
-    let _failed = try(config, connect)
+    let connected = try(config, connect)
 
     // Assert
-    client_closed(server)
+    connected
     |> should
+    |> be_error
+    |> extract_client_closed(server)
     |> be_true
     |> or_fail_with("Expected the client to close its socket")
   })

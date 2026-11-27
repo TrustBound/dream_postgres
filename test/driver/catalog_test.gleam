@@ -1,36 +1,46 @@
 //// Tests for `dream_postgres/driver/catalog`, the type catalog, on the
 //// driver servers of PostgreSQL 16 to 19.
 ////
-//// The tests make their types in a transaction of the connection that
-//// loads the catalog, and roll it back, so no type stays on the server and
-//// other test runs never see them. A load that must stay open waits behind
-//// an advisory lock of the range 82900 to 82999, which only these tests
-//// use. A second connection holds the lock, so no test sleeps.
+//// Setup hooks start each catalog with its connection and stop both after
+//// the test. The tests make their types in a transaction, in a schema
+//// whose name no other test uses, and the teardown rolls it back, so no
+//// type stays on the server and other tests never see them. A load that
+//// must stay open waits behind an advisory lock of a control connection,
+//// with a key that no other test uses, so no test sleeps. The tests of a
+//// lock wait share one act, so the wait happens once.
 
 import dream_postgres/driver/catalog.{
-  CatalogProcessDown, LoadStarted, UnknownType, supervised,
+  type CatalogError, type CatalogEvent, CatalogProcessDown, LoadStarted,
+  UnknownType, supervised,
 }
-import dream_postgres/driver/connection.{run, run_script, stop}
+import dream_postgres/driver/connection.{run}
 import dream_postgres/internal/cell.{
   type TypeDescription, Array, Base, Composite, Domain, Enum, Multirange, Pseudo,
   Range, TypeDescription,
 }
+import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
-import dream_test/unit.{describe, group, it}
+import dream_test/unit_context.{after_each, before_each, describe, group, it}
 import driver/server_catalog.{
-  begin_with, block_connection, next_catalog_event, received_catalog_events,
-  roll_back, start_catalog, start_watched_catalog, type_oid, unblock_connection,
+  type CatalogSession, type LoadRace, type RaceOutcome, begin_in_schema,
+  begin_with_types, block_connection, catalog_session_setup,
+  describe_in_new_catalog, find_part_type, find_type, load_found_type, load_type,
+  load_unknown_type, next_catalog_event, on_session_connection, race_act_setup,
+  received_catalog_events, start_test_catalog, start_test_watched_catalog,
+  stop_catalog_session, type_oid, unblock_connection,
 }
 import driver/server_connection.{
-  caller_answer, start_caller, start_connection, start_in_ended_owner,
+  caller_answer, run_failing_statement, run_setup_script, start_caller,
+  start_in_ended_owner,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
-import gleam/erlang/process
 import gleam/int.{to_string}
-import gleam/list.{each, flatten, map}
+import gleam/list.{flatten, map}
 import gleam/option.{None}
 import gleam/otp/static_supervisor
+import gleam/result.{map_error, try}
+import gleam/string.{inspect}
 import matchers/extract_driver_error_code.{extract_driver_error_code}
 import matchers/extract_load_failure.{extract_load_failure}
 import matchers/extract_type_kind.{extract_type_kind}
@@ -38,39 +48,47 @@ import matchers/extract_type_kind.{extract_type_kind}
 /// A type OID that no server of the tests has.
 const unknown_type_id = 4_294_967_000
 
-/// The statement that makes the schema `svc829_hidden`, which is not on
-/// the search_path.
-const hidden_schema = "CREATE SCHEMA svc829_hidden; "
-
 const int4 = TypeDescription(23, "pg_catalog", "int4", Base)
 
 const int4range = TypeDescription(3904, "pg_catalog", "int4range", Range(23))
 
-/// The tests of the type catalog.
+/// The tests of the type catalog. The describes run one after the other;
+/// the tests of one group run at the same time.
 pub fn tests() -> TestSuite {
-  describe("dream_postgres/driver/catalog", [
-    group("on each driver server", map(driver_servers(), server_tests)),
-    group(
-      "loads",
-      flatten([
-        load_tests(),
-        lookup_during_load_tests(),
-        known_type_during_load_tests(),
-      ]),
-    ),
-    group("the process", process_tests()),
+  suite.group("dream_postgres/driver/catalog", [
+    session_tests(),
+    lookup_during_load_tests(),
+    known_type_during_load_tests(),
+    supervisor_tests(),
   ])
 }
 
-// On each server --------------------------------------------------------------
+// With a catalog of its own ---------------------------------------------------
+
+fn session_tests() -> TestSuite {
+  describe(
+    "with a catalog of its own",
+    catalog_session_setup(first_driver_server),
+    [
+      after_each(stop_catalog_session),
+      group("on each driver server", map(driver_servers(), server_tests)),
+      group("loads", load_tests()),
+      group("the loads it tells of", watched_load_tests()),
+      group("failed loads", failed_load_tests()),
+      group("the process", process_tests()),
+    ],
+  )
+}
 
 fn server_tests(server: Server) {
   group(
     "PostgreSQL " <> to_string(server.version),
     flatten([
-      map(built_in_type_cases(), built_in_type_test(server, _)),
-      map(extension_type_cases(), extension_type_test(server, _)),
-      new_type_tests(server),
+      [before_each(start_test_catalog(server))],
+      map(built_in_type_cases(), built_in_type_test),
+      map(extension_type_cases(), extension_type_test),
+      new_type_tests(),
+      domain_tests(),
     ]),
   )
 }
@@ -106,17 +124,16 @@ fn built_in_type_cases() -> List(BuiltInTypeCase) {
   ]
 }
 
-fn built_in_type_test(server: Server, test_case: BuiltInTypeCase) {
-  it(test_case.name, fn() {
-    // Arrange
-    let connection = start_connection(server.port)
-    let type_catalog = start_catalog()
-
+fn built_in_type_test(test_case: BuiltInTypeCase) {
+  it(test_case.name, fn(session: CatalogSession) {
     // Act
     let description =
-      catalog.describe(type_catalog, connection, test_case.type_id, 5000)
-    catalog.stop(type_catalog)
-    stop(connection)
+      catalog.describe(
+        session.catalog,
+        session.connection,
+        test_case.type_id,
+        5000,
+      )
 
     // Assert
     description
@@ -143,192 +160,196 @@ fn extension_type_cases() -> List(ExtensionTypeCase) {
   ]
 }
 
-fn extension_type_test(server: Server, test_case: ExtensionTypeCase) {
-  it(test_case.name, fn() {
-    // Arrange
-    let connection = start_connection(server.port)
-    let type_catalog = start_catalog()
-    let type_id = type_oid(connection, test_case.type_name)
-
-    // Act
-    let description = catalog.describe(type_catalog, connection, type_id, 5000)
-    catalog.stop(type_catalog)
-    stop(connection)
-
-    // Assert
-    description
-    |> should
-    |> be_ok
-    |> be_equal(TypeDescription(type_id, "public", test_case.type_name, Base))
-    |> or_fail_with(
-      "Expected " <> test_case.type_name <> " as a base type of public",
-    )
-  })
-}
-
-fn new_type_tests(server: Server) {
-  [
-    it(
-      "describes an enum outside the search_path with its labels in order",
-      fn() {
-        // Arrange
-        let connection = start_connection(server.port)
-        let type_catalog = start_catalog()
-        begin_with(
-          connection,
-          hidden_schema
-            <> "CREATE TYPE svc829_hidden.mood AS ENUM ('sad', 'happy'); "
-            <> "ALTER TYPE svc829_hidden.mood ADD VALUE 'calm' BEFORE 'happy'",
-        )
-        let type_id = type_oid(connection, "svc829_hidden.mood")
-
-        // Act
-        let description =
-          catalog.describe(type_catalog, connection, type_id, 5000)
-        roll_back(connection)
-        catalog.stop(type_catalog)
-        stop(connection)
-
-        // Assert
-        description
-        |> should
-        |> be_ok
-        |> be_equal(TypeDescription(
-          type_id,
-          "svc829_hidden",
-          "mood",
-          Enum(["sad", "calm", "happy"]),
-        ))
-        |> or_fail_with(
-          "Expected the enum of svc829_hidden with sad, calm, happy",
-        )
-      },
-    ),
-    it("describes a composite with its fields, without a dropped one", fn() {
-      // Arrange
-      let connection = start_connection(server.port)
-      let type_catalog = start_catalog()
-      begin_with(
-        connection,
-        hidden_schema
-          <> "CREATE TYPE svc829_hidden.trio AS (a int4, b text, c bool); "
-          <> "ALTER TYPE svc829_hidden.trio DROP ATTRIBUTE b",
-      )
-      let type_id = type_oid(connection, "svc829_hidden.trio")
-
+fn extension_type_test(test_case: ExtensionTypeCase) {
+  group("the extension type " <> test_case.type_name, [
+    before_each(find_type(test_case.type_name)),
+    it(test_case.name, fn(session: CatalogSession) {
       // Act
       let description =
-        catalog.describe(type_catalog, connection, type_id, 5000)
-      roll_back(connection)
-      catalog.stop(type_catalog)
-      stop(connection)
+        catalog.describe(
+          session.catalog,
+          session.connection,
+          session.type_id,
+          5000,
+        )
 
       // Assert
       description
       |> should
       |> be_ok
       |> be_equal(TypeDescription(
-        type_id,
-        "svc829_hidden",
-        "trio",
-        Composite([#("a", 23), #("c", 16)]),
+        session.type_id,
+        "public",
+        test_case.type_name,
+        Base,
       ))
-      |> or_fail_with("Expected the composite with the fields a and c")
+      |> or_fail_with(
+        "Expected " <> test_case.type_name <> " as a base type of public",
+      )
     }),
-    ..domain_tests(server)
+  ])
+}
+
+fn new_type_tests() {
+  [
+    group("an enum", [
+      before_each(begin_with_types(
+        "CREATE TYPE {schema}.mood AS ENUM ('sad', 'happy'); "
+        <> "ALTER TYPE {schema}.mood ADD VALUE 'calm' BEFORE 'happy'",
+      )),
+      before_each(find_type("{schema}.mood")),
+      it(
+        "describes an enum outside the search_path with its labels in order",
+        fn(session: CatalogSession) {
+          // Act
+          let description =
+            catalog.describe(
+              session.catalog,
+              session.connection,
+              session.type_id,
+              5000,
+            )
+
+          // Assert
+          description
+          |> should
+          |> be_ok
+          |> be_equal(TypeDescription(
+            session.type_id,
+            session.schema,
+            "mood",
+            Enum(["sad", "calm", "happy"]),
+          ))
+          |> or_fail_with(
+            "Expected the enum of its schema with sad, calm, happy",
+          )
+        },
+      ),
+    ]),
+    group("a composite", [
+      before_each(begin_with_types(
+        "CREATE TYPE {schema}.trio AS (a int4, b text, c bool); "
+        <> "ALTER TYPE {schema}.trio DROP ATTRIBUTE b",
+      )),
+      before_each(find_type("{schema}.trio")),
+      it(
+        "describes a composite with its fields, without a dropped one",
+        fn(session: CatalogSession) {
+          // Act
+          let description =
+            catalog.describe(
+              session.catalog,
+              session.connection,
+              session.type_id,
+              5000,
+            )
+
+          // Assert
+          description
+          |> should
+          |> be_ok
+          |> be_equal(TypeDescription(
+            session.type_id,
+            session.schema,
+            "trio",
+            Composite([#("a", 23), #("c", 16)]),
+          ))
+          |> or_fail_with("Expected the composite with the fields a and c")
+        },
+      ),
+    ]),
   ]
 }
 
 const domain_chain_setup =
-  "CREATE DOMAIN svc829_hidden.inner_range AS int4range; "
-  <> "CREATE DOMAIN svc829_hidden.outer_range AS svc829_hidden.inner_range"
+  "CREATE DOMAIN {schema}.inner_range AS int4range; "
+  <> "CREATE DOMAIN {schema}.outer_range AS {schema}.inner_range"
 
-fn domain_tests(server: Server) {
+fn domain_tests() {
   [
-    it("describes a domain over a domain as a domain over the inner one", fn() {
-      // Arrange
-      let connection = start_connection(server.port)
-      let type_catalog = start_catalog()
-      begin_with(connection, hidden_schema <> domain_chain_setup)
-      let inner = type_oid(connection, "svc829_hidden.inner_range")
-      let outer = type_oid(connection, "svc829_hidden.outer_range")
+    group("a domain over a domain", [
+      before_each(begin_with_types(domain_chain_setup)),
+      before_each(find_type("{schema}.outer_range")),
+      before_each(find_part_type("{schema}.inner_range")),
+      it(
+        "describes a domain over a domain as a domain over the inner one",
+        fn(session: CatalogSession) {
+          // Act
+          let description =
+            catalog.describe(
+              session.catalog,
+              session.connection,
+              session.type_id,
+              5000,
+            )
 
-      // Act
-      let description = catalog.describe(type_catalog, connection, outer, 5000)
-      roll_back(connection)
-      catalog.stop(type_catalog)
-      stop(connection)
+          // Assert
+          description
+          |> should
+          |> be_ok
+          |> be_equal(TypeDescription(
+            session.type_id,
+            session.schema,
+            "outer_range",
+            Domain(session.part_type_id),
+          ))
+          |> or_fail_with("Expected the outer domain over the inner one")
+        },
+      ),
+      it(
+        "follows a domain over a domain over a range to the range",
+        fn(session: CatalogSession) {
+          // Act
+          let description =
+            catalog.describe_underlying(
+              session.catalog,
+              session.connection,
+              session.type_id,
+              5000,
+            )
 
-      // Assert
-      description
-      |> should
-      |> be_ok
-      |> be_equal(TypeDescription(
-        outer,
-        "svc829_hidden",
-        "outer_range",
-        Domain(inner),
-      ))
-      |> or_fail_with("Expected the outer domain over the inner one")
-    }),
-    it("follows a domain over a domain over a range to the range", fn() {
-      // Arrange
-      let connection = start_connection(server.port)
-      let type_catalog = start_catalog()
-      begin_with(connection, hidden_schema <> domain_chain_setup)
-      let outer = type_oid(connection, "svc829_hidden.outer_range")
+          // Assert
+          description
+          |> should
+          |> be_ok
+          |> be_equal(int4range)
+          |> or_fail_with("Expected int4range under the outer domain")
+        },
+      ),
+    ]),
+    group("a domain over a composite", [
+      before_each(begin_with_types(
+        "CREATE TYPE {schema}.pair AS (left_side int4, right_side text); "
+        <> "CREATE DOMAIN {schema}.checked_pair AS {schema}.pair",
+      )),
+      before_each(find_type("{schema}.checked_pair")),
+      before_each(find_part_type("{schema}.pair")),
+      it(
+        "follows a domain over a composite to the composite",
+        fn(session: CatalogSession) {
+          // Act
+          let description =
+            catalog.describe_underlying(
+              session.catalog,
+              session.connection,
+              session.type_id,
+              5000,
+            )
 
-      // Act
-      let description =
-        catalog.describe_underlying(type_catalog, connection, outer, 5000)
-      roll_back(connection)
-      catalog.stop(type_catalog)
-      stop(connection)
-
-      // Assert
-      description
-      |> should
-      |> be_ok
-      |> be_equal(int4range)
-      |> or_fail_with("Expected int4range under the outer domain")
-    }),
-    it("follows a domain over a composite to the composite", fn() {
-      // Arrange
-      let connection = start_connection(server.port)
-      let type_catalog = start_catalog()
-      begin_with(
-        connection,
-        hidden_schema
-          <> "CREATE TYPE svc829_hidden.pair AS (left_side int4, right_side text); "
-          <> "CREATE DOMAIN svc829_hidden.checked_pair AS svc829_hidden.pair",
-      )
-      let pair = type_oid(connection, "svc829_hidden.pair")
-      let checked_pair = type_oid(connection, "svc829_hidden.checked_pair")
-
-      // Act
-      let description =
-        catalog.describe_underlying(
-          type_catalog,
-          connection,
-          checked_pair,
-          5000,
-        )
-      roll_back(connection)
-      catalog.stop(type_catalog)
-      stop(connection)
-
-      // Assert
-      description
-      |> should
-      |> be_ok
-      |> be_equal(TypeDescription(
-        pair,
-        "svc829_hidden",
-        "pair",
-        Composite([#("left_side", 23), #("right_side", 25)]),
-      ))
-      |> or_fail_with("Expected the composite under the domain")
-    }),
+          // Assert
+          description
+          |> should
+          |> be_ok
+          |> be_equal(TypeDescription(
+            session.part_type_id,
+            session.schema,
+            "pair",
+            Composite([#("left_side", 23), #("right_side", 25)]),
+          ))
+          |> or_fail_with("Expected the composite under the domain")
+        },
+      ),
+    ]),
   ]
 }
 
@@ -336,488 +357,383 @@ fn domain_tests(server: Server) {
 
 fn load_tests() {
   [
-    it("loads one time for an unknown type, then gives UnknownType", fn() {
-      // Arrange
-      let connection = start_connection(first_driver_server.port)
-      let type_catalog = start_catalog()
+    before_each(start_test_catalog(first_driver_server)),
+    group("after a load", [
+      before_each(load_type(23)),
+      it(
+        "loads one time for an unknown type, then gives UnknownType",
+        fn(session: CatalogSession) {
+          // Act
+          let unknown =
+            catalog.describe(
+              session.catalog,
+              session.connection,
+              unknown_type_id,
+              5000,
+            )
 
-      // Act
-      let _known = catalog.describe(type_catalog, connection, 23, 5000)
-      let unknown =
-        catalog.describe(type_catalog, connection, unknown_type_id, 5000)
-      catalog.stop(type_catalog)
-      stop(connection)
+          // Assert
+          unknown
+          |> should
+          |> be_error
+          |> be_equal(UnknownType(unknown_type_id))
+          |> or_fail_with("Expected UnknownType after the second load")
+        },
+      ),
+      group("and a new type", [
+        before_each(begin_with_types(
+          "CREATE TYPE {schema}.later AS ENUM ('one')",
+        )),
+        before_each(find_type("{schema}.later")),
+        it(
+          "finds a type that was made after the last load",
+          fn(session: CatalogSession) {
+            // Act
+            let description =
+              catalog.describe(
+                session.catalog,
+                session.connection,
+                session.type_id,
+                5000,
+              )
 
-      // Assert
-      unknown
-      |> should
-      |> be_error
-      |> be_equal(UnknownType(unknown_type_id))
-      |> or_fail_with("Expected UnknownType after the second load")
-    }),
-    it("describes a known type from the first load", fn() {
-      // Arrange
-      let connection = start_connection(first_driver_server.port)
-      let type_catalog = start_catalog()
+            // Assert
+            description
+            |> should
+            |> be_ok
+            |> extract_type_kind
+            |> be_equal(Enum(["one"]))
+            |> or_fail_with("Expected the new enum after a reload")
+          },
+        ),
+      ]),
+    ]),
+    it(
+      "describes a known type from the first load",
+      fn(session: CatalogSession) {
+        // Act
+        let known =
+          catalog.describe(session.catalog, session.connection, 23, 5000)
 
-      // Act
-      let known = catalog.describe(type_catalog, connection, 23, 5000)
-      let _unknown =
-        catalog.describe(type_catalog, connection, unknown_type_id, 5000)
-      catalog.stop(type_catalog)
-      stop(connection)
+        // Assert
+        known
+        |> should
+        |> be_ok
+        |> be_equal(int4)
+        |> or_fail_with("Expected int4 from the first load")
+      },
+    ),
+    group("after an earlier catalog loaded a type of its transaction", [
+      before_each(begin_with_types(
+        "CREATE TYPE {schema}.private AS ENUM ('one')",
+      )),
+      before_each(find_type("{schema}.private")),
+      before_each(load_found_type),
+      it(
+        "starts each catalog empty, so a new one never has the types of an earlier one",
+        fn(session: CatalogSession) {
+          // Act
+          let answer =
+            describe_in_new_catalog(first_driver_server, session.type_id)
 
-      // Assert
-      known
-      |> should
-      |> be_ok
-      |> be_equal(int4)
-      |> or_fail_with("Expected int4 from the first load")
-    }),
-    it("starts one load for each lookup that does not find its type", fn() {
-      // Arrange
-      let connection = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
+          // Assert
+          answer
+          |> should
+          |> be_ok
+          |> be_error
+          |> be_equal(UnknownType(session.type_id))
+          |> or_fail_with("Expected UnknownType from the newer catalog")
+        },
+      ),
+    ]),
+  ]
+}
 
-      // Act
-      let _known = catalog.describe(type_catalog, connection, 23, 5000)
-      let _unknown =
-        catalog.describe(type_catalog, connection, unknown_type_id, 5000)
-      let loads = received_catalog_events(events)
-      catalog.stop(type_catalog)
-      stop(connection)
+fn watched_load_tests() {
+  [
+    before_each(start_test_watched_catalog(first_driver_server)),
+    before_each(load_type(23)),
+    before_each(load_unknown_type(unknown_type_id)),
+    it(
+      "starts one load for each lookup that does not find its type",
+      fn(session: CatalogSession) {
+        // Act
+        let loads = received_catalog_events(session.events)
 
-      // Assert
-      loads
-      |> should
-      |> be_equal([LoadStarted(1), LoadStarted(2)])
-      |> or_fail_with("Expected load 1, then load 2 for the unknown type")
-    }),
-    it("finds a type that was made after the last load", fn() {
-      // Arrange
-      let connection = start_connection(first_driver_server.port)
-      let type_catalog = start_catalog()
-      let _known = catalog.describe(type_catalog, connection, 23, 5000)
-      begin_with(
-        connection,
-        hidden_schema <> "CREATE TYPE svc829_hidden.later AS ENUM ('one')",
-      )
-      let type_id = type_oid(connection, "svc829_hidden.later")
-
-      // Act
-      let description =
-        catalog.describe(type_catalog, connection, type_id, 5000)
-      roll_back(connection)
-      catalog.stop(type_catalog)
-      stop(connection)
-
-      // Assert
-      description
-      |> should
-      |> be_ok
-      |> extract_type_kind
-      |> be_equal(Enum(["one"]))
-      |> or_fail_with("Expected the new enum after a reload")
-    }),
-    ..failed_load_tests()
+        // Assert
+        loads
+        |> should
+        |> be_equal([LoadStarted(1), LoadStarted(2)])
+        |> or_fail_with("Expected load 1, then load 2 for the unknown type")
+      },
+    ),
   ]
 }
 
 fn failed_load_tests() {
   [
-    it(
-      "starts each catalog empty, so a new one never has the types of an earlier one",
-      fn() {
-        // Arrange
-        let connection = start_connection(first_driver_server.port)
-        let other_connection = start_connection(first_driver_server.port)
-        let earlier = start_catalog()
-        begin_with(
-          connection,
-          hidden_schema <> "CREATE TYPE svc829_hidden.private AS ENUM ('one')",
-        )
-        let type_id = type_oid(connection, "svc829_hidden.private")
-        let _described = catalog.describe(earlier, connection, type_id, 5000)
-        let newer = start_catalog()
+    before_each(start_test_catalog(first_driver_server)),
+    before_each(on_session_connection(run_setup_script("BEGIN"))),
+    group("in a failed transaction", [
+      before_each(on_session_connection(run_failing_statement("SELECT 1/0"))),
+      it(
+        "gives the server's error when the load fails in a failed transaction",
+        fn(session: CatalogSession) {
+          // Act
+          let described =
+            catalog.describe(session.catalog, session.connection, 23, 5000)
 
+          // Assert
+          described
+          |> should
+          |> be_error
+          |> extract_load_failure
+          |> extract_driver_error_code
+          |> be_equal("25P02")
+          |> or_fail_with("Expected 25P02 from the load")
+        },
+      ),
+    ]),
+    it(
+      "refuses the statement that fails the transaction",
+      fn(session: CatalogSession) {
         // Act
-        let answer = catalog.describe(newer, other_connection, type_id, 5000)
-        roll_back(connection)
-        catalog.stop(newer)
-        catalog.stop(earlier)
-        each([connection, other_connection], stop)
+        let division = run(session.connection, "SELECT 1/0", [], [], 5000)
+
+        // Assert
+        division
+        |> should
+        |> be_error
+        |> extract_driver_error_code
+        |> be_equal("22012")
+        |> or_fail_with("Expected 22012 from the division by zero")
+      },
+    ),
+  ]
+}
+
+fn process_tests() {
+  [
+    before_each(start_test_catalog(first_driver_server)),
+    it(
+      "gives CatalogProcessDown after the catalog stopped",
+      fn(session: CatalogSession) {
+        // Act
+        catalog.stop(session.catalog)
+        catalog.stop(session.catalog)
+        let answer =
+          catalog.describe(session.catalog, session.connection, 23, 5000)
 
         // Assert
         answer
         |> should
         |> be_error
-        |> be_equal(UnknownType(type_id))
-        |> or_fail_with("Expected UnknownType from the newer catalog")
+        |> be_equal(CatalogProcessDown)
+        |> or_fail_with("Expected CatalogProcessDown")
       },
     ),
-    it(
-      "gives the server's error when the load fails in a failed transaction",
-      fn() {
-        // Arrange
-        let connection = start_connection(first_driver_server.port)
-        let type_catalog = start_catalog()
-        let _began = run_script(connection, "BEGIN", 5000)
-        let _division = run(connection, "SELECT 1/0", [], [], 5000)
-
-        // Act
-        let described = catalog.describe(type_catalog, connection, 23, 5000)
-        roll_back(connection)
-        catalog.stop(type_catalog)
-        stop(connection)
-
-        // Assert
-        described
-        |> should
-        |> be_error
-        |> extract_load_failure
-        |> extract_driver_error_code
-        |> be_equal("25P02")
-        |> or_fail_with("Expected 25P02 from the load")
-      },
-    ),
-    it("refuses the statement that fails the transaction", fn() {
-      // Arrange
-      let connection = start_connection(first_driver_server.port)
-      let type_catalog = start_catalog()
-      let _began = run_script(connection, "BEGIN", 5000)
-
-      // Act
-      let division = run(connection, "SELECT 1/0", [], [], 5000)
-      let _described = catalog.describe(type_catalog, connection, 23, 5000)
-      roll_back(connection)
-      catalog.stop(type_catalog)
-      stop(connection)
-
-      // Assert
-      division
-      |> should
-      |> be_error
-      |> extract_driver_error_code
-      |> be_equal("22012")
-      |> or_fail_with("Expected 22012 from the division by zero")
-    }),
   ]
 }
 
-// A lookup during a load ------------------------------------------------------
+// A lookup during a load: one act for four tests -------------------------------
 //
 // Load 1 waits on a blocked connection. A lookup on another connection, of
 // a type that its transaction made after load 1 started, loads again at
 // once, while load 1 still waits. Load 1 ends after load 2, so its older
-// table does not replace the table of load 2. Each test has its own lock
-// key.
+// table does not replace the table of load 2.
 
-const during_setup = "CREATE TYPE svc829_hidden.during AS ENUM ('one')"
-
-fn lookup_during_load_tests() {
-  [
-    it("loads again for a lookup during a load, without waiting for it", fn() {
-      // Arrange
-      let control = start_connection(first_driver_server.port)
-      let blocked = start_connection(first_driver_server.port)
-      let other = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-      let blocking = block_connection(control, blocked, 82_900)
-
-      // Act
-      let first =
-        start_caller(fn() {
-          catalog.describe(type_catalog, blocked, 23, 10_000)
-        })
-      let _first_event = next_catalog_event(events)
-      begin_with(other, hidden_schema <> during_setup)
-      let type_id = type_oid(other, "svc829_hidden.during")
-      let during = catalog.describe(type_catalog, other, type_id, 5000)
-      roll_back(other)
-      unblock_connection(blocking)
-      let _first_answer = caller_answer(first)
-      catalog.stop(type_catalog)
-      each([control, blocked, other], stop)
-
-      // Assert
-      during
-      |> should
-      |> be_ok
-      |> extract_type_kind
-      |> be_equal(Enum(["one"]))
-      |> or_fail_with(
-        "Expected load 2 to find the new type while load 1 waited",
-      )
-    }),
-    it("starts load 1 for the lookup that waits", fn() {
-      // Arrange
-      let control = start_connection(first_driver_server.port)
-      let blocked = start_connection(first_driver_server.port)
-      let other = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-      let blocking = block_connection(control, blocked, 82_902)
-
-      // Act
-      let first =
-        start_caller(fn() {
-          catalog.describe(type_catalog, blocked, 23, 10_000)
-        })
-      let first_event = next_catalog_event(events)
-      begin_with(other, hidden_schema <> during_setup)
-      let type_id = type_oid(other, "svc829_hidden.during")
-      let _during = catalog.describe(type_catalog, other, type_id, 5000)
-      roll_back(other)
-      unblock_connection(blocking)
-      let _first_answer = caller_answer(first)
-      catalog.stop(type_catalog)
-      each([control, blocked, other], stop)
-
-      // Assert
-      first_event
-      |> should
-      |> be_ok
-      |> be_equal(LoadStarted(1))
-      |> or_fail_with("Expected load 1 for the lookup that waits")
-    }),
-    it("starts only load 2 for the lookup during load 1", fn() {
-      // Arrange
-      let control = start_connection(first_driver_server.port)
-      let blocked = start_connection(first_driver_server.port)
-      let other = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-      let blocking = block_connection(control, blocked, 82_903)
-
-      // Act
-      let first =
-        start_caller(fn() {
-          catalog.describe(type_catalog, blocked, 23, 10_000)
-        })
-      let _first_event = next_catalog_event(events)
-      begin_with(other, hidden_schema <> during_setup)
-      let type_id = type_oid(other, "svc829_hidden.during")
-      let _during = catalog.describe(type_catalog, other, type_id, 5000)
-      roll_back(other)
-      unblock_connection(blocking)
-      let _first_answer = caller_answer(first)
-      let later_events = received_catalog_events(events)
-      catalog.stop(type_catalog)
-      each([control, blocked, other], stop)
-
-      // Assert
-      later_events
-      |> should
-      |> be_equal([LoadStarted(2)])
-      |> or_fail_with("Expected only load 2 after load 1 started")
-    }),
-    it("answers the lookup that waited from its own load", fn() {
-      // Arrange
-      let control = start_connection(first_driver_server.port)
-      let blocked = start_connection(first_driver_server.port)
-      let other = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-      let blocking = block_connection(control, blocked, 82_904)
-
-      // Act
-      let first =
-        start_caller(fn() {
-          catalog.describe(type_catalog, blocked, 23, 10_000)
-        })
-      let _first_event = next_catalog_event(events)
-      begin_with(other, hidden_schema <> during_setup)
-      let type_id = type_oid(other, "svc829_hidden.during")
-      let _during = catalog.describe(type_catalog, other, type_id, 5000)
-      roll_back(other)
-      unblock_connection(blocking)
-      let first_answer = caller_answer(first)
-      catalog.stop(type_catalog)
-      each([control, blocked, other], stop)
-
-      // Assert
-      first_answer
-      |> should
-      |> be_ok
-      |> be_ok
-      |> be_equal(int4)
-      |> or_fail_with("Expected int4 for the lookup that waited")
-    }),
-  ]
+type DuringLoad {
+  DuringLoad(
+    first_event: Result(CatalogEvent, Nil),
+    during: Result(TypeDescription, CatalogError),
+    later_events: List(CatalogEvent),
+    first_answer: Result(TypeDescription, CatalogError),
+  )
 }
 
-// A known type during a load --------------------------------------------------
+fn look_up_during_load(race: LoadRace) -> Result(DuringLoad, String) {
+  use blocking <- try(block_connection(
+    race.control,
+    race.blocked,
+    race.lock_key,
+  ))
+  let first =
+    start_caller(fn() {
+      catalog.describe(race.catalog, race.blocked, 23, 10_000)
+    })
+  let first_event = next_catalog_event(race.events)
+  use _began <- try(begin_in_schema(
+    race.other,
+    race.schema,
+    "CREATE TYPE {schema}.during AS ENUM ('one')",
+  ))
+  use type_id <- try(type_oid(race.other, race.schema <> ".during"))
+  let during = catalog.describe(race.catalog, race.other, type_id, 5000)
+  use _unblocked <- try(unblock_connection(blocking))
+  use first_answer <- try(caller_answer(first))
+  let later_events = received_catalog_events(race.events)
+  Ok(DuringLoad(first_event:, during:, later_events:, first_answer:))
+}
+
+fn lookup_during_load_tests() -> TestSuite {
+  describe(
+    "a lookup during a load",
+    race_act_setup(first_driver_server, look_up_during_load),
+    [
+      it(
+        "loads again for a lookup during a load, without waiting for it",
+        fn(shared: RaceOutcome(DuringLoad)) {
+          shared.outcome.during
+          |> should
+          |> be_ok
+          |> extract_type_kind
+          |> be_equal(Enum(["one"]))
+          |> or_fail_with(
+            "Expected load 2 to find the new type while load 1 waited",
+          )
+        },
+      ),
+      it(
+        "starts load 1 for the lookup that waits",
+        fn(shared: RaceOutcome(DuringLoad)) {
+          shared.outcome.first_event
+          |> should
+          |> be_ok
+          |> be_equal(LoadStarted(1))
+          |> or_fail_with("Expected load 1 for the lookup that waits")
+        },
+      ),
+      it(
+        "starts only load 2 for the lookup during load 1",
+        fn(shared: RaceOutcome(DuringLoad)) {
+          shared.outcome.later_events
+          |> should
+          |> be_equal([LoadStarted(2)])
+          |> or_fail_with("Expected only load 2 after load 1 started")
+        },
+      ),
+      it(
+        "answers the lookup that waited from its own load",
+        fn(shared: RaceOutcome(DuringLoad)) {
+          shared.outcome.first_answer
+          |> should
+          |> be_ok
+          |> be_equal(int4)
+          |> or_fail_with("Expected int4 for the lookup that waited")
+        },
+      ),
+    ],
+  )
+}
+
+// A known type during a load: one act for five tests ---------------------------
 //
 // While load 2 waits on a blocked connection, a lookup of a type of load 1
-// is answered from load 1, with no load of its own. Each test has its own
-// lock key.
+// is answered from load 1, with no load of its own.
 
-fn known_type_during_load_tests() {
-  [
-    it("answers a known type during a load with the table it has", fn() {
-      // Arrange
-      let control = start_connection(first_driver_server.port)
-      let blocked = start_connection(first_driver_server.port)
-      let other = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-
-      // Act
-      let _loaded = catalog.describe(type_catalog, other, 23, 5000)
-      let blocking = block_connection(control, blocked, 82_901)
-      let waiting =
-        start_caller(fn() {
-          catalog.describe(type_catalog, blocked, unknown_type_id, 10_000)
-        })
-      let _second_event = next_catalog_event(events)
-      let text = catalog.describe(type_catalog, other, 25, 5000)
-      unblock_connection(blocking)
-      let _waiting_answer = caller_answer(waiting)
-      catalog.stop(type_catalog)
-      each([control, blocked, other], stop)
-
-      // Assert
-      text
-      |> should
-      |> be_ok
-      |> be_equal(TypeDescription(25, "pg_catalog", "text", Base))
-      |> or_fail_with("Expected text from load 1 while load 2 waited")
-    }),
-    it("starts load 1 for the first lookup", fn() {
-      // Arrange
-      let connection = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-
-      // Act
-      let _loaded = catalog.describe(type_catalog, connection, 23, 5000)
-      let first_events = received_catalog_events(events)
-      catalog.stop(type_catalog)
-      stop(connection)
-
-      // Assert
-      first_events
-      |> should
-      |> be_equal([LoadStarted(1)])
-      |> or_fail_with("Expected load 1 for the first lookup")
-    }),
-    it("starts load 2 for a lookup of an unknown type", fn() {
-      // Arrange
-      let control = start_connection(first_driver_server.port)
-      let blocked = start_connection(first_driver_server.port)
-      let other = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-
-      // Act
-      let _loaded = catalog.describe(type_catalog, other, 23, 5000)
-      let _first_events = received_catalog_events(events)
-      let blocking = block_connection(control, blocked, 82_905)
-      let waiting =
-        start_caller(fn() {
-          catalog.describe(type_catalog, blocked, unknown_type_id, 10_000)
-        })
-      let second_event = next_catalog_event(events)
-      unblock_connection(blocking)
-      let _waiting_answer = caller_answer(waiting)
-      catalog.stop(type_catalog)
-      each([control, blocked, other], stop)
-
-      // Assert
-      second_event
-      |> should
-      |> be_ok
-      |> be_equal(LoadStarted(2))
-      |> or_fail_with("Expected load 2 for the unknown type")
-    }),
-    it("starts no load for a known type during a load", fn() {
-      // Arrange
-      let control = start_connection(first_driver_server.port)
-      let blocked = start_connection(first_driver_server.port)
-      let other = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-
-      // Act
-      let _loaded = catalog.describe(type_catalog, other, 23, 5000)
-      let _first_events = received_catalog_events(events)
-      let blocking = block_connection(control, blocked, 82_906)
-      let waiting =
-        start_caller(fn() {
-          catalog.describe(type_catalog, blocked, unknown_type_id, 10_000)
-        })
-      let _second_event = next_catalog_event(events)
-      let _text = catalog.describe(type_catalog, other, 25, 5000)
-      let events_during = received_catalog_events(events)
-      unblock_connection(blocking)
-      let _waiting_answer = caller_answer(waiting)
-      catalog.stop(type_catalog)
-      each([control, blocked, other], stop)
-
-      // Assert
-      events_during
-      |> should
-      |> be_equal([])
-      |> or_fail_with("Expected no load for text while load 2 waited")
-    }),
-    it("gives UnknownType to the lookup that waited for load 2", fn() {
-      // Arrange
-      let control = start_connection(first_driver_server.port)
-      let blocked = start_connection(first_driver_server.port)
-      let other = start_connection(first_driver_server.port)
-      let events = process.new_subject()
-      let type_catalog = start_watched_catalog(events)
-
-      // Act
-      let _loaded = catalog.describe(type_catalog, other, 23, 5000)
-      let blocking = block_connection(control, blocked, 82_907)
-      let waiting =
-        start_caller(fn() {
-          catalog.describe(type_catalog, blocked, unknown_type_id, 10_000)
-        })
-      let _second_event = next_catalog_event(events)
-      let _text = catalog.describe(type_catalog, other, 25, 5000)
-      unblock_connection(blocking)
-      let waiting_answer = caller_answer(waiting)
-      catalog.stop(type_catalog)
-      each([control, blocked, other], stop)
-
-      // Assert
-      waiting_answer
-      |> should
-      |> be_ok
-      |> be_error
-      |> be_equal(UnknownType(unknown_type_id))
-      |> or_fail_with("Expected UnknownType after load 2")
-    }),
-  ]
+type KnownDuringLoad {
+  KnownDuringLoad(
+    first_events: List(CatalogEvent),
+    second_event: Result(CatalogEvent, Nil),
+    text: Result(TypeDescription, CatalogError),
+    events_during: List(CatalogEvent),
+    waiting_answer: Result(TypeDescription, CatalogError),
+  )
 }
 
-// The process -----------------------------------------------------------------
+fn look_up_known_during_load(
+  race: LoadRace,
+) -> Result(KnownDuringLoad, String) {
+  use _loaded <- try(
+    catalog.describe(race.catalog, race.other, 23, 5000)
+    |> map_error(inspect),
+  )
+  let first_events = received_catalog_events(race.events)
+  use blocking <- try(block_connection(
+    race.control,
+    race.blocked,
+    race.lock_key,
+  ))
+  let waiting =
+    start_caller(fn() {
+      catalog.describe(race.catalog, race.blocked, unknown_type_id, 10_000)
+    })
+  let second_event = next_catalog_event(race.events)
+  let text = catalog.describe(race.catalog, race.other, 25, 5000)
+  let events_during = received_catalog_events(race.events)
+  use _unblocked <- try(unblock_connection(blocking))
+  use waiting_answer <- try(caller_answer(waiting))
+  Ok(KnownDuringLoad(
+    first_events:,
+    second_event:,
+    text:,
+    events_during:,
+    waiting_answer:,
+  ))
+}
 
-fn process_tests() {
-  [
-    it("gives CatalogProcessDown after the catalog stopped", fn() {
-      // Arrange
-      let connection = start_connection(first_driver_server.port)
-      let type_catalog = start_catalog()
+fn known_type_during_load_tests() -> TestSuite {
+  describe(
+    "a known type during a load",
+    race_act_setup(first_driver_server, look_up_known_during_load),
+    [
+      it(
+        "answers a known type during a load with the table it has",
+        fn(shared: RaceOutcome(KnownDuringLoad)) {
+          shared.outcome.text
+          |> should
+          |> be_ok
+          |> be_equal(TypeDescription(25, "pg_catalog", "text", Base))
+          |> or_fail_with("Expected text from load 1 while load 2 waited")
+        },
+      ),
+      it(
+        "starts load 1 for the first lookup",
+        fn(shared: RaceOutcome(KnownDuringLoad)) {
+          shared.outcome.first_events
+          |> should
+          |> be_equal([LoadStarted(1)])
+          |> or_fail_with("Expected load 1 for the first lookup")
+        },
+      ),
+      it(
+        "starts load 2 for a lookup of an unknown type",
+        fn(shared: RaceOutcome(KnownDuringLoad)) {
+          shared.outcome.second_event
+          |> should
+          |> be_ok
+          |> be_equal(LoadStarted(2))
+          |> or_fail_with("Expected load 2 for the unknown type")
+        },
+      ),
+      it(
+        "starts no load for a known type during a load",
+        fn(shared: RaceOutcome(KnownDuringLoad)) {
+          shared.outcome.events_during
+          |> should
+          |> be_equal([])
+          |> or_fail_with("Expected no load for text while load 2 waited")
+        },
+      ),
+      it(
+        "gives UnknownType to the lookup that waited for load 2",
+        fn(shared: RaceOutcome(KnownDuringLoad)) {
+          shared.outcome.waiting_answer
+          |> should
+          |> be_error
+          |> be_equal(UnknownType(unknown_type_id))
+          |> or_fail_with("Expected UnknownType after load 2")
+        },
+      ),
+    ],
+  )
+}
 
-      // Act
-      catalog.stop(type_catalog)
-      catalog.stop(type_catalog)
-      let answer = catalog.describe(type_catalog, connection, 23, 5000)
-      stop(connection)
+// As a child of a supervisor --------------------------------------------------
 
-      // Assert
-      answer
-      |> should
-      |> be_error
-      |> be_equal(CatalogProcessDown)
-      |> or_fail_with("Expected CatalogProcessDown")
-    }),
-    it("starts as a child of a supervisor", fn() {
+fn supervisor_tests() -> TestSuite {
+  describe("as a child of a supervisor", context.value(Nil), [
+    it("starts as a child of a supervisor", fn(_nothing) {
       // Arrange
       let supervisor =
         static_supervisor.new(static_supervisor.OneForOne)
@@ -834,5 +750,5 @@ fn process_tests() {
       |> be_ok
       |> or_fail_with("Expected the supervisor to start the catalog")
     }),
-  ]
+  ])
 }
