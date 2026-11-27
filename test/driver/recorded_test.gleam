@@ -130,6 +130,14 @@ fn version_tests(recording: Recording) {
       |> or_fail_with("Expected the SQLSTATE 22012")
     }),
     it("describes a table column, a computed column and a system column", fn() {
+      // Arrange
+      let expected_columns = [
+        column("relname", 19, 1259, 2, 64),
+        column("int4", 23, 0, 0, 4),
+        column("text", 25, 0, 0, -1),
+        column("ctid", 27, 1259, -1, 6),
+      ]
+
       // Act
       let bytes = read_recording(file_name(recording, "rows"))
 
@@ -139,7 +147,7 @@ fn version_tests(recording: Recording) {
       |> be_ok
       |> extract_backend_messages
       |> extract_row_descriptions
-      |> be_equal([expected_columns()])
+      |> be_equal([expected_columns])
       |> or_fail_with("Expected the four described columns")
     }),
     it("sends a value, a NULL and an empty value", fn() {
@@ -156,15 +164,6 @@ fn version_tests(recording: Recording) {
       |> or_fail_with("Expected pg_class, NULL and an empty value")
     }),
   ])
-}
-
-fn expected_columns() -> List(ResultColumn) {
-  [
-    column("relname", 19, 1259, 2, 64),
-    column("int4", 23, 0, 0, 4),
-    column("text", 25, 0, 0, -1),
-    column("ctid", 27, 1259, -1, 6),
-  ]
 }
 
 fn column(

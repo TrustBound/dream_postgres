@@ -338,50 +338,43 @@ fn copy_cases() -> List(MessageCase) {
   ]
 }
 
-/// The fields of a report: each code byte, its value and a zero byte, then
-/// the zero byte that ends the list.
-fn report_body(fields: List(#(String, String))) -> BitArray {
-  concat([concat(map(fields, report_field)), <<0>>])
-}
-
-fn report_field(field: #(String, String)) -> BitArray {
-  <<field.0:utf8, field.1:utf8, 0>>
-}
-
+/// A report message: the type byte, the length, then each field as its
+/// code byte, its value and a zero byte, then the zero byte that ends the
+/// list.
 fn report_message(type_byte: String, fields: List(#(String, String))) {
-  let body = report_body(fields)
+  let body =
+    concat([
+      concat(map(fields, fn(field) { <<field.0:utf8, field.1:utf8, 0>> })),
+      <<0>>,
+    ])
   <<type_byte:utf8, { byte_size(body) + 4 }:32, body:bits>>
-}
-
-fn every_field() -> List(#(String, String)) {
-  [
-    #("S", "FEHLER"),
-    #("V", "ERROR"),
-    #("C", "23505"),
-    #("M", "duplicate key"),
-    #("D", "Key (id)=(1) already exists."),
-    #("H", "Use another id."),
-    #("P", "15"),
-    #("p", "3"),
-    #("q", "SELECT 1"),
-    #("W", "SQL function f"),
-    #("s", "public"),
-    #("t", "users"),
-    #("c", "id"),
-    #("d", "int4"),
-    #("n", "users_pkey"),
-    #("F", "nbtinsert.c"),
-    #("L", "666"),
-    #("R", "_bt_check_unique"),
-    #("X", "a field of a later version"),
-  ]
 }
 
 fn report_cases() -> List(MessageCase) {
   [
     MessageCase(
       "ErrorResponse with every field and one of an unknown code",
-      report_message("E", every_field()),
+      report_message("E", [
+        #("S", "FEHLER"),
+        #("V", "ERROR"),
+        #("C", "23505"),
+        #("M", "duplicate key"),
+        #("D", "Key (id)=(1) already exists."),
+        #("H", "Use another id."),
+        #("P", "15"),
+        #("p", "3"),
+        #("q", "SELECT 1"),
+        #("W", "SQL function f"),
+        #("s", "public"),
+        #("t", "users"),
+        #("c", "id"),
+        #("d", "int4"),
+        #("n", "users_pkey"),
+        #("F", "nbtinsert.c"),
+        #("L", "666"),
+        #("R", "_bt_check_unique"),
+        #("X", "a field of a later version"),
+      ]),
       ErrorResponse(
         ServerReport(
           severity: "ERROR",
