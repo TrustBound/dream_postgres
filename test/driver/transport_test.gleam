@@ -23,8 +23,7 @@ import dream_test/matchers.{
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/fake_server.{
-  type FakeBehavior, Answer, NotTls, Reset, Tls, TlsThenNotTls, free_port,
-  start_fake_server,
+  type FakeBehavior, Answer, NotTls, Reset, Tls, free_port, start_fake_server,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import driver/test_files.{read_certificate}
@@ -643,35 +642,6 @@ fn socket_tests() {
       |> be_equal(SocketClosed)
       |> or_fail_with("Expected SocketClosed")
     }),
-    it("gives the TLS alert of a record that is not valid TLS", fn() {
-      // Act
-      let connected = {
-        use #(port, _server) <- result.map(
-          start_fake_server(TlsThenNotTls(
-            "test/fixtures/ssl/server.crt",
-            "test/fixtures/ssl/server.key",
-          )),
-        )
-        try(
-          transport_config(
-            "localhost",
-            port,
-            RequireTls(NoCertificateCheck, PostgresNegotiation),
-          ),
-          connect,
-        )
-      }
-
-      // Assert
-      connected
-      |> should
-      |> be_ok
-      |> be_ok
-      |> extract_receive_result(timeout: 5000)
-      |> be_error
-      |> be_equal(TlsFailed(OtherTlsFailure("bad_record_mac")))
-      |> or_fail_with("Expected the TLS alert as a typed error")
-    }),
     it("gives SocketClosed for a receive on a closed TLS connection", fn() {
       // Arrange
       let config =
@@ -709,6 +679,26 @@ fn reason_tests() {
       |> should
       |> be_equal(atom.create("revoked"))
       |> or_fail_with("Expected the name revoked")
+    }),
+    it("reads a TLS alert of the ssl application by its name", fn() {
+      // Arrange
+      let reason =
+        dynamic.array([
+          atom.to_dynamic(atom.create("tls_alert")),
+          dynamic.array([
+            atom.to_dynamic(atom.create("bad_record_mac")),
+            dynamic.string("TLS client: Bad Record MAC"),
+          ]),
+        ])
+
+      // Act
+      let failure = socket_failure(reason)
+
+      // Assert
+      failure
+      |> should
+      |> be_equal(TlsAlert(atom.create("bad_record_mac")))
+      |> or_fail_with("Expected the alert's name")
     }),
     it("keeps the printed form of a reason of another shape", fn() {
       // Arrange
