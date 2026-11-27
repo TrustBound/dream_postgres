@@ -49,6 +49,9 @@ import dream_postgres/driver/pool_member.{
   type Member, type MemberReport, MemberConfig, MemberReady, MemberStarted,
   SessionBack, SessionLost,
 }
+import dream_postgres/driver/sink.{
+  type Delivery, type Sink, Delivered, MapFailed,
+}
 import gleam/bool.{guard}
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
@@ -58,7 +61,7 @@ import gleam/erlang/process.{
   type Timer,
 }
 import gleam/int.{range}
-import gleam/list.{append, count, each, find, find_map, partition}
+import gleam/list.{append, count, each, find, find_map, fold, partition}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{OneForOne}
@@ -71,7 +74,7 @@ import gleam/string
 /// Everything a pool needs.
 pub type PoolConfig(attachment) {
   PoolConfig(
-    /// The settings of each connection process. The `events` subject of
+    /// The settings of each connection process. The `events` sink of
     /// these settings gets every event of every connection process of the
     /// pool: a connection that replaces another starts with its own
     /// `Connected`.
@@ -82,7 +85,10 @@ pub type PoolConfig(attachment) {
     attachment: attachment,
     /// Where the pool tells what each member does, in the order it changed
     /// its state: a hold sent after an event sees the state of that event.
-    events: Option(Subject(PoolEvent)),
+    /// The sink's map runs in the pool's process. When it crashes, the
+    /// pool drops the sink and sends no more events (see
+    /// `driver/sink`).
+    events: Option(Sink(PoolEvent)),
     /// How often the pool looks for connections to check. A connection is
     /// checked when it was free and unused for a whole interval. It must be
     /// 1 or more.
@@ -226,7 +232,8 @@ type Settings(attachment) {
     size: Int,
     health_check_interval_milliseconds: Int,
     shutdown_deadline_milliseconds: Int,
-    events: Option(Subject(PoolEvent)),
+    /// The events sink, `None` from the time its map crashed.
+    events: Option(Sink(PoolEvent)),
     attachment: attachment,
   )
 }
@@ -801,9 +808,8 @@ fn settle_checkout(
   let state = settle(state)
   case list.any(state.waiters, waiter_has_id(_, waiter_id)) {
     True -> tell(state, HoldWaiting(list.length(state.waiters)))
-    False -> Nil
+    False -> state
   }
-  state
 }
 
 /// A pool that drains refuses each checkout at once.
@@ -816,7 +822,7 @@ fn refuse_while_draining(state: State(attachment)) -> State(attachment) {
 
 fn expire(state: State(attachment), waiter_id: Int) -> State(attachment) {
   let #(expired, others) = partition(state.waiters, waiter_has_id(_, waiter_id))
-  each(expired, refuse_waiter(state, _, HoldDeadlinePassed))
+  let state = fold(expired, state, refuse_waiter(HoldDeadlinePassed))
   State(..state, waiters: others)
 }
 
@@ -828,18 +834,20 @@ fn refuse_waiters(
   state: State(attachment),
   error: HoldError,
 ) -> State(attachment) {
-  each(state.waiters, refuse_waiter(state, _, error))
+  let state = fold(state.waiters, state, refuse_waiter(error))
   State(..state, waiters: [])
 }
 
+/// A step of a fold over waiters: each one gets the error, and the
+/// subscriber hears of each refusal.
 fn refuse_waiter(
-  state: State(attachment),
-  waiter: Waiter,
   error: HoldError,
-) -> Nil {
-  process.cancel_timer(waiter.timer)
-  process.send(waiter.reply, Error(error))
-  tell(state, HoldRefused(error))
+) -> fn(State(attachment), Waiter) -> State(attachment) {
+  fn(state: State(attachment), waiter: Waiter) {
+    process.cancel_timer(waiter.timer)
+    process.send(waiter.reply, Error(error))
+    tell(state, HoldRefused(error))
+  }
 }
 
 /// Hands free connections to the waiters, oldest first. When none is
@@ -915,7 +923,6 @@ fn hand_out(
       next_id: lease_id + 1,
     )
   tell(state, MemberHeld(slot_id))
-  state
 }
 
 /// The last connect error, while no connection is connected.
@@ -959,7 +966,6 @@ fn release(
     State(..state, holders:)
     |> update_slot(holder.slot, returned(_, lease_id))
   tell(state, MemberReturned(holder.slot))
-  state
 }
 
 fn returned(slot: Slot, lease_id: Int) -> Slot {
@@ -1007,19 +1013,36 @@ fn after_report(
   state: State(attachment),
   report: MemberReport,
 ) -> State(attachment) {
-  let changed = state_after_report(state, report)
   let slot_id = report_slot(report)
-  option.map(event_of_report(report), tell(changed, _))
-  case slot_is_free(state, slot_id), slot_is_free(changed, slot_id) {
-    False, True -> tell(changed, MemberFree(slot_id))
-    _before, _after -> Nil
+  let changed = state_after_report(state, report)
+  let told =
+    event_of_report(report)
+    |> option.map(tell(changed, _))
+    |> option.unwrap(changed)
+  case slot_is_free(state, slot_id), slot_is_free(told, slot_id) {
+    False, True -> tell(told, MemberFree(slot_id))
+    True, True | True, False | False, False -> told
   }
-  changed
 }
 
-fn tell(state: State(attachment), event: PoolEvent) -> Nil {
-  option.map(state.settings.events, process.send(_, event))
-  Nil
+/// Sends the event through the events sink, if the pool has one. A sink
+/// whose map crashed is dropped: the pool sends nothing to it again.
+fn tell(state: State(attachment), event: PoolEvent) -> State(attachment) {
+  case state.settings.events {
+    Some(events) -> after_delivery(state, sink.deliver(events, event))
+    None -> state
+  }
+}
+
+fn after_delivery(
+  state: State(attachment),
+  delivery: Delivery,
+) -> State(attachment) {
+  case delivery {
+    Delivered -> state
+    MapFailed ->
+      State(..state, settings: Settings(..state.settings, events: None))
+  }
 }
 
 fn slot_is_free(state: State(attachment), slot_id: Int) -> Bool {
@@ -1158,9 +1181,10 @@ fn drain(
 ) -> State(attachment) {
   process.send_after(state.subject, deadline_milliseconds, DrainDeadlinePassed)
   let first_stop = state.phase == Serving
-  guard(when: !first_stop, return: Nil, otherwise: fn() {
-    tell(state, PoolStopping)
-  })
+  let state =
+    guard(when: !first_stop, return: state, otherwise: fn() {
+      tell(state, PoolStopping)
+    })
   State(
     ..state,
     phase: Draining,

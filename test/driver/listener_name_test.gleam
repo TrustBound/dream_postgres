@@ -19,6 +19,7 @@ import driver/server_named_listener.{
   stop_named_listener,
 }
 import driver/servers.{first_driver_server}
+import fixtures/identity_sink.{identity_sink}
 import gleam/erlang/process
 import gleam/result.{map_error, replace, try}
 import gleam/string.{inspect}
@@ -39,7 +40,7 @@ pub fn tests() -> TestSuite {
 
         // Act
         let answer =
-          subscribe(handle, "svc_unused", process.new_subject())
+          subscribe(handle, "svc_unused", identity_sink(process.new_subject()))
           |> replace(Nil)
 
         // Assert
@@ -78,7 +79,11 @@ fn named_tests() -> TestSuite {
       it("subscribes through a handle of its name", fn(named: NamedListener) {
         // Act
         let answer =
-          subscribe(named.handle, "svc_named_first", process.new_subject())
+          subscribe(
+            named.handle,
+            "svc_named_first",
+            identity_sink(process.new_subject()),
+          )
           |> replace(Nil)
           |> map_error(inspect)
 
@@ -119,7 +124,11 @@ fn restarted_tests() -> TestSuite {
           // Act
           let answer = {
             use Nil <- try(restart_listener(named.supervisor))
-            subscribe(named.handle, "svc_named_again", process.new_subject())
+            subscribe(
+              named.handle,
+              "svc_named_again",
+              identity_sink(process.new_subject()),
+            )
             |> replace(Nil)
             |> map_error(inspect)
           }

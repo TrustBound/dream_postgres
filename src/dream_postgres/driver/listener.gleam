@@ -4,8 +4,9 @@
 ////
 //// A listener is two gleam_otp actors:
 ////
-//// - The registry keeps the subscriptions: the channel, the subscriber
-////   subject, and a monitor on the subscriber's process. It does no I/O.
+//// - The registry keeps the subscriptions: the channel, the subscriber's
+////   sink, and a monitor on the process that owns the sink's subject. It
+////   does no I/O.
 ////   Each call of this module goes to it. It decides when a channel needs
 ////   `LISTEN` or `UNLISTEN`, and asks the session to send it.
 //// - The session owns the connection process. It sends each `LISTEN` and
@@ -21,6 +22,13 @@
 //// arrives, the session passes it to the registry, and the registry sends
 //// it on to each subscriber of its channel, in the order the server sent
 //// them.
+////
+//// The registry sends each message to a subscriber through the
+//// subscriber's sink, so the map of the sink runs in the registry's
+//// process. When that map crashes, the registry drops the sink: it ends
+//// the subscription, the same as when the subscriber's process stops, and
+//// asks for `UNLISTEN` when it was the last one of its channel. The other
+//// subscribers and the listener go on (see `driver/sink`).
 ////
 //// A subscriber hears whether its session listens. When the connection is
 //// lost, each subscriber gets `NotListening` at once, and the connection
@@ -62,6 +70,9 @@ import dream_postgres/driver/connection.{
   Disconnected, ReconnectFailed, Reconnected, ScriptCopyRefused, ScriptFailed,
   ScriptNotConnected, ScriptRefused, ScriptRequestFailed, ScriptUnencodable,
 }
+import dream_postgres/driver/sink.{
+  type Delivery, type Sink, Delivered, MapFailed,
+}
 import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{byte_size}
 import gleam/dict.{type Dict}
@@ -70,7 +81,8 @@ import gleam/erlang/atom
 import gleam/erlang/process.{
   type Down, type Monitor, type Name, type Pid, type Subject, subject_owner,
 }
-import gleam/list.{any, each, filter, unique}
+import gleam/function.{identity}
+import gleam/list.{any, filter, fold, unique}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{AnySignificant, RestForOne}
@@ -84,7 +96,8 @@ import gleam/string.{replace as replace_text}
 pub type ListenerConfig {
   ListenerConfig(
     /// The connection of the listener. The session sets its `events` and
-    /// its `notifications` to its own subjects.
+    /// its `notifications` to sinks of its own subjects, and its `notices`
+    /// to `None`.
     connection: ConnectionConfig,
     /// The longest time that each `LISTEN` and `UNLISTEN` can take.
     deadline_milliseconds: Int,
@@ -137,8 +150,8 @@ pub type ListenerError {
   /// The channel name has more than 63 bytes. PostgreSQL cuts such a name
   /// short, so its notifications would come with another name.
   ChannelTooLong(channel: String)
-  /// The subscriber subject has no process: it has a name that no process
-  /// has.
+  /// The subject of the subscriber's sink has no process: it has a name
+  /// that no process has.
   SubscriberHasNoProcess
   /// The `LISTEN` failed on a connection that is up, so the subscription
   /// is not kept. A connection that is not up is not a failure: the
@@ -183,7 +196,7 @@ type ReplyTo(reply)
 pub opaque type ListenerProcessMessage {
   SubscribeRequest(
     channel: String,
-    subscriber: Subject(ListenerMessage),
+    subscriber: Sink(ListenerMessage),
     owner: Pid,
     reply: ReplyTo(Result(Subscription, ListenerError)),
   )
@@ -237,7 +250,8 @@ type Placement {
 type Subscriber {
   Subscriber(
     channel: String,
-    subject: Subject(ListenerMessage),
+    /// Where each message to the subscriber goes.
+    sink: Sink(ListenerMessage),
     listening: Bool,
   )
 }
@@ -578,8 +592,8 @@ fn initialise_session(
   let connection_config =
     ConnectionConfig(
       ..config.connection,
-      events: Some(events),
-      notifications: Some(notifications),
+      events: Some(sink.to(events, identity)),
+      notifications: Some(sink.to(notifications, identity)),
       notices: None,
     )
   connection.supervised(connection_config).start()
@@ -638,32 +652,33 @@ pub fn stop(listener: Listener) -> Nil {
 
 // Subscribing -----------------------------------------------------------------
 
-/// Subscribes a subject to a channel. The first subscription of a channel
-/// makes the session send `LISTEN`. The registry monitors the subject's
-/// process and ends the subscription when that process stops.
+/// Subscribes a sink to a channel. The first subscription of a channel
+/// makes the session send `LISTEN`. The registry monitors the process that
+/// owns the sink's subject, and ends the subscription when that process
+/// stops, or when the sink's map crashes.
 ///
 /// ## Parameters
 ///
 /// - `listener`: the listener
 /// - `channel`: the exact channel name, at most 63 bytes
 /// - `subscriber`: where each notification, `NotListening`, `Listening`
-///   and `ListenFailed` goes
+///   and `ListenFailed` goes. Its map runs in the registry's process.
 ///
 /// ## Returns
 ///
 /// - `Ok(Subscription)`: the session listens on the channel, or the
 ///   connection is not up and the subscriber got `NotListening`
-/// - `Error(ListenerError)`: the name is too long, the subject has no
-///   process, the `LISTEN` failed with a `ListenFailure`, or the registry
-///   is gone
+/// - `Error(ListenerError)`: the name is too long, the sink's subject has
+///   no process, the `LISTEN` failed with a `ListenFailure`, or the
+///   registry is gone
 pub fn subscribe(
   listener: Listener,
   channel: String,
-  subscriber: Subject(ListenerMessage),
+  subscriber: Sink(ListenerMessage),
 ) -> Result(Subscription, ListenerError) {
   use Nil <- try(check_channel(channel))
   use owner <- try(
-    subject_owner(subscriber) |> replace_error(SubscriberHasNoProcess),
+    sink.owner(subscriber) |> replace_error(SubscriberHasNoProcess),
   )
   call(listener, SubscribeRequest(channel, subscriber, owner, _))
   |> replace_error(ListenerProcessDown)
@@ -739,10 +754,8 @@ fn handle_registry_message(
     SessionUp -> actor.continue(session_up(state))
     SessionLost -> actor.continue(lost(state))
     SessionConnectFailed(error) -> first_connect_failed(state, error)
-    NotificationReceived(notification) -> {
-      deliver(state, notification)
-      actor.continue(state)
-    }
+    NotificationReceived(notification) ->
+      actor.continue(deliver(state, notification))
     MonitoredProcessDown(monitor) ->
       actor.continue(monitored_process_ended(state, monitor))
   }
@@ -752,13 +765,13 @@ fn handle_registry_message(
 fn add_subscriber(
   state: RegistryState,
   channel: String,
-  subject: Subject(ListenerMessage),
+  subscriber_sink: Sink(ListenerMessage),
   owner: Pid,
   reply_to: ReplyTo(Result(Subscription, ListenerError)),
 ) -> RegistryState {
   let #(state, answer) = case admission(state, channel) {
     Admit(listening:) ->
-      added(state, Subscriber(channel, subject, listening), owner)
+      added(state, Subscriber(channel, subscriber_sink, listening), owner)
     Refuse(error) -> #(state, Error(SubscribeFailed(error)))
   }
   reply(reply_to, answer)
@@ -791,11 +804,12 @@ fn added(
 ) -> #(RegistryState, Result(Subscription, ListenerError)) {
   let monitor = process.monitor(owner)
   let subscriptions = dict.insert(state.subscriptions, monitor, subscriber)
-  case subscriber.listening {
-    True -> Nil
-    False -> process.send(subscriber.subject, NotListening)
+  let state = RegistryState(..state, subscriptions:)
+  let state = case subscriber.listening {
+    True -> state
+    False -> tell(NotListening)(state, #(monitor, subscriber))
   }
-  #(RegistryState(..state, subscriptions:), Ok(Subscription(monitor)))
+  #(state, Ok(Subscription(monitor)))
 }
 
 /// Removes the subscriber of a monitor, if it is still there. When it was
@@ -932,25 +946,48 @@ fn monitor_of(session: SessionLink) -> Monitor {
   session.monitor
 }
 
-fn deliver(state: RegistryState, notification: Notification) -> Nil {
-  subscribers_of(state, notification.channel)
-  |> each(process.send(_, NotificationArrived(notification)))
+fn deliver(state: RegistryState, notification: Notification) -> RegistryState {
+  entries_on(state, notification.channel)
+  |> fold(state, tell(NotificationArrived(notification)))
+}
+
+/// A step of a fold over subscriptions: sends the message through the
+/// sink of one subscription. A sink whose map crashed is dropped: its
+/// subscription ends, the same as when the subscriber's process stops.
+fn tell(
+  message: ListenerMessage,
+) -> fn(RegistryState, #(Monitor, Subscriber)) -> RegistryState {
+  fn(state: RegistryState, entry: #(Monitor, Subscriber)) {
+    let #(monitor, subscriber) = entry
+    sink.deliver(subscriber.sink, message)
+    |> keep_subscriber(state, monitor, _)
+  }
+}
+
+fn keep_subscriber(
+  state: RegistryState,
+  monitor: Monitor,
+  delivery: Delivery,
+) -> RegistryState {
+  case delivery {
+    Delivered -> state
+    MapFailed -> remove_subscriber(state, monitor)
+  }
 }
 
 /// Only the subscribers that listen get `NotListening`: one that came
 /// while the connection was not up got it already.
 fn lost(state: RegistryState) -> RegistryState {
-  dict.values(state.subscriptions)
-  |> filter(is_listening)
-  |> each(tell_lost)
+  let listening = dict.to_list(state.subscriptions) |> filter(entry_listens)
   RegistryState(
     ..state,
     subscriptions: dict.map_values(state.subscriptions, not_listening),
   )
+  |> fold(listening, _, tell(NotListening))
 }
 
-fn tell_lost(subscriber: Subscriber) -> Nil {
-  process.send(subscriber.subject, NotListening)
+fn entry_listens(entry: #(Monitor, Subscriber)) -> Bool {
+  is_listening(entry.1)
 }
 
 fn not_listening(_monitor: Monitor, subscriber: Subscriber) -> Subscriber {
@@ -959,21 +996,22 @@ fn not_listening(_monitor: Monitor, subscriber: Subscriber) -> Subscriber {
 
 fn listen_on_session(state: RegistryState, channel: String) -> RegistryState {
   let listened = listen(state, channel)
-  case listen_message(channel, listened) {
-    Some(message) ->
-      subscribers_of(state, channel) |> each(process.send(_, message))
-    None -> Nil
-  }
   let listening = listened == ListenWorked
-  RegistryState(
-    ..state,
-    subscriptions: dict.map_values(
-      state.subscriptions,
-      fn(_monitor, subscriber) {
-        listening_after(subscriber, channel, listening)
-      },
-    ),
-  )
+  let entries = entries_on(state, channel)
+  let state =
+    RegistryState(
+      ..state,
+      subscriptions: dict.map_values(
+        state.subscriptions,
+        fn(_monitor, subscriber) {
+          listening_after(subscriber, channel, listening)
+        },
+      ),
+    )
+  case listen_message(channel, listened) {
+    Some(message) -> fold(entries, state, tell(message))
+    None -> state
+  }
 }
 
 /// A `LISTEN` that meets a loss tells nothing: the subscribers got
@@ -1017,15 +1055,16 @@ fn has_subscribers(state: RegistryState, channel: String) -> Bool {
   subscribers_on(state, channel) != []
 }
 
-fn subscribers_of(
+/// Each subscription of `channel`, with the monitor that names it.
+fn entries_on(
   state: RegistryState,
   channel: String,
-) -> List(Subject(ListenerMessage)) {
-  subscribers_on(state, channel) |> list.map(subject_of)
+) -> List(#(Monitor, Subscriber)) {
+  dict.to_list(state.subscriptions) |> filter(entry_on_channel(_, channel))
 }
 
-fn subject_of(subscriber: Subscriber) -> Subject(ListenerMessage) {
-  subscriber.subject
+fn entry_on_channel(entry: #(Monitor, Subscriber), channel: String) -> Bool {
+  on_channel(entry.1, channel)
 }
 
 fn subscribers_on(state: RegistryState, channel: String) -> List(Subscriber) {

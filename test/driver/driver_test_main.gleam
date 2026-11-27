@@ -34,6 +34,7 @@ import driver/saslprep_test
 import driver/scram_test
 import driver/server_test
 import driver/setup_deadline_test
+import driver/sink_test
 import driver/statement_cache_test
 import driver/supervised_connection_test
 import driver/trace_test
@@ -75,6 +76,7 @@ pub fn suites() -> List(TestSuite) {
     trace_test.tests(),
     backoff_test.tests(),
     notices_test.tests(),
+    sink_test.tests(),
   ]
 }
 

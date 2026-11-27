@@ -34,6 +34,7 @@ import dream_test/context.{type Context}
 import driver/proxy.{type Proxy, inject, start_proxy, stop_proxy}
 import driver/servers.{type Server}
 import fixtures/backoff_strategies.{capped_delay}
+import fixtures/identity_sink.{identity_sink}
 import gleam/bit_array
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int.{to_string}
@@ -180,7 +181,7 @@ pub fn watched_config(
   ConnectionConfig(
     ..config,
     reconnect: Backoff(first_delay, 60_000, capped_delay),
-    events: Some(events),
+    events: Some(identity_sink(events)),
   )
 }
 

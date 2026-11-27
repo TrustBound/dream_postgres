@@ -30,6 +30,7 @@ import driver/server_connection.{
 }
 import driver/servers.{type Server}
 import fixtures/backoff_strategies.{capped_delay}
+import fixtures/identity_sink.{identity_sink}
 import gleam/bool
 import gleam/erlang/process.{
   type Down, type ExitMessage, type ExitReason, type Name, type Pid,
@@ -117,8 +118,11 @@ fn watched_pool_config(
 ) -> PoolConfig(attachment) {
   PoolConfig(
     ..config,
-    connection: ConnectionConfig(..config.connection, events: Some(events)),
-    events: Some(pool_events),
+    connection: ConnectionConfig(
+      ..config.connection,
+      events: Some(identity_sink(events)),
+    ),
+    events: Some(identity_sink(pool_events)),
   )
 }
 
@@ -710,7 +714,7 @@ pub fn start_named_pool(
   let config =
     PoolConfig(
       ..config,
-      events: Some(pool_events),
+      events: Some(identity_sink(pool_events)),
       attachment: "the settings of a named pool",
     )
   let started = process.new_subject()

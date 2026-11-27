@@ -25,10 +25,12 @@ import dream_postgres/driver/connection.{
   ReconnectFailed, Reconnected,
 }
 import dream_postgres/driver/housekeeping_sql.{health_check, rollback}
+import dream_postgres/driver/sink.{type Delivery, Delivered, MapFailed}
 import dream_postgres/internal/cell.{Idle}
 import gleam/erlang/process.{
   type ExitMessage, type Pid, type Subject, ExitMessage, Normal,
 }
+import gleam/function.{identity}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification, Transient}
@@ -38,9 +40,10 @@ import gleam/otp/supervision.{type ChildSpecification, Transient}
 /// What a member needs, the same for each member of a pool.
 pub type MemberConfig {
   MemberConfig(
-    /// The settings of the connection process. Its `events` subject gets
+    /// The settings of the connection process. Its `events` sink gets
     /// every event of each connection process of the member: a replacement
-    /// starts with its own `Connected`.
+    /// starts with its own `Connected`. The member sends each event to it,
+    /// and drops it when its map crashes.
     connection: ConnectionConfig,
     /// The longest time that the query of a health check may take.
     health_check_deadline_milliseconds: Int,
@@ -226,8 +229,7 @@ fn handle_message(
       actor.continue(check_connection(state, connection))
     EventReceived(event:) -> {
       option.map(report_of_event(state.slot, event), report(state, _))
-      tell(state, event)
-      actor.continue(state)
+      actor.continue(tell(state, event))
     }
     ExitReceived(exit:) -> exit_received(state, exit)
   }
@@ -241,7 +243,10 @@ fn connect(
   previous_wait_milliseconds: Int,
 ) -> State {
   let settings =
-    ConnectionConfig(..state.config.connection, events: Some(state.events))
+    ConnectionConfig(
+      ..state.config.connection,
+      events: Some(sink.to(state.events, identity)),
+    )
   case connection.start(settings) {
     Ok(started) -> {
       report(state, MemberConnected(state.slot, started))
@@ -300,7 +305,7 @@ fn ready(state: State) -> State {
 /// pool hears `MemberReplacing`.
 fn replace(state: State, broken: Connection) -> State {
   connection.stop(broken)
-  drop_stale_events(state)
+  let state = drop_stale_events(state)
   report(state, MemberReplacing(state.slot))
   connect(state, 0, 0)
 }
@@ -310,13 +315,10 @@ fn replace(state: State, broken: Connection) -> State {
 /// connection. The stop waits for the process's answer, and the process
 /// sent each of its events before that answer, so they are all here. The
 /// subscriber still gets each of them.
-fn drop_stale_events(state: State) -> Nil {
+fn drop_stale_events(state: State) -> State {
   case process.receive(state.events, 0) {
-    Ok(event) -> {
-      tell(state, event)
-      drop_stale_events(state)
-    }
-    Error(Nil) -> Nil
+    Ok(event) -> tell(state, event) |> drop_stale_events
+    Error(Nil) -> state
   }
 }
 
@@ -347,7 +349,7 @@ fn exit_received(
     }
     False, Normal -> actor.continue(state)
     False, _crashed -> {
-      drop_stale_events(state)
+      let state = drop_stale_events(state)
       report(state, MemberReplacing(state.slot))
       actor.continue(connect(state, 0, 0))
     }
@@ -358,8 +360,23 @@ fn report(state: State, member_report: MemberReport) -> Nil {
   process.send(state.reports, member_report)
 }
 
-/// Gives an event to the subscriber of the connection settings, if any.
-fn tell(state: State, event: ConnectionEvent) -> Nil {
-  option.map(state.config.connection.events, process.send(_, event))
-  Nil
+/// Sends the event of the connection through the events sink of the
+/// connection settings, if they have one.
+fn tell(state: State, event: ConnectionEvent) -> State {
+  case state.config.connection.events {
+    Some(events) -> sink.deliver(events, event) |> keep_events(state, _)
+    None -> state
+  }
+}
+
+/// An events sink whose map crashed is dropped: the member sends nothing
+/// to it again.
+fn keep_events(state: State, delivery: Delivery) -> State {
+  case delivery {
+    Delivered -> state
+    MapFailed -> {
+      let connection = ConnectionConfig(..state.config.connection, events: None)
+      State(..state, config: MemberConfig(..state.config, connection:))
+    }
+  }
 }

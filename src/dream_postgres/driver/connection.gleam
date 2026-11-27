@@ -54,6 +54,9 @@ import dream_postgres/driver/query.{
   CopyRow, CopySend, CopyStarted, CopyTo, CopyWait, Finished, NoCopyStarted,
   Notice, ParameterChanged, ScriptFailure, Send, ServerError, Wait,
 }
+import dream_postgres/driver/sink.{
+  type Delivery, type Sink, Delivered, MapFailed,
+}
 import dream_postgres/driver/statement_cache.{
   type CachedStatement, type StatementCache, CachedStatement,
 }
@@ -138,18 +141,24 @@ pub type ConnectionConfig {
     reconnect: Backoff,
     /// Where the process tells of each loss and each reconnect, for
     /// example to its pool.
-    events: Option(Subject(ConnectionEvent)),
+    events: Option(Sink(ConnectionEvent)),
     /// Where the process sends each notification at once, as it arrives,
     /// also while the connection is idle, for example to the listener.
     /// With `None`, each notification goes with the next outcome.
-    notifications: Option(Subject(Notification)),
+    notifications: Option(Sink(Notification)),
     /// Where the process sends each notice at once, as it arrives: during
     /// the login, during any request, and while the connection is idle.
     /// An outcome holds only the notices of its own request, so a notice
     /// of a prepare, a COPY, a failed statement, a housekeeping statement
     /// or of idle time reaches the app only here. With `None`, those go
     /// to no one.
-    notices: Option(Subject(ServerReport)),
+    ///
+    /// The map of each of these three sinks runs in the connection
+    /// process. When it crashes, the process drops that sink: it sets the
+    /// field to `None` in its own settings, and sends nothing to it again
+    /// (see `driver/sink`). A notification after a dropped
+    /// `notifications` sink goes with the next outcome.
+    notices: Option(Sink(ServerReport)),
     statements: StatementCaching,
   )
 }
@@ -983,13 +992,10 @@ fn attempt_first_open(
   previous_wait_milliseconds: Int,
 ) -> State {
   case open_session(state.config) {
-    Ok(session) -> {
-      let state = connected_state(state, session)
-      tell(state, Connected)
-      read_messages(state)
-    }
+    Ok(session) ->
+      connected_state(state, session) |> tell(Connected) |> read_messages
     Error(error) -> {
-      tell(state, ConnectFailed(error))
+      let state = tell(state, ConnectFailed(error))
       let wait =
         backoff_wait(
           state.config.reconnect,
@@ -1010,8 +1016,7 @@ fn open_first(
 ) -> actor.Next(State, Message) {
   case open_session(state.config) {
     Ok(session) -> {
-      let state = connected_state(state, session)
-      tell(state, Connected)
+      let state = connected_state(state, session) |> tell(Connected)
       reply(reply_to, Ok(Nil))
       actor.continue(read_messages(state))
     }
@@ -1056,7 +1061,7 @@ fn new_cache(config: ConnectionConfig) -> StatementCache {
 /// login's ReadyForQuery wait in the buffer, for `read_messages` after
 /// the process told of the login.
 fn connected_state(state: State, session: Session) -> State {
-  list.each(session.outcome.notices, send_notice(state, _))
+  let state = fold(session.outcome.notices, state, send_notice)
   State(
     ..state,
     link: Open(session.socket, session.bytes),
@@ -3156,12 +3161,11 @@ fn after_message(state: State, message: AsynchronousMessage) -> State {
 /// outcome otherwise.
 fn keep_asynchronous(state: State, message: AsynchronousMessage) -> State {
   case message, state.config.notifications {
-    query.Notification(process_id:, channel:, payload:), Some(subscriber) -> {
-      process.send(subscriber, Notification(process_id:, channel:, payload:))
-      state
-    }
+    query.Notification(process_id:, channel:, payload:), Some(subscriber) ->
+      sink.deliver(subscriber, Notification(process_id:, channel:, payload:))
+      |> keep_notifications(state, _)
     Notice(report:), _subscriber -> {
-      send_notice(state, report)
+      let state = send_notice(state, report)
       State(
         ..state,
         pending: [message, ..state.pending],
@@ -3173,9 +3177,33 @@ fn keep_asynchronous(state: State, message: AsynchronousMessage) -> State {
   }
 }
 
-fn send_notice(state: State, report: ServerReport) -> Nil {
-  option.map(state.config.notices, process.send(_, report))
-  Nil
+/// Sends a notice through the notices sink, if the process has one.
+fn send_notice(state: State, report: ServerReport) -> State {
+  case state.config.notices {
+    Some(notices) -> sink.deliver(notices, report) |> keep_notices(state, _)
+    None -> state
+  }
+}
+
+/// A notices sink whose map crashed is dropped.
+fn keep_notices(state: State, delivery: Delivery) -> State {
+  case delivery {
+    Delivered -> state
+    MapFailed ->
+      State(..state, config: ConnectionConfig(..state.config, notices: None))
+  }
+}
+
+/// A notifications sink whose map crashed is dropped.
+fn keep_notifications(state: State, delivery: Delivery) -> State {
+  case delivery {
+    Delivered -> state
+    MapFailed ->
+      State(
+        ..state,
+        config: ConnectionConfig(..state.config, notifications: None),
+      )
+  }
 }
 
 fn is_notification(message: AsynchronousMessage) -> Bool {
@@ -3649,7 +3677,7 @@ fn end_link(
   transport.close(socket)
   option.map(state.running, refuse_running(_, running_error))
   list.each(reverse(state.waiting), refuse_ticket(_, refusal))
-  tell(state, Disconnected(end))
+  let state = tell(state, Disconnected(end))
   schedule_reconnect(state, 0, 0)
   State(
     ..end_current(state),
@@ -3666,9 +3694,21 @@ fn refuse_ticket(ticket: Ticket, refusal: Refusal) -> Nil {
   refuse(ticket.request, refusal)
 }
 
-fn tell(state: State, event: ConnectionEvent) -> Nil {
-  option.map(state.config.events, process.send(_, event))
-  Nil
+/// Sends the event through the events sink, if the process has one.
+fn tell(state: State, event: ConnectionEvent) -> State {
+  case state.config.events {
+    Some(events) -> sink.deliver(events, event) |> keep_events(state, _)
+    None -> state
+  }
+}
+
+/// An events sink whose map crashed is dropped.
+fn keep_events(state: State, delivery: Delivery) -> State {
+  case delivery {
+    Delivered -> state
+    MapFailed ->
+      State(..state, config: ConnectionConfig(..state.config, events: None))
+  }
 }
 
 fn schedule_reconnect(
@@ -3734,12 +3774,10 @@ fn reconnect(
   previous_wait_milliseconds: Int,
 ) -> State {
   case open_session(state.config) {
-    Ok(session) -> {
-      tell(state, Reconnected)
-      connected_state(state, session) |> read_messages
-    }
+    Ok(session) ->
+      tell(state, Reconnected) |> connected_state(session) |> read_messages
     Error(connect_error) -> {
-      tell(state, ReconnectFailed(connect_error))
+      let state = tell(state, ReconnectFailed(connect_error))
       schedule_reconnect(state, attempt + 1, previous_wait_milliseconds)
       state
     }
