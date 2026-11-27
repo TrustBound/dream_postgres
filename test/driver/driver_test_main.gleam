@@ -8,9 +8,13 @@ import dream_test/reporters/progress
 import dream_test/runner
 import dream_test/suite.{type TestSuite}
 import driver/bit_array_test
+import driver/channel_binding_test
 import driver/decode_test
 import driver/encode_test
+import driver/login_test
 import driver/recorded_test
+import driver/saslprep_test
+import driver/scram_test
 import driver/server_test
 
 /// Every suite of the driver tests, in the order they run.
@@ -20,6 +24,10 @@ pub fn suites() -> List(TestSuite) {
     encode_test.tests(),
     decode_test.tests(),
     recorded_test.tests(),
+    saslprep_test.tests(),
+    scram_test.tests(),
+    channel_binding_test.tests(),
+    login_test.tests(),
     server_test.tests(),
   ]
 }
