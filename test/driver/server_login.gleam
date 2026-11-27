@@ -15,9 +15,10 @@ import dream_postgres/driver/message.{
 }
 import dream_postgres/driver/transport.{
   type Connection, type Tls, type TransportError, TransportConfig, address,
-  close, connect, receive, send, server_certificate,
+  close, receive, send, server_certificate,
 }
 import driver/servers.{type Server}
+import fixtures/transport_connect.{connect_with_minute_deadline}
 import gleam/option.{type Option, None, Some}
 import gleam/pair
 import gleam/result.{map_error, try}
@@ -105,7 +106,12 @@ fn open(
     address(test_login.host, server.port)
     |> result.replace_error(AddressRefused),
   )
-  connect(TransportConfig(checked, test_login.tls, 5000, 5000))
+  connect_with_minute_deadline(TransportConfig(
+    checked,
+    test_login.tls,
+    5000,
+    5000,
+  ))
   |> map_error(TransportFailed)
 }
 
