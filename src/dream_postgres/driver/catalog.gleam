@@ -2,8 +2,8 @@
 //// a server is, for the codecs.
 ////
 //// A catalog starts empty. The first lookup that does not find its type
-//// loads the catalog: the caller runs the catalog query of
-//// `driver/catalog_table` on its own connection, makes a table from the
+//// loads the catalog: the caller runs the catalog load of
+//// `driver/housekeeping_sql` on its own connection, makes a table from the
 //// rows, and gives the table to the catalog. The load runs in the
 //// caller's process, never in the catalog's, so lookups of other callers
 //// go on during a load, with the table of the last load.
@@ -38,7 +38,8 @@
 import dream_postgres/driver/catalog_table.{
   type CatalogTable, type RowError, find, find_underlying,
 }
-import dream_postgres/driver/connection.{type Connection, type RunError}
+import dream_postgres/driver/connection.{type Connection, type HousekeepingError}
+import dream_postgres/driver/housekeeping_sql
 import dream_postgres/internal/cell.{type TypeDescription}
 import gleam/erlang/process.{type Down, type Pid, type Subject}
 import gleam/option.{type Option, None, Some}
@@ -66,7 +67,7 @@ pub type CatalogError {
   /// caused.
   UnknownType(type_id: Int)
   /// The catalog query failed on the caller's connection.
-  LoadFailed(error: RunError)
+  LoadFailed(error: HousekeepingError)
   /// The rows of the catalog query do not make a table.
   UnreadableCatalog(error: RowError)
   /// The catalog process is gone.
@@ -282,9 +283,7 @@ fn load_and_find(
   use outcome <- try(
     connection.run_housekeeping(
       connection,
-      catalog_table.query,
-      [],
-      [],
+      housekeeping_sql.catalog_load,
       deadline_milliseconds,
     )
     |> map_error(LoadFailed),

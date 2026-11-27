@@ -24,6 +24,7 @@ import dream_postgres/driver/connection.{
   type ConnectionEvent, ConnectFailed, Connected, ConnectionConfig, Disconnected,
   ReconnectFailed, Reconnected,
 }
+import dream_postgres/driver/housekeeping_sql.{health_check, rollback}
 import dream_postgres/internal/cell.{Idle}
 import gleam/erlang/process.{
   type ExitMessage, type Pid, type Subject, ExitMessage, Normal,
@@ -100,9 +101,6 @@ type State {
     connection: Option(Connection),
   )
 }
-
-/// The query of a health check.
-const health_check_sql = "SELECT 1"
 
 // Starting --------------------------------------------------------------------
 
@@ -268,7 +266,7 @@ fn reset_connection(state: State, held: Connection) -> State {
 
 fn roll_back(state: State, held: Connection) -> State {
   let deadline = state.config.rollback_deadline_milliseconds
-  case connection.run_housekeeping_script(held, "ROLLBACK", deadline) {
+  case connection.run_housekeeping_script(held, rollback, deadline) {
     Ok(_outcomes) -> ready(state)
     Error(_error) -> replace(state, held)
   }
@@ -276,7 +274,7 @@ fn roll_back(state: State, held: Connection) -> State {
 
 fn check_connection(state: State, idle: Connection) -> State {
   let deadline = state.config.health_check_deadline_milliseconds
-  case connection.run_housekeeping_script(idle, health_check_sql, deadline) {
+  case connection.run_housekeeping_script(idle, health_check, deadline) {
     Ok(_outcomes) -> ready(state)
     Error(_error) -> replace(state, idle)
   }

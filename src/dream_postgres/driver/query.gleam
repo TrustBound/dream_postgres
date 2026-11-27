@@ -28,6 +28,7 @@
 import dream_postgres/driver/encode.{
   copy_abandonment, copy_data_messages, copy_done, copy_refusal, sync,
 }
+import dream_postgres/driver/housekeeping_sql.{type HousekeepingSql}
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ResultColumn, Bind,
   BindComplete, Close, CloseComplete, CommandComplete, CopyBothResponse,
@@ -167,6 +168,12 @@ pub type Outcome(value, failure) {
 /// state.
 pub type Start(state) {
   Start(messages: List(FrontendMessage), state: state)
+}
+
+/// The start of a step of a driver housekeeping statement: its bytes,
+/// which cannot fail to encode, and the first state.
+pub type HousekeepingStart(state) {
+  HousekeepingStart(bytes: BitArray, state: state)
 }
 
 /// What a step gives after one message from the server.
@@ -506,18 +513,6 @@ pub fn start_prepare_and_run(
   parameters: List(Cell),
   result_formats: List(Format),
 ) -> Start(PrepareAndRunState) {
-  let next_phases = [
-    AwaitingBindComplete,
-    AwaitingPortalColumns,
-    ReadingExecuteRows,
-  ]
-  let machine =
-    new_machine(
-      ExtendedProtocol,
-      AwaitingParseComplete,
-      next_phases,
-      BoundFormats(result_formats),
-    )
   Start(
     messages: [
       Parse(statement: "", query:, parameter_type_ids:),
@@ -526,8 +521,42 @@ pub fn start_prepare_and_run(
       Execute(portal: "", row_limit: 0),
       Sync,
     ],
-    state: PrepareAndRunState(machine),
+    state: prepare_and_run_state(result_formats),
   )
+}
+
+/// Starts to prepare and run a driver housekeeping statement in one round
+/// trip, as `start_prepare_and_run` with no parameter and text results.
+///
+/// ## Parameters
+///
+/// - `sql`: the housekeeping statement
+///
+/// ## Returns
+///
+/// The bytes to send and the state for `step_prepare_and_run`.
+pub fn start_housekeeping_run(
+  sql: HousekeepingSql,
+) -> HousekeepingStart(PrepareAndRunState) {
+  HousekeepingStart(
+    bytes: housekeeping_sql.prepare_and_run_messages(sql),
+    state: prepare_and_run_state([]),
+  )
+}
+
+fn prepare_and_run_state(result_formats: List(Format)) -> PrepareAndRunState {
+  let next_phases = [
+    AwaitingBindComplete,
+    AwaitingPortalColumns,
+    ReadingExecuteRows,
+  ]
+  new_machine(
+    ExtendedProtocol,
+    AwaitingParseComplete,
+    next_phases,
+    BoundFormats(result_formats),
+  )
+  |> PrepareAndRunState
 }
 
 /// Reads one message from the server in a step that prepares and runs in
@@ -567,9 +596,31 @@ pub fn step_prepare_and_run(
 ///
 /// The messages to send and the state for `step_simple_query`.
 pub fn start_simple_query(script: String) -> Start(SimpleQueryState) {
-  let machine =
-    new_machine(SimpleProtocol, AwaitingStatementResult, [], ColumnFormats([]))
-  Start(messages: [Query(script)], state: SimpleQueryState(machine))
+  Start(messages: [Query(script)], state: simple_query_state())
+}
+
+/// Starts to run a driver housekeeping statement with the simple query
+/// protocol, as `start_simple_query`.
+///
+/// ## Parameters
+///
+/// - `sql`: the housekeeping statement
+///
+/// ## Returns
+///
+/// The bytes to send and the state for `step_simple_query`.
+pub fn start_housekeeping_script(
+  sql: HousekeepingSql,
+) -> HousekeepingStart(SimpleQueryState) {
+  HousekeepingStart(
+    bytes: housekeeping_sql.query_message(sql),
+    state: simple_query_state(),
+  )
+}
+
+fn simple_query_state() -> SimpleQueryState {
+  new_machine(SimpleProtocol, AwaitingStatementResult, [], ColumnFormats([]))
+  |> SimpleQueryState
 }
 
 /// Reads one message from the server in a simple query step. The outcome

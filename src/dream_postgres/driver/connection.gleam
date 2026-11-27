@@ -34,6 +34,7 @@
 import dream_postgres/driver/deadline.{type Deadline}
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
+import dream_postgres/driver/housekeeping_sql.{type HousekeepingSql}
 import dream_postgres/driver/login.{
   type CancelKey, type LoginConfig, type LoginError, type LoginOutcome,
   type LoginStartError, type LoginState, ChannelBindingRequiresTls, Continue,
@@ -46,12 +47,12 @@ import dream_postgres/driver/message.{
 }
 import dream_postgres/driver/query.{
   type AsynchronousMessage, type CopyDirection, type CopyResult, type CopyState,
-  type CopyStep, type Failure, type PrepareAndRunState, type PrepareState,
-  type RunState, type ScriptFailure, type SimpleQueryState, type Start,
-  type StatementResult, type Step, type UnexpectedMessage, CopyCompleted,
-  CopyConnectionEnded, CopyFinished, CopyFrom, CopyNotSupported, CopyRow,
-  CopySend, CopyStarted, CopyTo, CopyWait, Finished, NoCopyStarted, Notice,
-  ParameterChanged, ScriptFailure, Send, ServerError, Wait,
+  type CopyStep, type Failure, type HousekeepingStart, type PrepareAndRunState,
+  type PrepareState, type RunState, type ScriptFailure, type SimpleQueryState,
+  type Start, type StatementResult, type Step, type UnexpectedMessage,
+  CopyCompleted, CopyConnectionEnded, CopyFinished, CopyFrom, CopyNotSupported,
+  CopyRow, CopySend, CopyStarted, CopyTo, CopyWait, Finished, NoCopyStarted,
+  Notice, ParameterChanged, ScriptFailure, Send, ServerError, Wait,
 }
 import dream_postgres/driver/statement_cache.{
   type CachedStatement, type StatementCache, CachedStatement,
@@ -300,7 +301,7 @@ pub type PrepareError {
   PrepareRefused(report: ServerReport, transaction_status: TransactionStatus)
 }
 
-/// Why `run` or `run_housekeeping` failed.
+/// Why `run` failed.
 pub type RunError {
   /// The request failed on its connection.
   RunFailed(failure: RequestFailure)
@@ -323,7 +324,7 @@ pub type RunError {
   RunStatementChanged(description: StatementDescription)
 }
 
-/// Why `run_script` or `run_housekeeping_script` failed.
+/// Why `run_script` or `run_listener_script` failed.
 pub type ScriptError {
   /// The request failed on its connection.
   ScriptRequestFailed(failure: RequestFailure)
@@ -347,6 +348,27 @@ pub type ScriptError {
   /// A statement of the script is a COPY. COPY goes through `copy_from`
   /// and `copy_to`. `completed` holds the statements that ran before it.
   ScriptCopyRefused(completed: List(Outcome))
+}
+
+/// Why `run_housekeeping` or `run_housekeeping_script` failed. A
+/// housekeeping statement always encodes, runs on the unnamed statement
+/// and is one statement that is not a COPY, so no case of an unencodable
+/// statement, a changed statement or a later statement is here.
+pub type HousekeepingError {
+  /// The request failed on its connection.
+  HousekeepingFailed(failure: RequestFailure)
+  /// A supervised process has not connected yet. `error` is why its last
+  /// attempt failed. It tries again after the reconnect backoff.
+  HousekeepingNotConnected(error: ConnectError)
+  /// The server refused the statement. The connection stays usable.
+  HousekeepingRefused(
+    report: ServerReport,
+    transaction_status: TransactionStatus,
+  )
+  /// The server answered as no PostgreSQL server answers the statement:
+  /// with a COPY, or with an error after a result. The connection stays
+  /// usable.
+  HousekeepingAnswerUnexpected
 }
 
 /// Why a `copy_from` or a `copy_to` failed.
@@ -554,6 +576,16 @@ type Request {
   /// The transaction status after every request before it.
   SettledStatusRequest(reply: ReplyTo(Result(TransactionStatus, SettleError)))
   ScriptRequest(sql: String, reply: ReplyTo(Result(List(Outcome), ScriptError)))
+  /// A driver housekeeping statement, prepared and run in one round trip.
+  HousekeepingRunRequest(
+    sql: HousekeepingSql,
+    reply: ReplyTo(Result(Outcome, HousekeepingError)),
+  )
+  /// A driver housekeeping statement, with the simple query protocol.
+  HousekeepingScriptRequest(
+    sql: HousekeepingSql,
+    reply: ReplyTo(Result(List(Outcome), HousekeepingError)),
+  )
   /// A COPY. The answer comes when the server started it.
   CopyRequest(
     id: Reference,
@@ -601,6 +633,16 @@ type Running {
   RunningScript(
     state: SimpleQueryState,
     reply: ReplyTo(Result(List(Outcome), ScriptError)),
+  )
+  /// A run of a driver housekeeping statement on the unnamed statement.
+  RunningHousekeepingRun(
+    state: PrepareAndRunState,
+    reply: ReplyTo(Result(Outcome, HousekeepingError)),
+  )
+  /// A driver housekeeping statement with the simple query protocol.
+  RunningHousekeepingScript(
+    state: SimpleQueryState,
+    reply: ReplyTo(Result(List(Outcome), HousekeepingError)),
   )
   /// A prepare under a new name, for the cache.
   RunningNamedPrepare(
@@ -1271,51 +1313,89 @@ pub fn run_script(
 }
 
 /// Runs a statement that the driver sends for its own housekeeping, from
-/// its own processes, with no span: for example the catalog load. A span
-/// records a call that the app made; a statement of the driver's own has
-/// no caller span to nest under.
+/// its own processes, with no span: the catalog load. A span records a
+/// call that the app made; a statement of the driver's own has no caller
+/// span to nest under. It runs on the unnamed statement in one round
+/// trip, with no parameter and text results, and never enters the
+/// statement cache.
 ///
 /// ## Parameters
 ///
 /// - `connection`: the connection
-/// - `sql`: the statement
-/// - `parameters`: one cell for each parameter
-/// - `result_formats`: the format of the result columns
+/// - `sql`: the housekeeping statement
 /// - `deadline_milliseconds`: the longest time to wait for the result
 ///
 /// ## Returns
 ///
-/// The result of `run`, with the same errors.
+/// - `Ok(Outcome)`: the columns, the rows of cells, the tag and the count
+/// - `Error(HousekeepingRefused(report, status))`: the server refused it
+/// - `Error(HousekeepingAnswerUnexpected)`: the server answered with a
+///   COPY
+/// - `Error(HousekeepingNotConnected(error))`: a supervised process has
+///   not connected yet
+/// - `Error(HousekeepingFailed(failure))`: the request failed on its
+///   connection
 pub fn run_housekeeping(
   connection: Connection,
-  sql: String,
-  parameters: List(Cell),
-  result_formats: List(Format),
+  sql: HousekeepingSql,
   deadline_milliseconds: Int,
-) -> Result(Outcome, RunError) {
-  run_without_span(
+) -> Result(Outcome, HousekeepingError) {
+  request(
     connection,
-    sql,
-    parameters,
-    result_formats,
+    HousekeepingRunRequest(sql, _),
     deadline_milliseconds,
+    HousekeepingFailed,
   )
 }
 
-/// Runs a script that the driver sends for its own housekeeping, from its
-/// own processes, with no span: for example a pool member's ROLLBACK and
-/// health check, and a listener's LISTEN and UNLISTEN.
+/// Runs a statement that the driver sends for its own housekeeping, from
+/// its own processes, with the simple query protocol and no span: a pool
+/// member's ROLLBACK and health check.
 ///
 /// ## Parameters
 ///
 /// - `connection`: the connection
-/// - `sql`: the script
+/// - `sql`: the housekeeping statement
+/// - `deadline_milliseconds`: the longest time to wait for the result
+///
+/// ## Returns
+///
+/// - `Ok(outcomes)`: the one outcome of the statement
+/// - `Error(HousekeepingRefused(report, status))`: the server refused it
+/// - `Error(HousekeepingAnswerUnexpected)`: the server answered with a
+///   COPY, or with an error after a result
+/// - `Error(HousekeepingNotConnected(error))`: a supervised process has
+///   not connected yet
+/// - `Error(HousekeepingFailed(failure))`: the request failed on its
+///   connection
+pub fn run_housekeeping_script(
+  connection: Connection,
+  sql: HousekeepingSql,
+  deadline_milliseconds: Int,
+) -> Result(List(Outcome), HousekeepingError) {
+  request(
+    connection,
+    HousekeepingScriptRequest(sql, _),
+    deadline_milliseconds,
+    HousekeepingFailed,
+  )
+}
+
+/// Runs a listener's LISTEN or UNLISTEN, from the listener's own process,
+/// with no span. The statement holds the caller's channel, so it is not a
+/// housekeeping statement of the closed set, and its encoding stays
+/// checked.
+///
+/// ## Parameters
+///
+/// - `connection`: the connection
+/// - `sql`: the LISTEN or UNLISTEN
 /// - `deadline_milliseconds`: the longest time to wait for all results
 ///
 /// ## Returns
 ///
 /// The result of `run_script`, with the same errors.
-pub fn run_housekeeping_script(
+pub fn run_listener_script(
   connection: Connection,
   sql: String,
   deadline_milliseconds: Int,
@@ -1965,6 +2045,20 @@ fn begin(
         RunningScript(_, reply_to),
         script_unencodable(reply_to, _),
       )
+    HousekeepingRunRequest(sql:, reply: reply_to) ->
+      start_housekeeping_step(
+        state,
+        socket,
+        query.start_housekeeping_run(sql),
+        RunningHousekeepingRun(_, reply_to),
+      )
+    HousekeepingScriptRequest(sql:, reply: reply_to) ->
+      start_housekeeping_step(
+        state,
+        socket,
+        query.start_housekeeping_script(sql),
+        RunningHousekeepingScript(_, reply_to),
+      )
     StatementRequest(statement) -> begin_statement(state, socket, statement)
     SettledStatusRequest(reply: reply_to) -> {
       reply(reply_to, Ok(tracked_status(state.tracker)))
@@ -2110,6 +2204,18 @@ fn start_step(
   }
 }
 
+/// Sends the first messages of a step of a housekeeping statement, whose
+/// bytes cannot fail to encode.
+fn start_housekeeping_step(
+  state: State,
+  socket: transport.Connection,
+  start: HousekeepingStart(step_state),
+  running: fn(step_state) -> Running,
+) -> State {
+  State(..state, running: Some(running(start.state)))
+  |> sent(socket, transport.send(socket, start.bytes))
+}
+
 fn script_unencodable(
   reply_to: ReplyTo(Result(List(Outcome), ScriptError)),
   error: EncodeError,
@@ -2137,6 +2243,10 @@ fn refuse(request: Request, refusal: Refusal) -> Nil {
       reply(reply_to, Error(settle_refusal(refusal)))
     ScriptRequest(reply: reply_to, ..) ->
       reply(reply_to, Error(script_refusal(refusal)))
+    HousekeepingRunRequest(reply: reply_to, ..) ->
+      reply(reply_to, Error(housekeeping_refusal(refusal)))
+    HousekeepingScriptRequest(reply: reply_to, ..) ->
+      reply(reply_to, Error(housekeeping_refusal(refusal)))
     CopyRequest(reply: reply_to, ..) ->
       reply(reply_to, Error(StartRefused(refusal)))
   }
@@ -2164,6 +2274,13 @@ fn script_refusal(refusal: Refusal) -> ScriptError {
   }
 }
 
+fn housekeeping_refusal(refusal: Refusal) -> HousekeepingError {
+  case refusal {
+    RefusedWithFailure(failure) -> HousekeepingFailed(failure)
+    RefusedNotConnected(error) -> HousekeepingNotConnected(error)
+  }
+}
+
 fn prepare_refusal(refusal: Refusal) -> PrepareError {
   case refusal {
     RefusedWithFailure(failure) -> PrepareFailed(failure)
@@ -2188,6 +2305,10 @@ fn refuse_running(running: Running, failure: RequestFailure) -> Nil {
       reply(reply_to, Error(RunFailed(failure)))
     RunningScript(reply: reply_to, ..) ->
       reply(reply_to, Error(ScriptRequestFailed(failure)))
+    RunningHousekeepingRun(reply: reply_to, ..) ->
+      reply(reply_to, Error(HousekeepingFailed(failure)))
+    RunningHousekeepingScript(reply: reply_to, ..) ->
+      reply(reply_to, Error(HousekeepingFailed(failure)))
     RunningNamedPrepare(request:, ..) ->
       refuse_statement(request, RefusedWithFailure(failure))
     RunningCachedRun(details:, ..) ->
@@ -2434,6 +2555,24 @@ fn advance(
         script_finisher(reply_to),
         running,
       )
+    RunningHousekeepingRun(state: step_state, reply: reply_to) ->
+      follow(
+        state,
+        socket,
+        query.step_prepare_and_run(step_state, message),
+        RunningHousekeepingRun(_, reply_to),
+        housekeeping_run_finisher(reply_to),
+        running,
+      )
+    RunningHousekeepingScript(state: step_state, reply: reply_to) ->
+      follow(
+        state,
+        socket,
+        query.step_simple_query(step_state, message),
+        RunningHousekeepingScript(_, reply_to),
+        housekeeping_script_finisher(reply_to),
+        running,
+      )
     RunningNamedPrepare(state: step_state, request:, name:) ->
       follow(
         state,
@@ -2472,13 +2611,33 @@ fn prepare_finisher(
 fn run_finisher(
   reply_to: ReplyTo(Result(Outcome, RunError)),
 ) -> Finisher(query.Outcome(StatementResult, Failure)) {
-  fn(state, _socket, outcome) { finish_run(state, outcome, reply_to) }
+  fn(state, _socket, outcome) {
+    finish_run(state, outcome, reply_to, run_failure)
+  }
+}
+
+fn housekeeping_run_finisher(
+  reply_to: ReplyTo(Result(Outcome, HousekeepingError)),
+) -> Finisher(query.Outcome(StatementResult, Failure)) {
+  fn(state, _socket, outcome) {
+    finish_run(state, outcome, reply_to, housekeeping_run_failure)
+  }
 }
 
 fn script_finisher(
   reply_to: ReplyTo(Result(List(Outcome), ScriptError)),
 ) -> Finisher(query.Outcome(List(StatementResult), ScriptFailure)) {
-  fn(state, _socket, outcome) { finish_script(state, outcome, reply_to) }
+  fn(state, _socket, outcome) {
+    finish_script(state, outcome, reply_to, script_failure)
+  }
+}
+
+fn housekeeping_script_finisher(
+  reply_to: ReplyTo(Result(List(Outcome), HousekeepingError)),
+) -> Finisher(query.Outcome(List(StatementResult), ScriptFailure)) {
+  fn(state, _socket, outcome) {
+    finish_script(state, outcome, reply_to, housekeeping_script_failure)
+  }
 }
 
 fn named_prepare_finisher(
@@ -2585,7 +2744,8 @@ fn result_error(result: Result(value, error)) -> Result(error, Nil) {
 fn finish_run(
   state: State,
   outcome: query.Outcome(StatementResult, Failure),
-  reply_to: ReplyTo(Result(Outcome, RunError)),
+  reply_to: ReplyTo(Result(Outcome, error)),
+  failing: fn(Failure, TransactionStatus) -> error,
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
   let tracker = track_step(state.tracker, outcome)
@@ -2595,7 +2755,7 @@ fn finish_run(
         take_pending(state, plain_outcome(statement, outcome.status))
       #(state, Ok(single))
     }
-    Error(failure) -> #(state, Error(run_failure(failure, outcome.status)))
+    Error(failure) -> #(state, Error(failing(failure, outcome.status)))
   }
   reply(reply_to, result)
   State(..state, tracker:)
@@ -2604,11 +2764,12 @@ fn finish_run(
 fn finish_script(
   state: State,
   outcome: query.Outcome(List(StatementResult), ScriptFailure),
-  reply_to: ReplyTo(Result(List(Outcome), ScriptError)),
+  reply_to: ReplyTo(Result(List(Outcome), error)),
+  failing: fn(Failure, TransactionStatus, List(Outcome)) -> error,
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
   let tracker = track_script(state.tracker, outcome)
-  let #(state, result) = script_result(state, outcome)
+  let #(state, result) = script_result(state, outcome, failing)
   reply(reply_to, result)
   State(..state, tracker:)
 }
@@ -2616,7 +2777,8 @@ fn finish_script(
 fn script_result(
   state: State,
   outcome: query.Outcome(List(StatementResult), ScriptFailure),
-) -> #(State, Result(List(Outcome), ScriptError)) {
+  failing: fn(Failure, TransactionStatus, List(Outcome)) -> error,
+) -> #(State, Result(List(Outcome), error)) {
   case outcome.result {
     Ok(statements) -> {
       let #(state, outcomes) = outcomes_of(state, statements, outcome.status)
@@ -2624,7 +2786,7 @@ fn script_result(
     }
     Error(ScriptFailure(completed:, failure:)) -> {
       let #(state, outcomes) = outcomes_of(state, completed, outcome.status)
-      #(state, Error(script_failure(failure, outcome.status, outcomes)))
+      #(state, Error(failing(failure, outcome.status, outcomes)))
     }
   }
 }
@@ -2767,6 +2929,32 @@ fn run_failure(failure: Failure, status: TransactionStatus) -> RunError {
   case failure {
     ServerError(report) -> RunRefused(report, status)
     CopyNotSupported(_report) -> RunCopyRefused
+  }
+}
+
+/// A housekeeping statement is not a COPY, so a COPY answer breaks the
+/// protocol.
+fn housekeeping_run_failure(
+  failure: Failure,
+  status: TransactionStatus,
+) -> HousekeepingError {
+  case failure {
+    ServerError(report) -> HousekeepingRefused(report, status)
+    CopyNotSupported(_report) -> HousekeepingAnswerUnexpected
+  }
+}
+
+/// A housekeeping statement is one statement that is not a COPY, so an
+/// error after a result and a COPY answer break the protocol.
+fn housekeeping_script_failure(
+  failure: Failure,
+  status: TransactionStatus,
+  completed: List(Outcome),
+) -> HousekeepingError {
+  case failure, completed {
+    ServerError(report), [] -> HousekeepingRefused(report, status)
+    ServerError(_report), [_ran, ..] | CopyNotSupported(_report), _ran ->
+      HousekeepingAnswerUnexpected
   }
 }
 

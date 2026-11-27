@@ -575,7 +575,7 @@ fn listened(result: Result(Nil, ScriptError)) -> Listened {
 }
 
 fn run(state: State, sql: String) -> Result(Nil, ScriptError) {
-  connection.run_housekeeping_script(
+  connection.run_listener_script(
     state.connection,
     sql,
     state.deadline_milliseconds,

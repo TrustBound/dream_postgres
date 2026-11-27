@@ -41,6 +41,9 @@ import gleam/option.{None}
 import gleam/otp/static_supervisor
 import gleam/result.{map_error, try}
 import gleam/string.{inspect}
+import matchers/extract_housekeeping_refusal_code.{
+  extract_housekeeping_refusal_code,
+}
 import matchers/extract_load_failure.{extract_load_failure}
 import matchers/extract_run_refusal_code.{extract_run_refusal_code}
 import matchers/extract_type_kind.{extract_type_kind}
@@ -488,7 +491,7 @@ fn failed_load_tests() {
           |> should
           |> be_error
           |> extract_load_failure
-          |> extract_run_refusal_code
+          |> extract_housekeeping_refusal_code
           |> be_equal("25P02")
           |> or_fail_with("Expected 25P02 from the load")
         },

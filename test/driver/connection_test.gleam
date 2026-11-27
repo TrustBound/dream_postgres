@@ -13,16 +13,17 @@ import dream_postgres/driver/connection.{
   type ConnectionEvent, type ConnectionStateError, type Outcome, type RunError,
   type ScriptError, type SettleError, Backoff, CacheStatements,
   ClosedAfterDeadline, ConnectionConfig, ConnectionEnded, ConnectionLost,
-  ConnectionProcessDown, CopyFailed, DeadlinePassed, LoginRequiresTls,
-  LoginSendFailed, LoginSocketFailed, LoginUndecodable, NoAnswerInTime,
-  PrepareFailed, PrepareUnencodable, ProcessGone, ProtocolViolation, Reconnected,
-  RunCopyRefused, RunFailed, RunUnencodable, ScriptRequestFailed,
-  ScriptUnencodable, ServerStoppedReading, SettleFailed, SetupTimedOut,
-  SocketFailed, TransportRefused, UndecodableMessage, UnexpectedIdleMessage,
-  UnnamedStatements, aborted_by, copy_from, prepare, run, run_script,
-  server_parameter, settled_transaction_status, start, stop, supervised,
-  transaction_status,
+  ConnectionProcessDown, CopyFailed, DeadlinePassed, HousekeepingFailed,
+  LoginRequiresTls, LoginSendFailed, LoginSocketFailed, LoginUndecodable,
+  NoAnswerInTime, PrepareFailed, PrepareUnencodable, ProcessGone,
+  ProtocolViolation, Reconnected, RunCopyRefused, RunFailed, RunUnencodable,
+  ScriptRequestFailed, ScriptUnencodable, ServerStoppedReading, SettleFailed,
+  SetupTimedOut, SocketFailed, TransportRefused, UndecodableMessage,
+  UnexpectedIdleMessage, UnnamedStatements, aborted_by, copy_from, prepare, run,
+  run_housekeeping, run_housekeeping_script, run_script, server_parameter,
+  settled_transaction_status, start, stop, supervised, transaction_status,
 }
+import dream_postgres/driver/housekeeping_sql.{catalog_load, health_check}
 import dream_postgres/driver/message.{
   BindComplete, Protocol32, TooManyItems, UnknownMessageType, ZeroByteInString,
 }
@@ -95,6 +96,9 @@ import matchers/extract_connection_end.{extract_connection_end}
 import matchers/extract_disconnect_error.{extract_disconnect_error}
 import matchers/extract_ending_report.{extract_ending_report}
 import matchers/extract_first.{extract_first}
+import matchers/extract_housekeeping_refusal_code.{
+  extract_housekeeping_refusal_code,
+}
 import matchers/extract_login_refusal_code.{extract_login_refusal_code}
 import matchers/extract_notice_details.{extract_notice_details}
 import matchers/extract_notice_messages.{extract_notice_messages}
@@ -390,6 +394,18 @@ fn failed_transaction_tests() -> ContextNode(Connection) {
         |> be_equal("22012")
         |> or_fail_with("Expected the report 22012")
       }),
+      it("refuses a housekeeping script with 25P02", fn(connection) {
+        // Act
+        let checked = run_housekeeping_script(connection, health_check, 5000)
+
+        // Assert
+        checked
+        |> should
+        |> be_error
+        |> extract_housekeeping_refusal_code
+        |> be_equal("25P02")
+        |> or_fail_with("Expected 25P02")
+      }),
       it(
         "answers a COMMIT of a failed transaction with ROLLBACK",
         fn(connection) {
@@ -500,6 +516,21 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       |> be_equal(PrepareFailed(ConnectionProcessDown))
       |> or_fail_with("Expected PrepareFailed(ConnectionProcessDown)")
     }),
+    it(
+      "gives HousekeepingFailed for a housekeeping run after it stopped",
+      fn(connection) {
+        // Act
+        stop(connection)
+        let loaded = run_housekeeping(connection, catalog_load, 5000)
+
+        // Assert
+        loaded
+        |> should
+        |> be_error
+        |> be_equal(HousekeepingFailed(ConnectionProcessDown))
+        |> or_fail_with("Expected HousekeepingFailed(ConnectionProcessDown)")
+      },
+    ),
     it("gives CopyFailed for a COPY after it stopped", fn(connection) {
       // Act
       stop(connection)

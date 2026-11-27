@@ -1,9 +1,10 @@
 //// The table of type descriptions: what each type OID of a server is.
 ////
-//// The catalog query reads `pg_type`, `pg_namespace`, `pg_range`,
-//// `pg_enum` and `pg_attribute` in one statement, so all its rows come from
-//// one snapshot of the server's catalog. `from_rows` turns those rows into
-//// a table. It is pure: it reads no socket and starts no process.
+//// The catalog load (`catalog_load` of `driver/housekeeping_sql`) reads
+//// `pg_type`, `pg_namespace`, `pg_range`, `pg_enum` and `pg_attribute` in
+//// one statement, so all its rows come from one snapshot of the server's
+//// catalog. `from_rows` turns those rows into a table. It is pure: it
+//// reads no socket and starts no process.
 ////
 //// A table is complete by construction. Each part of a type, such as the
 //// element of an array, the base of a domain, the subtype of a range, the
@@ -86,17 +87,6 @@ type SortedRows {
     fields: Dict(Int, List(#(String, Int))),
   )
 }
-
-// The query -------------------------------------------------------------------
-
-/// The catalog query. It is one statement, so its rows come from one
-/// snapshot, also inside a transaction of the caller. Each row has 11 text
-/// columns: the row kind (`type`, `label` or `field`), the type OID, a
-/// position that orders the labels of an enum and the fields of a
-/// composite, and the facts of the row kind. A range or multirange part
-/// that a type does not have is 0.
-pub const query =
-  "SELECT 'type', t.oid, NULL::float8, n.nspname::text, t.typname::text, t.typtype::text, t.typcategory::text, t.typelem::text, t.typbasetype::text, COALESCE(r.rngsubtype, 0)::text, COALESCE(m.rngtypid, 0)::text FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace LEFT JOIN pg_range r ON r.rngtypid = t.oid LEFT JOIN pg_range m ON m.rngmultitypid = t.oid UNION ALL SELECT 'label', e.enumtypid, e.enumsortorder::float8, e.enumlabel::text, NULL, NULL, NULL, NULL, NULL, NULL, NULL FROM pg_enum e UNION ALL SELECT 'field', t.oid, a.attnum::float8, a.attname::text, a.atttypid::text, NULL, NULL, NULL, NULL, NULL, NULL FROM pg_type t JOIN pg_attribute a ON a.attrelid = t.typrelid WHERE t.typtype = 'c' AND a.attnum > 0 AND NOT a.attisdropped ORDER BY 1, 2, 3"
 
 // Tables ----------------------------------------------------------------------
 

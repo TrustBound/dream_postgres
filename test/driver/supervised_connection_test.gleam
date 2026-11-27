@@ -4,11 +4,13 @@
 
 import dream_postgres/driver/connection.{
   type ChunkError, type Connection, type ConnectionEvent, type CopyError,
-  type Outcome, type PrepareError, type RunError, type ScriptError,
-  type SettleError, Backoff, ConnectFailed, Connected, ConnectionConfig,
-  CopyNotConnected, PrepareNotConnected, RunNotConnected, ScriptNotConnected,
-  SettleNotConnected, TransportRefused, supervised,
+  type HousekeepingError, type Outcome, type PrepareError, type RunError,
+  type ScriptError, type SettleError, Backoff, ConnectFailed, Connected,
+  ConnectionConfig, CopyNotConnected, HousekeepingNotConnected,
+  PrepareNotConnected, RunNotConnected, ScriptNotConnected, SettleNotConnected,
+  TransportRefused, supervised,
 }
+import dream_postgres/driver/housekeeping_sql.{catalog_load, rollback}
 import dream_postgres/driver/transport.{ConnectRefused}
 import dream_postgres/internal/cell.{
   type StatementDescription, type TransactionStatus,
@@ -94,6 +96,28 @@ pub fn tests() -> TestSuite {
         |> or_fail_with("Expected CopyNotConnected")
       },
     ),
+    it(
+      "refuses a housekeeping run with HousekeepingNotConnected before its first login",
+      fn(outcome: LateServer) {
+        // Assert
+        outcome.early_housekeeping_run
+        |> should
+        |> be_error
+        |> be_equal(HousekeepingNotConnected(TransportRefused(ConnectRefused)))
+        |> or_fail_with("Expected HousekeepingNotConnected")
+      },
+    ),
+    it(
+      "refuses a housekeeping script with HousekeepingNotConnected before its first login",
+      fn(outcome: LateServer) {
+        // Assert
+        outcome.early_housekeeping_script
+        |> should
+        |> be_error
+        |> be_equal(HousekeepingNotConnected(TransportRefused(ConnectRefused)))
+        |> or_fail_with("Expected HousekeepingNotConnected")
+      },
+    ),
     it("tells Connected once the server listens", fn(outcome: LateServer) {
       // Assert
       outcome.connected_event
@@ -121,6 +145,8 @@ type LateServer {
     early_run: Result(Outcome, RunError),
     early_settle: Result(TransactionStatus, SettleError),
     early_copy: Result(Int, CopyError(ChunkError)),
+    early_housekeeping_run: Result(Outcome, HousekeepingError),
+    early_housekeeping_script: Result(List(Outcome), HousekeepingError),
     connected_event: Result(ConnectionEvent, Nil),
     late_request: Result(List(Outcome), ScriptError),
   )
@@ -168,6 +194,10 @@ fn watch_late_server(
       5000,
       send_nothing,
     )
+  let early_housekeeping_run =
+    connection.run_housekeeping(connection, catalog_load, 5000)
+  let early_housekeeping_script =
+    connection.run_housekeeping_script(connection, rollback, 5000)
   use Nil <- try(start_forwarder(port, first_driver_server.port))
   let connected_event = next_event_after_failed_connects(events)
   let late_request =
@@ -180,6 +210,8 @@ fn watch_late_server(
     early_run:,
     early_settle:,
     early_copy:,
+    early_housekeeping_run:,
+    early_housekeeping_script:,
     connected_event:,
     late_request:,
   ))

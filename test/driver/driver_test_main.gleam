@@ -13,9 +13,11 @@ import driver/catalog_test
 import driver/channel_binding_test
 import driver/connection_copy_test
 import driver/connection_events_test
+import driver/connection_housekeeping_test
 import driver/connection_test
 import driver/decode_test
 import driver/encode_test
+import driver/housekeeping_sql_test
 import driver/listener_test
 import driver/login_server_test
 import driver/login_test
@@ -40,6 +42,7 @@ pub fn suites() -> List(TestSuite) {
   [
     bit_array_test.tests(),
     encode_test.tests(),
+    housekeeping_sql_test.tests(),
     decode_test.tests(),
     query_test.tests(),
     query_copy_test.tests(),
@@ -56,6 +59,7 @@ pub fn suites() -> List(TestSuite) {
     statement_cache_test.tests(),
     connection_test.tests(),
     connection_copy_test.tests(),
+    connection_housekeeping_test.tests(),
     pool_test.tests(),
     catalog_table_test.tests(),
     catalog_test.tests(),
