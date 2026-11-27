@@ -4,83 +4,67 @@
 //// connection controls the server, so no test sleeps.
 
 import dream_postgres/driver/connection.{
-  type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type DriverError, type Outcome, Backoff,
-  ConnectionConfig, ConnectionLost, ConnectionProcessDown, CopyStatementRefused,
-  DeadlinePassed, Disconnected, InvalidRequest, LoginRefused, ProtocolViolation,
-  ReconnectFailed, Reconnected, ScriptFailed, ServerEndedConnection,
-  ServerRefused, SetupTimedOut, TransportRefused, UndecodableMessage,
-  UnexpectedIdleMessage, UnexpectedServerMessage,
+  type DriverError, ConnectionConfig, ConnectionLost, ConnectionProcessDown,
+  CopyStatementRefused, DeadlinePassed, InvalidRequest, LoginUndecodable,
+  ProtocolViolation, Reconnected, SetupTimedOut, TransportRefused,
+  UndecodableMessage, UnexpectedIdleMessage, aborted_by, prepare, run,
+  run_script, server_parameter, start, stop, supervised, transaction_status,
 }
-import dream_postgres/driver/login.{PreferChannelBinding, ServerRejectedLogin}
 import dream_postgres/driver/message.{
-  BindComplete, Protocol30, UnknownMessageType, ZeroByteInString,
+  BindComplete, UnknownMessageType, ZeroByteInString,
 }
 import dream_postgres/driver/transport.{
-  ConnectRefused, ConnectionReset, NoTls, SendTimedOut, SocketClosed,
-  TransportConfig,
+  ConnectRefused, ConnectionReset, SendTimedOut, SocketClosed,
 }
 import dream_postgres/internal/cell.{
-  type Cell, type ServerReport, Binary, BinaryFormat, ColumnDescription,
-  CommandResult, Idle, InFailedTransaction, InTransaction, Null,
-  ParameterDescription, StatementDescription, Text,
+  Binary, BinaryFormat, ColumnDescription, CommandResult, Idle,
+  InFailedTransaction, InTransaction, Null, ParameterDescription,
+  StatementDescription, Text,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{
+  be_equal, be_error, be_none, be_ok, be_some, or_fail_with, should, start_with,
+}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import driver/servers.{type Server, driver_servers}
+import driver/fake_server.{
+  Answer, free_port, start_fake_server, start_silent_server,
+}
+import driver/proxy.{
+  type Proxy, client_end, close_client, inject, reset_client, start_proxy,
+  stop_reading, watch_client_end,
+}
+import driver/server_connection.{
+  backend_pid, caller_answer, connection_config, lock_waiter_pid, next_event,
+  next_event_after_refused_reconnects, send_stray_message, start_caller,
+  start_configured, start_connection, start_in_ended_owner, start_proxied,
+  stop_proxied, terminate_backend, tls_config, user_config, wait_for_lock_waiter,
+  wait_for_parameter, wait_for_table_waiter, watched_config,
+}
+import driver/servers.{type Server, driver_servers, first_driver_server}
+import fixtures/driver_tls.{verify_full}
 import gleam/bit_array
-import gleam/erlang/process.{type Pid, type Subject}
+import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/list.{map}
-import gleam/option.{type Option, None, Some}
 import gleam/otp/static_supervisor
-import gleam/result.{try}
-import gleam/string.{repeat, starts_with}
-
-@external(erlang, "port_ffi", "free_port")
-fn free_port() -> Int
-
-@external(erlang, "driver_proxy_ffi", "start")
-fn start_proxy(server_port: Int) -> #(Int, Proxy)
-
-@external(erlang, "driver_proxy_ffi", "inject")
-fn inject(proxy: Proxy, bytes: BitArray) -> Nil
-
-@external(erlang, "driver_proxy_ffi", "close_client")
-fn close_client(proxy: Proxy) -> Nil
-
-@external(erlang, "driver_proxy_ffi", "reset_client")
-fn reset_client(proxy: Proxy) -> Nil
-
-@external(erlang, "driver_proxy_ffi", "stop_reading")
-fn stop_reading(proxy: Proxy) -> Nil
-
-@external(erlang, "driver_proxy_ffi", "watch_client_end")
-fn watch_client_end(proxy: Proxy) -> ClientEndWatch
-
-@external(erlang, "driver_proxy_ffi", "client_end")
-fn client_end(watch: ClientEndWatch) -> BitArray
-
-@external(erlang, "driver_fake_server_ffi", "start")
-fn start_fake_server(behavior: FakeBehavior) -> #(Int, FakeServer)
-
-/// What the fake server does after the first 8 bytes (see the FFI).
-type FakeBehavior {
-  Answer(BitArray)
+import gleam/string.{repeat}
+import matchers/extract_command_result.{extract_command_result}
+import matchers/extract_command_rows.{extract_command_rows}
+import matchers/extract_disconnect_error.{extract_disconnect_error}
+import matchers/extract_driver_error_code.{extract_driver_error_code}
+import matchers/extract_ending_report.{extract_ending_report}
+import matchers/extract_login_refusal_code.{extract_login_refusal_code}
+import matchers/extract_outcome_notices.{extract_outcome_notices}
+import matchers/extract_outcome_notifications.{extract_outcome_notifications}
+import matchers/extract_outcome_tags.{extract_outcome_tags}
+import matchers/extract_reconnect_error.{extract_reconnect_error}
+import matchers/extract_refused_copy_outcomes.{extract_refused_copy_outcomes}
+import matchers/extract_report_code.{extract_report_code}
+import matchers/extract_result_columns.{extract_result_columns}
+import matchers/extract_script_failure_outcomes.{extract_script_failure_outcomes}
+import matchers/extract_unexpected_server_message.{
+  extract_unexpected_server_message,
 }
-
-type FakeServer
-
-@external(erlang, "driver_fake_server_ffi", "start_silent")
-fn start_silent_server() -> Int
-
-@external(erlang, "erlang", "send")
-fn send_raw(pid: Pid, message: String) -> String
-
-type Proxy
-
-type ClientEndWatch
 
 /// The tests of the connection process.
 pub fn tests() -> TestSuite {
@@ -88,140 +72,10 @@ pub fn tests() -> TestSuite {
     group("on each driver server", map(driver_servers(), server_tests)),
     group("starting", start_tests()),
     group("losing the connection", loss_tests()),
+    group("a refused reconnect", refused_reconnect_tests()),
     group("callers", caller_tests()),
     group("more paths", more_tests()),
   ])
-}
-
-// Settings --------------------------------------------------------------------
-
-fn config(
-  port: Int,
-  user: String,
-  password: String,
-  first_delay: Int,
-  events: Option(Subject(ConnectionEvent)),
-) -> Result(ConnectionConfig, DriverError) {
-  use address <- try(
-    transport.address("localhost", port)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
-  )
-  use login_config <- try(
-    login.new(
-      user:,
-      database: servers.database,
-      password: login.password(password),
-      parameters: [],
-      channel_binding: PreferChannelBinding,
-      protocol_version: Protocol30,
-    )
-    |> result.replace_error(ConnectionLost(SocketClosed)),
-  )
-  Ok(ConnectionConfig(
-    transport: TransportConfig(address, NoTls, 5000, 500),
-    login: login_config,
-    setup_timeout_milliseconds: 5000,
-    reconnect: Backoff(first_delay, 60_000),
-    events:,
-  ))
-}
-
-/// Starts a connection as `dream`, gives it to `body`, and stops it.
-fn with_connection(
-  port: Int,
-  body: fn(Connection) -> Result(value, DriverError),
-) -> Result(value, DriverError) {
-  use settings <- try(config(port, "dream", "dream", 10, None))
-  with_started(settings, body)
-}
-
-fn with_started(
-  settings: ConnectionConfig,
-  body: fn(Connection) -> Result(value, DriverError),
-) -> Result(value, DriverError) {
-  use connection <- try(
-    connection.start(settings)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
-  )
-  let value = body(connection)
-  connection.stop(connection)
-  value
-}
-
-fn script(
-  connection: Connection,
-  sql: String,
-) -> Result(List(Outcome), DriverError) {
-  connection.run_script(connection, sql, 5000)
-}
-
-fn run(
-  connection: Connection,
-  sql: String,
-  parameters: List(Cell),
-) -> Result(Outcome, DriverError) {
-  connection.run(connection, sql, parameters, [], 5000)
-}
-
-fn tags(outcomes: List(Outcome)) -> List(String) {
-  map(outcomes, tag)
-}
-
-fn tag(outcome: Outcome) -> String {
-  outcome.result.tag
-}
-
-fn rows(outcome: Outcome) -> List(List(Cell)) {
-  outcome.result.rows
-}
-
-fn code(error: DriverError) -> String {
-  case error {
-    ServerRefused(report, _) -> report.code
-    ServerEndedConnection(report) -> report.code
-    ScriptFailed(_, report, _) -> report.code
-    _ -> "not a server error"
-  }
-}
-
-fn report_code(report: Option(ServerReport)) -> Option(String) {
-  option.map(report, report_code_of)
-}
-
-fn report_code_of(report: ServerReport) -> String {
-  report.code
-}
-
-/// The backend process ID of the connection, as text.
-fn backend_pid(connection: Connection) -> Result(String, DriverError) {
-  use outcome <- try(run(connection, "SELECT pg_backend_pid()::text", []))
-  case rows(outcome) {
-    [[Text(pid)]] -> Ok(bit_array_text(pid))
-    _ -> Error(ConnectionLost(SocketClosed))
-  }
-}
-
-fn bit_array_text(bytes: BitArray) -> String {
-  case bit_array.to_string(bytes) {
-    Ok(text) -> text
-    Error(Nil) -> ""
-  }
-}
-
-/// Ends the backend of `pid` from the control connection. The server sends
-/// it the FATAL error 57P01, then closes its socket.
-fn terminate_backend(
-  control: Connection,
-  pid: String,
-) -> Result(Nil, DriverError) {
-  script(control, "SELECT pg_terminate_backend(" <> pid <> ")")
-  |> result.replace(Nil)
-}
-
-fn next_event(
-  events: Subject(ConnectionEvent),
-) -> Result(ConnectionEvent, Nil) {
-  process.receive(events, 5000)
 }
 
 // On each server --------------------------------------------------------------
@@ -229,955 +83,1052 @@ fn next_event(
 fn server_tests(server: Server) {
   group("PostgreSQL " <> to_string(server.version), [
     it("keeps the server_version that the login reported", fn() {
-      check_server_version(server)
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let version = server_parameter(connection, "server_version")
+      stop(connection)
+
+      // Assert
+      version
+      |> should
+      |> be_ok
+      |> be_some
+      |> start_with(to_string(server.version) <> ".")
+      |> or_fail_with("Expected the server_version of the server")
     }),
-    it("prepares a statement", fn() { check_prepare(server) }),
+    it("prepares a statement", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let sql = "SELECT relname FROM pg_class WHERE oid = $1"
+
+      // Act
+      let description = prepare(connection, sql, 5000)
+      stop(connection)
+
+      // Assert
+      description
+      |> should
+      |> be_ok
+      |> be_equal(
+        StatementDescription(parameters: [ParameterDescription(26)], columns: [
+          ColumnDescription("relname", 19, -1, 1259, 2),
+        ]),
+      )
+      |> or_fail_with("Expected the description of the statement")
+    }),
     it("runs a statement with a binary parameter and a binary result", fn() {
-      check_run(server)
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let outcome =
+        run(
+          connection,
+          "SELECT $1::int4 + 1",
+          [Binary(<<41:32>>)],
+          [
+            BinaryFormat,
+          ],
+          5000,
+        )
+      stop(connection)
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_command_result
+      |> be_equal(CommandResult(
+        rows: [[Binary(<<42:32>>)]],
+        tag: "SELECT 1",
+        count: 1,
+      ))
+      |> or_fail_with("Expected 42 as a binary int4")
+    }),
+    it("describes the result column of a run", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let outcome =
+        run(
+          connection,
+          "SELECT $1::int4 + 1",
+          [Binary(<<41:32>>)],
+          [
+            BinaryFormat,
+          ],
+          5000,
+        )
+      stop(connection)
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_result_columns
+      |> be_equal([ColumnDescription("?column?", 23, -1, 0, 0)])
+      |> or_fail_with("Expected one int4 column")
     }),
     it("runs a script with one outcome for each statement", fn() {
-      check_script(server)
+      // Arrange
+      let connection = start_connection(server.port)
+      let sql =
+        "CREATE TEMP TABLE t (id int); INSERT INTO t VALUES (1); SELECT id FROM t"
+
+      // Act
+      let outcomes = run_script(connection, sql, 5000)
+      stop(connection)
+
+      // Assert
+      outcomes
+      |> should
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["CREATE TABLE", "INSERT 0 1", "SELECT 1"])
+      |> or_fail_with("Expected one tag for each statement")
     }),
-    it("answers a COMMIT of a failed transaction with ROLLBACK", fn() {
-      check_commit_of_failed_transaction(server)
-    }),
-    it("knows the transaction status after BEGIN", fn() {
-      check_transaction_status(server)
-    }),
+    group("a statement that fails inside a transaction", [
+      it("fails the statement with 22012", fn() {
+        // Arrange
+        let connection = start_connection(server.port)
+
+        // Act
+        let _begun = run_script(connection, "BEGIN", 5000)
+        let failed = run(connection, "SELECT 1/0", [], [], 5000)
+        stop(connection)
+
+        // Assert
+        failed
+        |> should
+        |> be_error
+        |> extract_driver_error_code
+        |> be_equal("22012")
+        |> or_fail_with("Expected 22012")
+      }),
+      it("keeps the report of the statement that aborted it", fn() {
+        // Arrange
+        let connection = start_connection(server.port)
+
+        // Act
+        let _begun = run_script(connection, "BEGIN", 5000)
+        let _failed = run(connection, "SELECT 1/0", [], [], 5000)
+        let aborting = aborted_by(connection)
+        stop(connection)
+
+        // Assert
+        aborting
+        |> should
+        |> be_ok
+        |> be_some
+        |> extract_report_code
+        |> be_equal("22012")
+        |> or_fail_with("Expected the report 22012")
+      }),
+      it("answers a COMMIT of a failed transaction with ROLLBACK", fn() {
+        // Arrange
+        let connection = start_connection(server.port)
+
+        // Act
+        let _begun = run_script(connection, "BEGIN", 5000)
+        let _failed = run(connection, "SELECT 1/0", [], [], 5000)
+        let committed = run_script(connection, "COMMIT", 5000)
+        stop(connection)
+
+        // Assert
+        committed
+        |> should
+        |> be_ok
+        |> extract_outcome_tags
+        |> be_equal(["ROLLBACK"])
+        |> or_fail_with("Expected the tag ROLLBACK")
+      }),
+      it("keeps no report after the COMMIT", fn() {
+        // Arrange
+        let connection = start_connection(server.port)
+
+        // Act
+        let _begun = run_script(connection, "BEGIN", 5000)
+        let _failed = run(connection, "SELECT 1/0", [], [], 5000)
+        let _committed = run_script(connection, "COMMIT", 5000)
+        let aborting = aborted_by(connection)
+        stop(connection)
+
+        // Assert
+        aborting
+        |> should
+        |> be_ok
+        |> be_none
+        |> or_fail_with("Expected no report")
+      }),
+    ]),
+    group("the transaction status", [
+      it("knows the transaction status after BEGIN", fn() {
+        // Arrange
+        let connection = start_connection(server.port)
+
+        // Act
+        let _begun = run_script(connection, "BEGIN", 5000)
+        let status = transaction_status(connection)
+        stop(connection)
+
+        // Assert
+        status
+        |> should
+        |> be_ok
+        |> be_equal(InTransaction)
+        |> or_fail_with("Expected InTransaction after BEGIN")
+      }),
+      it("knows the transaction status after a failed statement", fn() {
+        // Arrange
+        let connection = start_connection(server.port)
+
+        // Act
+        let _begun = run_script(connection, "BEGIN", 5000)
+        let _failed = run_script(connection, "SELECT 1/0", 5000)
+        let status = transaction_status(connection)
+        stop(connection)
+
+        // Assert
+        status
+        |> should
+        |> be_ok
+        |> be_equal(InFailedTransaction)
+        |> or_fail_with("Expected InFailedTransaction after the error")
+      }),
+      it("knows the transaction status after ROLLBACK", fn() {
+        // Arrange
+        let connection = start_connection(server.port)
+
+        // Act
+        let _begun = run_script(connection, "BEGIN", 5000)
+        let _failed = run_script(connection, "SELECT 1/0", 5000)
+        let _rolled_back = run_script(connection, "ROLLBACK", 5000)
+        let status = transaction_status(connection)
+        stop(connection)
+
+        // Assert
+        status
+        |> should
+        |> be_ok
+        |> be_equal(Idle)
+        |> or_fail_with("Expected Idle after ROLLBACK")
+      }),
+    ]),
     it("gives the notices and notifications with the outcome", fn() {
-      check_notices_and_notifications(server)
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let outcomes = run_script(connection, notice_script, 5000)
+      stop(connection)
+
+      // Assert
+      outcomes
+      |> should
+      |> be_ok
+      |> extract_outcome_notices
+      |> be_equal([[], [], ["hello"]])
+      |> or_fail_with("Expected the notice on the last outcome")
+    }),
+    it("gives the notifications with the outcome", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let outcomes = run_script(connection, notice_and_notify_script, 5000)
+      stop(connection)
+
+      // Assert
+      outcomes
+      |> should
+      |> be_ok
+      |> extract_outcome_notifications
+      |> be_equal([[], [], [#("jobs", "done")]])
+      |> or_fail_with("Expected the notification on the last outcome")
     }),
   ])
 }
 
-fn check_server_version(server: Server) {
-  // Act
-  let version = {
-    use connection <- with_connection(server.port)
-    connection.server_parameter(connection, "server_version")
-  }
+/// The notice test and the notification test run at the same time on the
+/// same server, so each one listens on a channel of its own.
+const notice_script =
+  "LISTEN notice_jobs; DO $$ BEGIN RAISE NOTICE 'hello'; END $$; NOTIFY notice_jobs, 'done'"
 
-  // Assert
-  version
-  |> result.map(option.map(_, starts_with(_, to_string(server.version) <> ".")))
-  |> should
-  |> be_equal(Ok(Some(True)))
-  |> or_fail_with("Expected the server_version of the server")
-}
-
-fn check_prepare(server: Server) {
-  // Act
-  let description = {
-    use connection <- with_connection(server.port)
-    connection.prepare(
-      connection,
-      "SELECT relname FROM pg_class WHERE oid = $1",
-      5000,
-    )
-  }
-
-  // Assert
-  description
-  |> should
-  |> be_equal(
-    Ok(
-      StatementDescription(parameters: [ParameterDescription(26)], columns: [
-        ColumnDescription("relname", 19, -1, 1259, 2),
-      ]),
-    ),
-  )
-  |> or_fail_with("Expected the description of the statement")
-}
-
-fn check_run(server: Server) {
-  // Act
-  let result = {
-    use connection <- with_connection(server.port)
-    connection.run(
-      connection,
-      "SELECT $1::int4 + 1",
-      [Binary(<<41:32>>)],
-      [
-        BinaryFormat,
-      ],
-      5000,
-    )
-    |> result.map(outcome_result)
-  }
-
-  // Assert
-  result
-  |> should
-  |> be_equal(
-    Ok(#(
-      [ColumnDescription("?column?", 23, -1, 0, 0)],
-      CommandResult(rows: [[Binary(<<42:32>>)]], tag: "SELECT 1", count: 1),
-    )),
-  )
-  |> or_fail_with("Expected 42 as a binary int4")
-}
-
-fn outcome_result(outcome: Outcome) {
-  #(outcome.columns, outcome.result)
-}
-
-fn check_script(server: Server) {
-  // Act
-  let script_tags = {
-    use connection <- with_connection(server.port)
-    script(
-      connection,
-      "CREATE TEMP TABLE t (id int); INSERT INTO t VALUES (1); SELECT id FROM t",
-    )
-    |> result.map(tags)
-  }
-
-  // Assert
-  script_tags
-  |> should
-  |> be_equal(Ok(["CREATE TABLE", "INSERT 0 1", "SELECT 1"]))
-  |> or_fail_with("Expected one tag for each statement")
-}
-
-/// A statement fails inside a transaction: aborted_by gives its report,
-/// COMMIT through run_script answers with the tag ROLLBACK, and aborted_by
-/// gives nothing after it.
-fn check_commit_of_failed_transaction(server: Server) {
-  // Act
-  let answers = {
-    use connection <- with_connection(server.port)
-    use _begun <- try(script(connection, "BEGIN"))
-    let failed = run(connection, "SELECT 1/0", []) |> result.map_error(code)
-    use before <- try(connection.aborted_by(connection))
-    use committed <- try(script(connection, "COMMIT"))
-    use after <- try(connection.aborted_by(connection))
-    Ok(#(failed, report_code(before), tags(committed), report_code(after)))
-  }
-
-  // Assert
-  answers
-  |> should
-  |> be_equal(Ok(#(Error("22012"), Some("22012"), ["ROLLBACK"], None)))
-  |> or_fail_with("Expected 22012, then the tag ROLLBACK, then no report")
-}
-
-fn check_transaction_status(server: Server) {
-  // Act
-  let statuses = {
-    use connection <- with_connection(server.port)
-    use _begun <- try(script(connection, "BEGIN"))
-    use in_transaction <- try(connection.transaction_status(connection))
-    use _failed <- try(script(connection, "SELECT 1/0") |> result.or(Ok([])))
-    use failed <- try(connection.transaction_status(connection))
-    use _rolled_back <- try(script(connection, "ROLLBACK"))
-    use idle <- try(connection.transaction_status(connection))
-    Ok(#(in_transaction, failed, idle))
-  }
-
-  // Assert
-  statuses
-  |> should
-  |> be_equal(Ok(#(InTransaction, InFailedTransaction, Idle)))
-  |> or_fail_with("Expected the three statuses")
-}
-
-fn check_notices_and_notifications(server: Server) {
-  // Act
-  let messages = {
-    use connection <- with_connection(server.port)
-    use outcomes <- try(script(
-      connection,
-      "LISTEN jobs; DO $$ BEGIN RAISE NOTICE 'hello'; END $$; NOTIFY jobs, 'done'",
-    ))
-    Ok(map(outcomes, notices_and_notifications))
-  }
-
-  // Assert
-  messages
-  |> should
-  |> be_equal(Ok([#([], []), #([], []), #(["hello"], [#("jobs", "done")])]))
-  |> or_fail_with(
-    "Expected the notice and the notification on the last outcome",
-  )
-}
-
-fn notices_and_notifications(outcome: Outcome) {
-  #(
-    map(outcome.notices, notice_message),
-    map(outcome.notifications, notification_parts),
-  )
-}
-
-fn notice_message(report: ServerReport) -> String {
-  report.message
-}
-
-fn notification_parts(notification: connection.Notification) {
-  #(notification.channel, notification.payload)
-}
+const notice_and_notify_script =
+  "LISTEN jobs; DO $$ BEGIN RAISE NOTICE 'hello'; END $$; NOTIFY jobs, 'done'"
 
 // Starting --------------------------------------------------------------------
-
-fn first_server() -> Server {
-  case driver_servers() {
-    [server, ..] -> server
-    [] -> servers.Server(version: 16, port: 5441)
-  }
-}
 
 fn start_tests() {
   [
     it("gives the server's 28P01 for a wrong password", fn() {
       // Arrange
-      let settings = config(first_server().port, "dream", "wrong", 10, None)
+      let config = user_config(first_driver_server.port, "dream", "wrong")
 
       // Act
-      let started = settings |> result.map(connection.start)
+      let started = start(config)
 
       // Assert
       started
-      |> result.map(result.map_error(_, connect_error_code))
-      |> result.map(result.replace(_, Nil))
       |> should
-      |> be_equal(Ok(Error("28P01")))
+      |> be_error
+      |> extract_login_refusal_code
+      |> be_equal("28P01")
       |> or_fail_with("Expected the login refusal 28P01")
     }),
     it("gives TransportRefused for a port with no listener", fn() {
       // Arrange
-      let settings = config(free_port(), "dream", "dream", 10, None)
+      let config = connection_config(free_port())
 
       // Act
-      let started = settings |> result.map(connection.start)
+      let started = start(config)
 
       // Assert
       started
-      |> result.map(result.replace(_, Nil))
       |> should
-      |> be_equal(Ok(Error(TransportRefused(ConnectRefused))))
+      |> be_error
+      |> be_equal(TransportRefused(ConnectRefused))
       |> or_fail_with("Expected TransportRefused(ConnectRefused)")
     }),
     it("gives SetupTimedOut for a server that never answers", fn() {
       // Arrange
-      let port = start_silent_server()
-      let settings =
-        config(port, "dream", "dream", 10, None)
-        |> result.map(short_setup)
+      let config =
+        ConnectionConfig(
+          ..connection_config(start_silent_server()),
+          setup_timeout_milliseconds: 100,
+        )
 
       // Act
-      let started = settings |> result.map(connection.start)
+      let started = start(config)
 
       // Assert
       started
-      |> result.map(result.replace(_, Nil))
       |> should
-      |> be_equal(Ok(Error(SetupTimedOut)))
+      |> be_error
+      |> be_equal(SetupTimedOut)
       |> or_fail_with("Expected SetupTimedOut")
     }),
     it("sends Terminate when it stops", fn() {
       // Arrange
-      let #(port, proxy) = start_proxy(first_server().port)
+      let #(port, proxy) = start_proxy(first_driver_server.port)
+      let connection = start_connection(port)
 
       // Act
-      let last_bytes = {
-        use settings <- try(config(port, "dream", "dream", 10, None))
-        use started <- try(
-          connection.start(settings)
-          |> result.replace_error(ConnectionLost(SocketClosed)),
-        )
-        let watch = watch_client_end(proxy)
-        connection.stop(started)
-        Ok(client_end(watch))
-      }
+      let watch = watch_client_end(proxy)
+      stop(connection)
+      let last_bytes = client_end(watch)
 
       // Assert
       last_bytes
       |> should
-      |> be_equal(Ok(<<"X", 4:32>>))
+      |> be_equal(<<"X", 4:32>>)
       |> or_fail_with("Expected a Terminate as the last bytes")
     }),
     it("gives ConnectionProcessDown after it stopped", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
       // Act
-      let status = {
-        use settings <- try(config(
-          first_server().port,
-          "dream",
-          "dream",
-          10,
-          None,
-        ))
-        use started <- try(
-          connection.start(settings)
-          |> result.replace_error(ConnectionLost(SocketClosed)),
-        )
-        connection.stop(started)
-        connection.transaction_status(started)
-      }
+      stop(connection)
+      let status = transaction_status(connection)
 
       // Assert
       status
       |> should
-      |> be_equal(Error(ConnectionProcessDown))
+      |> be_error
+      |> be_equal(ConnectionProcessDown)
       |> or_fail_with("Expected ConnectionProcessDown")
     }),
   ]
 }
 
-fn short_setup(settings: ConnectionConfig) -> ConnectionConfig {
-  ConnectionConfig(..settings, setup_timeout_milliseconds: 100)
-}
-
-fn connect_error_code(error: ConnectError) -> String {
-  case error {
-    LoginRefused(ServerRejectedLogin(report)) -> report.code
-    _ -> "not a login refusal"
-  }
-}
-
 // Losing the connection ---------------------------------------------------------
-
-/// A connection through a proxy, with its events, and a control connection
-/// straight to the server.
-type Setup {
-  Setup(
-    connection: Connection,
-    control: Connection,
-    proxy: Proxy,
-    events: Subject(ConnectionEvent),
-  )
-}
-
-fn with_setup(
-  first_delay: Int,
-  body: fn(Setup) -> Result(value, DriverError),
-) -> Result(value, DriverError) {
-  let server = first_server()
-  let #(port, proxy) = start_proxy(server.port)
-  let events = process.new_subject()
-  use settings <- try(config(port, "dream", "dream", first_delay, Some(events)))
-  use connection <- with_started(settings)
-  use control <- with_connection(server.port)
-  body(Setup(connection:, control:, proxy:, events:))
-}
 
 fn loss_tests() {
   [
     it("notices at once when the server ends an idle session", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 10)
+      let pid = backend_pid(proxied.connection)
+
       // Act
-      let events = {
-        use setup <- with_setup(10)
-        use pid <- try(backend_pid(setup.connection))
-        use Nil <- try(terminate_backend(setup.control, pid))
-        Ok(#(
-          next_event(setup.events) |> result.map(event_code),
-          next_event(setup.events) |> result.map(event_code),
-        ))
-      }
+      let _terminated = terminate_backend(proxied.control, pid)
+      let lost = next_event(proxied.events)
+      stop_proxied(proxied)
 
       // Assert
-      events
+      lost
       |> should
-      |> be_equal(Ok(#(Ok("disconnected 57P01"), Ok("reconnected"))))
-      |> or_fail_with("Expected the loss, then the reconnect")
+      |> be_ok
+      |> extract_disconnect_error
+      |> extract_ending_report
+      |> extract_report_code
+      |> be_equal("57P01")
+      |> or_fail_with("Expected the loss by 57P01")
+    }),
+    it("reconnects after the server ended an idle session", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 10)
+      let pid = backend_pid(proxied.connection)
+
+      // Act
+      let _terminated = terminate_backend(proxied.control, pid)
+      let _lost = next_event(proxied.events)
+      let back = next_event(proxied.events)
+      stop_proxied(proxied)
+
+      // Assert
+      back
+      |> should
+      |> be_ok
+      |> be_equal(Reconnected)
+      |> or_fail_with("Expected the reconnect after the loss")
     }),
     it("runs a statement again after it reconnected", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 10)
+      let pid = backend_pid(proxied.connection)
+
       // Act
-      let tag = {
-        use setup <- with_setup(10)
-        use pid <- try(backend_pid(setup.connection))
-        use Nil <- try(terminate_backend(setup.control, pid))
-        let _lost = next_event(setup.events)
-        let _back = next_event(setup.events)
-        script(setup.connection, "SELECT 1") |> result.map(tags)
-      }
+      let _terminated = terminate_backend(proxied.control, pid)
+      let _lost = next_event(proxied.events)
+      let _back = next_event(proxied.events)
+      let outcomes = run_script(proxied.connection, "SELECT 1", 5000)
+      stop_proxied(proxied)
 
       // Assert
-      tag
+      outcomes
       |> should
-      |> be_equal(Ok(["SELECT 1"]))
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
       |> or_fail_with("Expected SELECT 1 on the new session")
     }),
     it("fails a request while the connection is lost", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let pid = backend_pid(proxied.connection)
+
       // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        use pid <- try(backend_pid(setup.connection))
-        use Nil <- try(terminate_backend(setup.control, pid))
-        let _lost = next_event(setup.events)
-        send_stray_message(setup.connection)
-        Ok(script(setup.connection, "SELECT 1") |> result.map_error(code))
-      }
+      let _terminated = terminate_backend(proxied.control, pid)
+      let _lost = next_event(proxied.events)
+      send_stray_message(proxied.connection)
+      let answer = run_script(proxied.connection, "SELECT 1", 5000)
+      stop_proxied(proxied)
 
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error("57P01")))
+      |> be_error
+      |> extract_driver_error_code
+      |> be_equal("57P01")
       |> or_fail_with("Expected the error of the loss")
     }),
-    loss_event_test("a close by the network", close_client, "lost closed"),
-    loss_event_test("a reset by the network", reset_client, "lost reset"),
+    loss_event_test(
+      "a close by the network",
+      close_client,
+      ConnectionLost(SocketClosed),
+    ),
+    loss_event_test(
+      "a reset by the network",
+      reset_client,
+      ConnectionLost(ConnectionReset),
+    ),
     loss_event_test(
       "bytes that are not a message",
-      inject_garbage,
-      "violation undecodable",
+      fn(proxy) { inject(proxy, <<"x", 4:32>>) },
+      ProtocolViolation(UndecodableMessage(UnknownMessageType(120))),
     ),
     loss_event_test(
       "a message between requests that is not allowed",
-      inject_bind_complete,
-      "violation idle",
+      fn(proxy) { inject(proxy, <<"2", 4:32>>) },
+      ProtocolViolation(UnexpectedIdleMessage(BindComplete)),
     ),
-    it("fails a running request with the loss and the waiting ones too", fn() {
-      check_running_and_waiting_fail()
-    }),
-    it("gives a violation to the running request", fn() {
-      check_running_violation()
-    }),
-    it("fails a send that the server never reads", fn() { check_send_timeout() }),
-    it("tells of a failed reconnect, and tries again", fn() {
-      check_reconnect_failed()
-    }),
-    it("ignores a message that is not about its socket", fn() {
+    it("fails a running request with the loss", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(823)", 5000)
+      let running =
+        start_caller(fn() {
+          run_script(proxied.connection, "SELECT pg_advisory_lock(823)", 5000)
+        })
+      let _waited = wait_for_lock_waiter(proxied.control, 823)
+      let _waiting =
+        start_caller(fn() { run_script(proxied.connection, "SELECT 1", 5000) })
+      let pid = lock_waiter_pid(proxied.control, 823)
+
       // Act
-      let tag = {
-        use setup <- with_setup(10)
-        send_stray_message(setup.connection)
-        script(setup.connection, "SELECT 1") |> result.map(tags)
-      }
+      let _terminated = terminate_backend(proxied.control, pid)
+      let answer = caller_answer(running)
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(823)", 5000)
+      stop_proxied(proxied)
 
       // Assert
-      tag
+      answer
       |> should
-      |> be_equal(Ok(["SELECT 1"]))
+      |> be_ok
+      |> be_error
+      |> extract_driver_error_code
+      |> be_equal("57P01")
+      |> or_fail_with("Expected the loss for the running request")
+    }),
+    it("fails a running request with the loss and the waiting ones too", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(831)", 5000)
+      let _running =
+        start_caller(fn() {
+          run_script(proxied.connection, "SELECT pg_advisory_lock(831)", 5000)
+        })
+      let _waited = wait_for_lock_waiter(proxied.control, 831)
+      let waiting =
+        start_caller(fn() { run_script(proxied.connection, "SELECT 1", 5000) })
+      let pid = lock_waiter_pid(proxied.control, 831)
+
+      // Act
+      let _terminated = terminate_backend(proxied.control, pid)
+      let answer = caller_answer(waiting)
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(831)", 5000)
+      stop_proxied(proxied)
+
+      // Assert
+      answer
+      |> should
+      |> be_ok
+      |> be_error
+      |> extract_driver_error_code
+      |> be_equal("57P01")
+      |> or_fail_with("Expected the loss for the waiting request")
+    }),
+    it("gives a violation to the running request", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(824)", 5000)
+      let running =
+        start_caller(fn() {
+          run_script(proxied.connection, "SELECT pg_advisory_lock(824)", 5000)
+        })
+      let _waited = wait_for_lock_waiter(proxied.control, 824)
+
+      // Act
+      inject(proxied.proxy, <<"2", 4:32>>)
+      let answer = caller_answer(running)
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(824)", 5000)
+      stop_proxied(proxied)
+
+      // Assert
+      answer
+      |> should
+      |> be_ok
+      |> be_error
+      |> extract_unexpected_server_message
+      |> be_equal(BindComplete)
+      |> or_fail_with("Expected a protocol violation for the running request")
+    }),
+    // The proxy stops reading, and a large script fills the socket's send
+    // queue. The proxy then sends a CopyInResponse as if the server
+    // answered. The step answers it with a CopyFail, whose send waits
+    // behind the full queue and fails after the send timeout of 500
+    // milliseconds.
+    it("fails a send that the server never reads", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let large = "SELECT '" <> repeat("x", 64_000_000) <> "'"
+
+      // Act
+      stop_reading(proxied.proxy)
+      let _queued = run_script(proxied.connection, large, 50)
+      inject(proxied.proxy, <<"G", 7:32, 0, 0:16>>)
+      let event = next_event(proxied.events)
+      stop_proxied(proxied)
+
+      // Assert
+      event
+      |> should
+      |> be_ok
+      |> extract_disconnect_error
+      |> be_equal(ConnectionLost(SendTimedOut))
+      |> or_fail_with("Expected the loss by a send timeout")
+    }),
+    it("ignores a message that is not about its socket", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 10)
+
+      // Act
+      send_stray_message(proxied.connection)
+      let outcomes = run_script(proxied.connection, "SELECT 1", 5000)
+      stop_proxied(proxied)
+
+      // Assert
+      outcomes
+      |> should
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
       |> or_fail_with("Expected the connection to work")
     }),
   ]
 }
 
-@external(erlang, "driver_connection_test_ffi", "pid_of")
-fn pid_of(connection: Connection) -> Pid
+fn loss_event_test(
+  name: String,
+  breaking: fn(Proxy) -> Nil,
+  expected: DriverError,
+) {
+  it("tells of " <> name, fn() {
+    // Arrange
+    let proxied = start_proxied(first_driver_server, 60_000)
 
-fn send_stray_message(connection: Connection) -> Nil {
-  let _sent = send_raw(pid_of(connection), "not a socket message")
-  Nil
+    // Act
+    breaking(proxied.proxy)
+    let event = next_event(proxied.events)
+    stop_proxied(proxied)
+
+    // Assert
+    event
+    |> should
+    |> be_ok
+    |> extract_disconnect_error
+    |> be_equal(expected)
+    |> or_fail_with("Expected the event of " <> name)
+  })
 }
 
-fn inject_garbage(proxy: Proxy) -> Nil {
-  inject(proxy, <<"x", 4:32>>)
-}
-
-fn inject_bind_complete(proxy: Proxy) -> Nil {
-  inject(proxy, <<"2", 4:32>>)
-}
-
-fn loss_event_test(name: String, breaking: fn(Proxy) -> Nil, expected: String) {
-  it("tells of " <> name, fn() { check_loss_event(breaking, expected) })
-}
-
-fn check_loss_event(breaking: fn(Proxy) -> Nil, expected: String) {
-  // Act
-  let event = {
-    use setup <- with_setup(60_000)
-    breaking(setup.proxy)
-    Ok(next_event(setup.events) |> result.map(event_code))
-  }
-
-  // Assert
-  event
-  |> should
-  |> be_equal(Ok(Ok(expected)))
-  |> or_fail_with("Expected the event " <> expected)
-}
-
-fn event_code(event: ConnectionEvent) -> String {
-  case event {
-    Disconnected(ServerEndedConnection(report)) ->
-      "disconnected " <> report.code
-    Disconnected(ConnectionLost(SocketClosed)) -> "lost closed"
-    Disconnected(ConnectionLost(ConnectionReset)) -> "lost reset"
-    Disconnected(ConnectionLost(SendTimedOut)) -> "lost send timeout"
-    Disconnected(ProtocolViolation(UndecodableMessage(UnknownMessageType(_)))) ->
-      "violation undecodable"
-    Disconnected(ProtocolViolation(UnexpectedIdleMessage(BindComplete))) ->
-      "violation idle"
-    Disconnected(ProtocolViolation(UnexpectedServerMessage(_))) ->
-      "violation running"
-    ReconnectFailed(LoginRefused(ServerRejectedLogin(report))) ->
-      "reconnect failed " <> report.code
-    Reconnected -> "reconnected"
-    _ -> "another event"
-  }
-}
-
-/// A caller waits on an advisory lock that the control connection holds,
-/// a second request waits behind it, and the server ends the session: both
-/// get the error of the loss.
-fn check_running_and_waiting_fail() {
-  // Act
-  let answers = {
-    use setup <- with_setup(60_000)
-    use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(823)"))
-    let running = start_caller(setup.connection, "SELECT pg_advisory_lock(823)")
-    use Nil <- try(wait_for_lock_waiter(setup.control, 823, 5000))
-    let waiting = start_caller(setup.connection, "SELECT 1")
-    use pid <- try(backend_pid_from_control(setup.control, 823))
-    use Nil <- try(terminate_backend(setup.control, pid))
-    let answers = #(caller_answer(running), caller_answer(waiting))
-    use _unlocked <- try(script(setup.control, "SELECT pg_advisory_unlock(823)"))
-    Ok(answers)
-  }
-
-  // Assert
-  answers
-  |> should
-  |> be_equal(Ok(#(Error("57P01"), Error("57P01"))))
-  |> or_fail_with("Expected the loss for both requests")
-}
-
-fn check_running_violation() {
-  // Act
-  let answer = {
-    use setup <- with_setup(60_000)
-    use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(824)"))
-    let running = start_caller(setup.connection, "SELECT pg_advisory_lock(824)")
-    use Nil <- try(wait_for_lock_waiter(setup.control, 824, 5000))
-    inject_bind_complete(setup.proxy)
-    let answer = caller_error(running)
-    use _unlocked <- try(script(setup.control, "SELECT pg_advisory_unlock(824)"))
-    Ok(answer)
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok("violation running"))
-  |> or_fail_with("Expected a protocol violation for the running request")
-}
-
-/// The proxy stops reading, and a large script fills the socket's send
-/// queue. The proxy then sends a CopyInResponse as if the server answered.
-/// The step answers it with a CopyFail, whose send waits behind the full
-/// queue and fails after the send timeout of 500 milliseconds.
-fn check_send_timeout() {
-  // Act
-  let event = {
-    use setup <- with_setup(60_000)
-    stop_reading(setup.proxy)
-    let large = "SELECT '" <> repeat("x", 64_000_000) <> "'"
-    let _queued = connection.run_script(setup.connection, large, 50)
-    inject(setup.proxy, <<"G", 7:32, 0, 0:16>>)
-    Ok(next_event(setup.events) |> result.map(event_code))
-  }
-
-  // Assert
-  event
-  |> should
-  |> be_equal(Ok(Ok("lost send timeout")))
-  |> or_fail_with("Expected the loss by a send timeout")
-}
+// A refused reconnect ---------------------------------------------------------
 
 /// The password of dream_reconnect changes while it is logged in, so the
-/// reconnect fails with 28P01. The password goes back, and the next
-/// attempt works.
-fn check_reconnect_failed() {
-  // Act
-  let events = {
-    let server = first_server()
-    let events = process.new_subject()
-    use settings <- try(config(
-      server.port,
-      "dream_reconnect",
-      "dream",
-      10,
-      Some(events),
-    ))
-    use connection <- with_started(settings)
-    use control <- with_connection(server.port)
-    use pid <- try(backend_pid(connection))
-    use _changed <- try(script(
-      control,
-      "ALTER ROLE dream_reconnect PASSWORD 'other'",
-    ))
-    use Nil <- try(terminate_backend(control, pid))
-    let lost = next_event(events) |> result.map(event_code)
-    let failed = next_event(events) |> result.map(event_code)
-    use _restored <- try(script(
-      control,
-      "ALTER ROLE dream_reconnect PASSWORD 'dream'",
-    ))
-    let back = skip_failures(events)
-    Ok(#(lost, failed, back))
-  }
+/// reconnect fails with 28P01. The password goes back, and the next attempt
+/// works. Each test changes the password of the same role, so each one is
+/// in a group of its own: the groups run one after the other.
+fn refused_reconnect_tests() {
+  [
+    group("the loss", [
+      it("tells of the loss before a refused reconnect", fn() {
+        // Arrange
+        let events = process.new_subject()
+        let config =
+          user_config(first_driver_server.port, "dream_reconnect", "dream")
+        let connection = start_configured(watched_config(config, events, 10))
+        let control = start_connection(first_driver_server.port)
+        let pid = backend_pid(connection)
 
-  // Assert
-  events
-  |> should
-  |> be_equal(
-    Ok(#(
-      Ok("disconnected 57P01"),
-      Ok("reconnect failed 28P01"),
-      Ok("reconnected"),
-    )),
-  )
-  |> or_fail_with("Expected the loss, a failed reconnect, then the reconnect")
+        // Act
+        let _changed = run_script(control, change_password, 5000)
+        let _terminated = terminate_backend(control, pid)
+        let lost = next_event(events)
+        let _refused = next_event(events)
+        let _restored = run_script(control, restore_password, 5000)
+        let _back = next_event_after_refused_reconnects(events)
+        stop(connection)
+        stop(control)
+
+        // Assert
+        lost
+        |> should
+        |> be_ok
+        |> extract_disconnect_error
+        |> extract_ending_report
+        |> extract_report_code
+        |> be_equal("57P01")
+        |> or_fail_with("Expected the loss by 57P01")
+      }),
+    ]),
+    group("the refusal", [
+      it("tells of a failed reconnect, and tries again", fn() {
+        // Arrange
+        let events = process.new_subject()
+        let config =
+          user_config(first_driver_server.port, "dream_reconnect", "dream")
+        let connection = start_configured(watched_config(config, events, 10))
+        let control = start_connection(first_driver_server.port)
+        let pid = backend_pid(connection)
+
+        // Act
+        let _changed = run_script(control, change_password, 5000)
+        let _terminated = terminate_backend(control, pid)
+        let _lost = next_event(events)
+        let refused = next_event(events)
+        let _restored = run_script(control, restore_password, 5000)
+        let _back = next_event_after_refused_reconnects(events)
+        stop(connection)
+        stop(control)
+
+        // Assert
+        refused
+        |> should
+        |> be_ok
+        |> extract_reconnect_error
+        |> extract_login_refusal_code
+        |> be_equal("28P01")
+        |> or_fail_with("Expected a reconnect refused with 28P01")
+      }),
+    ]),
+    group("the reconnect", [
+      it("reconnects once the password works again", fn() {
+        // Arrange
+        let events = process.new_subject()
+        let config =
+          user_config(first_driver_server.port, "dream_reconnect", "dream")
+        let connection = start_configured(watched_config(config, events, 10))
+        let control = start_connection(first_driver_server.port)
+        let pid = backend_pid(connection)
+
+        // Act
+        let _changed = run_script(control, change_password, 5000)
+        let _terminated = terminate_backend(control, pid)
+        let _lost = next_event(events)
+        let _refused = next_event(events)
+        let _restored = run_script(control, restore_password, 5000)
+        let back = next_event_after_refused_reconnects(events)
+        stop(connection)
+        stop(control)
+
+        // Assert
+        back
+        |> should
+        |> be_ok
+        |> be_equal(Reconnected)
+        |> or_fail_with("Expected the reconnect after the refusals")
+      }),
+    ]),
+  ]
 }
 
-/// Reads events until one that is not a failed reconnect.
-fn skip_failures(events: Subject(ConnectionEvent)) -> Result(String, Nil) {
-  case next_event(events) |> result.map(event_code) {
-    Ok("reconnect failed 28P01") -> skip_failures(events)
-    other -> other
-  }
-}
+const change_password = "ALTER ROLE dream_reconnect PASSWORD 'other'"
+
+const restore_password = "ALTER ROLE dream_reconnect PASSWORD 'dream'"
 
 // Callers ---------------------------------------------------------------------
-
-/// A caller process that runs one script and sends its answer back.
-type Caller {
-  Caller(answers: Subject(Result(List(Outcome), DriverError)), pid: Pid)
-}
-
-fn start_caller(connection: Connection, sql: String) -> Caller {
-  let answers = process.new_subject()
-  let pid =
-    process.spawn_unlinked(fn() { caller_body(connection, sql, answers) })
-  Caller(answers:, pid:)
-}
-
-fn caller_body(
-  connection: Connection,
-  sql: String,
-  answers: Subject(Result(List(Outcome), DriverError)),
-) -> Nil {
-  process.send(answers, script(connection, sql))
-}
-
-fn caller_answer(caller: Caller) -> Result(List(String), String) {
-  case process.receive(caller.answers, 5000) {
-    Ok(answer) -> answer |> result.map(tags) |> result.map_error(code)
-    Error(Nil) -> Error("no answer")
-  }
-}
-
-fn caller_error(caller: Caller) -> String {
-  case process.receive(caller.answers, 5000) {
-    Ok(Error(error)) -> event_code(Disconnected(error))
-    _ -> "no error"
-  }
-}
-
-/// Waits until the server has a session that waits for an advisory lock.
-/// It asks the control connection again each time: no sleep.
-fn wait_for_lock_waiter(
-  control: Connection,
-  key: Int,
-  attempts: Int,
-) -> Result(Nil, DriverError) {
-  use outcomes <- try(script(control, lock_waiters(key, "count(*)::text")))
-  case map(outcomes, rows), attempts {
-    [[[Text(<<"1">>)]]], _ -> Ok(Nil)
-    _, 0 -> Error(ConnectionLost(SocketClosed))
-    _, _ -> wait_for_lock_waiter(control, key, attempts - 1)
-  }
-}
-
-/// The sessions of the server that wait for the advisory lock `key`.
-/// Other tests use other keys at the same time.
-fn lock_waiters(key: Int, column: String) -> String {
-  "SELECT "
-  <> column
-  <> " FROM pg_locks WHERE locktype = 'advisory' AND NOT granted AND objid = "
-  <> to_string(key)
-}
-
-/// The backend that waits for an advisory lock.
-fn backend_pid_from_control(
-  control: Connection,
-  key: Int,
-) -> Result(String, DriverError) {
-  use outcomes <- try(script(control, lock_waiters(key, "pid::text")))
-  case map(outcomes, rows) {
-    [[[Text(pid)]]] -> Ok(bit_array_text(pid))
-    _ -> Error(ConnectionLost(SocketClosed))
-  }
-}
 
 fn caller_tests() {
   [
     it("stays usable after a caller is killed mid-query", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(825)", 5000)
+      let caller =
+        start_caller(fn() {
+          run_script(proxied.connection, "SELECT pg_advisory_lock(825)", 5000)
+        })
+      let _waited = wait_for_lock_waiter(proxied.control, 825)
+
       // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(825)"))
-        let caller =
-          start_caller(setup.connection, "SELECT pg_advisory_lock(825)")
-        use Nil <- try(wait_for_lock_waiter(setup.control, 825, 5000))
-        process.kill(caller.pid)
-        use _unlocked <- try(script(
-          setup.control,
-          "SELECT pg_advisory_unlock(825)",
-        ))
-        use outcome <- try(run(setup.connection, "SELECT 2", []))
-        Ok(rows(outcome))
-      }
+      process.kill(caller.pid)
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(825)", 5000)
+      let outcome = run(proxied.connection, "SELECT 2", [], [], 5000)
+      stop_proxied(proxied)
 
       // Assert
-      answer
+      outcome
       |> should
-      |> be_equal(Ok([[Text(<<"2">>)]]))
+      |> be_ok
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"2">>)]])
       |> or_fail_with("Expected the next query's own result")
     }),
-    it("gives DeadlinePassed and stays usable after a late answer", fn() {
+    it("gives DeadlinePassed for a late answer", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(826)", 5000)
+
       // Act
-      let answers = {
-        use setup <- with_setup(60_000)
-        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(826)"))
-        let late =
-          connection.run_script(
-            setup.connection,
-            "SELECT pg_advisory_lock(826)",
-            50,
-          )
-        use _unlocked <- try(script(
-          setup.control,
-          "SELECT pg_advisory_unlock(826)",
-        ))
-        use outcome <- try(run(setup.connection, "SELECT 3", []))
-        Ok(#(late |> result.replace(Nil), rows(outcome)))
-      }
+      let late =
+        run_script(proxied.connection, "SELECT pg_advisory_lock(826)", 50)
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(826)", 5000)
+      stop_proxied(proxied)
 
       // Assert
-      answers
+      late
       |> should
-      |> be_equal(
-        Ok(#(Error(DeadlinePassed(cancelled: False)), [[Text(<<"3">>)]])),
-      )
-      |> or_fail_with("Expected DeadlinePassed, then the next query's result")
+      |> be_error
+      |> be_equal(DeadlinePassed(cancelled: False))
+      |> or_fail_with("Expected DeadlinePassed")
+    }),
+    it("gives DeadlinePassed and stays usable after a late answer", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(832)", 5000)
+
+      // Act
+      let _late =
+        run_script(proxied.connection, "SELECT pg_advisory_lock(832)", 50)
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(832)", 5000)
+      let outcome = run(proxied.connection, "SELECT 3", [], [], 5000)
+      stop_proxied(proxied)
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"3">>)]])
+      |> or_fail_with("Expected the next query's result")
+    }),
+    it("runs the first of two requests", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(827)", 5000)
+      let first =
+        start_caller(fn() {
+          run_script(proxied.connection, "SELECT pg_advisory_lock(827)", 5000)
+        })
+      let _waited = wait_for_lock_waiter(proxied.control, 827)
+      let _second =
+        start_caller(fn() { run_script(proxied.connection, "SELECT 4", 5000) })
+
+      // Act
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(827)", 5000)
+      let answer = caller_answer(first)
+      stop_proxied(proxied)
+
+      // Assert
+      answer
+      |> should
+      |> be_ok
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
+      |> or_fail_with("Expected the first request to run")
     }),
     it("runs a request that waited behind another", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(833)", 5000)
+      let _first =
+        start_caller(fn() {
+          run_script(proxied.connection, "SELECT pg_advisory_lock(833)", 5000)
+        })
+      let _waited = wait_for_lock_waiter(proxied.control, 833)
+      let second =
+        start_caller(fn() { run_script(proxied.connection, "SELECT 4", 5000) })
+
       // Act
-      let answers = {
-        use setup <- with_setup(60_000)
-        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(827)"))
-        let first =
-          start_caller(setup.connection, "SELECT pg_advisory_lock(827)")
-        use Nil <- try(wait_for_lock_waiter(setup.control, 827, 5000))
-        let second = start_caller(setup.connection, "SELECT 4")
-        use _unlocked <- try(script(
-          setup.control,
-          "SELECT pg_advisory_unlock(827)",
-        ))
-        Ok(#(caller_answer(first), caller_answer(second)))
-      }
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(833)", 5000)
+      let answer = caller_answer(second)
+      stop_proxied(proxied)
 
       // Assert
-      answers
+      answer
       |> should
-      |> be_equal(Ok(#(Ok(["SELECT 1"]), Ok(["SELECT 1"]))))
-      |> or_fail_with("Expected both requests to run, in order")
+      |> be_ok
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
+      |> or_fail_with("Expected the waiting request to run after the first")
     }),
     it("refuses SQL with a zero byte before it sends anything", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
       // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        Ok(run(connection, "SELECT 1\u{0000}", []) |> result.replace(Nil))
-      }
+      let answer = run(connection, "SELECT 1\u{0000}", [], [], 5000)
+      stop(connection)
 
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(InvalidRequest(ZeroByteInString("query")))))
+      |> be_error
+      |> be_equal(InvalidRequest(ZeroByteInString("query")))
       |> or_fail_with("Expected InvalidRequest")
     }),
-    it("refuses a COPY statement and stays usable", fn() {
+    it("refuses a COPY statement with the statement before it", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
       // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        let refused = script(connection, "SELECT 1; COPY (SELECT 1) TO STDOUT")
-        use next <- try(script(connection, "SELECT 5"))
-        Ok(#(refused |> result.map_error(copy_completed), tags(next)))
-      }
+      let refused =
+        run_script(connection, "SELECT 1; COPY (SELECT 1) TO STDOUT", 5000)
+      stop(connection)
 
       // Assert
-      answers
+      refused
       |> should
-      |> be_equal(Ok(#(Error(["SELECT 1"]), ["SELECT 1"])))
+      |> be_error
+      |> extract_refused_copy_outcomes
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
       |> or_fail_with("Expected the refusal with the statement before it")
     }),
-    it("gives ScriptFailed with the statements that ran", fn() {
+    it("refuses a COPY statement and stays usable", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
       // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        Ok(
-          script(connection, "SELECT 1; SELECT 1/0")
-          |> result.map_error(script_failure),
-        )
-      }
+      let _refused =
+        run_script(connection, "SELECT 1; COPY (SELECT 1) TO STDOUT", 5000)
+      let next = run_script(connection, "SELECT 5", 5000)
+      stop(connection)
+
+      // Assert
+      next
+      |> should
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
+      |> or_fail_with("Expected SELECT 1 after the refusal")
+    }),
+    it("gives ScriptFailed with the statements that ran", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      let answer = run_script(connection, "SELECT 1; SELECT 1/0", 5000)
+      stop(connection)
 
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(#(["SELECT 1"], "22012"))))
-      |> or_fail_with("Expected the completed statement and 22012")
+      |> be_error
+      |> extract_script_failure_outcomes
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
+      |> or_fail_with("Expected the completed statement")
+    }),
+    it("gives ScriptFailed with the code of the failed statement", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      let answer = run_script(connection, "SELECT 1; SELECT 1/0", 5000)
+      stop(connection)
+
+      // Assert
+      answer
+      |> should
+      |> be_error
+      |> extract_driver_error_code
+      |> be_equal("22012")
+      |> or_fail_with("Expected 22012")
     }),
     it("refuses a prepare that the server refuses", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
       // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        Ok(
-          connection.prepare(connection, "SELECT * FROM no_such_table", 5000)
-          |> result.map_error(code),
-        )
-      }
+      let answer = prepare(connection, "SELECT * FROM no_such_table", 5000)
+      stop(connection)
 
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error("42P01")))
+      |> be_error
+      |> extract_driver_error_code
+      |> be_equal("42P01")
       |> or_fail_with("Expected 42P01")
     }),
     it("binds a NULL parameter", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
       // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        run(connection, "SELECT $1::text IS NULL", [Null]) |> result.map(rows)
-      }
+      let outcome = run(connection, "SELECT $1::text IS NULL", [Null], [], 5000)
+      stop(connection)
 
       // Assert
-      answer
+      outcome
       |> should
-      |> be_equal(Ok([[Text(<<"t">>)]]))
+      |> be_ok
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"t">>)]])
       |> or_fail_with("Expected true")
     }),
   ]
 }
 
-fn copy_completed(error: DriverError) -> List(String) {
-  case error {
-    CopyStatementRefused(completed) -> tags(completed)
-    _ -> ["not a copy refusal"]
-  }
-}
-
-fn script_failure(error: DriverError) -> #(List(String), String) {
-  case error {
-    ScriptFailed(completed, report, _) -> #(tags(completed), report.code)
-    _ -> #([], "not a script failure")
-  }
-}
-
 // More paths ------------------------------------------------------------------
-
-fn verify_full_config(port: Int) -> Result(ConnectionConfig, DriverError) {
-  use settings <- try(config(port, "dream", "dream", 10, None))
-  Ok(
-    ConnectionConfig(
-      ..settings,
-      transport: TransportConfig(
-        ..settings.transport,
-        tls: transport.RequireTls(
-          transport.CheckAuthorityAndHost(transport.AuthorityFile(
-            "test/fixtures/ssl/ca.crt",
-          )),
-          transport.PostgresNegotiation,
-        ),
-      ),
-    ),
-  )
-}
-
-/// Starts the connection in a process that then ends, and gives what the
-/// starter saw.
-fn start_in_owner(start: fn() -> Result(Nil, Nil)) -> Result(Nil, Nil) {
-  let answers = process.new_subject()
-  process.spawn_unlinked(fn() { owner_body(start, answers) })
-  process.receive(answers, 5000) |> result.flatten
-}
-
-/// The owner traps exits, so a supervisor that fails to start does not
-/// take the owner down before it reports.
-fn owner_body(
-  start: fn() -> Result(Nil, Nil),
-  answers: Subject(Result(Nil, Nil)),
-) -> Nil {
-  process.trap_exits(True)
-  process.send(answers, start())
-}
-
-fn start_connection_only(settings: ConnectionConfig) -> Result(Nil, Nil) {
-  connection.start(settings) |> result.replace(Nil) |> result.replace_error(Nil)
-}
-
-fn start_supervised(settings: ConnectionConfig) -> Result(Nil, Nil) {
-  static_supervisor.new(static_supervisor.OneForOne)
-  |> static_supervisor.add(connection.supervised(settings))
-  |> static_supervisor.start
-  |> result.replace(Nil)
-  |> result.replace_error(Nil)
-}
 
 fn more_tests() {
   [
     it("runs a statement over TLS", fn() {
+      // Arrange
+      let config =
+        tls_config(connection_config(first_driver_server.port), verify_full())
+      let connection = start_configured(config)
+
       // Act
-      let tag = {
-        use settings <- try(verify_full_config(first_server().port))
-        use connection <- with_started(settings)
-        script(connection, "SELECT 1") |> result.map(tags)
-      }
+      let outcomes = run_script(connection, "SELECT 1", 5000)
+      stop(connection)
 
       // Assert
-      tag
+      outcomes
       |> should
-      |> be_equal(Ok(["SELECT 1"]))
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
       |> or_fail_with("Expected SELECT 1 over TLS")
     }),
     it("sends Terminate when the process that started it ends", fn() {
       // Arrange
-      let #(port, proxy) = start_proxy(first_server().port)
+      let #(port, proxy) = start_proxy(first_driver_server.port)
+      let config = connection_config(port)
 
       // Act
-      let last_bytes = {
-        use settings <- try(config(port, "dream", "dream", 10, None))
-        let watch = watch_client_end(proxy)
-        let _started = start_in_owner(fn() { start_connection_only(settings) })
-        Ok(client_end(watch))
-      }
+      let watch = watch_client_end(proxy)
+      let _started = start_in_ended_owner(fn() { start(config) })
+      let last_bytes = client_end(watch)
 
       // Assert
       last_bytes
       |> should
-      |> be_equal(Ok(<<"X", 4:32>>))
+      |> be_equal(<<"X", 4:32>>)
       |> or_fail_with("Expected a Terminate when the owner ended")
     }),
     it("starts under a supervisor", fn() {
+      // Arrange
+      let supervisor =
+        static_supervisor.new(static_supervisor.OneForOne)
+        |> static_supervisor.add(
+          supervised(connection_config(first_driver_server.port)),
+        )
+
       // Act
-      let started = {
-        use settings <- try(config(
-          first_server().port,
-          "dream",
-          "dream",
-          10,
-          None,
-        ))
-        Ok(start_in_owner(fn() { start_supervised(settings) }))
-      }
+      let started =
+        start_in_ended_owner(fn() { static_supervisor.start(supervisor) })
 
       // Assert
       started
       |> should
-      |> be_equal(Ok(Ok(Nil)))
+      |> be_ok
+      |> be_ok
       |> or_fail_with("Expected the supervisor to start the connection")
     }),
     it("fails the supervisor's start when it cannot connect", fn() {
+      // Arrange
+      let supervisor =
+        static_supervisor.new(static_supervisor.OneForOne)
+        |> static_supervisor.add(supervised(connection_config(free_port())))
+
       // Act
-      let started = {
-        use settings <- try(config(free_port(), "dream", "dream", 10, None))
-        Ok(start_in_owner(fn() { start_supervised(settings) }))
-      }
+      let started =
+        start_in_ended_owner(fn() { static_supervisor.start(supervisor) })
 
       // Assert
       started
       |> should
-      |> be_equal(Ok(Error(Nil)))
+      |> be_ok
+      |> be_error
       |> or_fail_with("Expected the supervisor's start to fail")
     }),
     it("gives LoginUndecodable for bytes that are not a message", fn() {
@@ -1185,171 +1136,259 @@ fn more_tests() {
       let #(port, _server) = start_fake_server(Answer(<<"x", 4:32>>))
 
       // Act
-      let started = {
-        use settings <- try(config(port, "dream", "dream", 10, None))
-        Ok(connection.start(settings) |> result.replace(Nil))
-      }
+      let started = start(connection_config(port))
 
       // Assert
       started
       |> should
-      |> be_equal(
-        Ok(Error(connection.LoginUndecodable(UnknownMessageType(120)))),
-      )
+      |> be_error
+      |> be_equal(LoginUndecodable(UnknownMessageType(120)))
       |> or_fail_with("Expected LoginUndecodable")
     }),
-    it("refuses a prepare and a script with a zero byte", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        let prepared = connection.prepare(connection, "SELECT 1\u{0000}", 5000)
-        let scripted = script(connection, "SELECT 1\u{0000}")
-        Ok(#(prepared |> result.replace(Nil), scripted |> result.replace(Nil)))
-      }
+    it("refuses a prepare with a zero byte", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
 
-      // Assert
-      answers
-      |> should
-      |> be_equal(
-        Ok(#(
-          Error(InvalidRequest(ZeroByteInString("query"))),
-          Error(InvalidRequest(ZeroByteInString("query"))),
-        )),
-      )
-      |> or_fail_with("Expected InvalidRequest for both")
-    }),
-    it("fails a prepare while the connection is lost", fn() {
       // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        close_client(setup.proxy)
-        let _lost = next_event(setup.events)
-        Ok(
-          connection.prepare(setup.connection, "SELECT 1", 5000)
-          |> result.replace(Nil),
-        )
-      }
+      let answer = prepare(connection, "SELECT 1\u{0000}", 5000)
+      stop(connection)
 
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(ConnectionLost(SocketClosed))))
+      |> be_error
+      |> be_equal(InvalidRequest(ZeroByteInString("query")))
+      |> or_fail_with("Expected InvalidRequest for the prepare")
+    }),
+    it("refuses a script with a zero byte", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      let answer = run_script(connection, "SELECT 1\u{0000}", 5000)
+      stop(connection)
+
+      // Assert
+      answer
+      |> should
+      |> be_error
+      |> be_equal(InvalidRequest(ZeroByteInString("query")))
+      |> or_fail_with("Expected InvalidRequest for the script")
+    }),
+    it("fails a prepare while the connection is lost", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+
+      // Act
+      close_client(proxied.proxy)
+      let _lost = next_event(proxied.events)
+      let answer = prepare(proxied.connection, "SELECT 1", 5000)
+      stop_proxied(proxied)
+
+      // Assert
+      answer
+      |> should
+      |> be_error
+      |> be_equal(ConnectionLost(SocketClosed))
       |> or_fail_with("Expected the error of the loss")
     }),
+    // The proxy sends a NoticeResponse, a NotificationResponse and a
+    // ParameterStatus as if the server sent them between requests. The
+    // next outcome carries the notice and the notification, and the
+    // parameter has its new value.
     it(
       "keeps the parameter changes, notices and notifications between requests",
-      fn() { check_idle_messages() },
+      fn() {
+        // Arrange
+        let proxied = start_proxied(first_driver_server, 60_000)
+
+        // Act
+        inject(proxied.proxy, idle_messages())
+        let _handled =
+          wait_for_parameter(proxied.connection, "application_name", "injected")
+        let outcomes = run_script(proxied.connection, "SELECT 1", 5000)
+        stop_proxied(proxied)
+
+        // Assert
+        outcomes
+        |> should
+        |> be_ok
+        |> extract_outcome_notices
+        |> be_equal([["an idle notice"]])
+        |> or_fail_with("Expected the notice of the idle time")
+      },
     ),
-    it("keeps a parameter change during a script", fn() {
+    it("keeps the notifications between requests", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+
       // Act
-      let name = {
-        use connection <- with_connection(first_server().port)
-        use _set <- try(script(
-          connection,
-          "SET application_name = 'during a script'",
-        ))
-        connection.server_parameter(connection, "application_name")
-      }
+      inject(proxied.proxy, idle_messages())
+      let _handled =
+        wait_for_parameter(proxied.connection, "application_name", "injected")
+      let outcomes = run_script(proxied.connection, "SELECT 1", 5000)
+      stop_proxied(proxied)
+
+      // Assert
+      outcomes
+      |> should
+      |> be_ok
+      |> extract_outcome_notifications
+      |> be_equal([[#("idle_jobs", "idle")]])
+      |> or_fail_with("Expected the notification of the idle time")
+    }),
+    it("keeps a parameter change during a script", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let sql = "SET application_name = 'during a script'"
+
+      // Act
+      let _set = run_script(connection, sql, 5000)
+      let name = server_parameter(connection, "application_name")
+      stop(connection)
 
       // Assert
       name
       |> should
-      |> be_equal(Ok(Some("during a script")))
+      |> be_ok
+      |> be_some
+      |> be_equal("during a script")
       |> or_fail_with("Expected the new application_name")
     }),
     it("fails the running request when the network closes", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(828)", 5000)
+      let running =
+        start_caller(fn() {
+          run_script(proxied.connection, "SELECT pg_advisory_lock(828)", 5000)
+        })
+      let _waited = wait_for_lock_waiter(proxied.control, 828)
+
       // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(828)"))
-        let running =
-          start_caller(setup.connection, "SELECT pg_advisory_lock(828)")
-        use Nil <- try(wait_for_lock_waiter(setup.control, 828, 5000))
-        close_client(setup.proxy)
-        let answer = caller_error(running)
-        use _unlocked <- try(script(
-          setup.control,
-          "SELECT pg_advisory_unlock(828)",
-        ))
-        Ok(answer)
-      }
+      close_client(proxied.proxy)
+      let answer = caller_answer(running)
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(828)", 5000)
+      stop_proxied(proxied)
 
       // Assert
       answer
       |> should
-      |> be_equal(Ok("lost closed"))
+      |> be_ok
+      |> be_error
+      |> be_equal(ConnectionLost(SocketClosed))
       |> or_fail_with("Expected the loss for the running request")
     }),
+    // A run waits on an advisory lock. The proxy closes the connection,
+    // and the caller gets the loss.
     it("fails a running run when the network closes", fn() {
-      check_running_lost(RunCaller)
-    }),
-    it("fails a running prepare when the network closes", fn() {
-      check_running_lost(PrepareCaller)
-    }),
-    it("refuses COPY FROM STDIN in a run and stays usable", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _locked =
+        run_script(proxied.control, "SELECT pg_advisory_lock(830)", 5000)
+      let running =
+        start_caller(fn() {
+          run(proxied.connection, "SELECT pg_advisory_lock(830)", [], [], 5000)
+        })
+      let _waited = wait_for_lock_waiter(proxied.control, 830)
+
       // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        use _created <- try(script(connection, "CREATE TEMP TABLE c (x int)"))
-        let refused = run(connection, "COPY c FROM STDIN", [])
-        use next <- try(script(connection, "SELECT 6"))
-        Ok(#(
-          refused |> result.map_error(copy_completed) |> result.replace(Nil),
-          tags(next),
-        ))
-      }
+      close_client(proxied.proxy)
+      let answer = caller_answer(running)
+      let _unlocked =
+        run_script(proxied.control, "SELECT pg_advisory_unlock(830)", 5000)
+      stop_proxied(proxied)
 
       // Assert
-      answers
+      answer
       |> should
-      |> be_equal(Ok(#(Error([]), ["SELECT 1"])))
-      |> or_fail_with("Expected the refusal, then SELECT 1")
+      |> be_ok
+      |> be_error
+      |> be_equal(ConnectionLost(SocketClosed))
+      |> or_fail_with("Expected the loss for the running run")
+    }),
+    // A prepare waits on a table that the control connection locks: its
+    // Parse needs a lock on the table too. The proxy closes the connection,
+    // and the caller gets the loss.
+    it("fails a running prepare when the network closes", fn() {
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _created = run_script(proxied.control, create_lock_table, 5000)
+      let _locked = run_script(proxied.control, lock_table, 5000)
+      let running =
+        start_caller(fn() {
+          prepare(proxied.connection, "SELECT x FROM driver_prepare_lock", 5000)
+        })
+      let _waited =
+        wait_for_table_waiter(proxied.control, "driver_prepare_lock")
+
+      // Act
+      close_client(proxied.proxy)
+      let answer = caller_answer(running)
+      let _released = run_script(proxied.control, "ROLLBACK", 5000)
+      stop_proxied(proxied)
+
+      // Assert
+      answer
+      |> should
+      |> be_ok
+      |> be_error
+      |> be_equal(ConnectionLost(SocketClosed))
+      |> or_fail_with("Expected the loss for the running prepare")
+    }),
+    it("refuses COPY FROM STDIN in a run", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      let _created = run_script(connection, "CREATE TEMP TABLE c (x int)", 5000)
+      let refused = run(connection, "COPY c FROM STDIN", [], [], 5000)
+      stop(connection)
+
+      // Assert
+      refused
+      |> should
+      |> be_error
+      |> be_equal(CopyStatementRefused([]))
+      |> or_fail_with("Expected the refusal with no statement before it")
+    }),
+    it("refuses COPY FROM STDIN in a run and stays usable", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      let _created = run_script(connection, "CREATE TEMP TABLE c (x int)", 5000)
+      let _refused = run(connection, "COPY c FROM STDIN", [], [], 5000)
+      let next = run_script(connection, "SELECT 6", 5000)
+      stop(connection)
+
+      // Assert
+      next
+      |> should
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
+      |> or_fail_with("Expected SELECT 1 after the refusal")
     }),
   ]
 }
 
-/// The proxy sends a ParameterStatus and a NoticeResponse as if the server
-/// sent them between requests, and the control connection notifies a
-/// channel that the connection listens to. The next outcome carries the
-/// notice and the notification, and the parameter has its new value.
-fn check_idle_messages() {
-  // Act
-  let seen = {
-    use setup <- with_setup(60_000)
-    inject(
-      setup.proxy,
-      bit_array.concat([
-        notice("an idle notice"),
-        notification(4321, "idle_jobs", "idle"),
-        parameter_status("application_name", "injected"),
-      ]),
-    )
-    use Nil <- try(wait_for_parameter(setup.connection, "injected", 5000))
-    use outcomes <- try(script(setup.connection, "SELECT 1"))
-    Ok(map(outcomes, notices_and_notifications))
-  }
+const create_lock_table =
+  "CREATE TABLE IF NOT EXISTS driver_prepare_lock (x int)"
 
-  // Assert
-  seen
-  |> should
-  |> be_equal(Ok([#(["an idle notice"], [#("idle_jobs", "idle")])]))
-  |> or_fail_with("Expected the notice and the notification of the idle time")
-}
+const lock_table =
+  "BEGIN; LOCK TABLE driver_prepare_lock IN ACCESS EXCLUSIVE MODE"
 
-/// Asks for application_name until it is `value`. The snapshot request
-/// comes after the injected bytes, so once the value is there, the process
-/// handled all of them while it was idle. No sleep.
-fn wait_for_parameter(
-  connection: Connection,
-  value: String,
-  attempts: Int,
-) -> Result(Nil, DriverError) {
-  use name <- try(connection.server_parameter(connection, "application_name"))
-  case name == Some(value), attempts {
-    True, _ -> Ok(Nil)
-    False, 0 -> Error(ConnectionLost(SocketClosed))
-    False, _ -> wait_for_parameter(connection, value, attempts - 1)
-  }
+/// A NoticeResponse, a NotificationResponse and a ParameterStatus, as the
+/// server sends them between requests.
+fn idle_messages() -> BitArray {
+  bit_array.concat([
+    notice("an idle notice"),
+    notification(4321, "idle_jobs", "idle"),
+    parameter_status("application_name", "injected"),
+  ])
 }
 
 fn notification(process_id: Int, channel: String, payload: String) -> BitArray {
@@ -1368,105 +1407,4 @@ fn notice(text: String) -> BitArray {
     text:utf8, 0, 0,
   >>
   <<"N", { bit_array.byte_size(body) + 4 }:32, body:bits>>
-}
-
-type CallerKind {
-  RunCaller
-  PrepareCaller
-}
-
-/// A run waits on an advisory lock. A prepare waits on a table that the
-/// control connection locks: its Parse needs a lock on the table too. The
-/// proxy closes the connection, and the caller gets the loss.
-fn check_running_lost(kind: CallerKind) {
-  // Act
-  let answer = {
-    use setup <- with_setup(60_000)
-    use _held <- try(hold_lock(setup.control, kind))
-    let answers = process.new_subject()
-    process.spawn_unlinked(fn() {
-      blocked_call(setup.connection, kind, answers)
-    })
-    use Nil <- try(wait_for_blocked(setup.control, kind, 5000))
-    close_client(setup.proxy)
-    let answer = process.receive(answers, 5000)
-    use _released <- try(release_lock(setup.control, kind))
-    Ok(answer)
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(Ok(Error(ConnectionLost(SocketClosed)))))
-  |> or_fail_with("Expected the loss for the running request")
-}
-
-fn hold_lock(
-  control: Connection,
-  kind: CallerKind,
-) -> Result(List(Outcome), DriverError) {
-  case kind {
-    RunCaller -> script(control, "SELECT pg_advisory_lock(830)")
-    PrepareCaller -> {
-      use _created <- try(script(
-        control,
-        "CREATE TABLE IF NOT EXISTS driver_prepare_lock (x int)",
-      ))
-      script(
-        control,
-        "BEGIN; LOCK TABLE driver_prepare_lock IN ACCESS EXCLUSIVE MODE",
-      )
-    }
-  }
-}
-
-fn release_lock(
-  control: Connection,
-  kind: CallerKind,
-) -> Result(List(Outcome), DriverError) {
-  case kind {
-    RunCaller -> script(control, "SELECT pg_advisory_unlock(830)")
-    PrepareCaller -> script(control, "ROLLBACK")
-  }
-}
-
-fn blocked_call(
-  connection: Connection,
-  kind: CallerKind,
-  answers: Subject(Result(Nil, DriverError)),
-) -> Nil {
-  let answer = case kind {
-    RunCaller ->
-      run(connection, "SELECT pg_advisory_lock(830)", []) |> result.replace(Nil)
-    PrepareCaller ->
-      connection.prepare(connection, "SELECT x FROM driver_prepare_lock", 5000)
-      |> result.replace(Nil)
-  }
-  process.send(answers, answer)
-}
-
-fn wait_for_blocked(
-  control: Connection,
-  kind: CallerKind,
-  attempts: Int,
-) -> Result(Nil, DriverError) {
-  case kind {
-    RunCaller -> wait_for_lock_waiter(control, 830, attempts)
-    PrepareCaller -> wait_for_table_waiter(control, attempts)
-  }
-}
-
-fn wait_for_table_waiter(
-  control: Connection,
-  attempts: Int,
-) -> Result(Nil, DriverError) {
-  use outcomes <- try(script(
-    control,
-    "SELECT count(*)::text FROM pg_locks WHERE locktype = 'relation' AND NOT granted AND relation = 'driver_prepare_lock'::regclass",
-  ))
-  case map(outcomes, rows), attempts {
-    [[[Text(<<"1">>)]]], _ -> Ok(Nil)
-    _, 0 -> Error(ConnectionLost(SocketClosed))
-    _, _ -> wait_for_table_waiter(control, attempts - 1)
-  }
 }

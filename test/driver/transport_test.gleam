@@ -21,6 +21,10 @@ import dream_test/matchers.{
 }
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
+import driver/fake_server.{
+  type FakeBehavior, Answer, NotTls, Reset, Tls, client_closed, free_port,
+  start_fake_server,
+}
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/driver_tls.{certificate_authority, verify_full}
 import gleam/erlang/atom.{type Atom}
@@ -35,30 +39,11 @@ import matchers/extract_send_result.{extract_send_result}
 import matchers/extract_server_certificate.{extract_server_certificate}
 import matchers/extract_startup_answer.{extract_startup_answer}
 
-@external(erlang, "port_ffi", "free_port")
-fn free_port() -> Int
-
-@external(erlang, "driver_fake_server_ffi", "start")
-fn start_fake_server(behavior: FakeBehavior) -> #(Int, FakeServer)
-
-@external(erlang, "driver_fake_server_ffi", "client_closed")
-fn client_closed(server: FakeServer) -> Bool
-
 @external(erlang, "dream_postgres_transport_ffi", "reason_name")
 fn reason_name(reason: #(Atom, Atom)) -> Atom
 
 @external(erlang, "driver_file_ffi", "read_pem_certificate")
 fn read_pem_certificate(path: String) -> BitArray
-
-type FakeServer
-
-/// What the fake server does after the SSLRequest.
-type FakeBehavior {
-  Answer(BitArray)
-  Reset
-  NotTls
-  Tls(String, String)
-}
 
 /// The tests of the transport.
 pub fn tests() -> TestSuite {
