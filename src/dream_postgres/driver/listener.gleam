@@ -313,6 +313,7 @@ fn initialise(
       ..config.connection,
       events: Some(events),
       notifications: Some(notifications),
+      notices: None,
     )
   connection.supervised(connection_config).start()
   |> result.map(initialised(subject, config, _, starter, notifications, events))

@@ -1348,8 +1348,8 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
 
 /// The proxy sends a NoticeResponse, a NotificationResponse and a
 /// ParameterStatus as if the server sent them between requests. The next
-/// outcome carries the notice and the notification, and the parameter has
-/// its new value.
+/// outcome carries the notification and not the notice, which belongs to
+/// no request, and the parameter has its new value.
 fn idle_message_tests() -> ContextNode(ProxiedConnection) {
   let idle_messages =
     bit_array.concat([
@@ -1367,7 +1367,7 @@ fn idle_message_tests() -> ContextNode(ProxiedConnection) {
       "injected",
     )),
     it(
-      "keeps the parameter changes, notices and notifications between requests",
+      "keeps no notice of the idle time for the next outcome",
       fn(proxied: ProxiedConnection) {
         // Act
         let outcomes =
@@ -1378,8 +1378,8 @@ fn idle_message_tests() -> ContextNode(ProxiedConnection) {
         |> should
         |> be_ok
         |> extract_outcome_notices
-        |> be_equal([["an idle notice"]])
-        |> or_fail_with("Expected the notice of the idle time")
+        |> be_equal([[]])
+        |> or_fail_with("Expected no notice of the idle time")
       },
     ),
     it(
