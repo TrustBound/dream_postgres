@@ -12,6 +12,9 @@
 %% - reset: closes the socket with linger 0, so the client gets a reset;
 %% - {tls, CertificateFile, KeyFile}: sends S and starts TLS with that
 %%   certificate;
+%% - {tls_then_not_tls, CertificateFile, KeyFile}: sends S, does the TLS
+%%   handshake, then sends a record that is not valid TLS, so the client's
+%%   next read fails with a TLS alert;
 %% - not_tls: sends S, reads the client's TLS hello, and answers with bytes
 %%   that are not TLS.
 %%
@@ -102,6 +105,20 @@ behave(Socket, not_tls) ->
         then(gen_tcp:recv(Socket, 0, ?WAIT), fun(_Hello) ->
             then(gen_tcp:send(Socket, <<"this is not TLS">>), fun(_) ->
                 wait_for_close(gen_tcp, Socket)
+            end)
+        end)
+    end);
+behave(Socket, {tls_then_not_tls, CertificateFile, KeyFile}) ->
+    Options = [{certfile, binary_to_list(CertificateFile)},
+               {keyfile, binary_to_list(KeyFile)},
+               {log_level, none}],
+    then(gen_tcp:send(Socket, <<"S">>), fun(_) ->
+        then(ssl:handshake(Socket, Options, ?WAIT), fun(TlsSocket) ->
+            %% A record header for application data, then bytes that no
+            %% key of the session protects: the client's TLS layer fails
+            %% the record with an alert.
+            then(gen_tcp:send(Socket, <<23, 3, 3, 0, 5, "hello">>), fun(_) ->
+                wait_for_close(ssl, TlsSocket)
             end)
         end)
     end);
