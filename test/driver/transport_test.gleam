@@ -771,6 +771,12 @@ fn reason_tests() {
       OtherReason("{some,reason}"),
       ConnectUnlisted("{some,reason}"),
     ),
+    connect_reason_test(ReasonAtom(atom.create("enotconn")), ConnectClosed),
+    connect_reason_test(ReasonAtom(atom.create("einval")), ConnectClosed),
+    connect_reason_test(
+      ReasonAtom(atom.create("ehostunreach")),
+      ConnectUnlisted("ehostunreach"),
+    ),
     socket_reason_test(ReasonAtom(atom.create("einval")), SocketClosed),
     socket_reason_test(OtherReason("{some,reason}"), Unlisted("{some,reason}")),
     connect_reason_test(ReasonAtom(atom.create("timeout")), ConnectTimedOut),

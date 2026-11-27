@@ -773,6 +773,12 @@ fn open_process(connection: Connection) -> Result(Nil, ConnectError) {
 ///
 /// `SetupTimedOut` when the VM did not run the new process within the
 /// setup timeout, and `SetupExited` when it exited while it started.
+///
+/// It is public so that its tests can give it each start error directly.
+/// No portable real path gives any of them: the initialiser does no I/O
+/// and always returns `Ok`, so `InitFailed` and `InitExited` cannot come
+/// from it, and `InitTimeout` needs a VM too busy to run a new process
+/// within the setup timeout.
 pub fn start_failure(error: actor.StartError) -> ConnectError {
   case error {
     actor.InitTimeout -> SetupTimedOut

@@ -677,6 +677,13 @@ pub fn server_certificate(connection: Connection) -> Option(BitArray) {
 ///
 /// The typed error. A timeout is `ConnectTimedOut`, because the connect
 /// timeout bounds each of these steps.
+///
+/// It is public so that its tests can give it each reason directly. No
+/// portable real path gives these fallback cases: `enotconn` and `einval`
+/// (the spellings of `closed` on some systems only), a reason atom with
+/// no case of its own such as `ehostunreach`, a TLS alert (no step of the
+/// connect uses TLS), and a reason of another shape. Each of them is
+/// `ConnectClosed` or `ConnectUnlisted`.
 pub fn connect_error(reason: SocketFailure, host: String) -> TransportError {
   case reason_name(reason) {
     "nxdomain" -> DnsLookupFailed(host)
@@ -710,6 +717,12 @@ fn reason_name(reason: SocketFailure) -> String {
 ///
 /// The typed error. A TLS alert is `TlsAlertRaised` with the alert's
 /// name, and a reason with no variant of its own is `Unlisted`.
+///
+/// It is public so that its tests can give it each reason directly. No
+/// portable real path gives these fallback cases: `enotconn` and `einval`
+/// (the spellings of `closed` on some systems only, `SocketClosed`), a
+/// reason atom with no case of its own such as `ehostunreach` (a route
+/// that goes away), and a reason of another shape (`Unlisted`).
 pub fn socket_error(reason: SocketFailure) -> SocketError {
   case reason {
     ReasonAtom(atom) -> socket_error_of_name(atom.to_string(atom))
