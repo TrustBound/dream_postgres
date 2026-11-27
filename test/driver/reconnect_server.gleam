@@ -134,7 +134,7 @@ fn watch_reconnect(
 ) -> Result(BadReconnect, String) {
   use Nil <- try(wait_for_second_connection(server))
   let waiting_answer =
-    connection.run_script(connection, "SELECT 1", 5000)
+    connection.run_script(connection, connection.statement("SELECT 1"), 5000)
     |> result.replace(Nil)
   use lost <- try(next_event(events) |> map_error(no_event))
   use reconnect_end <- try(next_event(events) |> map_error(no_event))

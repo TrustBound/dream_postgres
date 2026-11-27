@@ -31,6 +31,13 @@
 //// the name up and sends to the process it finds, so a call during a
 //// restart gives `PoolStopped` and never crashes the caller.
 ////
+//// A hold makes no span of its own: each statement on the held connection
+//// has its span, and the OTel semantic conventions give a pool's signals
+//// as metrics (`db.client.connection.count`, `.pending_requests`,
+//// `.timeouts`, `.wait_time`, `.use_time`; docs/db/database-metrics.md,
+//// in development status), not as spans. The pool events and `status` give
+//// the numbers that those metrics read.
+////
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/catalog.{type Catalog}

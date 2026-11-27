@@ -101,11 +101,13 @@ fn watch_late_server(
 ) -> Result(LateServer, String) {
   let first_event = next_event(events)
   let early_request =
-    connection.run_script(connection, "SELECT 1", 5000) |> replace(Nil)
+    connection.run_script(connection, connection.statement("SELECT 1"), 5000)
+    |> replace(Nil)
   use Nil <- try(start_forwarder(port, first_driver_server.port))
   let connected_event = next_event_after_failed_connects(events)
   let late_request =
-    connection.run_script(connection, "SELECT 1", 5000) |> replace(Nil)
+    connection.run_script(connection, connection.statement("SELECT 1"), 5000)
+    |> replace(Nil)
   Ok(LateServer(
     connection:,
     first_event:,

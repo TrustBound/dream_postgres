@@ -82,6 +82,7 @@ pub type ChannelBindingSetting {
 pub opaque type LoginConfig {
   LoginConfig(
     user: String,
+    database: String,
     password: Password,
     parameters: List(#(String, String)),
     channel_binding: ChannelBindingSetting,
@@ -273,6 +274,24 @@ pub fn no_password() -> Password {
   NoPassword
 }
 
+/// The database that the server opens for the login.
+///
+/// ## Parameters
+///
+/// - `config`: the login settings
+///
+/// ## Returns
+///
+/// The database of the settings, or the user's name for an empty one: the
+/// server opens the database with the user's name then (PostgreSQL docs,
+/// protocol-message-formats, StartupMessage `database`).
+pub fn database(config: LoginConfig) -> String {
+  case config.database {
+    "" -> config.user
+    database -> database
+  }
+}
+
 /// Checks the settings of a login. No connection is needed.
 ///
 /// The StartupMessage gets `database`, then each parameter of the caller
@@ -311,6 +330,7 @@ pub fn new(
   use _ <- try(try_each(parameters, check_client_encoding))
   Ok(LoginConfig(
     user:,
+    database:,
     password:,
     parameters: startup_parameters(database, parameters),
     channel_binding:,

@@ -487,7 +487,7 @@ pub fn script_in_hold(
   pool: Pool(attachment),
   sql: String,
 ) -> fn() -> Result(Result(List(Outcome), DriverError), HoldError) {
-  fn() { pool.hold(pool, 5000, run_script(_, sql, 5000)) }
+  fn() { pool.hold(pool, 5000, run_script(_, connection.statement(sql), 5000)) }
 }
 
 /// The callback of a hold that stops the pool of `handle` with a deadline

@@ -297,7 +297,7 @@ pub fn run_control_script(
   connection: Connection,
   sql: String,
 ) -> Result(Nil, String) {
-  run_script(connection, sql, 5000)
+  run_script(connection, connection.statement(sql), 5000)
   |> replace(Nil)
   |> map_error(fn(error) { "could not run " <> sql <> ": " <> inspect(error) })
 }
@@ -313,7 +313,7 @@ pub fn run_control_script(
 ///   before_each(start_test_connection(first_driver_server)),
 ///   after_each(stop_connection),
 ///   it("runs a script", fn(connection) {
-///     run_script(connection, "SELECT 1", 5000)
+///     run_script(connection, connection.statement("SELECT 1"), 5000)
 ///     |> should
 ///     |> be_ok
 ///     |> or_fail_with("Expected the outcome")
@@ -375,7 +375,7 @@ pub fn run_setup_statement(
   sql: String,
 ) -> fn(Connection) -> Result(Connection, String) {
   setup_step(fn(connection) {
-    run(connection, sql, [], [], 5000)
+    run(connection, connection.statement(sql), [], [], 5000)
     |> map_error(fn(error) { "could not run " <> sql <> ": " <> inspect(error) })
   })
 }
@@ -386,7 +386,8 @@ pub fn run_failing_script(
   sql: String,
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    run_script(connection, sql, 5000) |> require_failure(connection, sql)
+    run_script(connection, connection.statement(sql), 5000)
+    |> require_failure(connection, sql)
   }
 }
 
@@ -406,7 +407,8 @@ pub fn run_failing_statement_within(
   deadline: Int,
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    run(connection, sql, [], [], deadline) |> require_failure(connection, sql)
+    run(connection, connection.statement(sql), [], [], deadline)
+    |> require_failure(connection, sql)
   }
 }
 
@@ -417,7 +419,7 @@ pub fn run_failing_statement_with_parameters(
   parameters: List(Cell),
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    run(connection, sql, parameters, [], 5000)
+    run(connection, connection.statement(sql), parameters, [], 5000)
     |> require_failure(connection, sql)
   }
 }
@@ -683,7 +685,11 @@ pub fn lock_request(
   proxied: ProxiedConnection,
 ) -> fn() -> Result(List(Outcome), DriverError) {
   fn() {
-    run_script(proxied.connection, advisory_lock_sql(proxied.lock_key), 5000)
+    run_script(
+      proxied.connection,
+      connection.statement(advisory_lock_sql(proxied.lock_key)),
+      5000,
+    )
   }
 }
 
@@ -921,7 +927,7 @@ pub fn query_text(
   connection: Connection,
   sql: String,
 ) -> Result(String, String) {
-  run_script(connection, sql, 5000) |> single_text
+  run_script(connection, connection.statement(sql), 5000) |> single_text
 }
 
 /// The backend process ID of the session that waits for the advisory lock
@@ -1077,7 +1083,7 @@ fn wait_for_one(
   sql: String,
   attempts: Int,
 ) -> Result(Nil, String) {
-  case run_script(control, sql, 5000), attempts {
+  case run_script(control, connection.statement(sql), 5000), attempts {
     Ok([Outcome(result: CommandResult(rows: [[Text(<<"1">>)]], ..), ..)]), _ ->
       Ok(Nil)
     Error(error), _ -> Error("could not ask for waiters: " <> inspect(error))

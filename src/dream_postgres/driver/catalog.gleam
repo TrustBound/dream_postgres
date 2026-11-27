@@ -282,7 +282,7 @@ fn load_and_find(
   use outcome <- try(
     connection.run(
       connection,
-      catalog_table.query,
+      connection.statement(catalog_table.query),
       [],
       [],
       deadline_milliseconds,

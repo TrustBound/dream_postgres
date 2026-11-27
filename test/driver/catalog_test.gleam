@@ -498,7 +498,14 @@ fn failed_load_tests() {
       "refuses the statement that fails the transaction",
       fn(session: CatalogSession) {
         // Act
-        let division = run(session.connection, "SELECT 1/0", [], [], 5000)
+        let division =
+          run(
+            session.connection,
+            connection.statement("SELECT 1/0"),
+            [],
+            [],
+            5000,
+          )
 
         // Assert
         division

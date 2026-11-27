@@ -56,6 +56,9 @@ import dream_postgres/driver/query.{
 import dream_postgres/driver/statement_cache.{
   type CachedStatement, type StatementCache, CachedStatement,
 }
+import dream_postgres/driver/trace.{
+  type SpanEnd, type SpanTarget, Failed, SpanQuery, SpanTarget, Worked,
+}
 import dream_postgres/driver/transaction.{
   type TransactionTracker, aborting_error, new_tracker, track, track_script,
   track_step, transaction_status as tracked_status,
@@ -310,7 +313,14 @@ pub opaque type Connection {
     /// the time of a cancel, and of a reconnect that runs before the
     /// request.
     reply_margin_milliseconds: Int,
+    /// The database and the server that each span of a statement names.
+    span_target: SpanTarget,
   )
+}
+
+/// The text of a statement, and the caller's name of it for its span.
+pub opaque type Statement {
+  Statement(sql: String, name: Option(String))
 }
 
 /// What a caller can read of the connection without a request to the
@@ -692,6 +702,7 @@ fn initialise(
     pid: process.self(),
     reply_margin_milliseconds: config.cancel_timeout_milliseconds
       + config.setup_timeout_milliseconds,
+    span_target: span_target(config),
   ))
   |> Ok
 }
@@ -789,6 +800,156 @@ pub fn stop(connection: Connection) -> Nil {
 
 // Requests --------------------------------------------------------------------
 
+/// A statement with no name: its span is named after the database.
+///
+/// ## Parameters
+///
+/// - `sql`: the text of the statement
+///
+/// ## Returns
+///
+/// The statement.
+pub fn statement(sql: String) -> Statement {
+  Statement(sql:, name: None)
+}
+
+/// Names a statement for its span. The name is recorded as
+/// `db.query.summary`, and it becomes the span's name (OTel semantic
+/// conventions, docs/db/database-spans.md: "The **span name** SHOULD be
+/// `{db.query.summary}` if a summary is available."). So it must be
+/// low-cardinality and hold no value: one name for one kind of statement,
+/// for example `post.create`. The name plays no part in the statement
+/// cache, whose key is the text.
+///
+/// ## Parameters
+///
+/// - `statement`: the statement
+/// - `name`: the app's name of the statement
+///
+/// ## Returns
+///
+/// The statement with the name.
+pub fn named(statement: Statement, name: String) -> Statement {
+  Statement(..statement, name: Some(name))
+}
+
+fn span_target(config: ConnectionConfig) -> SpanTarget {
+  let address = config.transport.address
+  SpanTarget(
+    database: login.database(config.login),
+    host: transport.host(address),
+    port: transport.port(address),
+  )
+}
+
+/// Runs the request of a statement inside its span. The span starts and
+/// ends in the caller's process, on every answer. A caller that is killed
+/// during the call leaves its span unended: the span is not exported, as
+/// for any span of a process that ends before it ends its span.
+fn traced(
+  connection: Connection,
+  statement: Statement,
+  text: Option(String),
+  work: fn() -> Result(value, error),
+  ending: fn(Result(value, error)) -> SpanEnd,
+) -> Result(value, error) {
+  let span =
+    trace.start(
+      connection.span_target,
+      SpanQuery(summary: statement.name, text:),
+    )
+  let result = work()
+  trace.end(span, ending(result))
+  result
+}
+
+fn statement_ending(result: Result(value, DriverError)) -> SpanEnd {
+  case result {
+    Ok(_value) -> Worked(operation: None)
+    Error(error) -> failed_ending(error)
+  }
+}
+
+fn outcome_ending(result: Result(Outcome, DriverError)) -> SpanEnd {
+  case result {
+    Ok(outcome) ->
+      Worked(operation: Some(trace.operation_of_tag(outcome.result.tag)))
+    Error(error) -> failed_ending(error)
+  }
+}
+
+/// A script names its operation only when it ran exactly one statement.
+fn script_ending(result: Result(List(Outcome), DriverError)) -> SpanEnd {
+  case result {
+    Ok([outcome]) -> outcome_ending(Ok(outcome))
+    Ok(_several_or_none) -> Worked(operation: None)
+    Error(error) -> failed_ending(error)
+  }
+}
+
+/// The server confirmed the COPY with its CopyInResponse or
+/// CopyOutResponse, and ends it with the tag `COPY`.
+fn copy_ending(result: Result(value, CopyError(reason))) -> SpanEnd {
+  case result {
+    Ok(_value) -> Worked(operation: Some("COPY"))
+    Error(AppFailed(..)) -> Failed(error_type: "AppFailed", status_code: None)
+    Error(DriverFailed(error)) -> failed_ending(error)
+  }
+}
+
+/// `error.type` is the server's SQLSTATE when there is one, else the
+/// error's name (OTel database-spans: `error.type` "SHOULD match the
+/// `db.response.status_code` returned by the database or the client
+/// library, or the canonical name of exception that occurred").
+fn failed_ending(error: DriverError) -> SpanEnd {
+  case error {
+    ServerRefused(report:, ..)
+    | ScriptFailed(report:, ..)
+    | ServerEndedConnection(report:) ->
+      Failed(error_type: report.code, status_code: Some(report.code))
+    DeadlinePassed(..)
+    | ConnectionLost(..)
+    | ProtocolViolation(..)
+    | CopyStatementRefused(..)
+    | CopyNotStarted(..)
+    | CopyNotRunning
+    | InvalidRequest(..)
+    | ConnectionProcessDown
+    | StatementChanged(..)
+    | NotConnected(..) ->
+      Failed(error_type: error_name(error), status_code: None)
+  }
+}
+
+/// The canonical name of an error: its constructor's name, for example
+/// `ConnectionLost`, as a span's `error.type` gives it. Each variant is
+/// listed, so a new one cannot be left out.
+///
+/// ## Parameters
+///
+/// - `error`: the error
+///
+/// ## Returns
+///
+/// The name of its constructor.
+pub fn error_name(error: DriverError) -> String {
+  case error {
+    ServerRefused(..) -> "ServerRefused"
+    ScriptFailed(..) -> "ScriptFailed"
+    DeadlinePassed(..) -> "DeadlinePassed"
+    ConnectionLost(..) -> "ConnectionLost"
+    ServerEndedConnection(..) -> "ServerEndedConnection"
+    ProtocolViolation(..) -> "ProtocolViolation"
+    CopyStatementRefused(..) -> "CopyStatementRefused"
+    CopyNotStarted(..) -> "CopyNotStarted"
+    CopyNotRunning -> "CopyNotRunning"
+    InvalidRequest(..) -> "InvalidRequest"
+    ConnectionProcessDown -> "ConnectionProcessDown"
+    StatementChanged(..) -> "StatementChanged"
+    NotConnected(..) -> "NotConnected"
+  }
+}
+
 /// Prepares a statement and describes it, before any run.
 ///
 /// ## Parameters
@@ -803,10 +964,11 @@ pub fn stop(connection: Connection) -> Nil {
 /// - `Error(DriverError)`: the server refused it, or the request failed
 pub fn prepare(
   connection: Connection,
-  sql: String,
+  statement: Statement,
   deadline_milliseconds: Int,
 ) -> Result(StatementDescription, DriverError) {
-  request(connection, prepare_request(sql, _), deadline_milliseconds)
+  use <- traced(connection, statement, Some(statement.sql), _, statement_ending)
+  request(connection, prepare_request(statement.sql, _), deadline_milliseconds)
 }
 
 /// Runs a statement with its parameters. Each cell carries its own format.
@@ -826,14 +988,15 @@ pub fn prepare(
 /// - `Error(DriverError)`: the server refused it, or the request failed
 pub fn run(
   connection: Connection,
-  sql: String,
+  statement: Statement,
   parameters: List(Cell),
   result_formats: List(Format),
   deadline_milliseconds: Int,
 ) -> Result(Outcome, DriverError) {
+  use <- traced(connection, statement, Some(statement.sql), _, outcome_ending)
   request(
     connection,
-    run_request(sql, parameters, result_formats, _),
+    run_request(statement.sql, parameters, result_formats, _),
     deadline_milliseconds,
   )
 }
@@ -854,10 +1017,14 @@ pub fn run(
 ///   ones before it), or the request failed
 pub fn run_script(
   connection: Connection,
-  sql: String,
+  statement: Statement,
   deadline_milliseconds: Int,
 ) -> Result(List(Outcome), DriverError) {
-  request(connection, ScriptRequest(sql, _), deadline_milliseconds)
+  // A script is not parameterized, so its text may hold values: it is not
+  // recorded (database-spans.md: "Non-parameterized query text SHOULD NOT
+  // be collected by default unless there is sanitization").
+  use <- traced(connection, statement, None, _, script_ending)
+  request(connection, ScriptRequest(statement.sql, _), deadline_milliseconds)
 }
 
 /// The transaction status after the last request.
@@ -982,12 +1149,18 @@ fn parameter_of(snapshot: Snapshot, name: String) -> Option(String) {
 ///   the deadline passed, or the request failed
 pub fn copy_from(
   connection: Connection,
-  sql: String,
+  statement: Statement,
   deadline_milliseconds: Int,
   produce: fn(CopySender) -> Result(Nil, reason),
 ) -> Result(Int, CopyError(reason)) {
+  use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
   let sender = new_sender(connection, deadline_milliseconds)
-  use Nil <- try(start_copy(sender, CopyFrom, sql, deadline_milliseconds))
+  use Nil <- try(start_copy(
+    sender,
+    CopyFrom,
+    statement.sql,
+    deadline_milliseconds,
+  ))
   case produce(sender) {
     Ok(Nil) -> end_copy(sender, CompleteCopy) |> map_error(DriverFailed)
     Error(reason) -> end_copy(sender, AbandonCopy) |> abandoned(reason)
@@ -1053,13 +1226,19 @@ pub fn send_chunk(
 ///   deadline passed, or the request failed
 pub fn copy_to(
   connection: Connection,
-  sql: String,
+  statement: Statement,
   deadline_milliseconds: Int,
   initial: value,
   fold: fn(value, BitArray) -> Result(value, reason),
 ) -> Result(value, CopyError(reason)) {
+  use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
   let sender = new_sender(connection, deadline_milliseconds)
-  use Nil <- try(start_copy(sender, CopyTo, sql, deadline_milliseconds))
+  use Nil <- try(start_copy(
+    sender,
+    CopyTo,
+    statement.sql,
+    deadline_milliseconds,
+  ))
   read_rows(sender, initial, fold)
 }
 

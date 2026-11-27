@@ -151,7 +151,8 @@ fn connection_tests() -> TestSuite {
         )),
         it("runs a statement over TLS", fn(connection) {
           // Act
-          let outcomes = run_script(connection, "SELECT 1", 5000)
+          let outcomes =
+            run_script(connection, connection.statement("SELECT 1"), 5000)
 
           // Assert
           outcomes
@@ -175,7 +176,8 @@ fn connection_tests() -> TestSuite {
           fn(connection) {
             // Act
             suspend_connection(connection)
-            let answer = run(connection, "SELECT 1", [], [], 10)
+            let answer =
+              run(connection, connection.statement("SELECT 1"), [], [], 10)
             resume_connection(connection)
 
             // Assert
@@ -211,7 +213,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
       let sql = "SELECT relname FROM pg_class WHERE oid = $1"
 
       // Act
-      let description = prepare(connection, sql, 5000)
+      let description = prepare(connection, connection.statement(sql), 5000)
 
       // Assert
       description
@@ -231,7 +233,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
         let outcome =
           run(
             connection,
-            "SELECT $1::int4 + 1",
+            connection.statement("SELECT $1::int4 + 1"),
             [Binary(<<41:32>>)],
             [BinaryFormat],
             5000,
@@ -255,7 +257,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
       let outcome =
         run(
           connection,
-          "SELECT $1::int4 + 1",
+          connection.statement("SELECT $1::int4 + 1"),
           [Binary(<<41:32>>)],
           [BinaryFormat],
           5000,
@@ -275,7 +277,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
         "CREATE TEMP TABLE t (id int); INSERT INTO t VALUES (1); SELECT id FROM t"
 
       // Act
-      let outcomes = run_script(connection, sql, 5000)
+      let outcomes = run_script(connection, connection.statement(sql), 5000)
 
       // Assert
       outcomes
@@ -289,7 +291,8 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
     transaction_status_tests(),
     it("gives the notices and notifications with the outcome", fn(connection) {
       // Act
-      let outcomes = run_script(connection, notice_script, 5000)
+      let outcomes =
+        run_script(connection, connection.statement(notice_script), 5000)
 
       // Assert
       outcomes
@@ -301,7 +304,12 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
     }),
     it("gives the notifications with the outcome", fn(connection) {
       // Act
-      let outcomes = run_script(connection, notice_and_notify_script, 5000)
+      let outcomes =
+        run_script(
+          connection,
+          connection.statement(notice_and_notify_script),
+          5000,
+        )
 
       // Assert
       outcomes
@@ -327,7 +335,8 @@ fn failed_transaction_tests() -> ContextNode(Connection) {
     before_each(run_setup_script("BEGIN")),
     it("fails the statement with 22012", fn(connection) {
       // Act
-      let failed = run(connection, "SELECT 1/0", [], [], 5000)
+      let failed =
+        run(connection, connection.statement("SELECT 1/0"), [], [], 5000)
 
       // Assert
       failed
@@ -356,7 +365,8 @@ fn failed_transaction_tests() -> ContextNode(Connection) {
         "answers a COMMIT of a failed transaction with ROLLBACK",
         fn(connection) {
           // Act
-          let committed = run_script(connection, "COMMIT", 5000)
+          let committed =
+            run_script(connection, connection.statement("COMMIT"), 5000)
 
           // Assert
           committed
@@ -450,7 +460,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     }),
     it("refuses SQL with a zero byte before it sends anything", fn(connection) {
       // Act
-      let answer = run(connection, "SELECT 1\u{0000}", [], [], 5000)
+      let answer =
+        run(connection, connection.statement("SELECT 1\u{0000}"), [], [], 5000)
 
       // Assert
       answer
@@ -461,7 +472,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     }),
     it("refuses a prepare with a zero byte", fn(connection) {
       // Act
-      let answer = prepare(connection, "SELECT 1\u{0000}", 5000)
+      let answer =
+        prepare(connection, connection.statement("SELECT 1\u{0000}"), 5000)
 
       // Assert
       answer
@@ -472,7 +484,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     }),
     it("refuses a script with a zero byte", fn(connection) {
       // Act
-      let answer = run_script(connection, "SELECT 1\u{0000}", 5000)
+      let answer =
+        run_script(connection, connection.statement("SELECT 1\u{0000}"), 5000)
 
       // Assert
       answer
@@ -483,7 +496,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     }),
     it("refuses a COPY statement with the statement before it", fn(connection) {
       // Act
-      let refused = run_script(connection, copy_script, 5000)
+      let refused =
+        run_script(connection, connection.statement(copy_script), 5000)
 
       // Assert
       refused
@@ -498,7 +512,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       before_each(run_failing_script(copy_script)),
       it("refuses a COPY statement and stays usable", fn(connection) {
         // Act
-        let next = run_script(connection, "SELECT 5", 5000)
+        let next =
+          run_script(connection, connection.statement("SELECT 5"), 5000)
 
         // Assert
         next
@@ -511,7 +526,12 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     ]),
     it("gives ScriptFailed with the statements that ran", fn(connection) {
       // Act
-      let answer = run_script(connection, "SELECT 1; SELECT 1/0", 5000)
+      let answer =
+        run_script(
+          connection,
+          connection.statement("SELECT 1; SELECT 1/0"),
+          5000,
+        )
 
       // Assert
       answer
@@ -526,7 +546,12 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       "gives ScriptFailed with the code of the failed statement",
       fn(connection) {
         // Act
-        let answer = run_script(connection, "SELECT 1; SELECT 1/0", 5000)
+        let answer =
+          run_script(
+            connection,
+            connection.statement("SELECT 1; SELECT 1/0"),
+            5000,
+          )
 
         // Assert
         answer
@@ -539,7 +564,12 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     ),
     it("refuses a prepare that the server refuses", fn(connection) {
       // Act
-      let answer = prepare(connection, "SELECT * FROM no_such_table", 5000)
+      let answer =
+        prepare(
+          connection,
+          connection.statement("SELECT * FROM no_such_table"),
+          5000,
+        )
 
       // Assert
       answer
@@ -551,7 +581,14 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     }),
     it("binds a NULL parameter", fn(connection) {
       // Act
-      let outcome = run(connection, "SELECT $1::text IS NULL", [Null], [], 5000)
+      let outcome =
+        run(
+          connection,
+          connection.statement("SELECT $1::text IS NULL"),
+          [Null],
+          [],
+          5000,
+        )
 
       // Assert
       outcome
@@ -568,7 +605,11 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
 
       // Act
       let name = {
-        use _outcomes <- try(run_script(connection, sql, 5000))
+        use _outcomes <- try(run_script(
+          connection,
+          connection.statement(sql),
+          5000,
+        ))
         server_parameter(connection, "application_name")
       }
 
@@ -584,7 +625,14 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       before_each(run_setup_script("CREATE TEMP TABLE c (x int)")),
       it("refuses COPY FROM STDIN in a run", fn(connection) {
         // Act
-        let refused = run(connection, "COPY c FROM STDIN", [], [], 5000)
+        let refused =
+          run(
+            connection,
+            connection.statement("COPY c FROM STDIN"),
+            [],
+            [],
+            5000,
+          )
 
         // Assert
         refused
@@ -597,7 +645,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
         before_each(run_failing_statement("COPY c FROM STDIN")),
         it("refuses COPY FROM STDIN in a run and stays usable", fn(connection) {
           // Act
-          let next = run_script(connection, "SELECT 6", 5000)
+          let next =
+            run_script(connection, connection.statement("SELECT 6"), 5000)
 
           // Assert
           next
@@ -826,7 +875,8 @@ fn cached_proxied_tests() -> List(ContextNode(ProxiedConnection)) {
       fn(proxied: ProxiedConnection) {
         // Act
         send_stray_message(proxied.connection)
-        let outcomes = run_script(proxied.connection, "SELECT 1", 5000)
+        let outcomes =
+          run_script(proxied.connection, connection.statement("SELECT 1"), 5000)
 
         // Assert
         outcomes
@@ -897,7 +947,7 @@ fn running_run_lost_test(name: String) -> ContextNode(ProxiedConnection) {
         start_caller(fn() {
           run(
             proxied.connection,
-            advisory_lock_sql(proxied.lock_key),
+            connection.statement(advisory_lock_sql(proxied.lock_key)),
             [],
             [],
             5000,
@@ -938,7 +988,11 @@ fn running_prepare_lost_tests(
       let answer = {
         let running =
           start_caller(fn() {
-            prepare(proxied.connection, "SELECT x FROM " <> table, 5000)
+            prepare(
+              proxied.connection,
+              connection.statement("SELECT x FROM " <> table),
+              5000,
+            )
           })
         use _waited <- try(wait_for_table_waiter(proxied.control, table))
         close_client(proxied.proxy)
@@ -985,7 +1039,12 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
         fn(proxied: ProxiedConnection) {
           // Act
           send_stray_message(proxied.connection)
-          let answer = run_script(proxied.connection, "SELECT 1", 5000)
+          let answer =
+            run_script(
+              proxied.connection,
+              connection.statement("SELECT 1"),
+              5000,
+            )
 
           // Assert
           answer
@@ -1003,7 +1062,8 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
         "fails a prepare while the connection is lost",
         fn(proxied: ProxiedConnection) {
           // Act
-          let answer = prepare(proxied.connection, "SELECT 1", 5000)
+          let answer =
+            prepare(proxied.connection, connection.statement("SELECT 1"), 5000)
 
           // Assert
           answer
@@ -1041,7 +1101,8 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
 
         // Act
         answer_next_request(proxied.proxy, <<"G", 7:32, 0, 0:16>>)
-        let answer = run_script(proxied.connection, large, 5000)
+        let answer =
+          run_script(proxied.connection, connection.statement(large), 5000)
 
         // Assert
         answer
@@ -1078,7 +1139,8 @@ fn idle_message_tests() -> ContextNode(ProxiedConnection) {
       "keeps the parameter changes, notices and notifications between requests",
       fn(proxied: ProxiedConnection) {
         // Act
-        let outcomes = run_script(proxied.connection, "SELECT 1", 5000)
+        let outcomes =
+          run_script(proxied.connection, connection.statement("SELECT 1"), 5000)
 
         // Assert
         outcomes
@@ -1093,7 +1155,8 @@ fn idle_message_tests() -> ContextNode(ProxiedConnection) {
       "keeps the notifications between requests",
       fn(proxied: ProxiedConnection) {
         // Act
-        let outcomes = run_script(proxied.connection, "SELECT 1", 5000)
+        let outcomes =
+          run_script(proxied.connection, connection.statement("SELECT 1"), 5000)
 
         // Assert
         outcomes
@@ -1152,7 +1215,13 @@ fn lock_tests() -> ContextNode(ProxiedConnection) {
           ))
           process.kill(caller.pid)
           use _released <- try(release_advisory_lock(proxied))
-          Ok(run(proxied.connection, "SELECT 2", [], [], 5000))
+          Ok(run(
+            proxied.connection,
+            connection.statement("SELECT 2"),
+            [],
+            [],
+            5000,
+          ))
         }
 
         // Assert
@@ -1212,7 +1281,8 @@ fn lose_and_reconnect(
   use _terminated <- try(terminate_backend(proxied.control, pid))
   let lost = next_event(proxied.events)
   let back = next_event(proxied.events)
-  let outcomes = run_script(proxied.connection, "SELECT 1", 5000)
+  let outcomes =
+    run_script(proxied.connection, connection.statement("SELECT 1"), 5000)
   Ok(LossAndReconnect(lost:, back:, outcomes:))
 }
 
@@ -1378,7 +1448,9 @@ fn lose_with_requests(
   let running = start_caller(lock_request(proxied))
   use _waited <- try(wait_for_lock_waiter(proxied.control, proxied.lock_key))
   let waiting =
-    start_caller(fn() { run_script(proxied.connection, "SELECT 1", 5000) })
+    start_caller(fn() {
+      run_script(proxied.connection, connection.statement("SELECT 1"), 5000)
+    })
   use pid <- try(lock_waiter_pid(proxied.control, proxied.lock_key))
   use _terminated <- try(terminate_backend(proxied.control, pid))
   Ok(RequestsAtLoss(
@@ -1436,7 +1508,9 @@ fn run_two_requests(proxied: ProxiedConnection) -> Result(TwoRequests, String) {
   let first = start_caller(lock_request(proxied))
   use _waited <- try(wait_for_lock_waiter(proxied.control, proxied.lock_key))
   let second =
-    start_caller(fn() { run_script(proxied.connection, "SELECT 4", 5000) })
+    start_caller(fn() {
+      run_script(proxied.connection, connection.statement("SELECT 4"), 5000)
+    })
   use _released <- try(release_advisory_lock(proxied))
   Ok(TwoRequests(first: caller_answer(first), second: caller_answer(second)))
 }
@@ -1506,10 +1580,19 @@ fn start_gated_deadline(server: Server) -> Result(GatedDeadline, String) {
     let gated = ConnectionConfig(..config, reconnect: Backoff(60_000, 60_000))
     use connection <- try(start_configured(cancel_timeout_config(gated, 5000)))
     {
-      let first = run(connection, "SELECT pg_sleep(0.3)", [], [], 50)
+      let first =
+        run(
+          connection,
+          connection.statement("SELECT pg_sleep(0.3)"),
+          [],
+          [],
+          50,
+        )
       record_gate(gate)
       use second <- try(
-        start_announced_caller(fn() { run_script(connection, "SELECT 1", 5000) }),
+        start_announced_caller(fn() {
+          run_script(connection, connection.statement("SELECT 1"), 5000)
+        }),
       )
       use _asked <- try(ask_transaction_status(connection, 20))
       release_gate(gate)
@@ -1604,16 +1687,26 @@ fn start_cancel_at_deadline(
   )
   {
     use pid <- try(backend_pid(connection))
-    let late = run(connection, "SELECT pg_sleep(30)", [], [], 300)
+    let late =
+      run(connection, connection.statement("SELECT pg_sleep(30)"), [], [], 300)
     let state =
       run_script(
         control,
-        "SELECT state FROM pg_stat_activity WHERE pid = " <> pid,
+        connection.statement(
+          "SELECT state FROM pg_stat_activity WHERE pid = " <> pid,
+        ),
         5000,
       )
     // The next statement runs longer than the cancel timeout, so the
     // cancel's timer ends while the connection serves another request.
-    let next = run(connection, "SELECT pg_sleep(0.3)::text", [], [], 5000)
+    let next =
+      run(
+        connection,
+        connection.statement("SELECT pg_sleep(0.3)::text"),
+        [],
+        [],
+        5000,
+      )
     Ok(CancelAtDeadline(connection:, control:, late:, state:, next:))
   }
   |> map_error(fn(error) {
@@ -1703,7 +1796,8 @@ fn start_lost_cancel(breaking: fn(Proxy) -> Nil) -> Result(LostCancel, String) {
       events,
     ))
     breaking(proxy)
-    let answer = run(connection, "SELECT pg_sleep(30)", [], [], 100)
+    let answer =
+      run(connection, connection.statement("SELECT pg_sleep(30)"), [], [], 100)
     let event = next_event(events)
     Ok(LostCancel(connection:, proxy:, answer:, event:))
   }
@@ -1794,7 +1888,8 @@ fn keyless_session_tests() -> TestSuite {
         "closes the connection when the session has no cancel key",
         fn(connection) {
           // Act
-          let answer = run(connection, "SELECT 1", [], [], 100)
+          let answer =
+            run(connection, connection.statement("SELECT 1"), [], [], 100)
 
           // Assert
           answer
@@ -1817,10 +1912,14 @@ fn keyless_session_tests() -> TestSuite {
             let pid = pid_of(connection)
             suspend_connection(connection)
             let first =
-              start_caller(fn() { run(connection, "SELECT 1", [], [], 100) })
+              start_caller(fn() {
+                run(connection, connection.statement("SELECT 1"), [], [], 100)
+              })
             use _first_came <- try(wait_for_message(pid, ["request"], 1_000_000))
             let waiting =
-              start_caller(fn() { run_script(connection, "SELECT 2", 5000) })
+              start_caller(fn() {
+                run_script(connection, connection.statement("SELECT 2"), 5000)
+              })
             use _both_came <- try(wait_for_mailbox_length(pid, 2, 1_000_000))
             resume_connection(connection)
             use _first_answer <- try(caller_answer(first))
@@ -1844,7 +1943,8 @@ fn keyless_session_tests() -> TestSuite {
           "gives a later request ClosedAfterDeadline after a deadline loss",
           fn(connection) {
             // Act
-            let answer = run(connection, "SELECT 1", [], [], 5000)
+            let answer =
+              run(connection, connection.statement("SELECT 1"), [], [], 5000)
 
             // Assert
             answer
@@ -1878,7 +1978,8 @@ fn end_waiting_request(
   use _locked <- try(hold_advisory_lock(proxied))
   let first = start_caller(lock_request(proxied))
   use _waited <- try(wait_for_lock_waiter(proxied.control, proxied.lock_key))
-  let waiting = run_script(proxied.connection, "SELECT 1", 100)
+  let waiting =
+    run_script(proxied.connection, connection.statement("SELECT 1"), 100)
   use _released <- try(release_advisory_lock(proxied))
   Ok(WaitingAtDeadline(waiting:, first: caller_answer(first)))
 }
@@ -1934,7 +2035,7 @@ fn ask_status_while_waiting(
     start_caller(fn() {
       run_script(
         proxied.connection,
-        "BEGIN; " <> advisory_lock_sql(proxied.lock_key),
+        connection.statement("BEGIN; " <> advisory_lock_sql(proxied.lock_key)),
         5000,
       )
     })
@@ -1994,7 +2095,8 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
         "reads the rewritten query tree from a notice, with options",
         fn(connection) {
           // Act
-          let outcome = run(connection, pg_class_query, [], [], 5000)
+          let outcome =
+            run(connection, connection.statement(pg_class_query), [], [], 5000)
 
           // Assert
           outcome
@@ -2009,7 +2111,8 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
       ),
       it("gives the notice of the rewritten query tree", fn(connection) {
         // Act
-        let outcome = run(connection, pg_class_query, [], [], 5000)
+        let outcome =
+          run(connection, connection.statement(pg_class_query), [], [], 5000)
 
         // Assert
         outcome
@@ -2023,7 +2126,8 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
         "gives the column origin with the rewritten query tree",
         fn(connection) {
           // Act
-          let outcome = run(connection, pg_class_query, [], [], 5000)
+          let outcome =
+            run(connection, connection.statement(pg_class_query), [], [], 5000)
 
           // Assert
           outcome
@@ -2037,7 +2141,8 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
       ),
       it("gives the row with the rewritten query tree", fn(connection) {
         // Act
-        let outcome = run(connection, pg_class_query, [], [], 5000)
+        let outcome =
+          run(connection, connection.statement(pg_class_query), [], [], 5000)
 
         // Assert
         outcome
@@ -2056,7 +2161,8 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
         "gives each notice in the middle of a result, and every row",
         fn(connection) {
           // Act
-          let outcome = run(connection, noisy_query, [], [], 5000)
+          let outcome =
+            run(connection, connection.statement(noisy_query), [], [], 5000)
 
           // Assert
           outcome
@@ -2071,7 +2177,8 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
         "gives every row of a result with notices in the middle",
         fn(connection) {
           // Act
-          let outcome = run(connection, noisy_query, [], [], 5000)
+          let outcome =
+            run(connection, connection.statement(noisy_query), [], [], 5000)
 
           // Assert
           outcome
@@ -2119,7 +2226,13 @@ fn cache_tests(server: Server) -> ContextNode(Connection) {
           fn(connection) {
             // Act
             let refused =
-              run(connection, "SELECT 1", list.repeat(Null, 65_536), [], 5000)
+              run(
+                connection,
+                connection.statement("SELECT 1"),
+                list.repeat(Null, 65_536),
+                [],
+                5000,
+              )
 
             // Assert
             refused
@@ -2141,8 +2254,18 @@ fn cache_tests(server: Server) -> ContextNode(Connection) {
         fn(connection) {
           // Act
           let statements = {
-            use _c <- try(run(connection, "SELECT 'c'", [], [], 5000))
-            run_script(connection, prepared_statements, 5000)
+            use _c <- try(run(
+              connection,
+              connection.statement("SELECT 'c'"),
+              [],
+              [],
+              5000,
+            ))
+            run_script(
+              connection,
+              connection.statement(prepared_statements),
+              5000,
+            )
           }
 
           // Assert
@@ -2171,9 +2294,25 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
       fn(connection) {
         // Act
         let statements = {
-          use _first <- try(run(connection, "SELECT 41 + 1", [], [], 5000))
-          use _second <- try(run(connection, "SELECT 41 + 1", [], [], 5000))
-          run_script(connection, prepared_statements, 5000)
+          use _first <- try(run(
+            connection,
+            connection.statement("SELECT 41 + 1"),
+            [],
+            [],
+            5000,
+          ))
+          use _second <- try(run(
+            connection,
+            connection.statement("SELECT 41 + 1"),
+            [],
+            [],
+            5000,
+          ))
+          run_script(
+            connection,
+            connection.statement(prepared_statements),
+            5000,
+          )
         }
 
         // Assert
@@ -2190,9 +2329,17 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
     it("prepares a statement one time for two prepares", fn(connection) {
       // Act
       let statements = {
-        use _first <- try(prepare(connection, "SELECT 1", 5000))
-        use _second <- try(prepare(connection, "SELECT 1", 5000))
-        run_script(connection, prepared_statements, 5000)
+        use _first <- try(prepare(
+          connection,
+          connection.statement("SELECT 1"),
+          5000,
+        ))
+        use _second <- try(prepare(
+          connection,
+          connection.statement("SELECT 1"),
+          5000,
+        ))
+        run_script(connection, connection.statement(prepared_statements), 5000)
       }
 
       // Assert
@@ -2207,8 +2354,8 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
     }),
     it("gives the same description for two prepares", fn(connection) {
       // Act
-      let first = prepare(connection, "SELECT 1", 5000)
-      let second = prepare(connection, "SELECT 1", 5000)
+      let first = prepare(connection, connection.statement("SELECT 1"), 5000)
+      let second = prepare(connection, connection.statement("SELECT 1"), 5000)
 
       // Assert
       second
@@ -2223,7 +2370,8 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
         "prepares again and runs when the statement is gone (26000)",
         fn(connection) {
           // Act
-          let outcome = run(connection, "SELECT 41 + 1", [], [], 5000)
+          let outcome =
+            run(connection, connection.statement("SELECT 41 + 1"), [], [], 5000)
 
           // Assert
           outcome
@@ -2249,7 +2397,14 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
         "gives StatementChanged when the result type changed (0A000)",
         fn(connection) {
           // Act
-          let outcome = run(connection, "SELECT * FROM changing", [], [], 5000)
+          let outcome =
+            run(
+              connection,
+              connection.statement("SELECT * FROM changing"),
+              [],
+              [],
+              5000,
+            )
 
           // Assert
           outcome
@@ -2264,7 +2419,14 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
         before_each(run_failing_statement("SELECT * FROM changing")),
         it("runs the changed statement after StatementChanged", fn(connection) {
           // Act
-          let outcome = run(connection, "SELECT * FROM changing", [], [], 5000)
+          let outcome =
+            run(
+              connection,
+              connection.statement("SELECT * FROM changing"),
+              [],
+              [],
+              5000,
+            )
 
           // Assert
           outcome
@@ -2283,7 +2445,14 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
       )),
       it("gives the error inside a transaction (0A000)", fn(connection) {
         // Act
-        let failed = run(connection, "SELECT * FROM changing", [], [], 5000)
+        let failed =
+          run(
+            connection,
+            connection.statement("SELECT * FROM changing"),
+            [],
+            [],
+            5000,
+          )
 
         // Assert
         failed
@@ -2297,7 +2466,14 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
         "leaves the transaction failed after the error (0A000)",
         fn(connection) {
           // Act
-          let failed = run(connection, "SELECT * FROM changing", [], [], 5000)
+          let failed =
+            run(
+              connection,
+              connection.statement("SELECT * FROM changing"),
+              [],
+              [],
+              5000,
+            )
 
           // Assert
           failed
@@ -2319,7 +2495,8 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
       "refuses a prepare and a run with a zero byte with UnnamedStatements",
       fn(connection) {
         // Act
-        let refused = prepare(connection, "SELECT 1\u{0000}", 5000)
+        let refused =
+          prepare(connection, connection.statement("SELECT 1\u{0000}"), 5000)
 
         // Assert
         refused
@@ -2331,7 +2508,8 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
     ),
     it("refuses a run with a zero byte with UnnamedStatements", fn(connection) {
       // Act
-      let refused = run(connection, "SELECT 1\u{0000}", [], [], 5000)
+      let refused =
+        run(connection, connection.statement("SELECT 1\u{0000}"), [], [], 5000)
 
       // Assert
       refused
@@ -2344,7 +2522,8 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
       "gives the server's error for a run with UnnamedStatements",
       fn(connection) {
         // Act
-        let refused = run(connection, "SELECT 1/0", [], [], 5000)
+        let refused =
+          run(connection, connection.statement("SELECT 1/0"), [], [], 5000)
 
         // Assert
         refused
@@ -2358,9 +2537,19 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
     it("prepares no named statement with UnnamedStatements", fn(connection) {
       // Act
       let statements = {
-        use _first <- try(run(connection, "SELECT 1", [], [], 5000))
-        use _second <- try(prepare(connection, "SELECT 1", 5000))
-        run_script(connection, prepared_statements, 5000)
+        use _first <- try(run(
+          connection,
+          connection.statement("SELECT 1"),
+          [],
+          [],
+          5000,
+        ))
+        use _second <- try(prepare(
+          connection,
+          connection.statement("SELECT 1"),
+          5000,
+        ))
+        run_script(connection, connection.statement(prepared_statements), 5000)
       }
 
       // Assert

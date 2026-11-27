@@ -31,6 +31,7 @@ import driver/server_test
 import driver/setup_deadline_test
 import driver/statement_cache_test
 import driver/supervised_connection_test
+import driver/trace_test
 import driver/transaction_test
 import driver/transport_test
 
@@ -63,6 +64,7 @@ pub fn suites() -> List(TestSuite) {
     setup_deadline_test.tests(),
     connection_events_test.tests(),
     supervised_connection_test.tests(),
+    trace_test.tests(),
   ]
 }
 

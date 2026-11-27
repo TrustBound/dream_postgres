@@ -148,7 +148,8 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
       before_each(start_test_configured(password_function_config(server.port))),
       it("logs in with a password from a function", fn(connection) {
         // Act
-        let outcome = run(connection, "SELECT 1", [], [], deadline)
+        let outcome =
+          run(connection, connection.statement("SELECT 1"), [], [], deadline)
 
         // Assert
         outcome
@@ -167,7 +168,14 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
         "gives the 57P01 of a session that the server ends during a run",
         fn(connection) {
           // Act
-          let answer = run(connection, terminate_own_session, [], [], deadline)
+          let answer =
+            run(
+              connection,
+              connection.statement(terminate_own_session),
+              [],
+              [],
+              deadline,
+            )
 
           // Assert
           answer
@@ -277,7 +285,8 @@ fn setting_test(
     ),
     it(test_case.name, fn(connection) {
       // Act
-      let outcome = run(connection, test_case.sql, [], [], deadline)
+      let outcome =
+        run(connection, connection.statement(test_case.sql), [], [], deadline)
 
       // Assert
       outcome
@@ -312,7 +321,12 @@ fn request_tests(server: Server) -> List(ContextNode(Connection)) {
     before_each(dream_connection(server, CacheStatements(512))),
     it("gives the tag SET for a SET of a reported parameter", fn(connection) {
       // Act
-      let outcomes = run_script(connection, set_application_name, deadline)
+      let outcomes =
+        run_script(
+          connection,
+          connection.statement(set_application_name),
+          deadline,
+        )
 
       // Assert
       outcomes
@@ -331,7 +345,9 @@ fn request_tests(server: Server) -> List(ContextNode(Connection)) {
       let outcome =
         run(
           connection,
-          "SELECT 1 AS first_column, 'x' AS second_column, 2",
+          connection.statement(
+            "SELECT 1 AS first_column, 'x' AS second_column, 2",
+          ),
           [],
           [],
           deadline,
@@ -369,7 +385,14 @@ fn set_tests() -> List(ContextNode(Connection)) {
     ),
     it("keeps a SET of a reported parameter as the setting", fn(connection) {
       // Act
-      let outcome = run(connection, application_name_setting, [], [], deadline)
+      let outcome =
+        run(
+          connection,
+          connection.statement(application_name_setting),
+          [],
+          [],
+          deadline,
+        )
 
       // Assert
       outcome
@@ -389,7 +412,14 @@ fn parameter_count_tests() -> List(ContextNode(Connection)) {
       "gives the 08P01 of the server for a wrong number of parameters",
       fn(connection) {
         // Act
-        let answer = run(connection, "SELECT $1::int4", [], [], deadline)
+        let answer =
+          run(
+            connection,
+            connection.statement("SELECT $1::int4"),
+            [],
+            [],
+            deadline,
+          )
 
         // Assert
         answer
@@ -405,7 +435,7 @@ fn parameter_count_tests() -> List(ContextNode(Connection)) {
       let answer =
         run(
           connection,
-          "SELECT $1::int4",
+          connection.statement("SELECT $1::int4"),
           [Text(<<"1">>), Text(<<"2">>)],
           [],
           deadline,
@@ -423,7 +453,8 @@ fn parameter_count_tests() -> List(ContextNode(Connection)) {
       before_each(run_failing_statement("SELECT $1::int4")),
       it("gives the NULL of SELECT NULL after the refusal", fn(connection) {
         // Act
-        let outcome = run(connection, "SELECT NULL", [], [], deadline)
+        let outcome =
+          run(connection, connection.statement("SELECT NULL"), [], [], deadline)
 
         // Assert
         outcome
@@ -447,7 +478,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
         let answer =
           run(
             connection,
-            unreadable_uuid,
+            connection.statement(unreadable_uuid),
             [Binary(<<1, 2, 3, 4, 5>>)],
             [],
             deadline,
@@ -473,7 +504,9 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
         let outcome =
           run(
             connection,
-            "CREATE TEMP TABLE parity_after_refusal (id integer)",
+            connection.statement(
+              "CREATE TEMP TABLE parity_after_refusal (id integer)",
+            ),
             [],
             [],
             deadline,
@@ -499,7 +532,9 @@ fn insert_update_tests() -> List(ContextNode(Connection)) {
       fn(connection) {
         // Act
         let outcomes =
-          try_map(insert_update_statements, run(connection, _, [], [], deadline))
+          insert_update_statements
+          |> map(connection.statement)
+          |> try_map(run(connection, _, [], [], deadline))
 
         // Assert
         outcomes
@@ -520,7 +555,7 @@ fn insert_update_tests() -> List(ContextNode(Connection)) {
         let outcome =
           run(
             connection,
-            "SELECT * FROM parity_rows ORDER BY id",
+            connection.statement("SELECT * FROM parity_rows ORDER BY id"),
             [],
             [],
             deadline,
@@ -545,7 +580,9 @@ fn insert_update_tests() -> List(ContextNode(Connection)) {
           let outcome =
             run(
               connection,
-              "SELECT some_text, id FROM parity_rows ORDER BY id",
+              connection.statement(
+                "SELECT some_text, id FROM parity_rows ORDER BY id",
+              ),
               [],
               [],
               deadline,
@@ -578,7 +615,9 @@ fn format_tests(server: Server) -> List(ContextNode(Connection)) {
       let outcome =
         run(
           connection,
-          "SELECT 1::int4, 'dream=r/dream'::aclitem, '[1,2]'::int4range",
+          connection.statement(
+            "SELECT 1::int4, 'dream=r/dream'::aclitem, '[1,2]'::int4range",
+          ),
           [],
           [BinaryFormat, TextFormat, BinaryFormat],
           deadline,
@@ -606,7 +645,7 @@ fn format_tests(server: Server) -> List(ContextNode(Connection)) {
         let outcome =
           run(
             connection,
-            "SELECT $1::aclitem::text",
+            connection.statement("SELECT $1::aclitem::text"),
             [Text(<<"dream=r/dream">>)],
             [],
             deadline,
@@ -627,7 +666,13 @@ fn format_tests(server: Server) -> List(ContextNode(Connection)) {
       fn(connection) {
         // Act
         let outcome =
-          run(connection, "SELECT $1::aclitem", [Null], [], deadline)
+          run(
+            connection,
+            connection.statement("SELECT $1::aclitem"),
+            [Null],
+            [],
+            deadline,
+          )
 
         // Assert
         outcome
@@ -648,14 +693,16 @@ fn format_tests(server: Server) -> List(ContextNode(Connection)) {
         let outcome = {
           use _inserted <- try(run(
             connection,
-            "INSERT INTO parity_acl (id, acl) VALUES ($1, $2)",
+            connection.statement(
+              "INSERT INTO parity_acl (id, acl) VALUES ($1, $2)",
+            ),
             [Binary(<<7:32>>), Text(<<"dream=arw/dream">>)],
             [],
             deadline,
           ))
           run(
             connection,
-            "SELECT id, acl FROM parity_acl",
+            connection.statement("SELECT id, acl FROM parity_acl"),
             [],
             [BinaryFormat, TextFormat],
             deadline,
@@ -757,7 +804,14 @@ fn cached_change_tests(change: TypeChange) -> ContextNode(Connection) {
     append(change_hooks(change), [
       it("gives StatementChanged for " <> change_name(change), fn(connection) {
         // Act
-        let answer = run(connection, changing_select, [], [], deadline)
+        let answer =
+          run(
+            connection,
+            connection.statement(changing_select),
+            [],
+            [],
+            deadline,
+          )
 
         // Assert
         answer
@@ -774,7 +828,14 @@ fn cached_change_tests(change: TypeChange) -> ContextNode(Connection) {
             <> change_name(change),
           fn(connection) {
             // Act
-            let outcome = run(connection, changing_select, [], [], deadline)
+            let outcome =
+              run(
+                connection,
+                connection.statement(changing_select),
+                [],
+                [],
+                deadline,
+              )
 
             // Assert
             outcome
@@ -799,7 +860,14 @@ fn unnamed_change_tests(change: TypeChange) -> ContextNode(Connection) {
         "gives the new value at once for " <> change_name(change),
         fn(connection) {
           // Act
-          let outcome = run(connection, changing_select, [], [], deadline)
+          let outcome =
+            run(
+              connection,
+              connection.statement(changing_select),
+              [],
+              [],
+              deadline,
+            )
 
           // Assert
           outcome
@@ -844,7 +912,14 @@ fn schema_tests(server: Server) -> List(ContextNode(Connection)) {
           "gives the added column at once with unnamed statements",
           fn(connection) {
             // Act
-            let outcome = run(connection, added_select, [], [], deadline)
+            let outcome =
+              run(
+                connection,
+                connection.statement(added_select),
+                [],
+                [],
+                deadline,
+              )
 
             // Assert
             outcome
@@ -878,7 +953,13 @@ fn cached_returning_tests() -> List(ContextNode(Connection)) {
     it(
       "gives the old default from an INSERT RETURNING before the change",
       fn(connection) {
-        run(connection, returning_insert, [], [], deadline)
+        run(
+          connection,
+          connection.statement(returning_insert),
+          [],
+          [],
+          deadline,
+        )
         |> should
         |> be_ok
         |> extract_command_result
@@ -894,7 +975,13 @@ fn cached_returning_tests() -> List(ContextNode(Connection)) {
       it(
         "gives the new default from a changed INSERT RETURNING after StatementChanged",
         fn(connection) {
-          run(connection, returning_insert, [], [], deadline)
+          run(
+            connection,
+            connection.statement(returning_insert),
+            [],
+            [],
+            deadline,
+          )
           |> should
           |> be_ok
           |> extract_command_result
@@ -908,7 +995,13 @@ fn cached_returning_tests() -> List(ContextNode(Connection)) {
         it(
           "inserts one row for each run of a changed INSERT RETURNING",
           fn(connection) {
-            run(connection, returning_count, [], [], deadline)
+            run(
+              connection,
+              connection.statement(returning_count),
+              [],
+              [],
+              deadline,
+            )
             |> should
             |> be_ok
             |> extract_command_result
@@ -928,7 +1021,13 @@ fn unnamed_returning_tests() -> List(ContextNode(Connection)) {
     it(
       "gives the old default from an INSERT RETURNING, unnamed",
       fn(connection) {
-        run(connection, returning_insert, [], [], deadline)
+        run(
+          connection,
+          connection.statement(returning_insert),
+          [],
+          [],
+          deadline,
+        )
         |> should
         |> be_ok
         |> extract_command_result
@@ -943,7 +1042,13 @@ fn unnamed_returning_tests() -> List(ContextNode(Connection)) {
       it(
         "gives the new default from a changed INSERT RETURNING, unnamed",
         fn(connection) {
-          run(connection, returning_insert, [], [], deadline)
+          run(
+            connection,
+            connection.statement(returning_insert),
+            [],
+            [],
+            deadline,
+          )
           |> should
           |> be_ok
           |> extract_command_result
@@ -957,7 +1062,13 @@ fn unnamed_returning_tests() -> List(ContextNode(Connection)) {
         it(
           "inserts one row for each changed INSERT RETURNING, unnamed",
           fn(connection) {
-            run(connection, returning_count, [], [], deadline)
+            run(
+              connection,
+              connection.statement(returning_count),
+              [],
+              [],
+              deadline,
+            )
             |> should
             |> be_ok
             |> extract_command_result
@@ -1024,7 +1135,7 @@ fn added_column_tests(change: AddedColumn) -> ContextNode(Connection) {
       "ALTER TABLE parity_added ADD COLUMN " <> change.added,
     )),
     it(change.changed_name, fn(connection) {
-      run(connection, added_select, [], [], deadline)
+      run(connection, connection.statement(added_select), [], [], deadline)
       |> should
       |> be_error
       |> extract_changed_column_names
@@ -1034,7 +1145,7 @@ fn added_column_tests(change: AddedColumn) -> ContextNode(Connection) {
     group("after the StatementChanged", [
       before_each(run_failing_statement(added_select)),
       it(change.name, fn(connection) {
-        run(connection, added_select, [], [], deadline)
+        run(connection, connection.statement(added_select), [], [], deadline)
         |> should
         |> be_ok
         |> extract_command_result
@@ -1061,7 +1172,13 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
     it(
       "refuses a changed statement in a transaction with 0A000",
       fn(connection) {
-        run(connection, transaction_select, [], [], deadline)
+        run(
+          connection,
+          connection.statement(transaction_select),
+          [],
+          [],
+          deadline,
+        )
         |> should
         |> be_error
         |> extract_driver_error_code
@@ -1074,7 +1191,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
       it(
         "refuses the next statement of the failed transaction with 25P02",
         fn(connection) {
-          run(connection, "SELECT 1", [], [], deadline)
+          run(connection, connection.statement("SELECT 1"), [], [], deadline)
           |> should
           |> be_error
           |> extract_driver_error_code
@@ -1088,7 +1205,13 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
         it(
           "refuses a changed statement in a transaction, then prepares it",
           fn(connection) {
-            run(connection, transaction_select, [], [], deadline)
+            run(
+              connection,
+              connection.statement(transaction_select),
+              [],
+              [],
+              deadline,
+            )
             |> should
             |> be_ok
             |> extract_command_result
@@ -1193,7 +1316,13 @@ fn reconnected_tests() -> ContextNode(ProxiedConnection) {
     it(
       "runs on a new session after the server ended the last one",
       fn(proxied: ProxiedConnection) {
-        run(proxied.connection, "SELECT 1", [], [], deadline)
+        run(
+          proxied.connection,
+          connection.statement("SELECT 1"),
+          [],
+          [],
+          deadline,
+        )
         |> should
         |> be_ok
         |> extract_command_result
@@ -1205,7 +1334,13 @@ fn reconnected_tests() -> ContextNode(ProxiedConnection) {
     it(
       "runs a statement again on the new session",
       fn(proxied: ProxiedConnection) {
-        run(proxied.connection, "SELECT 42", [], [], deadline)
+        run(
+          proxied.connection,
+          connection.statement("SELECT 42"),
+          [],
+          [],
+          deadline,
+        )
         |> should
         |> be_ok
         |> extract_command_result
@@ -1221,12 +1356,16 @@ fn reconnected_tests() -> ContextNode(ProxiedConnection) {
         let outcomes = {
           use _again <- try(run(
             proxied.connection,
-            "SELECT 42",
+            connection.statement("SELECT 42"),
             [],
             [],
             deadline,
           ))
-          run_script(proxied.connection, prepared_statements, deadline)
+          run_script(
+            proxied.connection,
+            connection.statement(prepared_statements),
+            deadline,
+          )
         }
 
         // Assert

@@ -348,7 +348,10 @@ pub fn block_connection(
 ) -> Result(BlockedConnection, String) {
   let lock = advisory_lock_sql(key)
   use _locked <- try(run_control_script(control, lock))
-  let blocker = start_caller(fn() { run_script(blocked, lock, 10_000) })
+  let blocker =
+    start_caller(fn() {
+      run_script(blocked, connection.statement(lock), 10_000)
+    })
   use _waited <- try(wait_for_lock_waiter(control, key))
   Ok(BlockedConnection(control:, blocked:, key:, blocker:))
 }
