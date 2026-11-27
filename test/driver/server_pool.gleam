@@ -830,41 +830,24 @@ fn down_reason(down: Down) -> ExitReason {
 
 // Waiting without a sleep -----------------------------------------------------
 
-/// Waits until `count` checkouts wait in the queue of the pool.
-pub fn wait_for_waiting_count(pool: Pool, count: Int) -> Result(Nil, String) {
-  wait_for_status(pool, fn(status) { status.waiting }, count, 100_000)
-}
-
-/// Waits until `count` holds of the pool run.
-pub fn wait_for_held_count(pool: Pool, count: Int) -> Result(Nil, String) {
-  wait_for_status(pool, fn(status) { status.held }, count, 100_000)
-}
-
-fn wait_for_status(
-  pool: Pool,
-  count_of: fn(PoolStatus) -> Int,
-  wanted: Int,
-  attempts: Int,
+/// Waits for the pool event `wanted`, and drops the events before it.
+pub fn wait_for_pool_event(
+  pool_events: Subject(PoolEvent),
+  wanted: PoolEvent,
 ) -> Result(Nil, String) {
-  case pool.status(pool) |> result.map(count_of), attempts {
-    Ok(count), _ if count == wanted -> Ok(Nil)
-    Error(error), _ -> Error("could not ask for the status: " <> inspect(error))
-    _count, 0 -> Error("the status did not come")
-    _count, _ -> wait_for_status(pool, count_of, wanted, attempts - 1)
+  case process.receive(pool_events, 5000) {
+    Ok(event) if event == wanted -> Ok(Nil)
+    Ok(_other) -> wait_for_pool_event(pool_events, wanted)
+    Error(Nil) -> Error("no " <> inspect(wanted) <> " within 5 seconds")
   }
 }
 
-/// Checks out until the pool refuses with `PoolStopped`.
-pub fn wait_for_refusal(pool: Pool) -> Result(Nil, String) {
-  ask_until_refused(pool, 100_000)
-}
-
-fn ask_until_refused(pool: Pool, attempts: Int) -> Result(Nil, String) {
-  case pool.hold(pool, 0, backend_pid), attempts {
-    Error(PoolStopped), _ -> Ok(Nil)
-    _answer, 0 -> Error("the pool did not stop")
-    _answer, _ -> ask_until_refused(pool, attempts - 1)
-  }
+/// The next pool event.
+pub fn next_pool_event(
+  pool_events: Subject(PoolEvent),
+) -> Result(PoolEvent, String) {
+  process.receive(pool_events, 5000)
+  |> map_error(fn(_timeout) { "no pool event within 5 seconds" })
 }
 
 /// Waits for the next `Disconnected` event, and drops the others.

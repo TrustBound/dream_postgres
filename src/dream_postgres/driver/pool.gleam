@@ -105,6 +105,18 @@ pub type PoolEvent {
   /// The member's connection is free for the next hold: connected, idle
   /// outside any transaction, and held by no one.
   MemberFree(slot: Int)
+  /// A hold found no free connection and waits in the queue, which now has
+  /// `waiting` holds.
+  HoldWaiting(waiting: Int)
+  /// The pool handed the member's connection to a hold.
+  MemberHeld(slot: Int)
+  /// The hold of the member's connection ended, and the member resets it.
+  MemberReturned(slot: Int)
+  /// The pool refused a hold with `error`.
+  HoldRefused(error: HoldError)
+  /// The pool started to stop: it refuses each new hold, and closes when
+  /// the last hold ended.
+  PoolStopping
 }
 
 /// Why a pool did not start.
@@ -692,6 +704,18 @@ fn check_out_request(
   let waiter = Waiter(id:, caller:, reply:, timer:)
   State(..state, waiters: append(state.waiters, [waiter]), next_id: id + 1)
   |> refuse_while_draining
+  |> settle_checkout(id)
+}
+
+/// A checkout that no free connection serves at once waits, and the
+/// subscriber hears how many wait.
+fn settle_checkout(state: State, waiter_id: Int) -> State {
+  let state = settle(state)
+  case list.any(state.waiters, waiter_has_id(_, waiter_id)) {
+    True -> tell(state, HoldWaiting(list.length(state.waiters)))
+    False -> Nil
+  }
+  state
 }
 
 /// A pool that drains refuses each checkout at once.
@@ -704,7 +728,7 @@ fn refuse_while_draining(state: State) -> State {
 
 fn expire(state: State, waiter_id: Int) -> State {
   let #(expired, others) = partition(state.waiters, waiter_has_id(_, waiter_id))
-  each(expired, refuse_waiter(_, HoldDeadlinePassed))
+  each(expired, refuse_waiter(state, _, HoldDeadlinePassed))
   State(..state, waiters: others)
 }
 
@@ -713,13 +737,14 @@ fn waiter_has_id(waiter: Waiter, id: Int) -> Bool {
 }
 
 fn refuse_waiters(state: State, error: HoldError) -> State {
-  each(state.waiters, refuse_waiter(_, error))
+  each(state.waiters, refuse_waiter(state, _, error))
   State(..state, waiters: [])
 }
 
-fn refuse_waiter(waiter: Waiter, error: HoldError) -> Nil {
+fn refuse_waiter(state: State, waiter: Waiter, error: HoldError) -> Nil {
   process.cancel_timer(waiter.timer)
   process.send(waiter.reply, Error(error))
+  tell(state, HoldRefused(error))
 }
 
 /// Hands free connections to the waiters, oldest first. When none is
@@ -787,12 +812,15 @@ fn hand_out(
   let holder = Holder(slot: slot_id, monitor: process.monitor(waiter.caller))
   process.send(waiter.reply, Ok(Lease(lease_id, connection, process.self())))
   let held = Slot(..slot, usage: HeldBy(lease_id), used_since_check: True)
-  State(
-    ..state,
-    slots: dict.insert(state.slots, slot_id, held),
-    holders: dict.insert(state.holders, lease_id, holder),
-    next_id: lease_id + 1,
-  )
+  let state =
+    State(
+      ..state,
+      slots: dict.insert(state.slots, slot_id, held),
+      holders: dict.insert(state.holders, lease_id, holder),
+      next_id: lease_id + 1,
+    )
+  tell(state, MemberHeld(slot_id))
+  state
 }
 
 /// The last connect error, while no connection is connected.
@@ -828,8 +856,11 @@ fn check_in(state: State, lease_id: Int) -> State {
 fn release(state: State, lease_id: Int, holder: Holder) -> State {
   process.demonitor_process(holder.monitor)
   let holders = dict.delete(state.holders, lease_id)
-  State(..state, holders:)
-  |> update_slot(holder.slot, returned(_, lease_id))
+  let state =
+    State(..state, holders:)
+    |> update_slot(holder.slot, returned(_, lease_id))
+  tell(state, MemberReturned(holder.slot))
+  state
 }
 
 fn returned(slot: Slot, lease_id: Int) -> Slot {
@@ -1010,6 +1041,10 @@ fn drain(
   replies: List(Subject(Nil)),
 ) -> State {
   process.send_after(state.subject, deadline_milliseconds, DrainDeadlinePassed)
+  let first_stop = state.phase == Serving
+  guard(when: !first_stop, return: Nil, otherwise: fn() {
+    tell(state, PoolStopping)
+  })
   State(
     ..state,
     phase: Draining,
