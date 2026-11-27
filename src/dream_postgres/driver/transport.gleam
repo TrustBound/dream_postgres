@@ -170,6 +170,18 @@ type TcpSocket
 
 type TlsSocket
 
+/// The reason of a failed socket call, as the FFI reads it.
+pub type SocketFailure {
+  /// A reason atom of `gen_tcp`, `inet` or `ssl`, for example
+  /// `econnreset`, `closed` or `timeout`.
+  ReasonAtom(reason: Atom)
+  /// A TLS alert that the `ssl` application sent or got, for example
+  /// `bad_record_mac`.
+  TlsAlert(alert: Atom)
+  /// A reason of any other shape, as the VM prints it.
+  OtherReason(text: String)
+}
+
 /// What the FFI checks of the certificate.
 type PeerCheck {
   SkipCheck
@@ -191,13 +203,20 @@ type AuthorityList {
 }
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_connect")
-fn tcp_connect(host: String, port: Int, timeout: Int) -> Result(TcpSocket, Atom)
+fn tcp_connect(
+  host: String,
+  port: Int,
+  timeout: Int,
+) -> Result(TcpSocket, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_send")
-fn tcp_send(socket: TcpSocket, bytes: BitArray) -> Result(Nil, Atom)
+fn tcp_send(socket: TcpSocket, bytes: BitArray) -> Result(Nil, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_receive")
-fn tcp_receive(socket: TcpSocket, timeout: Int) -> Result(BitArray, Atom)
+fn tcp_receive(
+  socket: TcpSocket,
+  timeout: Int,
+) -> Result(BitArray, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_close")
 fn tcp_close(socket: TcpSocket) -> Nil
@@ -209,13 +228,16 @@ fn tls_connect(
   authorities: AuthorityList,
   server_name: String,
   timeout: Int,
-) -> Result(TlsSocket, Atom)
+) -> Result(TlsSocket, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tls_send")
-fn tls_send(socket: TlsSocket, bytes: BitArray) -> Result(Nil, Atom)
+fn tls_send(socket: TlsSocket, bytes: BitArray) -> Result(Nil, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tls_receive")
-fn tls_receive(socket: TlsSocket, timeout: Int) -> Result(BitArray, Atom)
+fn tls_receive(
+  socket: TlsSocket,
+  timeout: Int,
+) -> Result(BitArray, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tls_close")
 fn tls_close(socket: TlsSocket) -> Nil
@@ -543,14 +565,26 @@ pub fn server_certificate(connection: Connection) -> Option(BitArray) {
 ///
 /// ## Parameters
 ///
-/// - `reason`: the error atom of `gen_tcp:connect`
+/// - `reason`: the failure of `gen_tcp:connect`
 /// - `host`: the host of the connect, for a failed DNS lookup
 ///
 /// ## Returns
 ///
 /// The typed error.
-pub fn connect_error(reason: Atom, host: String) -> TransportError {
-  case atom.to_string(reason) {
+pub fn connect_error(reason: SocketFailure, host: String) -> TransportError {
+  case reason {
+    ReasonAtom(atom) ->
+      connect_error_of_name(atom.to_string(atom), reason, host)
+    TlsAlert(..) | OtherReason(..) -> socket_error(reason)
+  }
+}
+
+fn connect_error_of_name(
+  name: String,
+  reason: SocketFailure,
+  host: String,
+) -> TransportError {
+  case name {
     "nxdomain" -> DnsLookupFailed(host)
     "timeout" -> ConnectTimedOut
     _ -> socket_error(reason)
@@ -561,13 +595,22 @@ pub fn connect_error(reason: Atom, host: String) -> TransportError {
 ///
 /// ## Parameters
 ///
-/// - `reason`: the error atom of `gen_tcp` or `ssl`
+/// - `reason`: the failure of `gen_tcp` or `ssl`
 ///
 /// ## Returns
 ///
-/// The typed error. A reason with no variant of its own is `Unlisted`.
-pub fn socket_error(reason: Atom) -> TransportError {
-  case atom.to_string(reason) {
+/// The typed error. A TLS alert is `TlsFailed` with the alert's name, and
+/// a reason with no variant of its own is `Unlisted`.
+pub fn socket_error(reason: SocketFailure) -> TransportError {
+  case reason {
+    ReasonAtom(atom) -> socket_error_of_name(atom.to_string(atom))
+    TlsAlert(alert) -> TlsFailed(OtherTlsFailure(atom.to_string(alert)))
+    OtherReason(text) -> Unlisted(text)
+  }
+}
+
+fn socket_error_of_name(name: String) -> TransportError {
+  case name {
     "econnrefused" -> ConnectRefused
     "closed" | "enotconn" -> SocketClosed
     "econnreset" -> ConnectionReset
@@ -585,8 +628,15 @@ pub fn socket_error(reason: Atom) -> TransportError {
 /// ## Returns
 ///
 /// The typed error.
-pub fn tls_error(reason: Atom) -> TransportError {
-  case atom.to_string(reason) {
+pub fn tls_error(reason: SocketFailure) -> TransportError {
+  case reason {
+    ReasonAtom(name) | TlsAlert(name) -> tls_error_of_name(atom.to_string(name))
+    OtherReason(text) -> TlsFailed(OtherTlsFailure(text))
+  }
+}
+
+fn tls_error_of_name(name: String) -> TransportError {
+  case name {
     "hostname_check_failed" -> TlsFailed(HostNameMismatch)
     "unknown_ca" -> TlsFailed(UnknownAuthority)
     "cert_expired" -> TlsFailed(CertificateExpired)
