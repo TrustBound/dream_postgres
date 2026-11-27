@@ -5,7 +5,7 @@
 //// no test sleeps. The advisory lock keys of these tests are 82600 to
 //// 82699.
 
-import dream_postgres/driver/catalog.{CatalogProcessDown}
+import dream_postgres/driver/catalog.{type Catalog, CatalogProcessDown}
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionConfig, type ConnectionEvent, type DriverError,
   type Outcome, Backoff, CacheStatements, ConnectionConfig,
@@ -33,11 +33,15 @@ import driver/servers.{type Server, driver_servers}
 import gleam/bit_array
 import gleam/dynamic
 import gleam/erlang/process.{
-  type Down, type ExitMessage, type ExitReason, type Pid, type Subject, Abnormal,
+  type Down, type ExitMessage, type ExitReason, type Name, type Pid,
+  type Subject, Abnormal,
 }
 import gleam/int.{to_string}
 import gleam/list.{map, unique}
 import gleam/option.{type Option, None, Some}
+import gleam/otp/actor
+import gleam/otp/static_supervisor
+import gleam/otp/supervision
 import gleam/result.{try}
 
 @external(erlang, "port_ffi", "free_port")
@@ -96,6 +100,7 @@ pub fn tests() -> TestSuite {
     group("connect errors", connect_error_tests()),
     group("replacing connections", replace_tests()),
     group("stopping", stop_tests()),
+    group("names", name_tests()),
   ])
 }
 
@@ -540,7 +545,7 @@ fn check_reset_after_running_request(server: Server) {
 }
 
 /// Each pool's catalog describes a type on a held connection, and stops
-/// with the pool.
+/// with the pool. After the stop, the pool gives no catalog.
 fn check_catalog(server: Server) {
   // Arrange
   let config = dream_config(server.port)
@@ -549,25 +554,26 @@ fn check_catalog(server: Server) {
   let descriptions = {
     use config <- try(config)
     use pool <- try(pool.start(config, 1) |> result.map_error(Start))
-    use described <- try(held(pool, describe_int4(pool, _)))
+    use types <- try(pool.catalog(pool) |> result.map_error(Checkout))
+    use described <- try(held(pool, describe_int4(types, _)))
     pool.stop(pool, 1000)
     use control <- with_control(server.port)
-    let after_stop = catalog.describe(pool.catalog(pool), control, 23, 5000)
-    Ok(#(described, result.replace(after_stop, Nil)))
+    let after_stop = catalog.describe(types, control, 23, 5000)
+    Ok(#(described, result.replace(after_stop, Nil), pool.catalog(pool)))
   }
 
   // Assert
   descriptions
   |> should
-  |> be_equal(Ok(#("int4", Error(CatalogProcessDown))))
-  |> or_fail_with("Expected int4, then CatalogProcessDown after the stop")
+  |> be_equal(Ok(#("int4", Error(CatalogProcessDown), Error(PoolStopped))))
+  |> or_fail_with("Expected int4, then no catalog after the stop")
 }
 
 fn describe_int4(
-  pool: Pool,
+  types: Catalog,
   connection: Connection,
 ) -> Result(String, Failure) {
-  catalog.describe(pool.catalog(pool), connection, 23, 5000)
+  catalog.describe(types, connection, 23, 5000)
   |> result.map(type_name)
   |> result.replace_error(Unexpected("no description of int4"))
 }
@@ -1402,4 +1408,163 @@ fn kill_supervisor(
 
 fn exit_reason(exit: ExitMessage) -> ExitReason {
   exit.reason
+}
+
+// Names -----------------------------------------------------------------------
+
+fn name_tests() {
+  [
+    it("gives PoolStopped for a name that no pool has", fn() {
+      // Arrange
+      let handle = pool.from_name(process.new_name("pool_test_unused"))
+
+      // Act
+      let answer = pool.hold(handle, 5000, backend_pid) |> result.replace(Nil)
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Error(PoolStopped))
+      |> or_fail_with("Expected PoolStopped")
+    }),
+    it("refuses a name that another pool has", fn() { check_name_taken() }),
+    it("ends a hold quietly when its pool stopped during it", fn() {
+      check_pool_gone_during_hold()
+    }),
+    it("keeps a handle of the name valid after a restart", fn() {
+      check_restart_under_name()
+    }),
+  ]
+}
+
+fn check_name_taken() {
+  // Arrange
+  let config = dream_config(first_server().port)
+  let name = process.new_name("pool_test_taken")
+
+  // Act
+  let second = {
+    use config <- try(config)
+    use first <- try(
+      pool.start_named(config, 1, name) |> result.map_error(Start),
+    )
+    let second = pool.start_named(config, 1, name) |> result.replace(Nil)
+    pool.stop(first, 1000)
+    Ok(second)
+  }
+
+  // Assert
+  second
+  |> should
+  |> be_equal(
+    Ok(
+      Error(
+        pool.PoolProcessStartFailed(actor.InitFailed("name already registered")),
+      ),
+    ),
+  )
+  |> or_fail_with("Expected the second start to fail on the name")
+}
+
+/// The callback stops the pool, so when the hold ends no process has the
+/// name, and the hold gives the callback's value.
+fn check_pool_gone_during_hold() {
+  // Arrange
+  let config = dream_config(first_server().port)
+  let name = process.new_name("pool_test_gone")
+
+  // Act
+  let answer = {
+    use config <- try(config)
+    use _started <- try(
+      pool.start_named(config, 1, name) |> result.map_error(Start),
+    )
+    let handle = pool.from_name(name)
+    pool.hold(handle, 5000, stop_inside(handle, _))
+    |> result.map_error(Checkout)
+  }
+
+  // Assert
+  answer
+  |> should
+  |> be_equal(Ok("stopped"))
+  |> or_fail_with("Expected the callback's value")
+}
+
+fn stop_inside(handle: Pool, _connection: Connection) -> String {
+  pool.stop(handle, 20)
+  "stopped"
+}
+
+/// A supervisor starts the pool under a name. The test kills the pool's
+/// manager; the supervisor starts it again under the name, and the handle
+/// that the test made from the name before gets a new connection.
+fn check_restart_under_name() {
+  // Arrange
+  let config = dream_config(first_server().port)
+  let name = process.new_name("pool_test_restart")
+  let handle = pool.from_name(name)
+
+  // Act
+  let pids = {
+    use config <- try(config)
+    use _supervisor <- try(
+      static_supervisor.new(static_supervisor.OneForOne)
+      |> static_supervisor.add(
+        supervision.worker(fn() { start_named_child(config, name) }),
+      )
+      |> static_supervisor.start
+      |> result.replace_error(Unexpected("no supervisor")),
+    )
+    use first <- try(held_backend_pid(handle))
+    use Nil <- try(kill_and_wait(name))
+    use second <- try(hold_until_back(handle, 100_000))
+    Ok(first != second)
+  }
+
+  // Assert
+  pids
+  |> should
+  |> be_equal(Ok(True))
+  |> or_fail_with("Expected a new connection through the same handle")
+}
+
+fn start_named_child(
+  config: PoolConfig,
+  name: Name(pool.PoolMessage),
+) -> Result(actor.Started(Pool), actor.StartError) {
+  use started <- try(
+    pool.start_named(config, 1, name)
+    |> result.replace_error(actor.InitFailed("the pool did not start")),
+  )
+  use pid <- try(
+    process.named(name)
+    |> result.replace_error(actor.InitFailed("no process has the name")),
+  )
+  Ok(actor.Started(pid:, data: started))
+}
+
+/// Kills the process of the name, and waits until it is down, so the name
+/// is free.
+fn kill_and_wait(name: Name(pool.PoolMessage)) -> Result(Nil, Failure) {
+  use pid <- try(
+    process.named(name) |> result.replace_error(Unexpected("no manager")),
+  )
+  let monitor = process.monitor(pid)
+  process.kill(pid)
+  process.new_selector()
+  |> process.select_specific_monitor(monitor, down_reason)
+  |> process.selector_receive(5000)
+  |> result.replace(Nil)
+  |> result.replace_error(Unexpected("the manager did not exit"))
+}
+
+/// Holds through the handle until the restarted pool answers: no sleep.
+fn hold_until_back(handle: Pool, attempts: Int) -> Result(String, Failure) {
+  case pool.hold(handle, 5000, backend_pid), attempts {
+    Ok(answer), _ -> answer
+    Error(PoolStopped), 0 -> Error(Unexpected("the pool did not come back"))
+    Error(PoolStopped), _ -> hold_until_back(handle, attempts - 1)
+    Error(error), _ -> Error(Checkout(error))
+  }
 }

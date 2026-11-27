@@ -25,6 +25,10 @@
 //// Each pool keeps all of its state in its own processes: two pools never
 //// share state, also when their settings are the same.
 ////
+//// A pool can start under a process name. A handle made from the name
+//// with `from_name` holds only the name, so it stays valid when a
+//// supervisor starts the pool again under the same name.
+////
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/catalog.{type Catalog}
@@ -40,7 +44,8 @@ import gleam/bool.{guard}
 import gleam/dict.{type Dict}
 import gleam/erlang/atom
 import gleam/erlang/process.{
-  type Down, type ExitMessage, type Monitor, type Pid, type Subject, type Timer,
+  type Down, type ExitMessage, type Monitor, type Name, type Pid, type Subject,
+  type Timer,
 }
 import gleam/int.{range}
 import gleam/list.{append, count, each, find, find_map, partition}
@@ -115,14 +120,11 @@ pub type PoolStatus {
   )
 }
 
-/// A pool.
+/// A pool: the subject of its manager process. For a pool that started
+/// under a name, the subject is the name's, so a handle stays valid when a
+/// supervisor starts the pool again under the same name.
 pub opaque type Pool {
-  Pool(subject: Subject(Message), pid: Pid, catalog: Catalog)
-}
-
-/// The manager process, as its initialiser gives it.
-type Manager {
-  Manager(subject: Subject(Message), pid: Pid, catalog: Catalog)
+  Pool(subject: Subject(PoolMessage))
 }
 
 /// A connection that a checkout gives, with the ID of the hold.
@@ -130,7 +132,9 @@ type Lease {
   Lease(id: Int, connection: Connection)
 }
 
-type Message {
+/// A message to the manager process of a pool. A name for `start_named`
+/// is a name for these messages.
+pub opaque type PoolMessage {
   CheckOut(
     caller: Pid,
     deadline_milliseconds: Int,
@@ -139,6 +143,7 @@ type Message {
   CheckIn(lease_id: Int)
   WaiterExpired(waiter_id: Int)
   StatusRequest(reply: Subject(PoolStatus))
+  CatalogRequest(reply: Subject(Catalog))
   StopRequest(deadline_milliseconds: Int, reply: Subject(Nil))
   DrainDeadlinePassed
   HealthCheckDue
@@ -212,7 +217,7 @@ type Phase {
 
 type State {
   State(
-    subject: Subject(Message),
+    subject: Subject(PoolMessage),
     settings: Settings,
     supervisor: Pid,
     /// The pool's type catalog, and its process.
@@ -253,18 +258,70 @@ type State {
 /// - `Error(StartError)`: a setting is not valid, or the manager did not
 ///   start
 pub fn start(config: PoolConfig, size: Int) -> Result(Pool, StartError) {
+  start_pool(config, size, None)
+}
+
+/// Starts a pool as `start` does, with its manager process registered
+/// under `name`. A supervisor that starts the pool again with the same
+/// name gives the name to the new manager, so a handle of `from_name`
+/// stays valid. The name must come from `process.new_name`, made once when
+/// the program starts.
+///
+/// ## Parameters
+///
+/// - `config`: the connection settings and the deadlines
+/// - `size`: the number of connections, 1 or more
+/// - `name`: the name of the manager process
+///
+/// ## Returns
+///
+/// - `Ok(Pool)`: the pool runs under the name, and its members connect
+/// - `Error(StartError)`: a setting is not valid, or the manager did not
+///   start, for example because another process has the name
+pub fn start_named(
+  config: PoolConfig,
+  size: Int,
+  name: Name(PoolMessage),
+) -> Result(Pool, StartError) {
+  start_pool(config, size, Some(name))
+}
+
+/// The pool that runs, or will run, under a name. It makes the handle
+/// from the name alone, with no call to the pool, so a handle made once
+/// stays valid when the pool starts again under the name.
+///
+/// ## Parameters
+///
+/// - `name`: the name of `start_named`
+///
+/// ## Returns
+///
+/// A handle of the pool. While no pool has the name, each call with it
+/// gives `PoolStopped`.
+pub fn from_name(name: Name(PoolMessage)) -> Pool {
+  Pool(subject: process.named_subject(name))
+}
+
+fn start_pool(
+  config: PoolConfig,
+  size: Int,
+  name: Option(Name(PoolMessage)),
+) -> Result(Pool, StartError) {
   use <- guard(size < 1, Error(InvalidSize(size)))
   let interval = config.health_check_interval_milliseconds
   use <- guard(interval < 1, Error(InvalidHealthCheckInterval(interval)))
-  use started <- try(start_manager(config, size))
-  let Manager(subject:, pid:, catalog:) = started.data
-  Ok(Pool(subject:, pid:, catalog:))
+  start_manager(config, size, name) |> result.map(started_pool)
+}
+
+fn started_pool(started: actor.Started(Subject(PoolMessage))) -> Pool {
+  Pool(subject: started.data)
 }
 
 fn start_manager(
   config: PoolConfig,
   size: Int,
-) -> Result(actor.Started(Manager), StartError) {
+  name: Option(Name(PoolMessage)),
+) -> Result(actor.Started(Subject(PoolMessage)), StartError) {
   let settings =
     Settings(
       size:,
@@ -279,8 +336,19 @@ fn start_manager(
     )
   actor.new_with_initialiser(5000, initialise(_, settings, member_config))
   |> actor.on_message(handle_message)
+  |> with_name(name)
   |> actor.start
   |> map_error(PoolProcessStartFailed)
+}
+
+fn with_name(
+  builder: actor.Builder(State, PoolMessage, Subject(PoolMessage)),
+  name: Option(Name(PoolMessage)),
+) -> actor.Builder(State, PoolMessage, Subject(PoolMessage)) {
+  case name {
+    Some(name) -> actor.named(builder, name)
+    None -> builder
+  }
 }
 
 /// Starts the pool's catalog, linked to the manager, and the supervisor of
@@ -288,10 +356,10 @@ fn start_manager(
 /// child specification, because its start gives the process ID that the
 /// manager needs to know the catalog's exit.
 fn initialise(
-  subject: Subject(Message),
+  subject: Subject(PoolMessage),
   settings: Settings,
   member_config: pool_member.MemberConfig,
-) -> Result(actor.Initialised(State, Message, Manager), String) {
+) -> Result(actor.Initialised(State, PoolMessage, Subject(PoolMessage)), String) {
   process.trap_exits(True)
   use catalog <- try(
     catalog.supervised(None).start()
@@ -323,10 +391,10 @@ fn add_member(
 fn initialised(
   supervisor: actor.Started(static_supervisor.Supervisor),
   catalog: actor.Started(Catalog),
-  subject: Subject(Message),
+  subject: Subject(PoolMessage),
   settings: Settings,
   reports: Subject(MemberReport),
-) -> actor.Initialised(State, Message, Manager) {
+) -> actor.Initialised(State, PoolMessage, Subject(PoolMessage)) {
   let selector =
     process.new_selector()
     |> process.select(subject)
@@ -341,15 +409,11 @@ fn initialised(
   new_state(subject, settings, supervisor.pid, catalog)
   |> actor.initialised
   |> actor.selecting(selector)
-  |> actor.returning(Manager(
-    subject:,
-    pid: process.self(),
-    catalog: catalog.data,
-  ))
+  |> actor.returning(subject)
 }
 
 fn new_state(
-  subject: Subject(Message),
+  subject: Subject(PoolMessage),
   settings: Settings,
   supervisor: Pid,
   catalog: actor.Started(Catalog),
@@ -370,7 +434,7 @@ fn new_state(
   )
 }
 
-fn monitor_fired(down: Down) -> Message {
+fn monitor_fired(down: Down) -> PoolMessage {
   MonitorFired(down.monitor)
 }
 
@@ -421,8 +485,18 @@ pub fn hold(
 ) -> Result(value, HoldError) {
   use lease <- result.map(check_out(pool, deadline_milliseconds))
   let value = callback(lease.connection)
-  process.send(pool.subject, CheckIn(lease.id))
+  check_in_lease(pool, lease)
   value
+}
+
+/// Ends the hold at the manager that gave the lease, or at the manager that
+/// took over its name, which knows no such lease and changes nothing. When
+/// no manager runs, there is nothing to end.
+fn check_in_lease(pool: Pool, lease: Lease) -> Nil {
+  case manager_pid(pool) {
+    Ok(_manager) -> process.send(pool.subject, CheckIn(lease.id))
+    Error(_gone) -> Nil
+  }
 }
 
 fn check_out(
@@ -434,7 +508,8 @@ fn check_out(
 }
 
 /// The type catalog of the pool. Each pool has its own catalog, which
-/// starts empty and stops with the pool.
+/// starts empty and stops with the pool. The handle asks the manager for
+/// it, because a pool that starts again under its name has a new catalog.
 ///
 /// ## Parameters
 ///
@@ -442,9 +517,11 @@ fn check_out(
 ///
 /// ## Returns
 ///
-/// The pool's catalog, for the lookups of the codecs.
-pub fn catalog(pool: Pool) -> Catalog {
-  pool.catalog
+/// - `Ok(Catalog)`: the catalog of the manager that runs now, for the
+///   lookups of the codecs
+/// - `Error(PoolStopped)`: the pool is gone
+pub fn catalog(pool: Pool) -> Result(Catalog, HoldError) {
+  ask(pool, CatalogRequest)
 }
 
 /// The state of the pool now: its connections, its holds, its queue and
@@ -463,13 +540,15 @@ pub fn status(pool: Pool) -> Result(PoolStatus, HoldError) {
 }
 
 /// Sends a request to the manager and waits for its answer. The manager
-/// answers each request; a manager that is gone gives `PoolStopped`.
+/// answers each request; a manager that is gone, or a name that no
+/// manager has, gives `PoolStopped`.
 fn ask(
   pool: Pool,
-  make: fn(Subject(reply)) -> Message,
+  make: fn(Subject(reply)) -> PoolMessage,
 ) -> Result(reply, HoldError) {
+  use manager <- try(manager_pid(pool))
   let reply_to = process.new_subject()
-  let monitor = process.monitor(pool.pid)
+  let monitor = process.monitor(manager)
   process.send(pool.subject, make(reply_to))
   let answer =
     process.new_selector()
@@ -480,6 +559,11 @@ fn ask(
   answer
 }
 
+/// The manager process of the pool, or of its name now.
+fn manager_pid(pool: Pool) -> Result(Pid, HoldError) {
+  process.subject_owner(pool.subject) |> result.replace_error(PoolStopped)
+}
+
 fn pool_down(_down: Down) -> Result(reply, HoldError) {
   Error(PoolStopped)
 }
@@ -488,8 +572,8 @@ fn pool_down(_down: Down) -> Result(reply, HoldError) {
 
 fn handle_message(
   state: State,
-  message: Message,
-) -> actor.Next(State, Message) {
+  message: PoolMessage,
+) -> actor.Next(State, PoolMessage) {
   case message {
     CheckOut(caller:, deadline_milliseconds:, reply:) ->
       check_out_request(state, caller, deadline_milliseconds, reply) |> next
@@ -497,6 +581,10 @@ fn handle_message(
     WaiterExpired(waiter_id:) -> expire(state, waiter_id) |> next
     StatusRequest(reply:) -> {
       process.send(reply, status_of(state))
+      actor.continue(state)
+    }
+    CatalogRequest(reply:) -> {
+      process.send(reply, state.catalog)
       actor.continue(state)
     }
     StopRequest(deadline_milliseconds:, reply:) ->
@@ -511,14 +599,14 @@ fn handle_message(
 
 /// While the pool serves, it hands each free connection to the oldest
 /// waiter. While it drains, it closes when the last hold ended.
-fn next(state: State) -> actor.Next(State, Message) {
+fn next(state: State) -> actor.Next(State, PoolMessage) {
   case state.phase {
     Serving -> actor.continue(settle(state))
     Draining -> drained(state)
   }
 }
 
-fn drained(state: State) -> actor.Next(State, Message) {
+fn drained(state: State) -> actor.Next(State, PoolMessage) {
   case dict.is_empty(state.holders) {
     True -> shut_down(state)
     False -> actor.continue(state)
@@ -833,7 +921,7 @@ fn drain(
 fn exit_received(
   state: State,
   exit: ExitMessage,
-) -> actor.Next(State, Message) {
+) -> actor.Next(State, PoolMessage) {
   case exit.pid == state.supervisor || exit.pid == state.catalog_pid {
     True -> stop_with_error("a process of the pool stopped")
     False ->
@@ -844,7 +932,7 @@ fn exit_received(
 /// Stops the manager with an exit reason that is not normal. The manager
 /// traps exits, so the exit signal that `stop_abnormal` sends to its own
 /// process would only be a message: the manager stops trapping first.
-fn stop_with_error(reason: String) -> actor.Next(State, Message) {
+fn stop_with_error(reason: String) -> actor.Next(State, PoolMessage) {
   process.trap_exits(False)
   actor.stop_abnormal(reason)
 }
@@ -852,7 +940,7 @@ fn stop_with_error(reason: String) -> actor.Next(State, Message) {
 /// Shuts the members' supervisor down, which makes each member send
 /// Terminate on its connection, and waits until it is down. Then the
 /// catalog stops, and each caller of `stop` gets its answer.
-fn shut_down(state: State) -> actor.Next(State, Message) {
+fn shut_down(state: State) -> actor.Next(State, PoolMessage) {
   let monitor = process.monitor(state.supervisor)
   process.send_abnormal_exit(state.supervisor, atom.create("shutdown"))
   process.new_selector()
