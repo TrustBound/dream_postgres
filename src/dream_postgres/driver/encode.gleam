@@ -61,7 +61,7 @@ pub fn encode(message: FrontendMessage) -> Result(BitArray, EncodeError) {
   case message {
     StartupMessage(version:, user:, parameters:) ->
       startup_message(version, user, parameters)
-    SslRequest -> Ok(<<8:32, ssl_request_code:32>>)
+    SslRequest -> Ok(ssl_request())
     GssEncryptionRequest -> Ok(<<8:32, gss_encryption_request_code:32>>)
     CancelRequest(process_id:, secret_key:) ->
       cancel_request(process_id, secret_key)
@@ -87,6 +87,16 @@ pub fn encode(message: FrontendMessage) -> Result(BitArray, EncodeError) {
     CopyFail(message:) -> string_message("f", "message", message)
     Terminate -> Ok(<<"X", 4:32>>)
   }
+}
+
+/// The bytes of an SSLRequest. It has no field, so it cannot fail, and the
+/// transport sends it without a `Result`.
+///
+/// ## Returns
+///
+/// The eight bytes of the SSLRequest.
+pub fn ssl_request() -> BitArray {
+  <<8:32, ssl_request_code:32>>
 }
 
 fn startup_message(
@@ -224,9 +234,8 @@ fn cell_value(value: Cell) -> Result(BitArray, EncodeError) {
 fn optional_value(value: Option(BitArray)) -> Result(BitArray, EncodeError) {
   case value {
     Some(bytes) -> {
-      let size = byte_size(bytes)
-      use <- guard(size > largest_length, Error(MessageTooLong(size)))
-      Ok(<<size:32, bytes:bits>>)
+      use size <- map(length_field(byte_size(bytes)))
+      <<size:bits, bytes:bits>>
     }
     None -> Ok(<<-1:32>>)
   }
@@ -317,7 +326,22 @@ fn unframed(body: BitArray) -> Result(BitArray, EncodeError) {
 
 /// The length field counts itself and the body, not the type byte.
 fn message_length(body: BitArray) -> Result(BitArray, EncodeError) {
-  let total = byte_size(body) + 4
-  use <- guard(total > largest_length, Error(MessageTooLong(total)))
-  Ok(<<total:32>>)
+  length_field(byte_size(body) + 4)
+}
+
+/// Writes a 32-bit length field: of a whole message, or of one value of a
+/// Bind, a FunctionCall or a SASLInitialResponse. The protocol reads it as
+/// a signed number, so the largest length is 2147483647.
+///
+/// ## Parameters
+///
+/// - `byte_count`: the length to write
+///
+/// ## Returns
+///
+/// - `Ok(bytes)`: the four bytes of the length
+/// - `Error(MessageTooLong(byte_count))`: the length is above 2147483647
+pub fn length_field(byte_count: Int) -> Result(BitArray, EncodeError) {
+  use <- guard(byte_count > largest_length, Error(MessageTooLong(byte_count)))
+  Ok(<<byte_count:32>>)
 }
