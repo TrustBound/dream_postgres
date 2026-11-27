@@ -175,10 +175,24 @@ fn rename(span: Span, operation: Option(String)) -> Nil {
 /// - `Some(code)`: the last code of class 01
 /// - `None`: no code of class 01
 pub fn last_warning_code(codes: List(String)) -> Option(String) {
-  list.fold(codes, None, keep_warning_code)
+  list.fold(codes, None, later_warning_code)
 }
 
-fn keep_warning_code(last: Option(String), code: String) -> Option(String) {
+/// The last warning code after one more notice: `code` when it is of
+/// class 01, else `last`.
+///
+/// ## Parameters
+///
+/// - `last`: the last warning code so far
+/// - `code`: the SQLSTATE of the next notice
+///
+/// ## Returns
+///
+/// The last warning code.
+pub fn later_warning_code(
+  last: Option(String),
+  code: String,
+) -> Option(String) {
   case string.starts_with(code, "01") {
     True -> Some(code)
     False -> last

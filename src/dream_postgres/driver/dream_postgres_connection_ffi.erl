@@ -62,12 +62,13 @@ receive_push(Alias, Timeout) ->
         {error, call_deadline_passed}
     end.
 
-%% Waits for the end of a COPY (the Gleam record {pushed_end, Result}),
+%% Waits for the end of a COPY (the Gleam record
+%% {pushed_end, Result, WarningCode}), giving {Result, WarningCode},
 %% for the end of the process, or for Timeout milliseconds. It takes no
 %% row: none comes after the caller ended its side.
 receive_end(Alias, Timeout) ->
     receive
-        {Alias, {pushed_end, Result}} -> {ok, Result};
+        {Alias, {pushed_end, Result, WarningCode}} -> {ok, {Result, WarningCode}};
         {'DOWN', Alias, process, _Pid, _Reason} -> {error, call_process_down}
     after Timeout ->
         {error, call_deadline_passed}

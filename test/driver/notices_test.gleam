@@ -46,7 +46,7 @@ const nonstandard_strings_sql =
 
 /// Makes a function that warns, for a COPY of its result.
 const warning_function_sql =
-  "CREATE FUNCTION pg_temp.warn() RETURNS int LANGUAGE plpgsql AS $$BEGIN RAISE WARNING 'copied'; RETURN 1; END$$"
+  "CREATE OR REPLACE FUNCTION pg_temp.warn() RETURNS int LANGUAGE plpgsql AS $$BEGIN RAISE WARNING 'copied'; RETURN 1; END$$"
 
 fn subscriber_tests() {
   group("the notices subscriber gets", [

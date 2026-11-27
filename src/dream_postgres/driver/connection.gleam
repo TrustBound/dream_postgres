@@ -575,6 +575,18 @@ type CopyEnding {
   AbandonCopy
 }
 
+/// A prepared statement, with the last warning code of its prepare for
+/// its span.
+type Prepared {
+  Prepared(description: StatementDescription, warning_code: Option(String))
+}
+
+/// What the caller of a COPY gets at its end: its value, with the last
+/// warning code of the COPY for its span.
+type CopyDone(value) {
+  CopyDone(value: value, warning_code: Option(String))
+}
+
 /// What the process pushes to the caller of a COPY. The caller waits for
 /// a push or for the end of the process, so each wait ends.
 type CopyPush {
@@ -583,7 +595,7 @@ type CopyPush {
   PushedRow(row: BitArray)
   /// The end of the COPY: its row count, or why there is none. The
   /// process pushes it once.
-  PushedEnd(result: Result(Int, CopyFault))
+  PushedEnd(result: Result(Int, CopyFault), warning_code: Option(String))
 }
 
 /// The caller's side of a COPY that runs.
@@ -645,10 +657,7 @@ type Request {
 
 /// A request about one statement, which the statement cache serves.
 type StatementRequest {
-  PrepareStatement(
-    sql: String,
-    reply: ReplyTo(Result(StatementDescription, PrepareError)),
-  )
+  PrepareStatement(sql: String, reply: ReplyTo(Result(Prepared, PrepareError)))
   RunStatement(details: RunDetails)
 }
 
@@ -670,7 +679,7 @@ type Running {
   /// A prepare of the unnamed statement, with no cache.
   RunningPrepare(
     state: PrepareState,
-    reply: ReplyTo(Result(StatementDescription, PrepareError)),
+    reply: ReplyTo(Result(Prepared, PrepareError)),
   )
   /// A run in one round trip on the unnamed statement, with no cache.
   RunningRun(
@@ -735,8 +744,12 @@ type State {
     next_id: Int,
     /// The key of this session for a CancelRequest.
     cancel_key: Option(CancelKey),
-    /// The notices and notifications since the last outcome, newest first.
+    /// The notices of the running request and the notifications since the
+    /// last outcome, newest first.
     pending: List(AsynchronousMessage),
+    /// The last warning code (class 01) of the running request, for the
+    /// span of a request whose result holds no notices.
+    warning_code: Option(String),
     /// The named statements of this session.
     cache: StatementCache,
     /// A COPY that ended, until its caller finishes its side.
@@ -817,7 +830,7 @@ fn receive_push(
 fn receive_end(
   pushes: ReplyTo(CopyPush),
   timeout: Int,
-) -> Result(Result(Int, CopyFault), CallFailure)
+) -> Result(#(Result(Int, CopyFault), Option(String)), CallFailure)
 
 /// Turns the pushes off: a push that comes later is dropped, and the
 /// pushes that wait in the mailbox are taken out.
@@ -1026,6 +1039,7 @@ fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
     next_id: 1,
     cancel_key: None,
     pending: [],
+    warning_code: None,
     cache: new_cache(config),
     copy: None,
   )
@@ -1136,9 +1150,9 @@ fn traced(
   result
 }
 
-fn prepare_ending(result: Result(value, PrepareError)) -> SpanEnd {
+fn prepare_ending(result: Result(Prepared, PrepareError)) -> SpanEnd {
   case result {
-    Ok(_value) -> Worked(operation: None, warning_code: None)
+    Ok(prepared) -> Worked(operation: None, warning_code: prepared.warning_code)
     Error(error) ->
       failed_ending(prepare_error_name(error), prepare_report(error))
   }
@@ -1179,9 +1193,9 @@ fn script_ending(result: Result(List(Outcome), ScriptError)) -> SpanEnd {
 
 /// The server confirmed the COPY with its CopyInResponse or
 /// CopyOutResponse, and ends it with the tag `COPY`.
-fn copy_ending(result: Result(value, CopyError(reason))) -> SpanEnd {
+fn copy_ending(result: Result(CopyDone(value), CopyError(reason))) -> SpanEnd {
   case result {
-    Ok(_value) -> Worked(operation: Some("COPY"), warning_code: None)
+    Ok(done) -> Worked(operation: Some("COPY"), warning_code: done.warning_code)
     Error(error) -> failed_ending(copy_error_name(error), copy_report(error))
   }
 }
@@ -1331,13 +1345,16 @@ pub fn prepare(
   statement: Statement,
   deadline_milliseconds: Int,
 ) -> Result(StatementDescription, PrepareError) {
-  use <- traced(connection, statement, Some(statement.sql), _, prepare_ending)
-  request(
-    connection,
-    prepare_request(statement.sql, _),
-    deadline_milliseconds,
-    PrepareFailed,
-  )
+  {
+    use <- traced(connection, statement, Some(statement.sql), _, prepare_ending)
+    request(
+      connection,
+      prepare_request(statement.sql, _),
+      deadline_milliseconds,
+      PrepareFailed,
+    )
+  }
+  |> result.map(fn(prepared) { prepared.description })
 }
 
 /// Runs a statement with its parameters. Each cell carries its own format.
@@ -1688,18 +1705,21 @@ pub fn copy_from(
   deadline_milliseconds: Int,
   produce: fn(CopySender) -> Result(Nil, reason),
 ) -> Result(Int, CopyError(reason)) {
-  use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
-  use sender <- with_sender(connection, deadline_milliseconds)
-  use Nil <- try(start_copy(
-    sender,
-    CopyFrom,
-    statement.sql,
-    deadline_milliseconds,
-  ))
-  case produce(sender) {
-    Ok(Nil) -> end_copy(sender, CompleteCopy)
-    Error(reason) -> end_copy(sender, AbandonCopy) |> abandoned(reason)
+  {
+    use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
+    use sender <- with_sender(connection, deadline_milliseconds)
+    use Nil <- try(start_copy(
+      sender,
+      CopyFrom,
+      statement.sql,
+      deadline_milliseconds,
+    ))
+    case produce(sender) {
+      Ok(Nil) -> end_copy(sender, CompleteCopy)
+      Error(reason) -> end_copy(sender, AbandonCopy) |> abandoned(reason)
+    }
   }
+  |> result.map(fn(done) { done.value })
 }
 
 /// Sends one chunk of the data of a `copy_from`, and returns when the
@@ -1779,15 +1799,18 @@ pub fn copy_to(
   initial: value,
   fold: fn(value, BitArray) -> Result(value, reason),
 ) -> Result(value, CopyError(reason)) {
-  use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
-  use sender <- with_sender(connection, deadline_milliseconds)
-  use Nil <- try(start_copy(
-    sender,
-    CopyTo,
-    statement.sql,
-    deadline_milliseconds,
-  ))
-  read_rows(sender, initial, fold)
+  {
+    use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
+    use sender <- with_sender(connection, deadline_milliseconds)
+    use Nil <- try(start_copy(
+      sender,
+      CopyTo,
+      statement.sql,
+      deadline_milliseconds,
+    ))
+    read_rows(sender, initial, fold)
+  }
+  |> result.map(fn(done) { done.value })
 }
 
 /// Runs `copy` with a new sender, and turns the sender's pushes off after
@@ -1886,11 +1909,12 @@ fn read_rows(
   sender: CopySender,
   accumulator: value,
   fold: fn(value, BitArray) -> Result(value, reason),
-) -> Result(value, CopyError(reason)) {
+) -> Result(CopyDone(value), CopyError(reason)) {
   case next_push(sender) {
     Ok(PushedRow(row:)) -> fold_row(sender, fold(accumulator, row), fold)
-    Ok(PushedEnd(result:)) ->
-      take_end(sender, result) |> result.replace(accumulator)
+    Ok(PushedEnd(result:, warning_code:)) ->
+      take_end(sender, result)
+      |> result.replace(CopyDone(accumulator, warning_code))
     Error(error) -> Error(leave_copy(sender, error))
   }
 }
@@ -1901,7 +1925,7 @@ fn fold_row(
   sender: CopySender,
   folded: Result(value, reason),
   fold: fn(value, BitArray) -> Result(value, reason),
-) -> Result(value, CopyError(reason)) {
+) -> Result(CopyDone(value), CopyError(reason)) {
   case folded {
     Ok(accumulator) -> {
       notify(sender, RowTaken)
@@ -1925,9 +1949,9 @@ fn take_end(
 /// refusal is the server's answer to the CopyFail, or the error that made
 /// the function fail; any other error is a failure of the connection.
 fn abandoned(
-  ended: Result(Int, CopyError(reason)),
+  ended: Result(CopyDone(Int), CopyError(reason)),
   reason: reason,
-) -> Result(value, CopyError(reason)) {
+) -> Result(CopyDone(value), CopyError(reason)) {
   case ended {
     Ok(_count) | Error(CopyRefused(..)) -> Error(AppFailed(reason))
     Error(AppFailed(..) as error)
@@ -1944,10 +1968,13 @@ fn abandoned(
 fn end_copy(
   sender: CopySender,
   ending: CopyEnding,
-) -> Result(Int, CopyError(reason)) {
+) -> Result(CopyDone(Int), CopyError(reason)) {
   notify(sender, Finish(ending))
   case receive_end(sender.pushes, sender.wait_milliseconds) {
-    Ok(ended) -> map_error(ended, copy_fault_error)
+    Ok(#(ended, warning_code)) ->
+      ended
+      |> result.map(CopyDone(_, warning_code))
+      |> map_error(copy_fault_error)
     Error(failure) ->
       Error(leave_copy(sender, CopyFailed(call_failure(failure))))
   }
@@ -1955,7 +1982,7 @@ fn end_copy(
 
 fn prepare_request(
   sql: String,
-  reply_to: ReplyTo(Result(StatementDescription, PrepareError)),
+  reply_to: ReplyTo(Result(Prepared, PrepareError)),
 ) -> Request {
   StatementRequest(PrepareStatement(sql, reply_to))
 }
@@ -2140,6 +2167,7 @@ fn accept_request(state: State, ticket: Ticket) -> State {
         ..state,
         current: Some(current),
         pending: list.filter(state.pending, is_notification),
+        warning_code: None,
       )
       |> begin(socket, ticket.request)
     }
@@ -2271,7 +2299,7 @@ fn serve_cached(
 ) -> State {
   case statement {
     PrepareStatement(reply: reply_to, ..) -> {
-      reply(reply_to, Ok(cached.description))
+      reply(reply_to, Ok(Prepared(cached.description, warning_code: None)))
       next_request(state)
     }
     RunStatement(details) -> run_cached(state, socket, details, cached)
@@ -2443,7 +2471,7 @@ fn refuse_running(running: Running, failure: RequestFailure) -> Nil {
     RunningCachedRun(details:, ..) ->
       reply(details.reply, Error(RunFailed(failure)))
     RunningCopy(session:, ..) ->
-      answer_session(session, Error(CopyFaultFailed(failure)))
+      answer_session(session, Error(CopyFaultFailed(failure)), None)
   }
 }
 
@@ -2731,7 +2759,7 @@ fn advance(
 }
 
 fn prepare_finisher(
-  reply_to: ReplyTo(Result(StatementDescription, PrepareError)),
+  reply_to: ReplyTo(Result(Prepared, PrepareError)),
 ) -> Finisher(query.Outcome(StatementDescription, ServerReport)) {
   fn(state, _socket, outcome) { finish_prepare(state, outcome, reply_to) }
 }
@@ -2841,11 +2869,15 @@ fn failed(
 fn finish_prepare(
   state: State,
   outcome: query.Outcome(StatementDescription, ServerReport),
-  reply_to: ReplyTo(Result(StatementDescription, PrepareError)),
+  reply_to: ReplyTo(Result(Prepared, PrepareError)),
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
   let tracker = track_prepare(state.tracker, outcome)
-  let result = outcome.result |> map_error(PrepareRefused(_, outcome.status))
+  let warning_code = state.warning_code
+  let result =
+    outcome.result
+    |> result.map(Prepared(_, warning_code:))
+    |> map_error(PrepareRefused(_, outcome.status))
   reply(reply_to, result)
   State(..state, tracker:)
 }
@@ -2954,7 +2986,9 @@ fn prepared(
 ) -> State {
   case request {
     PrepareStatement(reply: reply_to, ..) -> {
-      reply(reply_to, Ok(cached.description))
+      let prepared =
+        Prepared(cached.description, warning_code: state.warning_code)
+      reply(reply_to, Ok(prepared))
       state
     }
     RunStatement(details) -> run_prepared(state, socket, details, cached)
@@ -3128,7 +3162,11 @@ fn keep_asynchronous(state: State, message: AsynchronousMessage) -> State {
     }
     Notice(report:), _subscriber -> {
       send_notice(state, report)
-      State(..state, pending: [message, ..state.pending])
+      State(
+        ..state,
+        pending: [message, ..state.pending],
+        warning_code: trace.later_warning_code(state.warning_code, report.code),
+      )
     }
     query.Notification(..), None | ParameterChanged(..), _subscriber ->
       State(..state, pending: [message, ..state.pending])
@@ -3294,9 +3332,10 @@ fn copy_finished(
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
   let tracker = track_step(state.tracker, outcome)
+  let warning_code = state.warning_code
   let #(state, ended) = copy_result(state, outcome)
   let ended = deadline_result(state, ended)
-  State(..state, tracker:, copy: settle_copy(session, ended))
+  State(..state, tracker:, copy: settle_copy(session, ended, warning_code))
   |> next_request
 }
 
@@ -3338,20 +3377,25 @@ fn deadline_result(
 fn settle_copy(
   session: CopySession,
   ended: Result(Int, CopyFault),
+  warning_code: Option(String),
 ) -> Option(EndedCopy) {
-  answer_session(session, ended)
+  answer_session(session, ended, warning_code)
   close_session(session, ended)
 }
 
 /// Gives the end of the COPY to each chunk that waits for it, and to the
 /// caller: to its start, when it still waits for the start, else as a
 /// push.
-fn answer_session(session: CopySession, ended: Result(Int, CopyFault)) -> Nil {
+fn answer_session(
+  session: CopySession,
+  ended: Result(Int, CopyFault),
+  warning_code: Option(String),
+) -> Nil {
   list.each(session.waiting_chunks, reply(_, chunk_answer(ended)))
   case session.start {
     Some(start) ->
       reply(start, result.replace(ended, Nil) |> map_error(StartEnded))
-    None -> reply(session.pushes, PushedEnd(ended))
+    None -> reply(session.pushes, PushedEnd(ended, warning_code))
   }
 }
 

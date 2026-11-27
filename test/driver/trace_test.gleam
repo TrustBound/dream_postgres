@@ -6,7 +6,7 @@
 import dream_postgres/driver/catalog
 import dream_postgres/driver/connection.{
   type Connection, copy_from, copy_to, named, prepare, run, run_script,
-  statement,
+  statement, stop,
 }
 import dream_postgres/driver/listener.{type Listener}
 import dream_postgres/driver/login.{PreferChannelBinding}
@@ -19,8 +19,10 @@ import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit
 import dream_test/unit_context.{describe, it}
-import driver/proxy.{type Proxy, start_proxy, stop_proxy}
-import driver/server_connection.{connection_setup}
+import driver/proxy.{type Proxy, answer_next_request, start_proxy, stop_proxy}
+import driver/server_connection.{
+  connection_setup, run_control_script, start_connection,
+}
 import driver/server_listener.{start_listener, subscribe_to}
 import driver/server_pool.{
   type ProxiedPool, health_check_config, start_proxied_pool, stop_proxied_pool,
@@ -34,6 +36,8 @@ import driver/test_tracer.{
 }
 import fixtures/copy_callbacks.{collect_row, send_then_fail}
 import fixtures/expected_failure.{expect_failure}
+import fixtures/notice_bytes.{warning_notice_bytes}
+import gleam/bit_array
 import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/option.{None, Some}
@@ -50,6 +54,7 @@ pub fn tests() -> TestSuite {
   suite.group("the span of a statement", [
     statement_tests(),
     copy_tests(),
+    prepare_warning_tests(),
     span_tests(),
     housekeeping_tests(),
   ])
@@ -159,6 +164,13 @@ const several_warnings_sql =
 /// A statement that raises a warning, then fails.
 const warns_then_fails_sql =
   "DO $$BEGIN RAISE WARNING 'disk almost full'; RAISE EXCEPTION 'boom'; END$$"
+
+/// Makes a function that warns, for a COPY of its result.
+const warning_function_sql =
+  "CREATE OR REPLACE FUNCTION pg_temp.warn() RETURNS int LANGUAGE plpgsql AS $$BEGIN RAISE WARNING 'copied'; RETURN 1; END$$"
+
+/// A COPY of the result of the function that warns.
+const warning_copy_sql = "COPY (SELECT pg_temp.warn()) TO STDOUT"
 
 /// A statement that raises a notice of the code 00000 only.
 const notice_sql = "DO $$BEGIN RAISE NOTICE 'plain'; END$$"
@@ -528,8 +540,97 @@ fn statement_tests() -> TestSuite {
   ])
 }
 
+/// A prepare whose answer comes from the proxy: a warning 01000, then the
+/// answer of a statement with no parameter and no row.
+fn prepare_warning_tests() -> TestSuite {
+  unit.describe("of a prepare", [
+    unit.it("records the warning code of its own notice", fn() {
+      {
+        use #(proxy_port, proxy) <- try(start_proxy(first_driver_server.port))
+        use connection <- try(start_connection(proxy_port))
+        record_spans_here()
+        answer_next_request(
+          proxy,
+          bit_array.concat([
+            warning_notice_bytes("01000", "while preparing"),
+            <<"1":utf8, 4:32, "t":utf8, 6:32, 0:16, "n":utf8, 4:32>>,
+            <<"Z":utf8, 5:32, "I":utf8>>,
+          ]),
+        )
+        let span = {
+          use _description <- try(
+            prepare(connection, statement("SELECT 1 WHERE false"), 5000)
+            |> map_error(inspect),
+          )
+          next_span()
+        }
+        stop(connection)
+        stop_proxy(proxy)
+        span
+      }
+      |> should
+      |> be_ok
+      |> extract_span_attribute(key: "db.response.status_code")
+      |> be_equal(Some("01000"))
+      |> or_fail_with("Expected the code 01000 on the span of the prepare")
+    }),
+  ])
+}
+
 fn copy_tests() -> TestSuite {
   describe("of a COPY", connection_setup(first_driver_server), [
+    it("records the warning code of its own notice", fn(connection: Connection) {
+      {
+        use Nil <- try(run_control_script(connection, warning_function_sql))
+        record_spans_here()
+        use _rows <- try(
+          copy_to(
+            connection,
+            statement(warning_copy_sql),
+            5000,
+            [],
+            collect_row,
+          )
+          |> map_error(inspect),
+        )
+        next_span()
+      }
+      |> should
+      |> be_ok
+      |> extract_span_attribute(key: "db.response.status_code")
+      |> be_equal(Some("01000"))
+      |> or_fail_with("Expected the code 01000 on the span of the COPY")
+    }),
+    it(
+      "records no warning of a COPY on the next statement",
+      fn(connection: Connection) {
+        {
+          use Nil <- try(run_control_script(connection, warning_function_sql))
+          record_spans_here()
+          use _rows <- try(
+            copy_to(
+              connection,
+              statement(warning_copy_sql),
+              5000,
+              [],
+              collect_row,
+            )
+            |> map_error(inspect),
+          )
+          use _outcome <- try(
+            run(connection, statement("SELECT 1"), [], [], 5000)
+            |> map_error(inspect),
+          )
+          use _copy_span <- try(next_span())
+          next_span()
+        }
+        |> should
+        |> be_ok
+        |> extract_span_attribute(key: "db.response.status_code")
+        |> be_equal(None)
+        |> or_fail_with("Expected no status code on the SELECT")
+      },
+    ),
     it("of a COPY TO records the operation COPY", fn(connection: Connection) {
       {
         record_spans_here()
