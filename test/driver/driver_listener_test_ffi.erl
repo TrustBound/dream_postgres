@@ -1,32 +1,46 @@
 -module(driver_listener_test_ffi).
--export([connection_pid/1, stop_connection/1, stop_connection_process/1,
-         restart_first_child/1, first_child_restart/1]).
+-export([connection_pid/1, session_pid/1, stop_connection/1,
+         stop_connection_process/1, restart_first_child/1,
+         first_child_restart/1]).
 
-%% The connection process of a listener, read from the state of the
-%% listener's actor. A Listener is the record {listener, Subject}, with
-%% the subject {subject, Pid, Tag}, or {named_subject, Name} for a
-%% listener under a name. The state is {state, Connection, Starter,
-%% Deadline, Subscriptions}, with Connection the record
-%% {connection, Subject, Pid, ReplyMargin, SpanTarget}.
-connection_pid({listener, Subject}) ->
-    state_connection(sys:get_state(owner_of(Subject))).
+%% The connection process of a listener, read from the state of its
+%% session.
+connection_pid(Listener) ->
+    session_connection(sys:get_state(session_pid(Listener))).
+
+%% The session process of a listener, read from the state of its registry.
+%% A Listener is the record {listener, Subject}, with the subject
+%% {subject, Pid, Tag}, or {named_subject, Name} for a listener under a
+%% name. The registry state is {registry_state, Session, Starter,
+%% Subscriptions}, with Session {some, {session_link, Subject, Pid,
+%% Monitor}} once a session started.
+session_pid({listener, Subject}) ->
+    registry_session(sys:get_state(owner_of(Subject))).
 
 owner_of({subject, Pid, _Tag}) -> Pid;
 owner_of({named_subject, Name}) -> erlang:whereis(Name).
 
-state_connection({state, {connection, _Subject, Pid, _Margin, _Target}, _Starter,
-                  _Deadline, _Subscriptions}) ->
+registry_session({registry_state, {some, {session_link, _Subject, Pid, _Monitor}},
+                  _Starter, _Subscriptions}) ->
+    Pid.
+
+%% The session state is {session_state, Connection, Registry, Deadline},
+%% with Connection the record {connection, Subject, Pid, ReplyMargin,
+%% SpanTarget}.
+session_connection({session_state, {connection, _Subject, Pid, _Margin, _Target},
+                    _Registry, _Deadline}) ->
     Pid.
 
 %% Sends the connection process of the listener an exit signal, as a
 %% supervisor that ends it does, and waits until it is gone. The process
-%% traps exits and stops with the reason normal, so the linked listener
+%% traps exits and stops with the reason normal, so the linked session
 %% stays.
 stop_connection(Listener) ->
     stop_connection_process(connection_pid(Listener)).
 
-%% As stop_connection, for a connection process read before: the listener
-%% answers no sys:get_state while it waits for its connection.
+%% As stop_connection, for a connection process read before: the session
+%% answers no sys:get_state while it waits for its connection, and the
+%% registry none while it waits for its session.
 stop_connection_process(Pid) ->
     Monitor = erlang:monitor(process, Pid),
     exit(Pid, shutdown),
