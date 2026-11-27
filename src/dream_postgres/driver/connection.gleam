@@ -61,7 +61,7 @@ import dream_postgres/driver/transaction.{
 }
 import dream_postgres/driver/transport.{
   type TransportConfig, type TransportError, BytesReceived, NotThisSocket,
-  SocketClosed, SocketEnded, SocketFailed,
+  SocketClosed, SocketEnded,
 }
 import dream_postgres/internal/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
@@ -185,6 +185,18 @@ pub type Violation {
   UnexpectedIdleMessage(message: BackendMessage)
 }
 
+/// Why a connection was lost.
+pub type LossReason {
+  /// The socket closed or failed.
+  SocketFailed(error: TransportError)
+  /// The deadline of the running request passed and its cancel did not
+  /// end it in time, so the process closed the connection. The request
+  /// whose deadline passed gets `DeadlinePassed(cancelled: False)`. The
+  /// requests that waited behind it, and the ones that come while the
+  /// process connects again, get this reason.
+  ClosedAfterDeadline
+}
+
 /// Why a request failed.
 pub type DriverError {
   /// The server refused the statement. The connection stays usable.
@@ -198,8 +210,8 @@ pub type DriverError {
   /// The deadline passed before the result came. `cancelled` says whether
   /// the server confirmed a cancel.
   DeadlinePassed(cancelled: Bool)
-  /// The socket closed or failed.
-  ConnectionLost(reason: TransportError)
+  /// The connection is gone. `reason` says why.
+  ConnectionLost(reason: LossReason)
   /// The server ended the session with a FATAL or PANIC error, for example
   /// `57P01` when an administrator stops it.
   ServerEndedConnection(report: ServerReport)
@@ -210,11 +222,18 @@ pub type DriverError {
   /// script that ran before it.
   CopyStatementRefused(completed: List(Outcome))
   /// The SQL of `copy_from` did not start a `COPY ... FROM STDIN`, or the
-  /// SQL of `copy_to` did not start a `COPY ... TO STDOUT`. The statement
-  /// ran: a statement that is not a COPY ran to its end, with its result
-  /// dropped, and the driver ended a COPY of the other direction with no
-  /// row stored and every row dropped.
-  CopyNotStarted
+  /// SQL of `copy_to` did not start a `COPY ... TO STDOUT`. `completed`
+  /// says what ran:
+  ///
+  /// - `Some(outcome)`: the statement ran to its end. A statement that is
+  ///   not a COPY gives its tag and its rows, as text cells, with no
+  ///   columns, because the driver does not describe it. A
+  ///   `COPY ... TO STDOUT` given to `copy_from` gives its tag, such as
+  ///   `COPY 3`, and no rows: the driver read them and dropped them.
+  /// - `None`: a `COPY ... FROM STDIN` given to `copy_to`. The driver ended
+  ///   it with CopyFail, so the server stored no row. Inside a transaction,
+  ///   the transaction failed.
+  CopyNotStarted(completed: Option(Outcome))
   /// A chunk or an end came for a COPY that does not run: its `copy_from`
   /// returned already.
   CopyNotRunning
@@ -607,7 +626,7 @@ fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
   State(
     config:,
     subject:,
-    link: Lost(ConnectionLost(SocketClosed)),
+    link: Lost(ConnectionLost(SocketFailed(SocketClosed))),
     parameters: dict.new(),
     tracker: new_tracker(),
     running: None,
@@ -843,14 +862,20 @@ fn parameter_of(snapshot: Snapshot, name: String) -> Option(String) {
 /// - `connection`: the connection
 /// - `sql`: one `COPY ... FROM STDIN` statement, with the format of the
 ///   data (text, csv or binary)
-/// - `deadline_milliseconds`: the longest time for the whole COPY, with
-///   the time of `produce`
+/// - `deadline_milliseconds`: the longest time for the whole COPY, from
+///   the moment the connection process takes the request, with the time
+///   of `produce`. When it passes, the driver ends the COPY on the server,
+///   and each `send_chunk` after it gives `DeadlinePassed`. The driver
+///   cannot stop `produce` itself, which runs in the caller's process:
+///   `copy_from` returns when `produce` returns.
 /// - `produce`: makes the data and sends it in chunks
 ///
 /// ## Returns
 ///
 /// - `Ok(count)`: the number of rows that the server stored
 /// - `Error(AppFailed(reason))`: `produce` failed; no row is stored
+/// - `Error(DriverFailed(CopyNotStarted(completed)))`: the SQL was not a
+///   `COPY ... FROM STDIN`; `completed` holds what ran instead
 /// - `Error(DriverFailed(error))`: the server refused the COPY or a row,
 ///   the deadline passed, or the request failed
 pub fn copy_from(
@@ -906,8 +931,12 @@ pub fn send_chunk(
 /// - `connection`: the connection
 /// - `sql`: one `COPY ... TO STDOUT` statement, with the format of the
 ///   rows (text, csv or binary)
-/// - `deadline_milliseconds`: the longest time for the whole COPY, with
-///   the time of `fold`
+/// - `deadline_milliseconds`: the longest time for the whole COPY, from
+///   the moment the connection process takes the request, with the time
+///   of `fold` and of reading the rest after `fold` failed. When it
+///   passes, the driver cancels the COPY on the server, and the next row
+///   gives `DeadlinePassed`. The driver cannot stop `fold` itself, which
+///   runs in the caller's process.
 /// - `initial`: the first value of the fold
 /// - `fold`: takes the value and the bytes of one row, in the format of
 ///   the COPY, and gives the next value
@@ -916,6 +945,8 @@ pub fn send_chunk(
 ///
 /// - `Ok(value)`: the value after the last row
 /// - `Error(AppFailed(reason))`: `fold` failed
+/// - `Error(DriverFailed(CopyNotStarted(completed)))`: the SQL was not a
+///   `COPY ... TO STDOUT`; `completed` holds what ran instead
 /// - `Error(DriverFailed(error))`: the server refused the COPY, the
 ///   deadline passed, or the request failed
 pub fn copy_to(
@@ -1404,7 +1435,31 @@ fn sent(
 ) -> State {
   case sent {
     Ok(Nil) -> state
-    Error(error) -> lose(state, socket, ConnectionLost(error))
+    Error(error) -> write_failed(state, socket, error)
+  }
+}
+
+/// A write failed. The server may have sent its last messages before the
+/// failure, for example the FATAL error of a session that it ends, and
+/// then closed: the process reads them first, so that error wins. If
+/// they do not end the connection, the failure of the write does.
+fn write_failed(
+  state: State,
+  socket: transport.Connection,
+  error: TransportError,
+) -> State {
+  read_messages_with(state, transport.received_bytes(socket))
+  |> lose_if_connected(socket, ConnectionLost(SocketFailed(error)))
+}
+
+fn lose_if_connected(
+  state: State,
+  socket: transport.Connection,
+  error: DriverError,
+) -> State {
+  case state.link {
+    Connected(..) -> lose(state, socket, error)
+    Lost(..) -> state
   }
 }
 
@@ -1464,8 +1519,10 @@ fn socket_event(
       State(..state, link: Connected(socket, <<bytes:bits, more:bits>>))
       |> read_messages
       |> receive_next
-    SocketEnded -> lose(state, socket, ConnectionLost(SocketClosed))
-    SocketFailed(error) -> lose(state, socket, ConnectionLost(error))
+    SocketEnded ->
+      lose(state, socket, ConnectionLost(SocketFailed(SocketClosed)))
+    transport.SocketFailed(error) ->
+      lose(state, socket, ConnectionLost(SocketFailed(error)))
     NotThisSocket -> state
   }
 }
@@ -1481,9 +1538,16 @@ fn receive_next(state: State) -> State {
 
 /// Decodes and handles each whole message of the buffer.
 fn read_messages(state: State) -> State {
+  read_messages_with(state, <<>>)
+}
+
+/// Decodes and handles each whole message of the buffer, followed by
+/// `received`.
+fn read_messages_with(state: State, received: BitArray) -> State {
   use <- guard(paused(state), state)
   case state.link {
-    Connected(socket:, bytes:) -> read_message(state, socket, bytes)
+    Connected(socket:, bytes:) ->
+      read_message(state, socket, <<bytes:bits, received:bits>>)
     Lost(..) -> state
   }
 }
@@ -1498,7 +1562,7 @@ fn read_message(
       State(..state, link: Connected(socket, rest))
       |> handle_server_message(socket, message)
       |> read_messages
-    Ok(NeedMoreBytes) -> state
+    Ok(NeedMoreBytes) -> State(..state, link: Connected(socket, bytes))
     Error(error) ->
       lose(state, socket, ProtocolViolation(UndecodableMessage(error)))
   }
@@ -2069,18 +2133,31 @@ fn copy_finished(
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
   let tracker = track_step(state.tracker, outcome)
-  let ended = copy_result(outcome) |> deadline_result(state, _)
+  let #(state, ended) = copy_result(state, outcome)
+  let ended = deadline_result(state, ended)
   State(..state, tracker:, copy: settle_copy(session, ended))
   |> next_request
 }
 
+/// The row count of the COPY, or why there is none. A statement that ran
+/// in place of the COPY gives its outcome, with the pending notices and
+/// notifications.
 fn copy_result(
+  state: State,
   outcome: query.Outcome(CopyResult, Failure),
-) -> Result(Int, DriverError) {
+) -> #(State, Result(Int, DriverError)) {
   case outcome.result {
-    Ok(CopyCompleted(count:)) -> Ok(count)
-    Ok(NoCopyStarted) | Error(CopyNotSupported(..)) -> Error(CopyNotStarted)
-    Error(ServerError(report)) -> Error(ServerRefused(report, outcome.status))
+    Ok(CopyCompleted(count:)) -> #(state, Ok(count))
+    Ok(NoCopyStarted(result:)) -> {
+      let #(state, completed) =
+        take_pending(state, Outcome([], result, [], [], outcome.status))
+      #(state, Error(CopyNotStarted(Some(completed))))
+    }
+    Error(CopyNotSupported(..)) -> #(state, Error(CopyNotStarted(None)))
+    Error(ServerError(report)) -> #(
+      state,
+      Error(ServerRefused(report, outcome.status)),
+    )
   }
 }
 
@@ -2232,7 +2309,7 @@ fn chunk_sent(
       reply(reply_to, Ok(Nil))
       state
     }
-    Error(error) -> lose(waiting, socket, ConnectionLost(error))
+    Error(error) -> write_failed(waiting, socket, error)
   }
 }
 
@@ -2332,8 +2409,20 @@ fn lose(
   socket: transport.Connection,
   error: DriverError,
 ) -> State {
+  end_link(state, socket, running_error: error, error:)
+}
+
+/// Ends the link. The running request, and a COPY that runs, fail with
+/// `running_error`. The waiting requests, the subscriber, the reconnect
+/// and the requests that come while the link is lost get `error`.
+fn end_link(
+  state: State,
+  socket: transport.Connection,
+  running_error running_error: DriverError,
+  error error: DriverError,
+) -> State {
   transport.close(socket)
-  option.map(state.running, refuse_running(_, error))
+  option.map(state.running, refuse_running(_, running_error))
   list.each(reverse(state.waiting), refuse_ticket(_, error))
   tell(state, Disconnected(error))
   schedule_reconnect(state, error, 0)
@@ -2343,7 +2432,7 @@ fn lose(
     running: None,
     waiting: [],
     tracker: new_tracker(),
-    copy: lost_copy(state, error),
+    copy: lost_copy(state, running_error),
   )
 }
 
@@ -2527,7 +2616,12 @@ fn confirm_cancel(state: State, message: BackendMessage) -> State {
 /// of the connection. A session with no cancel key cannot cancel, so its
 /// connection is closed and replaced.
 ///
-/// A COPY that runs takes no more chunks. The rest of a
+/// A COPY that runs takes no more chunks. A `COPY ... FROM STDIN` gets
+/// both the cancel and, once the cancel is done, a CopyFail, because each
+/// covers a case that the other does not: the cancel stops a server that
+/// is busy with rows it received already (triggers, indexes, constraint
+/// checks), and the CopyFail ends a COPY whose server waits for data,
+/// where it does not act on a cancel. The rest of a
 /// `COPY ... TO STDOUT` is read and dropped at once, because the server
 /// acts on a cancel only between rows, never while it waits to write a row
 /// that the caller did not take. A COPY that the server ended already
@@ -2557,7 +2651,7 @@ fn start_cancel(
       process.send_after(state.subject, delay, CancelOver(current.id))
       state
     }
-    None -> lose(state, socket, DeadlinePassed(cancelled: False))
+    None -> lose_at_deadline(state, socket, current)
   }
 }
 
@@ -2620,12 +2714,19 @@ fn mark_cancel_done(
   |> next_request
 }
 
+/// The request whose deadline passed fails with `DeadlinePassed`. The
+/// others fail because the process closed the connection after it.
 fn lose_at_deadline(
   state: State,
   socket: transport.Connection,
   _current: Current,
 ) -> State {
-  lose(state, socket, DeadlinePassed(cancelled: False))
+  end_link(
+    state,
+    socket,
+    running_error: DeadlinePassed(cancelled: False),
+    error: ConnectionLost(ClosedAfterDeadline),
+  )
 }
 
 /// Opens a new connection with the same settings, sends the CancelRequest,

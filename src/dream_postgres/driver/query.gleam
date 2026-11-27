@@ -225,9 +225,11 @@ pub type CopyResult {
   /// The COPY ended. `count` is the number of rows of its CommandComplete:
   /// the rows that the server stored, or the rows that it sent.
   CopyCompleted(count: Int)
-  /// The statement was not a COPY. It ran to its end, and its result is
-  /// dropped.
-  NoCopyStarted
+  /// The statement did not start the COPY of the step's direction, and ran
+  /// to its end: a statement that is not a COPY, with its rows as text
+  /// cells, or a `COPY ... TO STDOUT` in a step for `COPY ... FROM STDIN`,
+  /// with its tag and none of its rows, which the step dropped.
+  NoCopyStarted(result: CommandResult)
 }
 
 /// What a copy step gives after one message from the server.
@@ -841,9 +843,14 @@ fn copy_outcome(
 ) -> Outcome(CopyResult, Failure) {
   let copy_result = case machine.copy_began {
     True -> CopyCompleted(machine.count)
-    False -> NoCopyStarted
+    False -> NoCopyStarted(command_result(machine))
   }
-  step_result(machine, copy_result)
+  // A refused COPY that ended with no error is a COPY TO STDOUT that ran
+  // to its end: it completed, as a statement that is not a COPY does.
+  case machine.copy_refused, machine.error {
+    True, None -> Ok(copy_result)
+    _, _ -> step_result(machine, copy_result)
+  }
   |> outcome(machine, status, _)
 }
 

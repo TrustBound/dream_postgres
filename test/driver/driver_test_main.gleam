@@ -11,6 +11,7 @@ import driver/bit_array_test
 import driver/catalog_table_test
 import driver/catalog_test
 import driver/channel_binding_test
+import driver/connection_copy_test
 import driver/connection_test
 import driver/decode_test
 import driver/encode_test
@@ -50,6 +51,7 @@ pub fn suites() -> List(TestSuite) {
     transport_test.tests(),
     statement_cache_test.tests(),
     connection_test.tests(),
+    connection_copy_test.tests(),
     pool_test.tests(),
     catalog_table_test.tests(),
     catalog_test.tests(),

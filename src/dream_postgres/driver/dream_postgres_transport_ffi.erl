@@ -2,7 +2,8 @@
 -export([tcp_connect/4, tcp_send/2, tcp_receive/2, tcp_close/1,
          tls_connect/5, tls_send/2, tls_receive/2, tls_close/1,
          peer_certificate/1, read_authority_file/1, reason_name/1,
-         tcp_receive_next/1, tls_receive_next/1, socket_event/2]).
+         tcp_receive_next/1, tls_receive_next/1, socket_event/2,
+         tcp_received_bytes/1, tls_received_bytes/1]).
 
 %% The socket calls of dream_postgres/driver/transport. Each function does
 %% one OTP call and gives a Gleam result: {ok, Value} or {error, Reason},
@@ -136,3 +137,18 @@ socket_event({Tag, Socket, Reason}, Socket) when Tag =:= tcp_error; Tag =:= ssl_
     {failed, reason_name(Reason)};
 socket_event(_Message, _Socket) ->
     other.
+
+%% The bytes that the server sent before a write failed, for the owner of
+%% the socket: the data messages of this socket that wait in the mailbox,
+%% in order. It never waits: the receive has the timeout 0. Bytes that the
+%% socket itself still holds are not read: the reset that fails a write
+%% makes the system drop them.
+tcp_received_bytes(Socket) -> iolist_to_binary(delivered(Socket, tcp, [])).
+
+tls_received_bytes(Socket) -> iolist_to_binary(delivered(Socket, ssl, [])).
+
+delivered(Socket, Tag, Bytes) ->
+    receive
+        {Tag, Socket, More} -> delivered(Socket, Tag, [Bytes, More])
+    after 0 -> Bytes
+    end.

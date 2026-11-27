@@ -5,13 +5,12 @@
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type CopyError, type CopySender, type DriverError,
-  type Outcome, type StatementCaching, AppFailed, Backoff, CacheStatements,
-  ConnectionConfig, ConnectionLost, ConnectionProcessDown, CopyNotRunning,
-  CopyNotStarted, CopyStatementRefused, DeadlinePassed, Disconnected,
-  DriverFailed, InvalidRequest, LoginRefused, ProtocolViolation, ReconnectFailed,
+  type ConnectionEvent, type DriverError, type Outcome, type StatementCaching,
+  Backoff, CacheStatements, ClosedAfterDeadline, ConnectionConfig,
+  ConnectionLost, ConnectionProcessDown, CopyStatementRefused, DeadlinePassed,
+  Disconnected, InvalidRequest, LoginRefused, ProtocolViolation, ReconnectFailed,
   Reconnected, ScriptFailed, ServerEndedConnection, ServerRefused, SetupTimedOut,
-  TransportRefused, UndecodableMessage, UnexpectedIdleMessage,
+  SocketFailed, TransportRefused, UndecodableMessage, UnexpectedIdleMessage,
   UnexpectedServerMessage, UnnamedStatements,
 }
 import dream_postgres/driver/login.{PreferChannelBinding, ServerRejectedLogin}
@@ -32,8 +31,8 @@ import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/servers.{type Server, driver_servers}
+import fixtures/driver_session.{wait_for_mailbox_length, wait_for_message}
 import gleam/bit_array
-import gleam/bool
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int.{to_string}
 import gleam/list.{map}
@@ -101,8 +100,6 @@ pub fn tests() -> TestSuite {
     group("deadlines on each server", map(driver_servers(), deadline_tests)),
     group("deadlines", more_deadline_tests()),
     group("what dream_model needs", map(driver_servers(), model_tests)),
-    group("COPY on each server", map(driver_servers(), copy_tests)),
-    group("COPY", copy_more_tests()),
   ])
 }
 
@@ -117,7 +114,7 @@ fn config(
 ) -> Result(ConnectionConfig, DriverError) {
   use address <- try(
     transport.address("localhost", port)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   use login_config <- try(
     login.new(
@@ -128,7 +125,7 @@ fn config(
       channel_binding: PreferChannelBinding,
       protocol_version: Protocol30,
     )
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   Ok(ConnectionConfig(
     transport: TransportConfig(address, NoTls, 5000, 500),
@@ -157,7 +154,7 @@ fn with_started(
 ) -> Result(value, DriverError) {
   use connection <- try(
     connection.start(settings)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   let value = body(connection)
   connection.stop(connection)
@@ -213,7 +210,7 @@ fn backend_pid(connection: Connection) -> Result(String, DriverError) {
   use outcome <- try(run(connection, "SELECT pg_backend_pid()::text", []))
   case rows(outcome) {
     [[Text(pid)]] -> Ok(bit_array_text(pid))
-    _ -> Error(ConnectionLost(SocketClosed))
+    _ -> Error(ConnectionLost(SocketFailed(SocketClosed)))
   }
 }
 
@@ -498,7 +495,7 @@ fn start_tests() {
         use settings <- try(config(port, "dream", "dream", 10, None))
         use started <- try(
           connection.start(settings)
-          |> result.replace_error(ConnectionLost(SocketClosed)),
+          |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
         )
         let watch = watch_client_end(proxy)
         connection.stop(started)
@@ -523,7 +520,7 @@ fn start_tests() {
         ))
         use started <- try(
           connection.start(settings)
-          |> result.replace_error(ConnectionLost(SocketClosed)),
+          |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
         )
         connection.stop(started)
         connection.transaction_status(started)
@@ -729,9 +726,10 @@ fn event_code(event: ConnectionEvent) -> String {
   case event {
     Disconnected(ServerEndedConnection(report)) ->
       "disconnected " <> report.code
-    Disconnected(ConnectionLost(SocketClosed)) -> "lost closed"
-    Disconnected(ConnectionLost(ConnectionReset)) -> "lost reset"
-    Disconnected(ConnectionLost(SendTimedOut)) -> "lost send timeout"
+    Disconnected(ConnectionLost(SocketFailed(SocketClosed))) -> "lost closed"
+    Disconnected(ConnectionLost(SocketFailed(ConnectionReset))) -> "lost reset"
+    Disconnected(ConnectionLost(SocketFailed(SendTimedOut))) ->
+      "lost send timeout"
     Disconnected(ProtocolViolation(UndecodableMessage(UnknownMessageType(_)))) ->
       "violation undecodable"
     Disconnected(ProtocolViolation(UnexpectedIdleMessage(BindComplete))) ->
@@ -740,7 +738,7 @@ fn event_code(event: ConnectionEvent) -> String {
       "violation running"
     ReconnectFailed(LoginRefused(ServerRejectedLogin(report))) ->
       "reconnect failed " <> report.code
-    Disconnected(DeadlinePassed(cancelled: False)) -> "lost at deadline"
+    Disconnected(ConnectionLost(ClosedAfterDeadline)) -> "lost at deadline"
     Reconnected -> "reconnected"
     _ -> "another event"
   }
@@ -808,7 +806,7 @@ fn check_send_timeout() {
   // Assert
   answer
   |> should
-  |> be_equal(Ok(Error(ConnectionLost(SendTimedOut))))
+  |> be_equal(Ok(Error(ConnectionLost(SocketFailed(SendTimedOut)))))
   |> or_fail_with("Expected the loss by a send timeout")
 }
 
@@ -912,7 +910,7 @@ fn wait_for_lock_waiter(
   use outcomes <- try(script(control, lock_waiters(key, "count(*)::text")))
   case map(outcomes, rows), attempts {
     [[[Text(<<"1">>)]]], _ -> Ok(Nil)
-    _, 0 -> Error(ConnectionLost(SocketClosed))
+    _, 0 -> Error(ConnectionLost(SocketFailed(SocketClosed)))
     _, _ -> wait_for_lock_waiter(control, key, attempts - 1)
   }
 }
@@ -934,7 +932,7 @@ fn backend_pid_from_control(
   use outcomes <- try(script(control, lock_waiters(key, "pid::text")))
   case map(outcomes, rows) {
     [[[Text(pid)]]] -> Ok(bit_array_text(pid))
-    _ -> Error(ConnectionLost(SocketClosed))
+    _ -> Error(ConnectionLost(SocketFailed(SocketClosed)))
   }
 }
 
@@ -1244,7 +1242,7 @@ fn more_tests() {
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(ConnectionLost(SocketClosed))))
+      |> be_equal(Ok(Error(ConnectionLost(SocketFailed(SocketClosed)))))
       |> or_fail_with("Expected the error of the loss")
     }),
     it(
@@ -1364,7 +1362,7 @@ fn wait_for_parameter(
   use name <- try(connection.server_parameter(connection, "application_name"))
   case name == Some(value), attempts {
     True, _ -> Ok(Nil)
-    False, 0 -> Error(ConnectionLost(SocketClosed))
+    False, 0 -> Error(ConnectionLost(SocketFailed(SocketClosed)))
     False, _ -> wait_for_parameter(connection, value, attempts - 1)
   }
 }
@@ -1442,7 +1440,7 @@ fn check_running_lost(kind: CallerKind, caching: Caching) {
   // Assert
   answer
   |> should
-  |> be_equal(Ok(Ok(Error(ConnectionLost(SocketClosed)))))
+  |> be_equal(Ok(Ok(Error(ConnectionLost(SocketFailed(SocketClosed))))))
   |> or_fail_with("Expected the loss for the running request")
 }
 
@@ -1537,7 +1535,7 @@ fn wait_for_table_waiter(
   ))
   case map(outcomes, rows), attempts {
     [[[Text(<<"1">>)]]], _ -> Ok(Nil)
-    _, 0 -> Error(ConnectionLost(SocketClosed))
+    _, 0 -> Error(ConnectionLost(SocketFailed(SocketClosed)))
     _, _ -> wait_for_table_waiter(control, table, attempts - 1)
   }
 }
@@ -1881,7 +1879,7 @@ fn protocol_32_config(port: Int) -> Result(ConnectionConfig, DriverError) {
       channel_binding: PreferChannelBinding,
       protocol_version: message.Protocol32,
     )
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   Ok(
     ConnectionConfig(..settings, login: login_config)
@@ -2065,7 +2063,7 @@ fn more_deadline_tests() {
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(ConnectionLost(SocketClosed))))
+      |> be_equal(Ok(Error(ConnectionLost(SocketFailed(SocketClosed)))))
       |> or_fail_with("Expected the error of the loss")
     }),
     it("closes the connection when the cancel never gets an answer", fn() {
@@ -2099,6 +2097,74 @@ fn more_deadline_tests() {
       |> should
       |> be_equal(Ok(Error(DeadlinePassed(cancelled: False))))
       |> or_fail_with("Expected DeadlinePassed with no cancel")
+    }),
+    it(
+      "gives a waiting request ClosedAfterDeadline after a deadline loss",
+      fn() {
+        // Arrange
+        let login_answer = <<"R", 8:32, 0:32, "Z", 5:32, "I">>
+        let #(port, _server) = start_fake_server(Answer(login_answer))
+        let first_answers = process.new_subject()
+
+        // Act
+        let answers = {
+          use settings <- try(
+            config(port, "dream", "dream", 60_000, None)
+            |> result.map(with_timeouts(_, 5000, 200)),
+          )
+          use connection <- with_started(settings)
+          let pid = pid_of(connection)
+          suspend(pid)
+          process.spawn_unlinked(fn() {
+            process.send(
+              first_answers,
+              connection.run(connection, "SELECT 1", [], [], 100),
+            )
+          })
+          let first_came = wait_for_message(pid, ["request"], 1_000_000)
+          let waiting = start_caller(connection, "SELECT 2")
+          let both_came = wait_for_mailbox_length(pid, 2, 1_000_000)
+          resume(pid)
+          Ok(#(first_came, both_came, process.receive(waiting.answers, 5000)))
+        }
+
+        // Assert
+        answers
+        |> should
+        |> be_equal(
+          Ok(#(True, True, Ok(Error(ConnectionLost(ClosedAfterDeadline))))),
+        )
+        |> or_fail_with(
+          "Expected the request behind the deadline to get ClosedAfterDeadline",
+        )
+      },
+    ),
+    it("gives a later request ClosedAfterDeadline after a deadline loss", fn() {
+      // Arrange
+      let login_answer = <<"R", 8:32, 0:32, "Z", 5:32, "I">>
+      let #(port, _server) = start_fake_server(Answer(login_answer))
+
+      // Act
+      let answer = {
+        use settings <- try(
+          config(port, "dream", "dream", 60_000, None)
+          |> result.map(with_timeouts(_, 5000, 200)),
+        )
+        use connection <- with_started(settings)
+        let _at_deadline = connection.run(connection, "SELECT 1", [], [], 100)
+        Ok(
+          connection.run(connection, "SELECT 1", [], [], 5000)
+          |> result.replace(Nil),
+        )
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(ConnectionLost(ClosedAfterDeadline))))
+      |> or_fail_with(
+        "Expected ClosedAfterDeadline while the process reconnects",
+      )
     }),
     it("ends a waiting request at its deadline", fn() {
       // Act
@@ -2199,7 +2265,7 @@ fn options_config(
       channel_binding: PreferChannelBinding,
       protocol_version: Protocol30,
     )
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   Ok(ConnectionConfig(..settings, login: login_config))
 }
@@ -2286,1148 +2352,4 @@ fn tree_detail(report: ServerReport) -> Bool {
 
 fn column_origin(column: ColumnDescription) -> #(String, Int, Int) {
   #(column.name, column.table_id, column.column_number)
-}
-
-// COPY ------------------------------------------------------------------------
-
-@external(erlang, "driver_copy_test_ffi", "memory_of")
-fn memory_of(pid: Pid) -> #(Int, Int)
-
-@external(erlang, "driver_copy_test_ffi", "send_stray_down")
-fn send_stray_down(pid: Pid) -> Nil
-
-fn copy_from(
-  connection: Connection,
-  sql: String,
-  produce: fn(CopySender) -> Result(Nil, reason),
-) -> Result(Int, CopyError(reason)) {
-  connection.copy_from(connection, sql, 5000, produce)
-}
-
-/// The rows of a table, counted on the connection.
-fn count_rows(
-  connection: Connection,
-  table: String,
-) -> Result(String, DriverError) {
-  use outcome <- try(
-    run(connection, "SELECT count(*)::text FROM " <> table, []),
-  )
-  Ok(row_texts(outcome) |> string.concat)
-}
-
-fn create_table(
-  connection: Connection,
-  table: String,
-) -> Result(Nil, DriverError) {
-  script(connection, "CREATE TEMP TABLE " <> table <> " (id int, name text)")
-  |> result.replace(Nil)
-}
-
-/// Three rows in two chunks. The end of the first chunk is in the middle
-/// of a row.
-fn send_three_rows(sender: CopySender) -> Result(Nil, DriverError) {
-  use Nil <- try(connection.send_chunk(sender, <<"1\tone\n2\ttw":utf8>>))
-  connection.send_chunk(sender, <<"o\n3\tthree\n":utf8>>)
-}
-
-fn send_nothing(_sender: CopySender) -> Result(Nil, DriverError) {
-  Ok(Nil)
-}
-
-fn collect_size(sizes: List(Int), row: BitArray) -> Result(List(Int), Nil) {
-  Ok([bit_array.byte_size(row), ..sizes])
-}
-
-fn collect_row(
-  rows: List(BitArray),
-  row: BitArray,
-) -> Result(List(BitArray), Nil) {
-  Ok([row, ..rows])
-}
-
-/// Sends a row that is not valid, then valid rows until the server's error
-/// comes back.
-fn send_until_refused(sender: CopySender) -> Result(Nil, DriverError) {
-  use Nil <- try(connection.send_chunk(sender, <<"x\tbad\n":utf8>>))
-  send_rows_until_error(sender, <<"2\ttwo\n":utf8>>, 1_000_000)
-}
-
-/// Sends the chunk again and again until a send fails, and gives that
-/// failure.
-fn send_rows_until_error(
-  sender: CopySender,
-  chunk: BitArray,
-  attempts: Int,
-) -> Result(Nil, DriverError) {
-  case connection.send_chunk(sender, chunk), attempts {
-    Ok(Nil), 0 -> Ok(Nil)
-    Ok(Nil), _ -> send_rows_until_error(sender, chunk, attempts - 1)
-    Error(error), _ -> Error(error)
-  }
-}
-
-fn copy_error_text(error: CopyError(DriverError)) -> String {
-  case error {
-    AppFailed(reason) -> "app " <> driver_error_text(reason)
-    DriverFailed(error) -> "driver " <> driver_error_text(error)
-  }
-}
-
-fn driver_error_text(error: DriverError) -> String {
-  case error {
-    ServerRefused(report, _) -> report.code
-    ServerEndedConnection(report) -> "ended " <> report.code
-    ConnectionLost(reason) -> event_code(Disconnected(ConnectionLost(reason)))
-    ProtocolViolation(_) -> "violation"
-    DeadlinePassed(cancelled: True) -> "deadline cancelled"
-    DeadlinePassed(cancelled: False) -> "deadline"
-    CopyNotStarted -> "not started"
-    CopyNotRunning -> "not running"
-    _ -> "another error"
-  }
-}
-
-fn copy_tests(server: Server) {
-  group("PostgreSQL " <> to_string(server.version), [
-    it("stores the rows of a COPY FROM STDIN and gives their count", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        use Nil <- try(create_table(connection, "copied"))
-        let stored =
-          copy_from(connection, "COPY copied FROM STDIN", send_three_rows)
-        use outcome <- try(
-          run(connection, "SELECT id::text, name FROM copied ORDER BY id", []),
-        )
-        Ok(#(stored, row_texts(outcome)))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Ok(3), ["1", "one", "2", "two", "3", "three"])))
-      |> or_fail_with("Expected three rows stored")
-    }),
-    it("reads the rows of a COPY TO STDOUT one at a time", fn() {
-      // Act
-      let rows = {
-        use connection <- with_connection(server.port)
-        Ok(connection.copy_to(
-          connection,
-          "COPY (SELECT n, 'r' || n FROM generate_series(1, 3) n) TO STDOUT",
-          5000,
-          [],
-          collect_row,
-        ))
-      }
-
-      // Assert
-      rows
-      |> should
-      |> be_equal(
-        Ok(Ok([<<"3\tr3\n":utf8>>, <<"2\tr2\n":utf8>>, <<"1\tr1\n":utf8>>])),
-      )
-      |> or_fail_with("Expected each row as its own bytes")
-    }),
-    it("gives a row that is longer than one read of the socket", fn() {
-      // Act
-      let sizes = {
-        use connection <- with_connection(server.port)
-        Ok(connection.copy_to(
-          connection,
-          "COPY (SELECT repeat('x', 4000000)) TO STDOUT",
-          5000,
-          [],
-          collect_size,
-        ))
-      }
-
-      // Assert
-      sizes
-      |> should
-      |> be_equal(Ok(Ok([4_000_001])))
-      |> or_fail_with("Expected one row of 4,000,001 bytes")
-    }),
-    it("moves the bytes of a csv COPY both ways", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        use Nil <- try(create_table(connection, "csv"))
-        let stored =
-          copy_from(connection, "COPY csv FROM STDIN (FORMAT csv)", send_csv)
-        let read =
-          connection.copy_to(
-            connection,
-            "COPY csv TO STDOUT (FORMAT csv)",
-            5000,
-            [],
-            collect_row,
-          )
-        Ok(#(stored, read))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Ok(2), Ok([<<"2,\"b,c\"\n":utf8>>, <<"1,a\n":utf8>>]))))
-      |> or_fail_with("Expected the csv rows back")
-    }),
-    it("moves the bytes of a binary COPY both ways", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        use _created <- try(script(connection, "CREATE TEMP TABLE b (n int4)"))
-        let stored =
-          copy_from(
-            connection,
-            "COPY b FROM STDIN (FORMAT binary)",
-            send_binary,
-          )
-        let read =
-          connection.copy_to(
-            connection,
-            "COPY b TO STDOUT (FORMAT binary)",
-            5000,
-            [],
-            collect_row,
-          )
-          |> result.map(list.reverse)
-          |> result.map(bit_array.concat)
-        Ok(#(stored, read))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Ok(1), Ok(binary_copy()))))
-      |> or_fail_with("Expected the same binary COPY data back")
-    }),
-    it("commits and rolls back a COPY with its transaction", fn() {
-      // Act
-      let counts = {
-        use connection <- with_connection(server.port)
-        use Nil <- try(create_table(connection, "kept"))
-        use _begun <- try(script(connection, "BEGIN"))
-        let rolled_back =
-          copy_from(connection, "COPY kept FROM STDIN", send_three_rows)
-        use _rolled_back <- try(script(connection, "ROLLBACK"))
-        use after_rollback <- try(count_rows(connection, "kept"))
-        use _begun <- try(script(connection, "BEGIN"))
-        let committed =
-          copy_from(connection, "COPY kept FROM STDIN", send_three_rows)
-        use _committed <- try(script(connection, "COMMIT"))
-        use after_commit <- try(count_rows(connection, "kept"))
-        Ok(#(rolled_back, after_rollback, committed, after_commit))
-      }
-
-      // Assert
-      counts
-      |> should
-      |> be_equal(Ok(#(Ok(3), "0", Ok(3), "3")))
-      |> or_fail_with("Expected no row after ROLLBACK and three after COMMIT")
-    }),
-    it("fails the transaction with a COPY that the app abandoned", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        use Nil <- try(create_table(connection, "failing"))
-        use _begun <- try(script(connection, "BEGIN"))
-        let failed =
-          copy_from(connection, "COPY failing FROM STDIN", send_then_fail)
-        use status <- try(connection.transaction_status(connection))
-        use _rolled_back <- try(script(connection, "ROLLBACK"))
-        Ok(#(failed, status))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Error(AppFailed("stopped")), InFailedTransaction)))
-      |> or_fail_with("Expected the app's failure in a failed transaction")
-    }),
-    it("ends the COPY at a server error in the middle and stays usable", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        use Nil <- try(create_table(connection, "refused"))
-        let refused =
-          copy_from(connection, "COPY refused FROM STDIN", send_until_refused)
-          |> result.map_error(copy_error_text)
-        use count <- try(count_rows(connection, "refused"))
-        Ok(#(refused, count))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Error("app 22P02"), "0")))
-      |> or_fail_with("Expected the app's failure with 22P02, and no row")
-    }),
-    it("gives the server's error when the app sent all its data", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        use Nil <- try(create_table(connection, "bad"))
-        let refused =
-          copy_from(connection, "COPY bad FROM STDIN", send_bad_row)
-          |> result.map_error(copy_error_text)
-        use status <- try(connection.transaction_status(connection))
-        Ok(#(refused, status))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Error("driver 22P02"), Idle)))
-      |> or_fail_with("Expected the server's 22P02")
-    }),
-    it("abandons the COPY with CopyFail when the app fails", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        use Nil <- try(create_table(connection, "abandoned"))
-        let failed =
-          copy_from(connection, "COPY abandoned FROM STDIN", send_then_fail)
-        use count <- try(count_rows(connection, "abandoned"))
-        Ok(#(failed, count))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Error(AppFailed("stopped")), "0")))
-      |> or_fail_with("Expected the app's failure, and no row stored")
-    }),
-    it("reads the rest of a COPY TO STDOUT when the app fails", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        let failed =
-          connection.copy_to(
-            connection,
-            "COPY (SELECT n FROM generate_series(1, 100000) n) TO STDOUT",
-            5000,
-            0,
-            fail_at_second_row,
-          )
-        use next <- try(script(connection, "SELECT 7"))
-        Ok(#(failed, tags(next)))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Error(AppFailed("enough")), ["SELECT 1"])))
-      |> or_fail_with("Expected the app's failure, then a usable connection")
-    }),
-    it("refuses a statement that does not start its COPY", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(server.port)
-        use Nil <- try(create_table(connection, "other"))
-        let select = copy_from(connection, "SELECT 1", send_three_rows)
-        let out = copy_from(connection, "COPY other TO STDOUT", send_three_rows)
-        let into =
-          connection.copy_to(
-            connection,
-            "COPY other FROM STDIN",
-            5000,
-            [],
-            collect_row,
-          )
-        use count <- try(count_rows(connection, "other"))
-        Ok(#(select, out, into, count))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(
-        Ok(#(
-          Error(DriverFailed(CopyNotStarted)),
-          Error(DriverFailed(CopyNotStarted)),
-          Error(DriverFailed(CopyNotStarted)),
-          "0",
-        )),
-      )
-      |> or_fail_with("Expected CopyNotStarted three times")
-    }),
-    it(
-      "gives the server's error for a COPY of a table that does not exist",
-      fn() {
-        // Act
-        let refused = {
-          use connection <- with_connection(server.port)
-          Ok(
-            copy_from(
-              connection,
-              "COPY no_such_table FROM STDIN",
-              send_three_rows,
-            )
-            |> result.map_error(copy_error_text),
-          )
-        }
-
-        // Assert
-        refused
-        |> should
-        |> be_equal(Ok(Error("driver 42P01")))
-        |> or_fail_with("Expected 42P01")
-      },
-    ),
-  ])
-}
-
-/// The binary COPY data of one row with the int4 1: the header, the row
-/// and the trailer (docs, "COPY", "Binary Format").
-fn binary_copy() -> BitArray {
-  <<"PGCOPY\n":utf8, 255, "\r\n":utf8, 0, 0:32, 0:32, 1:16, 4:32, 1:32, -1:16>>
-}
-
-fn send_binary(sender: CopySender) -> Result(Nil, DriverError) {
-  connection.send_chunk(sender, binary_copy())
-}
-
-fn send_csv(sender: CopySender) -> Result(Nil, DriverError) {
-  connection.send_chunk(sender, <<"1,a\n2,\"b,c\"\n":utf8>>)
-}
-
-fn send_bad_row(sender: CopySender) -> Result(Nil, DriverError) {
-  connection.send_chunk(sender, <<"x\tbad\n":utf8>>)
-}
-
-fn send_then_fail(sender: CopySender) -> Result(Nil, String) {
-  use Nil <- try(
-    send_three_rows(sender) |> result.replace_error("the send failed"),
-  )
-  Error("stopped")
-}
-
-fn fail_at_second_row(rows: Int, _row: BitArray) -> Result(Int, String) {
-  case rows {
-    0 -> Ok(1)
-    _ -> Error("enough")
-  }
-}
-
-// COPY: memory, deadlines, callers and losses ---------------------------------
-
-/// The largest memory and mailbox of the connection process, and the
-/// largest memory of the caller, over the samples of a COPY.
-type MemoryPeak {
-  MemoryPeak(connection: Int, queue: Int, caller: Int)
-}
-
-/// The memory bound of the tests, in bytes: far less than the 16,000,000
-/// bytes of the COPY data of the 1,000,000 rows.
-const memory_bound = 2_000_000
-
-fn sample_memory(peak: MemoryPeak, connection_pid: Pid) -> MemoryPeak {
-  let #(connection_bytes, queue) = memory_of(connection_pid)
-  let #(caller_bytes, _caller_queue) = memory_of(process.self())
-  MemoryPeak(
-    connection: int.max(peak.connection, connection_bytes),
-    queue: int.max(peak.queue, queue),
-    caller: int.max(peak.caller, caller_bytes),
-  )
-}
-
-/// Loads 1,000,000 rows in 1,000 chunks of 1,000 rows, and samples the
-/// memory after every 10 chunks. The peak goes to `peaks`.
-fn load_million_rows(
-  sender: CopySender,
-  connection_pid: Pid,
-  peaks: Subject(MemoryPeak),
-) -> Result(Nil, DriverError) {
-  let chunk = bit_array.from_string(repeat("12345\tsome text\n", 1000))
-  use peak <- try(load_chunks(
-    sender,
-    chunk,
-    1000,
-    connection_pid,
-    MemoryPeak(0, 0, 0),
-  ))
-  process.send(peaks, peak)
-  Ok(Nil)
-}
-
-fn load_chunks(
-  sender: CopySender,
-  chunk: BitArray,
-  left: Int,
-  connection_pid: Pid,
-  peak: MemoryPeak,
-) -> Result(MemoryPeak, DriverError) {
-  use <- bool.guard(left == 0, Ok(peak))
-  use Nil <- try(connection.send_chunk(sender, chunk))
-  load_chunks(
-    sender,
-    chunk,
-    left - 1,
-    connection_pid,
-    sample_every(peak, left, 10, connection_pid),
-  )
-}
-
-fn sample_every(
-  peak: MemoryPeak,
-  number: Int,
-  interval: Int,
-  connection_pid: Pid,
-) -> MemoryPeak {
-  case number % interval {
-    0 -> sample_memory(peak, connection_pid)
-    _ -> peak
-  }
-}
-
-/// Counts the rows of a COPY TO STDOUT, and samples the memory after every
-/// 10,000 rows.
-fn count_and_sample(
-  counted: #(Int, MemoryPeak),
-  _row: BitArray,
-  connection_pid: Pid,
-) -> Result(#(Int, MemoryPeak), Nil) {
-  let #(count, peak) = counted
-  Ok(#(count + 1, sample_every(peak, count, 10_000, connection_pid)))
-}
-
-fn within_bounds(peak: MemoryPeak) -> #(Bool, Int, Bool) {
-  #(peak.connection < memory_bound, peak.queue, peak.caller < memory_bound)
-}
-
-fn counted_within_bounds(
-  counted: #(Int, MemoryPeak),
-) -> #(Int, Bool, Bool, Bool) {
-  let #(count, peak) = counted
-  #(
-    count,
-    peak.connection < memory_bound,
-    peak.queue <= 1,
-    peak.caller < memory_bound,
-  )
-}
-
-/// Waits until the backend `pid` is idle, asking the control connection
-/// again each time: no sleep.
-fn wait_until_idle(
-  control: Connection,
-  pid: String,
-  attempts: Int,
-) -> Result(Nil, DriverError) {
-  use states <- try(backend_state(control, pid))
-  case states, attempts {
-    ["idle"], _ -> Ok(Nil)
-    _, 0 -> Error(ConnectionLost(SocketClosed))
-    _, _ -> wait_until_idle(control, pid, attempts - 1)
-  }
-}
-
-/// Starts a process that tells when the backend `pid` is idle.
-fn watch_until_idle(
-  control: Connection,
-  pid: String,
-) -> Subject(Result(Nil, DriverError)) {
-  let idle = process.new_subject()
-  process.spawn(fn() { tell_when_idle(control, pid, idle) })
-  idle
-}
-
-fn tell_when_idle(
-  control: Connection,
-  pid: String,
-  idle: Subject(Result(Nil, DriverError)),
-) -> Nil {
-  process.send(idle, wait_until_idle(control, pid, 1_000_000))
-}
-
-fn await_idle(
-  idle: Subject(Result(Nil, DriverError)),
-) -> Result(Nil, DriverError) {
-  process.receive(idle, 10_000)
-  |> result.replace_error(ConnectionLost(SocketClosed))
-  |> result.flatten
-}
-
-/// Waits, sending nothing, until the backend is idle, then sends a row.
-fn send_after_idle(
-  sender: CopySender,
-  control: Connection,
-  pid: String,
-) -> Result(Nil, DriverError) {
-  use Nil <- try(watch_until_idle(control, pid) |> await_idle)
-  connection.send_chunk(sender, <<"1\tone\n":utf8>>)
-}
-
-/// Takes the first row, then waits until the backend is idle.
-fn read_until_idle(
-  waited: Bool,
-  _row: BitArray,
-  control: Connection,
-  pid: String,
-) -> Result(Bool, DriverError) {
-  use <- bool.guard(waited, Ok(True))
-  watch_until_idle(control, pid) |> await_idle |> result.replace(True)
-}
-
-/// A caller process that runs `copy`, tells `started` what its function
-/// did, and never ends by itself.
-fn start_copy_caller(
-  copy: fn(Subject(String)) -> value,
-) -> #(Pid, Subject(String)) {
-  let started = process.new_subject()
-  let pid = process.spawn_unlinked(fn() { copy(started) })
-  #(pid, started)
-}
-
-fn started_text(started: Subject(String)) -> String {
-  process.receive(started, 5000) |> result.unwrap("no answer")
-}
-
-fn hang_after_rows(
-  connection: Connection,
-  started: Subject(String),
-) -> Result(Int, CopyError(DriverError)) {
-  copy_from(connection, "COPY hung FROM STDIN", send_and_hang(_, started))
-}
-
-fn send_and_hang(
-  sender: CopySender,
-  started: Subject(String),
-) -> Result(Nil, DriverError) {
-  use Nil <- try(send_three_rows(sender))
-  process.send(started, "sent")
-  process.receive_forever(process.new_subject())
-}
-
-fn hang_after_refusal(
-  connection: Connection,
-  started: Subject(String),
-) -> Result(Int, CopyError(DriverError)) {
-  copy_from(connection, "COPY hung FROM STDIN", refuse_and_hang(_, started))
-}
-
-fn refuse_and_hang(
-  sender: CopySender,
-  started: Subject(String),
-) -> Result(Nil, DriverError) {
-  process.send(started, send_until_refused(sender) |> refused_text)
-  process.receive_forever(process.new_subject())
-}
-
-fn refused_text(refused: Result(Nil, DriverError)) -> String {
-  case refused {
-    Ok(Nil) -> "not refused"
-    Error(error) -> driver_error_text(error)
-  }
-}
-
-fn hang_at_first_row(
-  connection: Connection,
-  started: Subject(String),
-) -> Result(Nil, CopyError(Nil)) {
-  connection.copy_to(
-    connection,
-    "COPY (SELECT n FROM generate_series(1, 1000000) n) TO STDOUT",
-    5000,
-    Nil,
-    fn(value, row) { hang_at_row(value, row, started) },
-  )
-}
-
-fn hang_at_row(
-  _value: Nil,
-  _row: BitArray,
-  started: Subject(String),
-) -> Result(Nil, Nil) {
-  process.send(started, "row")
-  process.receive_forever(process.new_subject())
-}
-
-/// Sends a row, breaks the connection, sends until a send fails, and
-/// sends once more. A failure gives the first error and the answer to the
-/// send after it.
-fn send_across(
-  sender: CopySender,
-  breaking: fn() -> Result(Nil, DriverError),
-) -> Result(Nil, #(DriverError, Result(Nil, DriverError))) {
-  use Nil <- try(
-    connection.send_chunk(sender, <<"1\tone\n":utf8>>)
-    |> result.map_error(first_error),
-  )
-  use Nil <- try(breaking() |> result.map_error(first_error))
-  send_rows_until_error(sender, <<"2\ttwo\n":utf8>>, 1_000_000)
-  |> result.map_error(with_next_send(_, sender))
-}
-
-fn first_error(error: DriverError) -> #(DriverError, Result(Nil, DriverError)) {
-  #(error, Ok(Nil))
-}
-
-fn with_next_send(
-  error: DriverError,
-  sender: CopySender,
-) -> #(DriverError, Result(Nil, DriverError)) {
-  #(error, connection.send_chunk(sender, <<"3\tthree\n":utf8>>))
-}
-
-fn across_text(
-  error: CopyError(#(DriverError, Result(Nil, DriverError))),
-) -> String {
-  case error {
-    DriverFailed(ConnectionLost(_reason)) -> "driver lost"
-    AppFailed(#(first, next)) ->
-      "app " <> driver_error_text(first) <> ", then " <> refused_text(next)
-    DriverFailed(error) -> "driver " <> driver_error_text(error)
-  }
-}
-
-fn break_nothing() -> Result(Nil, DriverError) {
-  Ok(Nil)
-}
-
-fn close_proxy(proxy: Proxy) -> Result(Nil, DriverError) {
-  close_client(proxy)
-  Ok(Nil)
-}
-
-fn inject_into(proxy: Proxy) -> Result(Nil, DriverError) {
-  inject_bind_complete(proxy)
-  Ok(Nil)
-}
-
-fn keep_sender(
-  sender: CopySender,
-  senders: Subject(CopySender),
-) -> Result(Nil, DriverError) {
-  process.send(senders, sender)
-  Ok(Nil)
-}
-
-/// Runs a script and a second COPY inside a COPY. Both wait behind the
-/// COPY, so both reach their deadline.
-fn copy_inside(
-  _sender: CopySender,
-  connection: Connection,
-) -> Result(Nil, #(String, String)) {
-  let inner_script =
-    connection.run_script(connection, "SELECT 1", 50)
-    |> result.replace("ran")
-    |> result.map_error(driver_error_text)
-    |> either_text
-  let inner_copy =
-    connection.copy_from(
-      connection,
-      "COPY waiting FROM STDIN",
-      50,
-      send_nothing,
-    )
-    |> result.replace("ran")
-    |> result.map_error(copy_error_text)
-    |> either_text
-  Error(#(inner_script, inner_copy))
-}
-
-fn either_text(answer: Result(String, String)) -> String {
-  case answer {
-    Ok(text) | Error(text) -> text
-  }
-}
-
-fn close_at_first_row(
-  closed: Bool,
-  _row: BitArray,
-  proxy: Proxy,
-) -> Result(Bool, DriverError) {
-  use <- bool.guard(closed, Ok(True))
-  close_client(proxy)
-  Ok(True)
-}
-
-fn copy_more_tests() {
-  [
-    it("keeps the memory flat while it loads 1,000,000 rows", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        use _created <- try(script(
-          connection,
-          "CREATE TEMP TABLE loaded (n int, name text)",
-        ))
-        let peaks = process.new_subject()
-        let connection_pid = pid_of(connection)
-        let stored =
-          copy_from(connection, "COPY loaded FROM STDIN", load_million_rows(
-            _,
-            connection_pid,
-            peaks,
-          ))
-        Ok(#(stored, process.receive(peaks, 0) |> result.map(within_bounds)))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Ok(1_000_000), Ok(#(True, 0, True)))))
-      |> or_fail_with(
-        "Expected 1,000,000 rows, an empty mailbox, and memory within the bound",
-      )
-    }),
-    it("keeps the memory flat while it reads 1,000,000 rows", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        let connection_pid = pid_of(connection)
-        connection.copy_to(
-          connection,
-          "COPY (SELECT n, 'some text' FROM generate_series(1, 1000000) n) TO STDOUT",
-          60_000,
-          #(0, MemoryPeak(0, 0, 0)),
-          fn(counted, row) { count_and_sample(counted, row, connection_pid) },
-        )
-        |> result.map(counted_within_bounds)
-        |> Ok
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(Ok(#(1_000_000, True, True, True))))
-      |> or_fail_with("Expected 1,000,000 rows, and memory within the bound")
-    }),
-    it("ends a COPY FROM STDIN at its deadline while the app sends", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        use Nil <- try(create_table(connection, "late"))
-        let chunk = bit_array.from_string(repeat("1\tone\n", 1000))
-        let late =
-          connection.copy_from(
-            connection,
-            "COPY late FROM STDIN",
-            300,
-            send_rows_until_error(_, chunk, 1_000_000),
-          )
-          |> result.map_error(copy_error_text)
-        use count <- try(count_rows(connection, "late"))
-        Ok(#(late, count))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Error("driver deadline cancelled"), "0")))
-      |> or_fail_with("Expected DeadlinePassed(True), and no row stored")
-    }),
-    it(
-      "ends a COPY FROM STDIN at its deadline while the app sends nothing",
-      fn() {
-        // Act
-        let answers = {
-          use connection <- with_connection(first_server().port)
-          use control <- with_connection(first_server().port)
-          use Nil <- try(create_table(connection, "idle"))
-          use pid <- try(backend_pid(connection))
-          let late =
-            connection.copy_from(
-              connection,
-              "COPY idle FROM STDIN",
-              300,
-              send_after_idle(_, control, pid),
-            )
-            |> result.map_error(copy_error_text)
-          use count <- try(count_rows(connection, "idle"))
-          Ok(#(late, count))
-        }
-
-        // Assert
-        answers
-        |> should
-        |> be_equal(Ok(#(Error("driver deadline cancelled"), "0")))
-        |> or_fail_with("Expected the end of the COPY at the deadline")
-      },
-    ),
-    it("ends a COPY TO STDOUT at its deadline while the app holds a row", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        use control <- with_connection(first_server().port)
-        use pid <- try(backend_pid(connection))
-        let late =
-          connection.copy_to(
-            connection,
-            "COPY (SELECT n FROM generate_series(1, 10000000) n) TO STDOUT",
-            300,
-            False,
-            fn(waited, row) { read_until_idle(waited, row, control, pid) },
-          )
-          |> result.map_error(copy_error_text)
-        use next <- try(script(connection, "SELECT 8"))
-        Ok(#(late, tags(next)))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#(Error("driver deadline cancelled"), ["SELECT 1"])))
-      |> or_fail_with("Expected DeadlinePassed(True), then a usable connection")
-    }),
-    it("abandons a COPY FROM STDIN when its caller ends", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        use Nil <- try(create_table(connection, "hung"))
-        let #(caller, started) =
-          start_copy_caller(hang_after_rows(connection, _))
-        let told = started_text(started)
-        process.kill(caller)
-        use count <- try(count_rows(connection, "hung"))
-        Ok(#(told, count))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#("sent", "0")))
-      |> or_fail_with("Expected no row stored, and a usable connection")
-    }),
-    it("drops the end of a COPY when its caller ends before it took it", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        use Nil <- try(create_table(connection, "hung"))
-        let #(caller, started) =
-          start_copy_caller(hang_after_refusal(connection, _))
-        let told = started_text(started)
-        process.kill(caller)
-        use count <- try(count_rows(connection, "hung"))
-        Ok(#(told, count))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#("22P02", "0")))
-      |> or_fail_with("Expected the refusal, then a usable connection")
-    }),
-    it("reads the rest of a COPY TO STDOUT when its caller ends", fn() {
-      // Act
-      let answers = {
-        use connection <- with_connection(first_server().port)
-        let #(caller, started) =
-          start_copy_caller(hang_at_first_row(connection, _))
-        let told = started_text(started)
-        process.kill(caller)
-        use next <- try(script(connection, "SELECT 9"))
-        Ok(#(told, tags(next)))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(Ok(#("row", ["SELECT 1"])))
-      |> or_fail_with("Expected a usable connection")
-    }),
-    it("ignores the DOWN of a process that it does not watch", fn() {
-      // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        send_stray_down(pid_of(connection))
-        script(connection, "SELECT 10") |> result.map(tags)
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(["SELECT 1"]))
-      |> or_fail_with("Expected the connection to work")
-    }),
-    it("refuses a chunk after its COPY ended", fn() {
-      // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        use Nil <- try(create_table(connection, "stale"))
-        let senders = process.new_subject()
-        let stored =
-          copy_from(connection, "COPY stale FROM STDIN", keep_sender(_, senders))
-        let late =
-          process.receive(senders, 0)
-          |> result.map(connection.send_chunk(_, <<"1\tone\n":utf8>>))
-        Ok(#(stored, late))
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(#(Ok(0), Ok(Error(CopyNotRunning)))))
-      |> or_fail_with("Expected CopyNotRunning")
-    }),
-    it("gives the error of the COPY again to a chunk after it", fn() {
-      // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        use _created <- try(script(
-          connection,
-          "CREATE TEMP TABLE again (id int CHECK (id < 2), name text)",
-        ))
-        Ok(
-          copy_from(connection, "COPY again FROM STDIN", send_across(
-            _,
-            break_nothing,
-          ))
-          |> result.map_error(across_text),
-        )
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(Error("app 23514, then 23514")))
-      |> or_fail_with("Expected 23514 for the chunk after the error")
-    }),
-    it("refuses a COPY with a zero byte before it sends anything", fn() {
-      // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        Ok(copy_from(connection, "COPY t FROM STDIN\u{0000}", send_three_rows))
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(
-        Ok(Error(DriverFailed(InvalidRequest(ZeroByteInString("query"))))),
-      )
-      |> or_fail_with("Expected InvalidRequest")
-    }),
-    it("serves no other request of the caller while its COPY runs", fn() {
-      // Act
-      let answer = {
-        use connection <- with_connection(first_server().port)
-        use Nil <- try(create_table(connection, "waiting"))
-        Ok(
-          copy_from(connection, "COPY waiting FROM STDIN", copy_inside(
-            _,
-            connection,
-          )),
-        )
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(Error(AppFailed(#("deadline", "driver deadline")))))
-      |> or_fail_with("Expected both inner requests to wait to their deadline")
-    }),
-    it("gives the loss of the connection in the middle of a COPY", fn() {
-      // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        use Nil <- try(create_table(setup.connection, "lost"))
-        Ok(
-          copy_from(
-            setup.connection,
-            "COPY lost FROM STDIN",
-            send_across(_, fn() { close_proxy(setup.proxy) }),
-          )
-          |> result.map_error(across_text),
-        )
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(Error("driver lost")))
-      |> or_fail_with("Expected the loss of the connection")
-    }),
-    it("gives the end of the session in the middle of a COPY", fn() {
-      // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        use Nil <- try(create_table(setup.connection, "ended"))
-        use pid <- try(backend_pid(setup.connection))
-        Ok(
-          copy_from(
-            setup.connection,
-            "COPY ended FROM STDIN",
-            send_across(_, fn() { terminate_backend(setup.control, pid) }),
-          )
-          |> result.map_error(across_text),
-        )
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(Error("driver ended 57P01")))
-      |> or_fail_with("Expected the server's 57P01")
-    }),
-    it("gives a violation in the middle of a COPY", fn() {
-      // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        use Nil <- try(create_table(setup.connection, "broken"))
-        Ok(
-          copy_from(
-            setup.connection,
-            "COPY broken FROM STDIN",
-            send_across(_, fn() { inject_into(setup.proxy) }),
-          )
-          |> result.map_error(across_text),
-        )
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(Error("driver violation")))
-      |> or_fail_with("Expected the violation")
-    }),
-    it("loses the connection when a chunk cannot be sent in time", fn() {
-      // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        answer_next_request(setup.proxy, <<
-          "1", 4:32, "2", 4:32, "G", 7:32, 0, 0:16,
-        >>)
-        let chunk = bit_array.from_string(repeat("x", 65_536))
-        Ok(
-          copy_from(
-            setup.connection,
-            "COPY t FROM STDIN",
-            send_rows_until_error(_, chunk, 1_000_000),
-          )
-          |> result.map_error(copy_error_text),
-        )
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(Error("driver lost send timeout")))
-      |> or_fail_with("Expected the loss by a send timeout")
-    }),
-    it("gives the loss of the connection to the next row of a COPY", fn() {
-      // Act
-      let answer = {
-        use setup <- with_setup(60_000)
-        Ok(
-          connection.copy_to(
-            setup.connection,
-            "COPY (SELECT n FROM generate_series(1, 1000000) n) TO STDOUT",
-            5000,
-            False,
-            fn(closed, row) { close_at_first_row(closed, row, setup.proxy) },
-          )
-          |> result.map_error(copy_error_text),
-        )
-      }
-
-      // Assert
-      answer
-      |> should
-      |> be_equal(Ok(Error("driver lost closed")))
-      |> or_fail_with("Expected the loss of the connection")
-    }),
-  ]
 }
