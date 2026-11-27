@@ -2,20 +2,22 @@
 //// descriptions, with rows in the shape of the catalog query.
 
 import dream_postgres/driver/catalog_table.{
-  type CatalogTable, type RowError, CircularDomain, MissingPart, UnknownTypeKind,
-  UnreadableRow, empty, find, find_underlying, from_rows,
+  type CatalogTable, CircularDomain, MissingPart, UnknownTypeKind, UnreadableRow,
+  empty, find, from_rows,
 }
 import dream_postgres/internal/cell.{
-  type Cell, type TypeDescription, Array, Base, Binary, Composite, Domain, Enum,
-  Multirange, Null, Pseudo, Range, Text, TypeDescription,
+  type Cell, type TypeDescription, type TypeKind, Array, Base, Binary, Composite,
+  Domain, Enum, Multirange, Null, Pseudo, Range, Text, TypeDescription,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{
+  be_equal, be_error, be_none, be_ok, be_some, or_fail_with, should,
+}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import gleam/bit_array
 import gleam/int.{to_string}
-import gleam/option.{type Option, None, Some}
-import gleam/result
+import matchers/extract_catalog_type.{extract_catalog_type}
+import matchers/extract_underlying_catalog_type.{extract_underlying_catalog_type}
 
 /// The tests of the table of type descriptions.
 pub fn tests() -> TestSuite {
@@ -110,22 +112,9 @@ fn int4_row() -> List(Cell) {
   type_row(23, "int4", "b", "N")
 }
 
-fn found(
-  rows: List(List(Cell)),
-  type_id: Int,
-) -> Result(Option(TypeDescription), RowError) {
-  from_rows(rows) |> result.map(find(_, type_id))
-}
-
-fn found_underlying(
-  rows: List(List(Cell)),
-  type_id: Int,
-) -> Result(Option(TypeDescription), RowError) {
-  from_rows(rows) |> result.map(find_underlying(_, type_id))
-}
-
-fn pg_catalog_type(id: Int, name: String, kind: cell.TypeKind) {
-  Ok(Some(TypeDescription(id:, schema: "pg_catalog", name:, kind:)))
+/// The description of a type of the schema `pg_catalog`.
+fn pg_catalog_type(id: Int, name: String, kind: TypeKind) -> TypeDescription {
+  TypeDescription(id:, schema: "pg_catalog", name:, kind:)
 }
 
 // Kinds -----------------------------------------------------------------------
@@ -137,11 +126,14 @@ fn kind_tests() {
       let rows = [int4_row()]
 
       // Act
-      let description = found(rows, 23)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 23)
+      |> be_some
       |> be_equal(pg_catalog_type(23, "int4", Base))
       |> or_fail_with("Expected int4 as a base type")
     }),
@@ -153,11 +145,14 @@ fn kind_tests() {
       ]
 
       // Act
-      let description = found(rows, 1007)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 1007)
+      |> be_some
       |> be_equal(pg_catalog_type(1007, "_int4", Array(23)))
       |> or_fail_with("Expected _int4 as an array of int4")
     }),
@@ -171,11 +166,14 @@ fn kind_tests() {
         ]
 
         // Act
-        let description = found(rows, 600)
+        let table = from_rows(rows)
 
         // Assert
-        description
+        table
         |> should
+        |> be_ok
+        |> extract_catalog_type(type_id: 600)
+        |> be_some
         |> be_equal(pg_catalog_type(600, "point", Base))
         |> or_fail_with("Expected point as a base type")
       },
@@ -191,11 +189,14 @@ fn kind_tests() {
       ]
 
       // Act
-      let description = found(rows, 900)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 900)
+      |> be_some
       |> be_equal(pg_catalog_type(
         900,
         "pair",
@@ -208,11 +209,14 @@ fn kind_tests() {
       let rows = [type_row(901, "nothing", "c", "C")]
 
       // Act
-      let description = found(rows, 901)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 901)
+      |> be_some
       |> be_equal(pg_catalog_type(901, "nothing", Composite([])))
       |> or_fail_with("Expected a composite with no field")
     }),
@@ -226,11 +230,14 @@ fn kind_tests() {
       ]
 
       // Act
-      let description = found(rows, 902)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 902)
+      |> be_some
       |> be_equal(pg_catalog_type(902, "mood", Enum(["sad", "calm", "happy"])))
       |> or_fail_with("Expected the labels in order")
     }),
@@ -242,11 +249,14 @@ fn kind_tests() {
       ]
 
       // Act
-      let description = found(rows, 903)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 903)
+      |> be_some
       |> be_equal(pg_catalog_type(903, "positive", Domain(23)))
       |> or_fail_with("Expected a domain over int4")
     }),
@@ -258,11 +268,14 @@ fn kind_tests() {
       ]
 
       // Act
-      let description = found(rows, 3904)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 3904)
+      |> be_some
       |> be_equal(pg_catalog_type(3904, "int4range", Range(23)))
       |> or_fail_with("Expected a range of int4")
     }),
@@ -275,11 +288,14 @@ fn kind_tests() {
       ]
 
       // Act
-      let description = found(rows, 4451)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 4451)
+      |> be_some
       |> be_equal(pg_catalog_type(4451, "int4multirange", Multirange(3904)))
       |> or_fail_with("Expected a multirange of int4range")
     }),
@@ -288,11 +304,14 @@ fn kind_tests() {
       let rows = [type_row(2278, "void", "p", "P")]
 
       // Act
-      let description = found(rows, 2278)
+      let table = from_rows(rows)
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_catalog_type(type_id: 2278)
+      |> be_some
       |> be_equal(pg_catalog_type(2278, "void", Pseudo))
       |> or_fail_with("Expected void as a pseudo-type")
     }),
@@ -322,26 +341,31 @@ fn lookup_tests() {
       // Assert
       description
       |> should
-      |> be_equal(None)
+      |> be_none
       |> or_fail_with("Expected no type")
     }),
     it("finds no type for an OID that the rows do not have", fn() {
       // Act
-      let description = found([int4_row()], 25)
+      let table = from_rows([int4_row()])
 
       // Assert
-      description
+      table
       |> should
-      |> be_equal(Ok(None))
+      |> be_ok
+      |> extract_catalog_type(type_id: 25)
+      |> be_none
       |> or_fail_with("Expected no type for 25")
     }),
     it("follows a chain of domains to the range at its end", fn() {
       // Act
-      let description = found_underlying(domain_chain_rows(), 911)
+      let table = from_rows(domain_chain_rows())
 
       // Assert
-      description
+      table
       |> should
+      |> be_ok
+      |> extract_underlying_catalog_type(type_id: 911)
+      |> be_some
       |> be_equal(pg_catalog_type(3904, "int4range", Range(23)))
       |> or_fail_with("Expected int4range at the end of the chain")
     }),
@@ -349,33 +373,34 @@ fn lookup_tests() {
       "gives the type itself as the underlying type of a type that is not a domain",
       fn() {
         // Act
-        let description = found_underlying(domain_chain_rows(), 23)
+        let table = from_rows(domain_chain_rows())
 
         // Assert
-        description
+        table
         |> should
+        |> be_ok
+        |> extract_underlying_catalog_type(type_id: 23)
+        |> be_some
         |> be_equal(pg_catalog_type(23, "int4", Base))
         |> or_fail_with("Expected int4 itself")
       },
     ),
     it("finds no underlying type for an OID that the rows do not have", fn() {
       // Act
-      let description = found_underlying(domain_chain_rows(), 25)
+      let table = from_rows(domain_chain_rows())
 
       // Assert
-      description
+      table
       |> should
-      |> be_equal(Ok(None))
+      |> be_ok
+      |> extract_underlying_catalog_type(type_id: 25)
+      |> be_none
       |> or_fail_with("Expected no type for 25")
     }),
   ]
 }
 
 // Errors ----------------------------------------------------------------------
-
-fn error_of(rows: List(List(Cell))) -> Result(Nil, RowError) {
-  from_rows(rows) |> result.replace(Nil)
-}
 
 fn error_tests() {
   [
@@ -384,12 +409,13 @@ fn error_tests() {
       let row = [text("type"), number(23)]
 
       // Act
-      let outcome = error_of([row])
+      let outcome = from_rows([row])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(UnreadableRow(row)))
+      |> be_error
+      |> be_equal(UnreadableRow(row))
       |> or_fail_with("Expected the row back in the error")
     }),
     it("refuses a binary cell", fn() {
@@ -397,12 +423,13 @@ fn error_tests() {
       let row = [Binary(<<"type">>), number(23)]
 
       // Act
-      let outcome = error_of([row])
+      let outcome = from_rows([row])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(UnreadableRow(row)))
+      |> be_error
+      |> be_equal(UnreadableRow(row))
       |> or_fail_with("Expected the row back in the error")
     }),
     it("refuses a type OID that is not a number", fn() {
@@ -422,12 +449,13 @@ fn error_tests() {
       ]
 
       // Act
-      let outcome = error_of([row])
+      let outcome = from_rows([row])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(UnreadableRow(row)))
+      |> be_error
+      |> be_equal(UnreadableRow(row))
       |> or_fail_with("Expected the row back in the error")
     }),
     it("refuses a name that is not UTF-8", fn() {
@@ -447,12 +475,13 @@ fn error_tests() {
       ]
 
       // Act
-      let outcome = error_of([row])
+      let outcome = from_rows([row])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(UnreadableRow(row)))
+      |> be_error
+      |> be_equal(UnreadableRow(row))
       |> or_fail_with("Expected the row back in the error")
     }),
     it("refuses a label row with more facts", fn() {
@@ -472,12 +501,13 @@ fn error_tests() {
       ]
 
       // Act
-      let outcome = error_of([row])
+      let outcome = from_rows([row])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(UnreadableRow(row)))
+      |> be_error
+      |> be_equal(UnreadableRow(row))
       |> or_fail_with("Expected the row back in the error")
     }),
     it("refuses a field row whose field type is not a number", fn() {
@@ -497,44 +527,51 @@ fn error_tests() {
       ]
 
       // Act
-      let outcome = error_of([row])
+      let outcome = from_rows([row])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(UnreadableRow(row)))
+      |> be_error
+      |> be_equal(UnreadableRow(row))
       |> or_fail_with("Expected the row back in the error")
     }),
     it("refuses a type kind that PostgreSQL does not have", fn() {
       // Act
-      let outcome = error_of([type_row(920, "strange", "x", "X")])
+      let outcome = from_rows([type_row(920, "strange", "x", "X")])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(UnknownTypeKind(920, "x")))
+      |> be_error
+      |> be_equal(UnknownTypeKind(920, "x"))
       |> or_fail_with("Expected the kind x back in the error")
     }),
     it("refuses a part that is not a type of the rows", fn() {
       // Act
       let outcome =
-        error_of([type_row_with(1007, "_int4", "b", "A", #(23, 0, 0, 0))])
+        from_rows([type_row_with(1007, "_int4", "b", "A", #(23, 0, 0, 0))])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(MissingPart(type_id: 1007, part_type_id: 23)))
+      |> be_error
+      |> be_equal(MissingPart(type_id: 1007, part_type_id: 23))
       |> or_fail_with("Expected the missing element int4")
     }),
     it("refuses a composite field of a type that the rows do not have", fn() {
       // Act
       let outcome =
-        error_of([type_row(900, "pair", "c", "C"), field_row(900, "1", "a", 23)])
+        from_rows([
+          type_row(900, "pair", "c", "C"),
+          field_row(900, "1", "a", 23),
+        ])
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(MissingPart(type_id: 900, part_type_id: 23)))
+      |> be_error
+      |> be_equal(MissingPart(type_id: 900, part_type_id: 23))
       |> or_fail_with("Expected the missing field type int4")
     }),
     it("refuses domains whose chain comes back to itself", fn() {
@@ -545,12 +582,13 @@ fn error_tests() {
       ]
 
       // Act
-      let outcome = error_of(rows)
+      let outcome = from_rows(rows)
 
       // Assert
       outcome
       |> should
-      |> be_equal(Error(CircularDomain(930)))
+      |> be_error
+      |> be_equal(CircularDomain(930))
       |> or_fail_with("Expected the first domain of the circle")
     }),
   ]
