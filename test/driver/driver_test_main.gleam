@@ -8,6 +8,8 @@ import dream_test/reporters/progress
 import dream_test/runner
 import dream_test/suite.{type TestSuite}
 import driver/bit_array_test
+import driver/catalog_table_test
+import driver/catalog_test
 import driver/channel_binding_test
 import driver/connection_test
 import driver/decode_test
@@ -41,6 +43,8 @@ pub fn suites() -> List(TestSuite) {
     server_test.tests(),
     transport_test.tests(),
     connection_test.tests(),
+    catalog_table_test.tests(),
+    catalog_test.tests(),
   ]
 }
 
