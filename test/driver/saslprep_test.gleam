@@ -5,95 +5,99 @@ import dream_postgres/driver/saslprep.{
   type SaslprepError, EmptyAfterMapping, InvalidBidirectionalText,
   ProhibitedCodePoint, saslprep,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import gleam/list.{map}
 
 /// The tests of SASLprep.
 pub fn tests() -> TestSuite {
   describe("dream_postgres/driver/saslprep", [
-    group("the examples of RFC 4013 section 3", map(rfc_cases(), saslprep_test)),
-    group("each rule of the profile", map(rule_cases(), saslprep_test)),
+    group("the examples of RFC 4013 section 3", rfc_tests()),
+    group("each rule of the profile", rule_tests()),
   ])
 }
 
-type SaslprepCase {
-  SaslprepCase(
-    name: String,
-    input: String,
-    expected: Result(String, SaslprepError),
-  )
+fn prepared_test(name: String, input: String, expected: String) {
+  it(name, fn() {
+    // Act
+    let prepared = saslprep(input)
+
+    // Assert
+    prepared
+    |> should
+    |> be_ok
+    |> be_equal(expected)
+    |> or_fail_with("Expected the SASLprep result of " <> name)
+  })
 }
 
-fn saslprep_test(test_case: SaslprepCase) {
-  it(test_case.name, fn() { check_saslprep(test_case) })
+fn refused_test(name: String, input: String, expected: SaslprepError) {
+  it(name, fn() {
+    // Act
+    let prepared = saslprep(input)
+
+    // Assert
+    prepared
+    |> should
+    |> be_error
+    |> be_equal(expected)
+    |> or_fail_with("Expected the SASLprep result of " <> name)
+  })
 }
 
-fn check_saslprep(test_case: SaslprepCase) {
-  // Act
-  let prepared = saslprep(test_case.input)
-
-  // Assert
-  prepared
-  |> should
-  |> be_equal(test_case.expected)
-  |> or_fail_with("Expected the SASLprep result of " <> test_case.name)
-}
-
-fn rfc_cases() -> List(SaslprepCase) {
+fn rfc_tests() {
   [
-    SaslprepCase("1: SOFT HYPHEN mapped to nothing", "I\u{00AD}X", Ok("IX")),
-    SaslprepCase("2: no transformation", "user", Ok("user")),
-    SaslprepCase("3: case preserved", "USER", Ok("USER")),
-    SaslprepCase("4: output is NFKC", "\u{00AA}", Ok("a")),
-    SaslprepCase("5: output is NFKC, matches 1", "\u{2168}", Ok("IX")),
-    SaslprepCase(
+    prepared_test("1: SOFT HYPHEN mapped to nothing", "I\u{00AD}X", "IX"),
+    prepared_test("2: no transformation", "user", "user"),
+    prepared_test("3: case preserved", "USER", "USER"),
+    prepared_test("4: output is NFKC", "\u{00AA}", "a"),
+    prepared_test("5: output is NFKC, matches 1", "\u{2168}", "IX"),
+    refused_test(
       "6: prohibited character",
       "\u{0007}",
-      Error(ProhibitedCodePoint(0x07)),
+      ProhibitedCodePoint(0x07),
     ),
-    SaslprepCase(
+    refused_test(
       "7: bidirectional check",
       "\u{0627}\u{0031}",
-      Error(InvalidBidirectionalText),
+      InvalidBidirectionalText,
     ),
   ]
 }
 
-fn rule_cases() -> List(SaslprepCase) {
+fn rule_tests() {
   [
-    SaslprepCase("a non-ASCII space becomes SPACE", "a\u{00A0}b", Ok("a b")),
-    SaslprepCase(
+    prepared_test("a non-ASCII space becomes SPACE", "a\u{00A0}b", "a b"),
+    refused_test(
       "a text that the mapping empties",
       "\u{00AD}\u{200D}",
-      Error(EmptyAfterMapping),
+      EmptyAfterMapping,
     ),
-    SaslprepCase("the empty text", "", Error(EmptyAfterMapping)),
-    SaslprepCase(
+    refused_test("the empty text", "", EmptyAfterMapping),
+    refused_test(
       "a code point that Unicode 3.2 does not assign",
       "a\u{0221}",
-      Error(ProhibitedCodePoint(0x0221)),
+      ProhibitedCodePoint(0x0221),
     ),
-    SaslprepCase(
+    refused_test(
       "a private use character",
       "\u{E000}",
-      Error(ProhibitedCodePoint(0xE000)),
+      ProhibitedCodePoint(0xE000),
     ),
-    SaslprepCase(
+    prepared_test(
       "a right-to-left text",
       "\u{0627}1\u{0628}",
-      Ok("\u{0627}1\u{0628}"),
+      "\u{0627}1\u{0628}",
     ),
-    SaslprepCase(
+    refused_test(
       "a right-to-left text with a left-to-right character",
       "\u{0627}a\u{0628}",
-      Error(InvalidBidirectionalText),
+      InvalidBidirectionalText,
     ),
-    SaslprepCase(
+    refused_test(
       "a right-to-left character that does not start the text",
       "1\u{0627}",
-      Error(InvalidBidirectionalText),
+      InvalidBidirectionalText,
     ),
   ]
 }
