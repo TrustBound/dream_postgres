@@ -18,6 +18,13 @@
 //// caller still waits for it or not. A reply that comes after the caller
 //// stopped waiting is dropped and never reaches the caller's mailbox.
 ////
+//// A COPY streams its rows between the caller's process and the socket:
+//// `copy_from` sends each chunk of the caller to the socket before the
+//// caller makes the next one, and `copy_to` reads the next row from the
+//// socket only after the caller took the last one. The caller's process
+//// makes and reads the data; the connection process keeps the socket. The
+//// connection serves its COPY caller only, up to the end of the COPY.
+////
 //// Messages that the server sends between requests are kept, not dropped:
 //// a parameter change updates `server_parameter`, and a notice or a
 //// notification goes with the outcome of the next request.
@@ -37,11 +44,13 @@ import dream_postgres/driver/message.{
   NoticeResponse, NotificationResponse, ParameterStatus,
 }
 import dream_postgres/driver/query.{
-  type AsynchronousMessage, type Failure, type PrepareAndRunState,
-  type PrepareState, type RunState, type ScriptFailure, type SimpleQueryState,
-  type Start, type StatementResult, type Step, type UnexpectedMessage,
-  ConnectionEnded, CopyNotSupported, Finished, Notice, ParameterChanged,
-  ScriptFailure, Send, ServerError, Wait,
+  type AsynchronousMessage, type CopyDirection, type CopyResult, type CopyState,
+  type CopyStep, type Failure, type PrepareAndRunState, type PrepareState,
+  type RunState, type ScriptFailure, type SimpleQueryState, type Start,
+  type StatementResult, type Step, type UnexpectedMessage, ConnectionEnded,
+  CopyCompleted, CopyConnectionEnded, CopyFinished, CopyFrom, CopyNotSupported,
+  CopyRow, CopySend, CopyStarted, CopyTo, CopyWait, Finished, NoCopyStarted,
+  Notice, ParameterChanged, ScriptFailure, Send, ServerError, Wait,
 }
 import dream_postgres/driver/statement_cache.{
   type CachedStatement, type StatementCache, CachedStatement,
@@ -63,8 +72,9 @@ import gleam/bool.{guard}
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{
-  type ExitMessage, type Pid, type Subject, type Timer,
+  type Down, type ExitMessage, type Monitor, type Pid, type Subject, type Timer,
 }
+import gleam/erlang/reference.{type Reference}
 import gleam/int.{min}
 import gleam/list.{append, filter_map, fold, reverse, try_map}
 import gleam/option.{type Option, None, Some}
@@ -199,6 +209,15 @@ pub type DriverError {
   /// `copy_from` and `copy_to`. `completed` holds the statements of a
   /// script that ran before it.
   CopyStatementRefused(completed: List(Outcome))
+  /// The SQL of `copy_from` did not start a `COPY ... FROM STDIN`, or the
+  /// SQL of `copy_to` did not start a `COPY ... TO STDOUT`. The statement
+  /// ran: a statement that is not a COPY ran to its end, with its result
+  /// dropped, and the driver ended a COPY of the other direction with no
+  /// row stored and every row dropped.
+  CopyNotStarted
+  /// A chunk or an end came for a COPY that does not run: its `copy_from`
+  /// returned already.
+  CopyNotRunning
   /// The request cannot be written, for example SQL with a zero byte.
   InvalidRequest(error: EncodeError)
   /// The connection process is gone.
@@ -209,6 +228,31 @@ pub type DriverError {
   /// statement did not run: check it against `description` and run it
   /// again.
   StatementChanged(description: StatementDescription)
+}
+
+/// Why a `copy_from` or a `copy_to` failed.
+pub type CopyError(reason) {
+  /// The app's function failed with `reason`. The driver ended the COPY: a
+  /// `COPY ... FROM STDIN` got a CopyFail, so the server stored no row of
+  /// it, and the rest of a `COPY ... TO STDOUT` was read and dropped. The
+  /// connection stays usable.
+  AppFailed(reason: reason)
+  /// The COPY failed in the driver or on the server, for example with the
+  /// server's error for a row that is not valid.
+  DriverFailed(error: DriverError)
+}
+
+/// What the function of `copy_from` sends its chunks with, while its COPY
+/// runs.
+pub opaque type CopySender {
+  CopySender(
+    connection: Connection,
+    /// The COPY of this sender. The caller makes it, so it can end the
+    /// COPY even before the connection process answered the start.
+    id: Reference,
+    /// The longest time that the caller waits for each answer.
+    wait_milliseconds: Int,
+  )
 }
 
 /// A connection process.
@@ -254,6 +298,63 @@ type Message {
   SocketMessage(message: Dynamic)
   ReconnectNow(error: DriverError, attempt: Int)
   ExitSignal(exit: ExitMessage)
+  /// A call of the caller of the COPY `id`.
+  CopyCall(id: Reference, call: CopyCall)
+  /// A process that the connection process watches ended: the caller of a
+  /// COPY.
+  CallerDown(down: Down)
+}
+
+/// What the caller of a COPY asks while its COPY runs.
+type CopyCall {
+  /// Send this chunk of a `COPY ... FROM STDIN`. The answer comes when the
+  /// chunk went to the socket.
+  SendChunk(chunk: BitArray, reply: ReplyTo(Result(Nil, DriverError)))
+  /// Give the next row of a `COPY ... TO STDOUT`, or its end.
+  ReadRow(reply: ReplyTo(Result(CopyRead, DriverError)))
+  /// End the COPY, and give its row count when it ended.
+  EndCopy(ending: CopyEnding, reply: ReplyTo(Result(Int, DriverError)))
+  /// The caller stopped waiting, or its process ended: the COPY is
+  /// abandoned, and no one gets an answer.
+  CallerLeft
+}
+
+/// How the caller ends a COPY.
+type CopyEnding {
+  /// The app sent all its data: the server stores the rows.
+  CompleteCopy
+  /// The app's function failed: the server stores no row.
+  AbandonCopy
+}
+
+/// The answer to `ReadRow`.
+type CopyRead {
+  RowRead(row: BitArray)
+  /// The COPY ended after `count` rows.
+  RowsEnded(count: Int)
+}
+
+/// The caller's side of a COPY that runs.
+type CopySession {
+  CopySession(
+    id: Reference,
+    /// The monitor of the caller's process.
+    monitor: Monitor,
+    /// The caller waits for the start of the COPY.
+    start: Option(ReplyTo(Result(Nil, DriverError))),
+    /// The call of the caller that waits for the server.
+    call: Option(CopyCall),
+    /// A row of a `COPY ... TO STDOUT` that the caller did not take yet.
+    /// The process reads nothing more from the socket until it does.
+    held_row: Option(BitArray),
+  )
+}
+
+/// A COPY that the server ended, whose caller did not take the end yet.
+/// The connection serves no other request until the caller does, or until
+/// its process ends.
+type EndedCopy {
+  EndedCopy(id: Reference, monitor: Monitor, result: Result(Int, DriverError))
 }
 
 /// A request that goes to the server.
@@ -262,6 +363,14 @@ type Request {
   /// The transaction status after every request before it.
   SettledStatusRequest(reply: ReplyTo(Result(TransactionStatus, DriverError)))
   ScriptRequest(sql: String, reply: ReplyTo(Result(List(Outcome), DriverError)))
+  /// A COPY. The answer comes when the server started it.
+  CopyRequest(
+    id: Reference,
+    direction: CopyDirection,
+    sql: String,
+    caller: Pid,
+    reply: ReplyTo(Result(Nil, DriverError)),
+  )
 }
 
 /// A request about one statement, which the statement cache serves.
@@ -314,6 +423,7 @@ type Running {
     details: RunDetails,
     statement: CachedStatement,
   )
+  RunningCopy(state: CopyState, session: CopySession)
 }
 
 /// What finishes a step: the state, the socket for a next step of the
@@ -348,6 +458,8 @@ type State {
     pending: List(AsynchronousMessage),
     /// The named statements of this session.
     cache: StatementCache,
+    /// A COPY that ended, until its caller takes the end.
+    copy: Option(EndedCopy),
   )
 }
 
@@ -479,6 +591,7 @@ fn initialised(
     process.new_selector()
     |> process.select(subject)
     |> process.select_trapped_exits(ExitSignal)
+    |> process.select_monitors(CallerDown)
     |> process.select_other(SocketMessage)
   actor.initialised(state)
   |> actor.selecting(selector)
@@ -504,6 +617,7 @@ fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
     cancel_key: None,
     pending: [],
     cache: new_cache(config),
+    copy: None,
   )
 }
 
@@ -714,6 +828,218 @@ fn parameter_of(snapshot: Snapshot, name: String) -> Option(String) {
   dict.get(snapshot.parameters, name) |> option.from_result
 }
 
+// COPY ------------------------------------------------------------------------
+
+/// Streams rows from the app into a table with a `COPY ... FROM STDIN`.
+/// `produce` runs in the caller's process and sends the data with
+/// `send_chunk`, which returns only when the chunk went to the socket, so
+/// the app never makes data faster than the socket takes it. The driver
+/// ends the COPY: with CopyDone when `produce` gives `Ok`, and with
+/// CopyFail when it gives `Error`, so the server stores no row. The
+/// connection serves no other request until `copy_from` returns.
+///
+/// ## Parameters
+///
+/// - `connection`: the connection
+/// - `sql`: one `COPY ... FROM STDIN` statement, with the format of the
+///   data (text, csv or binary)
+/// - `deadline_milliseconds`: the longest time for the whole COPY, with
+///   the time of `produce`
+/// - `produce`: makes the data and sends it in chunks
+///
+/// ## Returns
+///
+/// - `Ok(count)`: the number of rows that the server stored
+/// - `Error(AppFailed(reason))`: `produce` failed; no row is stored
+/// - `Error(DriverFailed(error))`: the server refused the COPY or a row,
+///   the deadline passed, or the request failed
+pub fn copy_from(
+  connection: Connection,
+  sql: String,
+  deadline_milliseconds: Int,
+  produce: fn(CopySender) -> Result(Nil, reason),
+) -> Result(Int, CopyError(reason)) {
+  let sender = new_sender(connection, deadline_milliseconds)
+  use Nil <- try(start_copy(sender, CopyFrom, sql, deadline_milliseconds))
+  case produce(sender) {
+    Ok(Nil) -> end_copy(sender, CompleteCopy) |> map_error(DriverFailed)
+    Error(reason) -> end_copy(sender, AbandonCopy) |> abandoned(reason)
+  }
+}
+
+/// Sends one chunk of the data of a `copy_from`, and returns when the
+/// chunk went to the socket. A chunk is any part of the COPY data stream:
+/// its end need not be the end of a row.
+///
+/// ## Parameters
+///
+/// - `sender`: the sender that `copy_from` gave
+/// - `chunk`: the bytes, in the format of the COPY
+///
+/// ## Returns
+///
+/// - `Ok(Nil)`: the chunk went to the socket
+/// - `Error(DriverError)`: the COPY failed, for example with the server's
+///   error for a row, or its deadline passed. The server takes no more
+///   data: give `Error` from `produce`.
+pub fn send_chunk(
+  sender: CopySender,
+  chunk: BitArray,
+) -> Result(Nil, DriverError) {
+  call(
+    sender.connection,
+    chunk_message(sender.id, chunk, _),
+    sender.wait_milliseconds,
+  )
+  |> result.flatten
+}
+
+/// Streams rows out of a table with a `COPY ... TO STDOUT`, and folds over
+/// them one at a time in the caller's process. The connection process
+/// reads the next row from the socket only after `fold` took the last one,
+/// so neither process holds the whole result. When `fold` fails, the
+/// driver reads the rest of the COPY and drops it. The connection serves
+/// no other request until `copy_to` returns.
+///
+/// ## Parameters
+///
+/// - `connection`: the connection
+/// - `sql`: one `COPY ... TO STDOUT` statement, with the format of the
+///   rows (text, csv or binary)
+/// - `deadline_milliseconds`: the longest time for the whole COPY, with
+///   the time of `fold`
+/// - `initial`: the first value of the fold
+/// - `fold`: takes the value and the bytes of one row, in the format of
+///   the COPY, and gives the next value
+///
+/// ## Returns
+///
+/// - `Ok(value)`: the value after the last row
+/// - `Error(AppFailed(reason))`: `fold` failed
+/// - `Error(DriverFailed(error))`: the server refused the COPY, the
+///   deadline passed, or the request failed
+pub fn copy_to(
+  connection: Connection,
+  sql: String,
+  deadline_milliseconds: Int,
+  initial: value,
+  fold: fn(value, BitArray) -> Result(value, reason),
+) -> Result(value, CopyError(reason)) {
+  let sender = new_sender(connection, deadline_milliseconds)
+  use Nil <- try(start_copy(sender, CopyTo, sql, deadline_milliseconds))
+  read_rows(sender, initial, fold)
+}
+
+fn new_sender(
+  connection: Connection,
+  deadline_milliseconds: Int,
+) -> CopySender {
+  CopySender(
+    connection:,
+    id: reference.new(),
+    wait_milliseconds: deadline_milliseconds
+      + connection.reply_margin_milliseconds,
+  )
+}
+
+fn start_copy(
+  sender: CopySender,
+  direction: CopyDirection,
+  sql: String,
+  deadline_milliseconds: Int,
+) -> Result(Nil, CopyError(reason)) {
+  let caller = process.self()
+  request(
+    sender.connection,
+    CopyRequest(sender.id, direction, sql, caller, _),
+    deadline_milliseconds,
+  )
+  |> map_error(leave_copy(sender, _))
+}
+
+/// The caller stops: the connection process ends the COPY, if it still
+/// runs, and answers no one.
+fn leave_copy(sender: CopySender, error: DriverError) -> CopyError(reason) {
+  process.send(sender.connection.subject, CopyCall(sender.id, CallerLeft))
+  DriverFailed(error)
+}
+
+fn read_rows(
+  sender: CopySender,
+  accumulator: value,
+  fold: fn(value, BitArray) -> Result(value, reason),
+) -> Result(value, CopyError(reason)) {
+  case read_row(sender) {
+    Ok(RowRead(row:)) -> fold_row(sender, fold(accumulator, row), fold)
+    Ok(RowsEnded(..)) -> Ok(accumulator)
+    Error(error) -> Error(leave_copy(sender, error))
+  }
+}
+
+fn fold_row(
+  sender: CopySender,
+  folded: Result(value, reason),
+  fold: fn(value, BitArray) -> Result(value, reason),
+) -> Result(value, CopyError(reason)) {
+  case folded {
+    Ok(accumulator) -> read_rows(sender, accumulator, fold)
+    Error(reason) -> end_copy(sender, AbandonCopy) |> abandoned(reason)
+  }
+}
+
+/// The app's function failed, and the driver ended the COPY. A server
+/// error is the server's answer to the CopyFail, or the error that made
+/// the function fail; any other error is a failure of the connection.
+fn abandoned(
+  ended: Result(Int, DriverError),
+  reason: reason,
+) -> Result(value, CopyError(reason)) {
+  case ended {
+    Ok(_count) | Error(ServerRefused(..)) -> Error(AppFailed(reason))
+    Error(error) -> Error(DriverFailed(error))
+  }
+}
+
+fn read_row(sender: CopySender) -> Result(CopyRead, DriverError) {
+  call(sender.connection, row_message(sender.id, _), sender.wait_milliseconds)
+  |> result.flatten
+}
+
+fn end_copy(
+  sender: CopySender,
+  ending: CopyEnding,
+) -> Result(Int, DriverError) {
+  call(
+    sender.connection,
+    end_message(sender.id, ending, _),
+    sender.wait_milliseconds,
+  )
+  |> result.flatten
+}
+
+fn chunk_message(
+  id: Reference,
+  chunk: BitArray,
+  reply_to: ReplyTo(Result(Nil, DriverError)),
+) -> Message {
+  CopyCall(id, SendChunk(chunk, reply_to))
+}
+
+fn row_message(
+  id: Reference,
+  reply_to: ReplyTo(Result(CopyRead, DriverError)),
+) -> Message {
+  CopyCall(id, ReadRow(reply_to))
+}
+
+fn end_message(
+  id: Reference,
+  ending: CopyEnding,
+  reply_to: ReplyTo(Result(Int, DriverError)),
+) -> Message {
+  CopyCall(id, EndCopy(ending, reply_to))
+}
+
 fn prepare_request(
   sql: String,
   reply_to: ReplyTo(Result(StatementDescription, DriverError)),
@@ -801,6 +1127,8 @@ fn handle_message(
       actor.continue(socket_message_received(state, socket_message))
     ReconnectNow(error:, attempt:) ->
       actor.continue(reconnect(state, error, attempt))
+    CopyCall(id:, call:) -> actor.continue(copy_call(state, id, call))
+    CallerDown(down:) -> actor.continue(caller_down(state, down))
   }
 }
 
@@ -834,7 +1162,6 @@ fn terminate(socket: transport.Connection) -> Nil {
   }
 }
 
-/// A request runs at once when no other runs, and waits otherwise.
 /// Gives the request its number and starts its deadline timer.
 fn new_request(state: State, request: Request, deadline: Int) -> State {
   let id = state.next_id
@@ -842,14 +1169,20 @@ fn new_request(state: State, request: Request, deadline: Int) -> State {
   accept_request(State(..state, next_id: id + 1), Ticket(id:, request:, timer:))
 }
 
+/// A request runs at once when no request is in progress and no ended
+/// COPY waits for its caller. A request is in progress from its start
+/// until `next_request` ends it: while a step runs, and also after its
+/// step ended while the cancel of its deadline is not done yet, so that
+/// cancel can never reach the next request.
 fn accept_request(state: State, ticket: Ticket) -> State {
-  case state.running, state.link {
-    None, Connected(socket:, ..) -> {
+  case state.current, state.copy, state.link {
+    None, None, Connected(socket:, ..) -> {
       let current = Current(ticket.id, ticket.timer, False, False, False)
       begin(State(..state, current: Some(current)), socket, ticket.request)
     }
-    Some(_running), _ -> State(..state, waiting: [ticket, ..state.waiting])
-    None, Lost(error:) -> {
+    Some(_in_progress), _, _ | _, Some(_copy), _ ->
+      State(..state, waiting: [ticket, ..state.waiting])
+    None, None, Lost(error:) -> {
       refuse_ticket(ticket, error)
       state
     }
@@ -874,6 +1207,11 @@ fn begin(
     SettledStatusRequest(reply: reply_to) -> {
       reply(reply_to, Ok(tracked_status(state.tracker)))
       next_request(state)
+    }
+    CopyRequest(id:, direction:, sql:, caller:, reply: reply_to) -> {
+      let session =
+        CopySession(id, process.monitor(caller), Some(reply_to), None, None)
+      begin_copy(state, socket, query.start_copy(sql, direction), session)
     }
   }
 }
@@ -1015,6 +1353,7 @@ fn refuse(request: Request, error: DriverError) -> Nil {
     StatementRequest(statement) -> refuse_statement(statement, error)
     SettledStatusRequest(reply: reply_to) -> reply(reply_to, Error(error))
     ScriptRequest(reply: reply_to, ..) -> reply(reply_to, Error(error))
+    CopyRequest(reply: reply_to, ..) -> reply(reply_to, Error(error))
   }
 }
 
@@ -1032,6 +1371,7 @@ fn refuse_running(running: Running, error: DriverError) -> Nil {
     RunningScript(reply: reply_to, ..) -> reply(reply_to, Error(error))
     RunningNamedPrepare(request:, ..) -> refuse_statement(request, error)
     RunningCachedRun(details:, ..) -> reply(details.reply, Error(error))
+    RunningCopy(session:, ..) -> answer_session(session, Error(error))
   }
 }
 
@@ -1056,6 +1396,7 @@ fn sent(
 /// request is done: its timer stops, and the oldest waiting request
 /// starts, if one waits.
 fn next_request(state: State) -> State {
+  use <- guard(option.is_some(state.copy), state)
   case state.running, state.current {
     Some(_running), _ -> state
     None, Some(Current(deadline_passed: True, cancel_done: False, ..)) -> state
@@ -1114,6 +1455,7 @@ fn socket_event(
 }
 
 fn receive_next(state: State) -> State {
+  use <- guard(paused(state), state)
   case state.link {
     Connected(socket:, ..) ->
       sent(state, socket, transport.receive_next(socket))
@@ -1123,6 +1465,7 @@ fn receive_next(state: State) -> State {
 
 /// Decodes and handles each whole message of the buffer.
 fn read_messages(state: State) -> State {
+  use <- guard(paused(state), state)
   case state.link {
     Connected(socket:, bytes:) -> read_message(state, socket, bytes)
     Lost(..) -> state
@@ -1234,6 +1577,14 @@ fn advance(
         query.step_run(step_state, message),
         RunningCachedRun(_, details, statement),
         cached_run_finisher(details, statement),
+        running,
+      )
+    RunningCopy(state: step_state, session:) ->
+      follow_copy(
+        state,
+        socket,
+        query.step_copy(step_state, message),
+        session,
         running,
       )
   }
@@ -1608,6 +1959,353 @@ fn notification_of(message: AsynchronousMessage) -> Result(Notification, Nil) {
   }
 }
 
+// The COPY in the process -----------------------------------------------------
+
+/// Sends the first messages of a COPY. A message that cannot be written
+/// fails the request before any byte goes out.
+fn begin_copy(
+  state: State,
+  socket: transport.Connection,
+  start: Start(CopyState),
+  session: CopySession,
+) -> State {
+  case encode_all(start.messages) {
+    Ok(bytes) ->
+      running_copy(state, start.state, session)
+      |> sent(socket, transport.send(socket, bytes))
+    Error(error) -> {
+      answer_session(session, Error(InvalidRequest(error)))
+      process.demonitor_process(session.monitor)
+      next_request(state)
+    }
+  }
+}
+
+fn running_copy(
+  state: State,
+  copy_state: CopyState,
+  session: CopySession,
+) -> State {
+  State(..state, running: Some(RunningCopy(copy_state, session)))
+}
+
+/// Goes on with a COPY: tells its caller of the start and of each row,
+/// sends what the step asks, waits, or ends it.
+fn follow_copy(
+  state: State,
+  socket: transport.Connection,
+  step: Result(CopyStep, UnexpectedMessage),
+  session: CopySession,
+  current: Running,
+) -> State {
+  case step {
+    Ok(CopyWait(copy_state)) -> running_copy(state, copy_state, session)
+    Ok(CopySend(bytes, copy_state)) ->
+      running_copy(state, copy_state, session)
+      |> sent(socket, transport.send(socket, bytes))
+    Ok(CopyStarted(copy_state)) -> {
+      option.map(session.start, reply(_, Ok(Nil)))
+      running_copy(state, copy_state, CopySession(..session, start: None))
+    }
+    Ok(CopyRow(row, copy_state)) -> copy_row(state, copy_state, session, row)
+    Ok(CopyFinished(outcome)) -> copy_finished(state, session, outcome)
+    Ok(CopyConnectionEnded(report, messages)) ->
+      ended(state, socket, current, report, messages)
+    Error(unexpected) ->
+      failed(
+        state,
+        socket,
+        current,
+        ProtocolViolation(UnexpectedServerMessage(unexpected)),
+      )
+  }
+}
+
+/// A row goes to the caller that waits for it. Else the process keeps it,
+/// and reads nothing more until the caller takes it.
+fn copy_row(
+  state: State,
+  copy_state: CopyState,
+  session: CopySession,
+  row: BitArray,
+) -> State {
+  case session.call {
+    Some(ReadRow(reply: reply_to)) -> {
+      reply(reply_to, Ok(RowRead(row)))
+      running_copy(state, copy_state, CopySession(..session, call: None))
+    }
+    _ ->
+      running_copy(
+        state,
+        copy_state,
+        CopySession(..session, held_row: Some(row)),
+      )
+  }
+}
+
+/// The server ended the COPY. Its caller gets the result now, if it waits
+/// for it, or with its next call. After a deadline the result is
+/// `DeadlinePassed`.
+fn copy_finished(
+  state: State,
+  session: CopySession,
+  outcome: query.Outcome(CopyResult, Failure),
+) -> State {
+  let state = after_step(state, outcome.asynchronous_messages)
+  let tracker = track_step(state.tracker, outcome)
+  let ended = copy_result(outcome) |> deadline_result(state, _)
+  State(..state, tracker:, copy: settle_copy(session, ended))
+  |> next_request
+}
+
+fn copy_result(
+  outcome: query.Outcome(CopyResult, Failure),
+) -> Result(Int, DriverError) {
+  case outcome.result {
+    Ok(CopyCompleted(count:)) -> Ok(count)
+    Ok(NoCopyStarted) | Error(CopyNotSupported(..)) -> Error(CopyNotStarted)
+    Error(ServerError(report)) -> Error(ServerRefused(report, outcome.status))
+  }
+}
+
+fn deadline_result(
+  state: State,
+  ended: Result(Int, DriverError),
+) -> Result(Int, DriverError) {
+  case state.current {
+    Some(Current(deadline_passed: True, cancel_confirmed:, ..)) ->
+      Error(DeadlinePassed(cancelled: cancel_confirmed))
+    _ -> ended
+  }
+}
+
+/// Answers the caller of an ended COPY, and keeps the end while the caller
+/// still has to take it.
+fn settle_copy(
+  session: CopySession,
+  ended: Result(Int, DriverError),
+) -> Option(EndedCopy) {
+  answer_session(session, ended)
+  close_session(session, ended)
+}
+
+/// Gives the end of the COPY to the caller's start or call that waits.
+fn answer_session(
+  session: CopySession,
+  ended: Result(Int, DriverError),
+) -> Nil {
+  case session.start, session.call {
+    Some(start), _ -> reply(start, result.replace(ended, Nil))
+    None, Some(call) -> answer_call(call, ended)
+    None, None -> Nil
+  }
+}
+
+/// The caller took the end of the COPY with its start, with a row read or
+/// with its end, and the process watches it no more. Else the end waits
+/// for the caller's next call.
+fn close_session(
+  session: CopySession,
+  ended: Result(Int, DriverError),
+) -> Option(EndedCopy) {
+  case session.start, session.call {
+    None, None | None, Some(SendChunk(..)) ->
+      Some(EndedCopy(session.id, session.monitor, ended))
+    _, _ -> {
+      process.demonitor_process(session.monitor)
+      None
+    }
+  }
+}
+
+fn answer_call(call: CopyCall, ended: Result(Int, DriverError)) -> Nil {
+  case call {
+    SendChunk(reply: reply_to, ..) ->
+      reply(reply_to, result.replace(ended, Nil))
+    ReadRow(reply: reply_to) -> reply(reply_to, result.map(ended, RowsEnded))
+    EndCopy(reply: reply_to, ..) -> reply(reply_to, ended)
+    CallerLeft -> Nil
+  }
+}
+
+/// A call of the caller of a COPY: of the COPY that runs, of the one that
+/// waits for its caller to take its end, or of one that is over.
+fn copy_call(state: State, id: Reference, call: CopyCall) -> State {
+  case state.running, state.copy, state.link {
+    Some(RunningCopy(state: copy_state, session:)), _, Connected(socket:, ..)
+      if session.id == id
+    -> running_copy_call(state, socket, copy_state, session, call)
+    _, Some(ended), _ if ended.id == id -> ended_copy_call(state, ended, call)
+    _, _, _ -> {
+      answer_call(call, Error(CopyNotRunning))
+      state
+    }
+  }
+}
+
+/// The end of an ended COPY goes to the call. A chunk gets the end but
+/// does not take it: the caller still ends the COPY.
+fn ended_copy_call(state: State, ended: EndedCopy, call: CopyCall) -> State {
+  answer_call(call, ended.result)
+  case call {
+    SendChunk(..) -> state
+    _ -> {
+      process.demonitor_process(ended.monitor)
+      next_request(State(..state, copy: None))
+    }
+  }
+}
+
+fn running_copy_call(
+  state: State,
+  socket: transport.Connection,
+  copy_state: CopyState,
+  session: CopySession,
+  call: CopyCall,
+) -> State {
+  case call {
+    SendChunk(chunk:, reply: reply_to) ->
+      send_copy_chunk(state, socket, copy_state, session, chunk, reply_to)
+    ReadRow(reply: reply_to) ->
+      read_copy_row(state, copy_state, session, reply_to)
+    EndCopy(ending: CompleteCopy, ..) ->
+      CopySession(..session, call: Some(call))
+      |> stop_copy(state, socket, query.finish_copy(copy_state), _)
+    EndCopy(ending: AbandonCopy, ..) | CallerLeft ->
+      CopySession(..session, call: Some(call))
+      |> stop_copy(state, socket, query.abandon_copy(copy_state), _)
+  }
+}
+
+/// Sends a chunk while the server reads data and the deadline did not
+/// pass, and answers when it went to the socket. Else the chunk waits for
+/// the end of the COPY, which is its answer.
+fn send_copy_chunk(
+  state: State,
+  socket: transport.Connection,
+  copy_state: CopyState,
+  session: CopySession,
+  chunk: BitArray,
+  reply_to: ReplyTo(Result(Nil, DriverError)),
+) -> State {
+  let waiting =
+    running_copy(
+      state,
+      copy_state,
+      CopySession(..session, call: Some(SendChunk(chunk, reply_to))),
+    )
+  case query.accepts_copy_data(copy_state) && !deadline_passed(state) {
+    True ->
+      transport.send(socket, query.copy_data(chunk))
+      |> chunk_sent(state, waiting, socket, reply_to, _)
+    False -> waiting
+  }
+}
+
+/// Answers a chunk that went to the socket. A send that failed loses the
+/// connection, and the waiting chunk gets the loss.
+fn chunk_sent(
+  state: State,
+  waiting: State,
+  socket: transport.Connection,
+  reply_to: ReplyTo(Result(Nil, DriverError)),
+  sent: Result(Nil, TransportError),
+) -> State {
+  case sent {
+    Ok(Nil) -> {
+      reply(reply_to, Ok(Nil))
+      state
+    }
+    Error(error) -> lose(waiting, socket, ConnectionLost(error))
+  }
+}
+
+/// Gives the row that the process kept, and reads on. Else the call waits
+/// for the next row.
+fn read_copy_row(
+  state: State,
+  copy_state: CopyState,
+  session: CopySession,
+  reply_to: ReplyTo(Result(CopyRead, DriverError)),
+) -> State {
+  case session.held_row {
+    Some(row) -> {
+      reply(reply_to, Ok(RowRead(row)))
+      running_copy(state, copy_state, CopySession(..session, held_row: None))
+      |> read_on
+    }
+    None ->
+      running_copy(
+        state,
+        copy_state,
+        CopySession(..session, call: Some(ReadRow(reply_to))),
+      )
+  }
+}
+
+/// Sends the bytes that end the COPY, drops a row that the caller did not
+/// take, and reads on to the end of the COPY.
+fn stop_copy(
+  state: State,
+  socket: transport.Connection,
+  stopped: #(CopyState, BitArray),
+  session: CopySession,
+) -> State {
+  let #(copy_state, bytes) = stopped
+  running_copy(state, copy_state, CopySession(..session, held_row: None))
+  |> sent(socket, transport.send(socket, bytes))
+  |> read_on
+}
+
+/// Reads the messages that came while the process kept a row, and asks
+/// the socket for more.
+fn read_on(state: State) -> State {
+  state |> read_messages |> receive_next
+}
+
+fn paused(state: State) -> Bool {
+  case state.running {
+    Some(RunningCopy(session: CopySession(held_row: Some(_row), ..), ..)) ->
+      True
+    _ -> False
+  }
+}
+
+/// Ends the COPY that runs, if one runs, with the bytes that `ending`
+/// gives.
+fn end_running_copy(
+  state: State,
+  ending: fn(CopyState) -> #(CopyState, BitArray),
+) -> State {
+  case state.running, state.link {
+    Some(RunningCopy(state: copy_state, session:)), Connected(socket:, ..) ->
+      stop_copy(state, socket, ending(copy_state), session)
+    _, _ -> state
+  }
+}
+
+/// The caller of a COPY ended: the COPY is abandoned, or its end is
+/// dropped.
+fn caller_down(state: State, down: Down) -> State {
+  case state.running, state.copy, state.link {
+    Some(RunningCopy(state: copy_state, session:)), _, Connected(socket:, ..)
+      if session.monitor == down.monitor
+    -> running_copy_call(state, socket, copy_state, session, CallerLeft)
+    _, Some(ended), _ if ended.monitor == down.monitor ->
+      ended_copy_call(state, ended, CallerLeft)
+    _, _, _ -> state
+  }
+}
+
+/// A COPY that runs when the connection is lost ends with the loss. One
+/// that ended before keeps its own result.
+fn lost_copy(state: State, error: DriverError) -> Option(EndedCopy) {
+  case state.running {
+    Some(RunningCopy(session:, ..)) -> close_session(session, Error(error))
+    _ -> state.copy
+  }
+}
+
 // Losing and connecting again -------------------------------------------------
 
 /// The connection is lost: the socket closes, the running request and
@@ -1629,6 +2327,7 @@ fn lose(
     running: None,
     waiting: [],
     tracker: new_tracker(),
+    copy: lost_copy(state, error),
   )
 }
 
@@ -1811,11 +2510,18 @@ fn confirm_cancel(state: State, message: BackendMessage) -> State {
 /// running request sends a cancel on a new socket, with the TLS settings
 /// of the connection. A session with no cancel key cannot cancel, so its
 /// connection is closed and replaced.
+///
+/// A COPY that runs takes no more chunks. The rest of a
+/// `COPY ... TO STDOUT` is read and dropped at once, because the server
+/// acts on a cancel only between rows, never while it waits to write a row
+/// that the caller did not take. A COPY that the server ended already
+/// waits for its caller, with its own result.
 fn deadline_reached(state: State, id: Int) -> State {
-  case state.current, state.link {
-    Some(current), Connected(socket:, ..) if current.id == id ->
+  case state.current, state.running, state.link {
+    Some(current), Some(_running), Connected(socket:, ..) if current.id == id ->
       start_cancel(state, socket, current)
-    _, _ -> end_waiting(state, id)
+      |> end_running_copy(query.stop_at_deadline)
+    _, _, _ -> end_waiting(state, id)
   }
 }
 
@@ -1883,12 +2589,18 @@ fn for_current(
   }
 }
 
+/// A `COPY ... FROM STDIN` that still runs gets its CopyFail only now.
+/// The server ignores a cancel while it waits for CopyData, and it drops
+/// a pending cancel when a statement fails. A CopyFail sent before the
+/// server took the cancel could end the COPY first, and leave the cancel
+/// to stop the next statement.
 fn mark_cancel_done(
   state: State,
   _socket: transport.Connection,
   current: Current,
 ) -> State {
   State(..state, current: Some(Current(..current, cancel_done: True)))
+  |> end_running_copy(query.abandon_copy)
   |> next_request
 }
 
