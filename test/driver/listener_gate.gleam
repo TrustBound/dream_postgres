@@ -7,9 +7,10 @@
 pub type Gate
 
 /// Starts a gate proxy to the server on `server_port`, with the gate open,
-/// and gives the port that the client connects to.
+/// and gives the port that the client connects to. Gives the reason when
+/// the proxy cannot listen.
 @external(erlang, "listener_gate_ffi", "start")
-pub fn start_gate(server_port: Int) -> #(Int, Gate)
+pub fn start_gate(server_port: Int) -> Result(#(Int, Gate), String)
 
 /// Closes the gate and each client's connection, as a broken network does.
 @external(erlang, "listener_gate_ffi", "break")

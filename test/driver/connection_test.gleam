@@ -51,13 +51,14 @@ import driver/proxy.{
 import driver/server_connection.{
   type ProxiedConnection, type ProxiedOutcome, advisory_lock_sql,
   ask_transaction_status, backend_pid, break_session, caller_answer,
-  caller_outcomes, connection_config, connection_setup, hold_advisory_lock,
-  inject_and_wait_for_parameter, lock_request, lock_waiter_pid, next_event,
-  next_event_after_refused_reconnects, parameter_config, protocol_config,
-  proxied_act_setup, proxied_setup, release_advisory_lock, resume_connection,
-  run_control_script, run_control_setup_script, run_failing_script,
-  run_failing_statement, run_setup_script, run_setup_statement,
-  send_stray_message, start_announced_caller, start_caller, start_configured,
+  caller_outcomes, cancel_timeout_config, connection_config, connection_setup,
+  hold_advisory_lock, inject_and_wait_for_parameter, lock_request,
+  lock_waiter_pid, next_event, next_event_after_refused_reconnects,
+  parameter_config, protocol_config, proxied_act_setup, proxied_setup,
+  release_advisory_lock, resume_connection, run_control_script,
+  run_control_setup_script, run_failing_script, run_failing_statement,
+  run_setup_script, run_setup_statement, send_stray_message,
+  setup_timeout_config, start_announced_caller, start_caller, start_configured,
   start_connection, start_in_ended_owner, start_test_caching,
   start_test_configured, start_test_connection, start_test_proxied,
   start_test_proxied_with_caching, stop_after_error, stop_connection,
@@ -68,7 +69,7 @@ import driver/server_connection.{
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/driver_tls.{verify_full}
 import gleam/bit_array
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/list.{map}
 import gleam/otp/static_supervisor
@@ -162,7 +163,11 @@ fn connection_tests() -> TestSuite {
       group("the statement cache", map(driver_servers(), cache_tests)),
       group("what dream_model needs", map(driver_servers(), model_tests)),
       group("when the process does not answer in time", [
-        before_each(start_test_configured(slow_answer_config())),
+        before_each(start_test_configured(
+          connection_config(first_driver_server.port)
+          |> result.map(setup_timeout_config(_, 100))
+          |> result.map(cancel_timeout_config(_, 100)),
+        )),
         it(
           "gives DeadlinePassed when the process does not answer in time",
           fn(connection) {
@@ -625,38 +630,35 @@ type StartInputs {
 }
 
 fn build_start_inputs() -> Result(StartInputs, String) {
-  let #(proxy_port, proxy) = start_proxy(first_driver_server.port)
-  let #(fake_port, _fake_server) = start_fake_server(Answer(<<"x", 4:32>>))
-  build_configs(proxy, proxy_port, fake_port)
+  use #(proxy_port, proxy) <- try(start_proxy(first_driver_server.port))
+  {
+    let first_port = first_driver_server.port
+    use #(fake_port, _fake_server) <- try(
+      start_fake_server(Answer(<<"x", 4:32>>)),
+    )
+    use wrong_password <- try(user_config(first_port, "dream", "wrong"))
+    use no_listener <- try(connection_config(free_port()))
+    use silent_port <- try(start_silent_server())
+    use silent <- try(connection_config(silent_port))
+    use undecodable_login <- try(connection_config(fake_port))
+    use first_server <- try(connection_config(first_port))
+    use through_proxy <- try(connection_config(proxy_port))
+    let silent_server =
+      ConnectionConfig(..silent, setup_timeout_milliseconds: 100)
+    Ok(StartInputs(
+      wrong_password:,
+      no_listener:,
+      silent_server:,
+      undecodable_login:,
+      first_server:,
+      through_proxy:,
+      proxy:,
+    ))
+  }
   |> map_error(fn(error) {
     stop_proxy(proxy)
     error
   })
-}
-
-fn build_configs(
-  proxy: Proxy,
-  proxy_port: Int,
-  fake_port: Int,
-) -> Result(StartInputs, String) {
-  let first_port = first_driver_server.port
-  use wrong_password <- try(user_config(first_port, "dream", "wrong"))
-  use no_listener <- try(connection_config(free_port()))
-  use silent <- try(connection_config(start_silent_server()))
-  use undecodable_login <- try(connection_config(fake_port))
-  use first_server <- try(connection_config(first_port))
-  use through_proxy <- try(connection_config(proxy_port))
-  let silent_server =
-    ConnectionConfig(..silent, setup_timeout_milliseconds: 100)
-  Ok(StartInputs(
-    wrong_password:,
-    no_listener:,
-    silent_server:,
-    undecodable_login:,
-    first_server:,
-    through_proxy:,
-    proxy:,
-  ))
 }
 
 fn stop_start_inputs(inputs: StartInputs) -> Result(Nil, String) {
@@ -1055,9 +1057,18 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
 /// outcome carries the notice and the notification, and the parameter has
 /// its new value.
 fn idle_message_tests() -> ContextNode(ProxiedConnection) {
+  let idle_messages =
+    bit_array.concat([
+      frame("N", <<
+        "S", "NOTICE":utf8, 0, "V", "NOTICE":utf8, 0, "C", "00000":utf8, 0, "M",
+        "an idle notice":utf8, 0, 0,
+      >>),
+      frame("A", <<4321:32, "idle_jobs":utf8, 0, "idle":utf8, 0>>),
+      frame("S", <<"application_name":utf8, 0, "injected":utf8, 0>>),
+    ])
   group("after messages between requests", [
     before_each(inject_and_wait_for_parameter(
-      idle_messages(),
+      idle_messages,
       "application_name",
       "injected",
     )),
@@ -1094,32 +1105,8 @@ fn idle_message_tests() -> ContextNode(ProxiedConnection) {
   ])
 }
 
-/// A NoticeResponse, a NotificationResponse and a ParameterStatus, as the
-/// server sends them between requests.
-fn idle_messages() -> BitArray {
-  bit_array.concat([
-    notice("an idle notice"),
-    notification(4321, "idle_jobs", "idle"),
-    parameter_status("application_name", "injected"),
-  ])
-}
-
-fn notification(process_id: Int, channel: String, payload: String) -> BitArray {
-  let body = <<process_id:32, channel:utf8, 0, payload:utf8, 0>>
-  <<"A", { bit_array.byte_size(body) + 4 }:32, body:bits>>
-}
-
-fn parameter_status(name: String, value: String) -> BitArray {
-  let body = <<name:utf8, 0, value:utf8, 0>>
-  <<"S", { bit_array.byte_size(body) + 4 }:32, body:bits>>
-}
-
-fn notice(text: String) -> BitArray {
-  let body = <<
-    "S", "NOTICE":utf8, 0, "V", "NOTICE":utf8, 0, "C", "00000":utf8, 0, "M",
-    text:utf8, 0, 0,
-  >>
-  <<"N", { bit_array.byte_size(body) + 4 }:32, body:bits>>
+fn frame(type_byte: String, body: BitArray) -> BitArray {
+  <<type_byte:utf8, { bit_array.byte_size(body) + 4 }:32, body:bits>>
 }
 
 /// Each test waits on the advisory lock of its own proxied connection, which
@@ -1294,34 +1281,22 @@ fn start_refused_reconnect() -> Result(RefusedReconnect, String) {
   use control <- try(
     start_connection(port) |> map_error(stop_after_error(connection, _)),
   )
-  refuse_reconnect(connection, control, events)
-  |> map_error(restore_after_error(connection, control, _))
-}
-
-fn refuse_reconnect(
-  connection: Connection,
-  control: Connection,
-  events: Subject(ConnectionEvent),
-) -> Result(RefusedReconnect, String) {
-  use pid <- try(backend_pid(connection))
-  use _changed <- try(run_control_script(control, change_password))
-  use _terminated <- try(terminate_backend(control, pid))
-  let lost = next_event(events)
-  let refused = next_event(events)
-  use _restored <- try(run_control_script(control, restore_password))
-  let back = next_event_after_refused_reconnects(events)
-  Ok(RefusedReconnect(connection:, control:, lost:, refused:, back:))
-}
-
-fn restore_after_error(
-  connection: Connection,
-  control: Connection,
-  error: String,
-) -> String {
-  let restored = run_control_script(control, restore_password)
-  stop(connection)
-  stop(control)
-  error <> "; restoring the password gave " <> inspect(restored)
+  {
+    use pid <- try(backend_pid(connection))
+    use _changed <- try(run_control_script(control, change_password))
+    use _terminated <- try(terminate_backend(control, pid))
+    let lost = next_event(events)
+    let refused = next_event(events)
+    use _restored <- try(run_control_script(control, restore_password))
+    let back = next_event_after_refused_reconnects(events)
+    Ok(RefusedReconnect(connection:, control:, lost:, refused:, back:))
+  }
+  |> map_error(fn(error) {
+    let restored = run_control_script(control, restore_password)
+    stop(connection)
+    stop(control)
+    error <> "; restoring the password gave " <> inspect(restored)
+  })
 }
 
 fn stop_refused_reconnect(scenario: RefusedReconnect) -> Result(Nil, String) {
@@ -1517,47 +1492,38 @@ type GatedDeadline {
   )
 }
 
+/// The connection goes through the gate, with a first reconnect delay of
+/// 60 seconds and a cancel timeout of 5 seconds.
 fn start_gated_deadline(server: Server) -> Result(GatedDeadline, String) {
-  let #(port, gate) = start_cancel_gate(server.port)
+  use #(port, gate) <- try(start_cancel_gate(server.port))
   {
-    use config <- try(gated_config(port))
-    use connection <- try(start_configured(config))
-    run_gated_deadline(connection, gate)
+    use config <- try(connection_config(port))
+    let gated = ConnectionConfig(..config, reconnect: Backoff(60_000, 60_000))
+    use connection <- try(start_configured(cancel_timeout_config(gated, 5000)))
+    {
+      let first = run(connection, "SELECT pg_sleep(0.3)", [], [], 50)
+      record_gate(gate)
+      use second <- try(
+        start_announced_caller(fn() { run_script(connection, "SELECT 1", 5000) }),
+      )
+      use _asked <- try(ask_transaction_status(connection, 20))
+      release_gate(gate)
+      let second_answer = caller_answer(second)
+      let events = gate_events(gate)
+      Ok(GatedDeadline(
+        connection:,
+        gate:,
+        first:,
+        second: second_answer,
+        events:,
+      ))
+    }
     |> map_error(stop_after_error(connection, _))
   }
   |> map_error(fn(error) {
     stop_cancel_gate(gate)
     error
   })
-}
-
-/// The config of a connection through the gate on `port`, with a first
-/// reconnect delay of 60 seconds and a cancel timeout of 5 seconds.
-fn gated_config(port: Int) -> Result(ConnectionConfig, String) {
-  use config <- try(connection_config(port))
-  Ok(
-    ConnectionConfig(
-      ..config,
-      reconnect: Backoff(60_000, 60_000),
-      cancel_timeout_milliseconds: 5000,
-    ),
-  )
-}
-
-fn run_gated_deadline(
-  connection: Connection,
-  gate: CancelGate,
-) -> Result(GatedDeadline, String) {
-  let first = run(connection, "SELECT pg_sleep(0.3)", [], [], 50)
-  record_gate(gate)
-  use second <- try(
-    start_announced_caller(fn() { run_script(connection, "SELECT 1", 5000) }),
-  )
-  use _asked <- try(ask_transaction_status(connection, 20))
-  release_gate(gate)
-  let second_answer = caller_answer(second)
-  let events = gate_events(gate)
-  Ok(GatedDeadline(connection:, gate:, first:, second: second_answer, events:))
 }
 
 fn stop_gated_deadline(shared: GatedDeadline) -> Result(Nil, String) {
@@ -1621,44 +1587,34 @@ type CancelAtDeadline {
   )
 }
 
+/// The connection uses protocol 3.2, so its cancel key is longer than 4
+/// bytes, and a cancel timeout of 200 milliseconds.
 fn start_cancel_at_deadline(
   server: Server,
 ) -> Result(CancelAtDeadline, String) {
-  use config <- try(cancel_config(server.port))
-  use connection <- try(start_configured(config))
+  use config <- try(protocol_config(server.port, Protocol32))
+  use connection <- try(start_configured(cancel_timeout_config(config, 200)))
   use control <- try(
     start_connection(server.port) |> map_error(stop_after_error(connection, _)),
   )
-  cancel_at_deadline(connection, control)
+  {
+    use pid <- try(backend_pid(connection))
+    let late = run(connection, "SELECT pg_sleep(30)", [], [], 300)
+    let state =
+      run_script(
+        control,
+        "SELECT state FROM pg_stat_activity WHERE pid = " <> pid,
+        5000,
+      )
+    // The next statement runs longer than the cancel timeout, so the
+    // cancel's timer ends while the connection serves another request.
+    let next = run(connection, "SELECT pg_sleep(0.3)::text", [], [], 5000)
+    Ok(CancelAtDeadline(connection:, control:, late:, state:, next:))
+  }
   |> map_error(fn(error) {
     stop(control)
     stop_after_error(connection, error)
   })
-}
-
-/// The config of a connection with protocol 3.2, so its cancel key is
-/// longer than 4 bytes, and a cancel timeout of 200 milliseconds.
-fn cancel_config(port: Int) -> Result(ConnectionConfig, String) {
-  use config <- try(protocol_config(port, Protocol32))
-  Ok(ConnectionConfig(..config, cancel_timeout_milliseconds: 200))
-}
-
-fn cancel_at_deadline(
-  connection: Connection,
-  control: Connection,
-) -> Result(CancelAtDeadline, String) {
-  use pid <- try(backend_pid(connection))
-  let late = run(connection, "SELECT pg_sleep(30)", [], [], 300)
-  let state =
-    run_script(
-      control,
-      "SELECT state FROM pg_stat_activity WHERE pid = " <> pid,
-      5000,
-    )
-  // The next statement runs longer than the cancel timeout, so the
-  // cancel's timer ends while the connection serves another request.
-  let next = run(connection, "SELECT pg_sleep(0.3)::text", [], [], 5000)
-  Ok(CancelAtDeadline(connection:, control:, late:, state:, next:))
 }
 
 fn stop_cancel_at_deadline(shared: CancelAtDeadline) -> Result(Nil, String) {
@@ -1719,7 +1675,9 @@ fn cancel_at_deadline_tests(server: Server) -> TestSuite {
 /// the proxy too, which serves one session at a time, so it never reaches
 /// the server. After the cancel timeout, the connection is closed and the
 /// caller gets DeadlinePassed. `breaking` runs on the proxy before the
-/// statement.
+/// statement. The connection sends its events to a subject of the act,
+/// with a first reconnect delay of 60 seconds and a cancel timeout of 200
+/// milliseconds.
 type LostCancel {
   LostCancel(
     connection: Connection,
@@ -1730,11 +1688,12 @@ type LostCancel {
 }
 
 fn start_lost_cancel(breaking: fn(Proxy) -> Nil) -> Result(LostCancel, String) {
-  let #(port, proxy) = start_proxy(first_driver_server.port)
+  use #(port, proxy) <- try(start_proxy(first_driver_server.port))
   let events = process.new_subject()
   {
-    use config <- try(lost_cancel_config(port, events))
-    use connection <- try(start_configured(config))
+    use config <- try(connection_config(port))
+    let watched = watched_config(config, events, 60_000)
+    use connection <- try(start_configured(cancel_timeout_config(watched, 200)))
     breaking(proxy)
     let answer = run(connection, "SELECT pg_sleep(30)", [], [], 100)
     let event = next_event(events)
@@ -1744,22 +1703,6 @@ fn start_lost_cancel(breaking: fn(Proxy) -> Nil) -> Result(LostCancel, String) {
     stop_proxy(proxy)
     error
   })
-}
-
-/// The config of a connection through a proxy on `port`, with its events
-/// sent to `events`, a first reconnect delay of 60 seconds, and a cancel
-/// timeout of 200 milliseconds.
-fn lost_cancel_config(
-  port: Int,
-  events: Subject(ConnectionEvent),
-) -> Result(ConnectionConfig, String) {
-  use config <- try(connection_config(port))
-  Ok(
-    ConnectionConfig(
-      ..watched_config(config, events, 60_000),
-      cancel_timeout_milliseconds: 200,
-    ),
-  )
 }
 
 fn stop_lost_cancel(shared: LostCancel) -> Result(Nil, String) {
@@ -1811,7 +1754,7 @@ fn lost_cancel_tests(
 /// connection closed.
 fn start_keyless_connection() -> Result(Connection, String) {
   let login_answer = <<"R", 8:32, 0:32, "Z", 5:32, "I">>
-  let #(port, _fake_server) = start_fake_server(Answer(login_answer))
+  use #(port, _fake_server) <- try(start_fake_server(Answer(login_answer)))
   use config <- try(connection_config(port))
   start_configured(
     ConnectionConfig(
@@ -1957,21 +1900,6 @@ fn waiting_status_tests() -> TestSuite {
         },
       ),
     ],
-  )
-}
-
-// The connection config of the slow answer test -------------------------------
-
-/// The config of a connection to the first driver server with a setup
-/// timeout and a cancel timeout of 100 milliseconds.
-fn slow_answer_config() -> Result(ConnectionConfig, String) {
-  use config <- try(connection_config(first_driver_server.port))
-  Ok(
-    ConnectionConfig(
-      ..config,
-      setup_timeout_milliseconds: 100,
-      cancel_timeout_milliseconds: 100,
-    ),
   )
 }
 
