@@ -179,6 +179,18 @@ type TcpSocket
 
 type TlsSocket
 
+/// The reason of a failed socket call, as the FFI reads it.
+pub type SocketFailure {
+  /// A reason atom of `gen_tcp`, `inet` or `ssl`, for example
+  /// `econnreset`, `closed` or `timeout`.
+  ReasonAtom(reason: Atom)
+  /// A TLS alert that the `ssl` application sent or got, for example
+  /// `bad_record_mac`.
+  TlsAlert(alert: Atom)
+  /// A reason of any other shape, as the VM prints it.
+  OtherReason(text: String)
+}
+
 /// What the FFI checks of the certificate.
 type PeerCheck {
   SkipCheck
@@ -197,7 +209,7 @@ type TlsAnswer {
 type FfiSocketEvent {
   Received(BitArray)
   Ended
-  Failed(Atom)
+  Failed(SocketFailure)
   Other
 }
 
@@ -226,13 +238,16 @@ fn tcp_connect(
   port: Int,
   timeout: Int,
   send_timeout: Int,
-) -> Result(TcpSocket, Atom)
+) -> Result(TcpSocket, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_send")
-fn tcp_send(socket: TcpSocket, bytes: BitArray) -> Result(Nil, Atom)
+fn tcp_send(socket: TcpSocket, bytes: BitArray) -> Result(Nil, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_receive")
-fn tcp_receive(socket: TcpSocket, timeout: Int) -> Result(BitArray, Atom)
+fn tcp_receive(
+  socket: TcpSocket,
+  timeout: Int,
+) -> Result(BitArray, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_close")
 fn tcp_close(socket: TcpSocket) -> Nil
@@ -244,13 +259,16 @@ fn tls_connect(
   authorities: AuthorityList,
   server_name: String,
   timeout: Int,
-) -> Result(TlsSocket, Atom)
+) -> Result(TlsSocket, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tls_send")
-fn tls_send(socket: TlsSocket, bytes: BitArray) -> Result(Nil, Atom)
+fn tls_send(socket: TlsSocket, bytes: BitArray) -> Result(Nil, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tls_receive")
-fn tls_receive(socket: TlsSocket, timeout: Int) -> Result(BitArray, Atom)
+fn tls_receive(
+  socket: TlsSocket,
+  timeout: Int,
+) -> Result(BitArray, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tls_close")
 fn tls_close(socket: TlsSocket) -> Nil
@@ -259,10 +277,10 @@ fn tls_close(socket: TlsSocket) -> Nil
 fn tls_peer_certificate(socket: TlsSocket) -> Result(BitArray, Atom)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_receive_next")
-fn tcp_receive_next(socket: TcpSocket) -> Result(Nil, Atom)
+fn tcp_receive_next(socket: TcpSocket) -> Result(Nil, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tls_receive_next")
-fn tls_receive_next(socket: TlsSocket) -> Result(Nil, Atom)
+fn tls_receive_next(socket: TlsSocket) -> Result(Nil, SocketFailure)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_received_bytes")
 fn tcp_received_bytes(socket: TcpSocket) -> BitArray
@@ -440,7 +458,11 @@ fn request_tls(
   socket: TcpSocket,
   opening: Opening,
 ) -> Result(TlsAnswer, TransportError) {
-  use Nil <- try(tcp_send(socket, ssl_request()) |> map_error(socket_error))
+  // A send maps its reason as a send: a send timeout is SendTimedOut, not
+  // the ReceiveTimedOut of socket_error. The 8 bytes of the SSLRequest on
+  // a new socket fit in its send buffer, so in practice this send does not
+  // wait; the mapping says what a timeout would be.
+  use Nil <- try(tcp_send(socket, ssl_request()) |> map_error(send_error))
   read_tls_answer(socket, <<>>, opening)
 }
 
@@ -619,14 +641,26 @@ pub fn server_certificate(connection: Connection) -> Option(BitArray) {
 ///
 /// ## Parameters
 ///
-/// - `reason`: the error atom of `gen_tcp:connect`
+/// - `reason`: the failure of `gen_tcp:connect`
 /// - `host`: the host of the connect, for a failed DNS lookup
 ///
 /// ## Returns
 ///
 /// The typed error.
-pub fn connect_error(reason: Atom, host: String) -> TransportError {
-  case atom.to_string(reason) {
+pub fn connect_error(reason: SocketFailure, host: String) -> TransportError {
+  case reason {
+    ReasonAtom(atom) ->
+      connect_error_of_name(atom.to_string(atom), reason, host)
+    TlsAlert(..) | OtherReason(..) -> socket_error(reason)
+  }
+}
+
+fn connect_error_of_name(
+  name: String,
+  reason: SocketFailure,
+  host: String,
+) -> TransportError {
+  case name {
     "nxdomain" -> DnsLookupFailed(host)
     "timeout" -> ConnectTimedOut
     _ -> socket_error(reason)
@@ -637,13 +671,22 @@ pub fn connect_error(reason: Atom, host: String) -> TransportError {
 ///
 /// ## Parameters
 ///
-/// - `reason`: the error atom of `gen_tcp` or `ssl`
+/// - `reason`: the failure of `gen_tcp` or `ssl`
 ///
 /// ## Returns
 ///
-/// The typed error. A reason with no variant of its own is `Unlisted`.
-pub fn socket_error(reason: Atom) -> TransportError {
-  case atom.to_string(reason) {
+/// The typed error. A TLS alert is `TlsFailed` with the alert's name, and
+/// a reason with no variant of its own is `Unlisted`.
+pub fn socket_error(reason: SocketFailure) -> TransportError {
+  case reason {
+    ReasonAtom(atom) -> socket_error_of_name(atom.to_string(atom))
+    TlsAlert(alert) -> TlsFailed(OtherTlsFailure(atom.to_string(alert)))
+    OtherReason(text) -> Unlisted(text)
+  }
+}
+
+fn socket_error_of_name(name: String) -> TransportError {
+  case name {
     "econnrefused" -> ConnectRefused
     // A call on a socket that is closed already gives einval or enotconn
     // on some systems, and closed on others.
@@ -658,13 +701,20 @@ pub fn socket_error(reason: Atom) -> TransportError {
 ///
 /// ## Parameters
 ///
-/// - `reason`: the error atom of `gen_tcp:send` or `ssl:send`
+/// - `reason`: the failure of `gen_tcp:send` or `ssl:send`
 ///
 /// ## Returns
 ///
 /// `SendTimedOut` for a send timeout, else the error of `socket_error`.
-pub fn send_error(reason: Atom) -> TransportError {
-  case atom.to_string(reason) {
+pub fn send_error(reason: SocketFailure) -> TransportError {
+  case reason {
+    ReasonAtom(atom) -> send_error_of_name(atom.to_string(atom), reason)
+    TlsAlert(..) | OtherReason(..) -> socket_error(reason)
+  }
+}
+
+fn send_error_of_name(name: String, reason: SocketFailure) -> TransportError {
+  case name {
     "timeout" -> SendTimedOut
     _ -> socket_error(reason)
   }
@@ -679,8 +729,15 @@ pub fn send_error(reason: Atom) -> TransportError {
 /// ## Returns
 ///
 /// The typed error.
-pub fn tls_error(reason: Atom) -> TransportError {
-  case atom.to_string(reason) {
+pub fn tls_error(reason: SocketFailure) -> TransportError {
+  case reason {
+    ReasonAtom(name) | TlsAlert(name) -> tls_error_of_name(atom.to_string(name))
+    OtherReason(text) -> TlsFailed(OtherTlsFailure(text))
+  }
+}
+
+fn tls_error_of_name(name: String) -> TransportError {
+  case name {
     "hostname_check_failed" -> TlsFailed(HostNameMismatch)
     "unknown_ca" -> TlsFailed(UnknownAuthority)
     "cert_expired" -> TlsFailed(CertificateExpired)
