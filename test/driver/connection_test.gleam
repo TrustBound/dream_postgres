@@ -1910,7 +1910,13 @@ fn waiting_status_tests() -> TestSuite {
 fn model_tests(server: Server) -> ContextNode(Connection) {
   group("PostgreSQL " <> to_string(server.version), [
     group("with the rewritten query tree in a notice", [
-      before_each(start_test_configured(tree_config(server.port))),
+      before_each(
+        start_test_configured(parameter_config(
+          server.port,
+          "options",
+          tree_options,
+        )),
+      ),
       it(
         "reads the rewritten query tree from a notice, with options",
         fn(connection) {
@@ -2008,23 +2014,16 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
   ])
 }
 
+/// The run-time parameters, for the startup parameter `options`, that print
+/// the rewritten query tree in a notice.
+const tree_options = "-c debug_print_rewritten=on -c client_min_messages=log"
+
 const pg_class_query = "SELECT relname FROM pg_class WHERE relname = 'pg_class'"
 
 const noisy_function =
   "CREATE FUNCTION pg_temp.noisy(n int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'row %', n; RETURN n; END $$"
 
 const noisy_query = "SELECT pg_temp.noisy(g) FROM generate_series(1, 3) AS g"
-
-/// The config of a connection that sets, with the startup parameter
-/// `options`, the run-time parameters that print the rewritten query tree
-/// in a notice.
-fn tree_config(port: Int) -> Result(ConnectionConfig, String) {
-  parameter_config(
-    port,
-    "options",
-    "-c debug_print_rewritten=on -c client_min_messages=log",
-  )
-}
 
 // The statement cache ---------------------------------------------------------
 
