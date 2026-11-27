@@ -44,6 +44,7 @@ dream_uuid = { path = "../dream_uuid" }
 [dev-dependencies]
 dream_test = ">= 3.0.0 and < 4.0.0"
 dream_snippets = ">= 1.0.0 and < 2.0.0"
+gleam_regexp = ">= 1.0.0 and < 2.0.0"
 simplifile = ">= 2.3.0 and < 3.0.0"
 
 [tools.dream_snippets]

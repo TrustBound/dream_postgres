@@ -12,7 +12,7 @@
   <a href="https://github.com/TrustBound/dream_postgres/releases"><img src="https://img.shields.io/github/v/release/TrustBound/dream_postgres?label=Release" alt="Latest Release"></a>
   <a href="https://hexdocs.pm/dream_postgres"><img src="https://img.shields.io/badge/hex-docs-lightgreen.svg" alt="HexDocs"></a>
   <a href="https://github.com/TrustBound/dream_postgres/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/TrustBound/dream_postgres/badges/coverage.json" alt="Coverage"></a>
-  <a href="https://github.com/TrustBound/dream_postgres/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+  <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/LICENSE.md"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
   <a href="https://gleam.run"><img src="https://img.shields.io/badge/gleam-%E2%9C%A8-ffaff3" alt="Gleam"></a>
 </div>
 
@@ -261,19 +261,19 @@ pub fn signup_answer(
 
 ## Guides
 
-- [Getting started](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/getting-started.md): start a pool, make tables, store a user and read users back
-- [Connecting to PostgreSQL](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/connecting.md): the config, TLS, a supervised pool, reconnects, PgBouncer, notices and pool events
-- [Pool tuning](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/pool-tuning.md): the pool size, the checkout timeout, the query timeout and the other times of the pool
-- [Queries](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/queries.md): build a query, read its rows, run it, and handle its errors
-- [Transactions](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/transactions.md): steps, checks, isolation, savepoints, a commit that rolls back, and a rollback that fails
-- [Codecs](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/codecs.md): every codec with its PostgreSQL types, and enums, JSON, custom and composite codecs
-- [COPY](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/copy.md): load and read many rows with binary `COPY`
-- [LISTEN and NOTIFY](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/listen-notify.md): get the notifications of a channel
-- [Tracing](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/tracing.md): OpenTelemetry spans of each query
-- [Interceptors](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/interceptors.md): change, log or answer each query
-- [Recorded queries](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/recorded-queries.md): record the queries of a test once, and play them back with no database
-- [Boot check](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/boot-check.md): check every query against the database when the app starts
-- [Upgrading to 3.0.0](https://github.com/TrustBound/dream_postgres/blob/main/docs/guides/upgrading-to-3.md): move from the Pog-based 2.x to the new client
+- [Getting started](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/getting-started.md): start a pool, make tables, store a user and read users back
+- [Connecting to PostgreSQL](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/connecting.md): the config, TLS, a supervised pool, reconnects, PgBouncer, notices and pool events
+- [Pool tuning](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/pool-tuning.md): the pool size, the checkout timeout, the query timeout and the other times of the pool
+- [Queries](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/queries.md): build a query, read its rows, run it, and handle its errors
+- [Transactions](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/transactions.md): steps, checks, isolation, savepoints, a commit that rolls back, and a rollback that fails
+- [Codecs](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/codecs.md): every codec with its PostgreSQL types, and enums, JSON, custom and composite codecs
+- [COPY](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/copy.md): load and read many rows with binary `COPY`
+- [LISTEN and NOTIFY](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/listen-notify.md): get the notifications of a channel
+- [Tracing](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/tracing.md): OpenTelemetry spans of each query
+- [Interceptors](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/interceptors.md): change, log or answer each query
+- [Recorded queries](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/recorded-queries.md): record the queries of a test once, and play them back with no database
+- [Boot check](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/boot-check.md): check every query against the database when the app starts
+- [Upgrading to 3.0.0](https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/upgrading-to-3.md): move from the Pog-based 2.x to the new client
 
 ## API Reference
 
@@ -289,11 +289,11 @@ This package was first built for the [Dream](https://github.com/TrustBound/dream
 
 ## Contributing
 
-See the [Contributing Guide](https://github.com/TrustBound/dream_postgres/blob/main/CONTRIBUTING.md).
+See the [Contributing Guide](https://github.com/TrustBound/dream_postgres/blob/3.0.0/CONTRIBUTING.md).
 
 ## License
 
-MIT, see [LICENSE.md](https://github.com/TrustBound/dream_postgres/blob/main/LICENSE.md)
+MIT, see [LICENSE.md](https://github.com/TrustBound/dream_postgres/blob/3.0.0/LICENSE.md)
 
 ---
 

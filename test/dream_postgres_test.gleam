@@ -7,6 +7,7 @@ import dream_postgres/composite_codecs_test
 import dream_postgres/copy_stream_test
 import dream_postgres/copy_test
 import dream_postgres/database_url_test
+import dream_postgres/document_links_test
 import dream_postgres/driver_executor_test
 import dream_postgres/error_test
 import dream_postgres/geometry_range_codecs_test
@@ -79,6 +80,7 @@ pub fn main() {
     listener_test.tests(),
     verify_test.unit_tests(),
     verify_test.tests(),
+    document_links_test.tests(),
     guide_snippets_test.tests(),
     advanced_guide_snippets_test.unit_tests(),
     advanced_guide_snippets_test.tests(),
