@@ -9,7 +9,7 @@ import dream_postgres/driver/listener.{
 }
 import dream_test/context.{type Context}
 import driver/listener_gate.{
-  type Gate, break_gate, open_gate, start_gate, stop_gate,
+  type Gate, break_gate, open_gate, start_gate, stop_gate, wait_refused,
 }
 import driver/server_connection.{start_connection}
 import driver/server_listener.{
@@ -17,6 +17,7 @@ import driver/server_listener.{
 }
 import driver/servers.{type Server}
 import fixtures/backoff_strategies.{capped_delay}
+import gleam/erlang/atom
 import gleam/erlang/process.{
   type Down, type ExitReason, type Name, type Pid, type Subject,
 }
@@ -263,4 +264,101 @@ pub fn crash_session(
   use Nil <- try(send_notification(gated.control, gated.channel, "again"))
   let notified = receive_message(gated.subscriber)
   Ok(SessionCrash(lost:, again:, notified:))
+}
+
+// A subscribe that the registry handles after the login, before the report
+// of it --------------------------------------------------------------------
+
+/// The first two messages of a subscriber whose subscribe the registry
+/// handled after the connection of its session logged in, but before the
+/// registry handled the session's report of that login.
+///
+/// The order is forced, with no timing: the registry is suspended while
+/// the subscribe waits in its mailbox, the gate opens, and the session's
+/// report of the login comes in behind it. Then the registry resumes and
+/// handles the subscribe first.
+pub fn subscribe_before_up_report(
+  gated: GatedNamedListener,
+) -> Result(#(ListenerMessage, ListenerMessage), String) {
+  wait_refused(gated.gate)
+  let registry = registry_pid(gated.named.handle)
+  watch_received(registry)
+  suspend_process(registry)
+  let answers = process.new_subject()
+  let subscriber = process.new_subject()
+  let channel = gated.channel
+  let handle = gated.named.handle
+  process.spawn(fn() {
+    process.send(answers, subscribe_to(handle, channel, subscriber))
+  })
+  use Nil <- try(wait_received(registry, atom.create("subscribe_request")))
+  open_gate(gated.gate)
+  use Nil <- try(wait_received(registry, atom.create("session_up")))
+  resume_process(registry)
+  use subscribed <- try(
+    process.receive(answers, 5000)
+    |> replace_error("the subscribe gave no answer within 5 seconds"),
+  )
+  use _subscription <- try(subscribed)
+  use first <- try(receive_message(subscriber))
+  use second <- try(receive_message(subscriber))
+  Ok(#(first, second))
+}
+
+@external(erlang, "driver_listener_test_ffi", "registry_pid")
+fn registry_pid(listener: Listener) -> Pid
+
+@external(erlang, "driver_listener_test_ffi", "watch_received")
+fn watch_received(process: Pid) -> Nil
+
+@external(erlang, "driver_listener_test_ffi", "suspend_process")
+fn suspend_process(process: Pid) -> Nil
+
+@external(erlang, "driver_listener_test_ffi", "resume_process")
+fn resume_process(process: Pid) -> Nil
+
+@external(erlang, "driver_listener_test_ffi", "wait_received")
+fn wait_received(process: Pid, tag: atom.Atom) -> Result(Nil, String)
+
+/// The first two messages of a subscriber whose subscribe the registry
+/// handled while the session was up, but after the connection was lost
+/// and before the registry handled the report of that loss. Its `LISTEN`
+/// meets the loss.
+///
+/// The order is forced as in `subscribe_before_up_report`: a first
+/// subscriber shows that the session is up, the registry is suspended
+/// while the second subscribe waits in its mailbox, the gate breaks the
+/// connection, and the session's report of the loss comes in behind the
+/// subscribe. The gate opens once the registry handled the subscribe.
+pub fn subscribe_during_unreported_loss(
+  gated: GatedNamedListener,
+) -> Result(#(ListenerMessage, ListenerMessage), String) {
+  let handle = gated.named.handle
+  let first = process.new_subject()
+  use _first_subscription <- try(subscribe_to(handle, gated.channel, first))
+  use _not_listening <- try(receive_message(first))
+  open_gate(gated.gate)
+  use _listening <- try(receive_message(first))
+  let registry = registry_pid(handle)
+  watch_received(registry)
+  suspend_process(registry)
+  let answers = process.new_subject()
+  let second = process.new_subject()
+  let channel = gated.channel <> "_second"
+  process.spawn(fn() {
+    process.send(answers, subscribe_to(handle, channel, second))
+  })
+  use Nil <- try(wait_received(registry, atom.create("subscribe_request")))
+  break_gate(gated.gate)
+  use Nil <- try(wait_received(registry, atom.create("session_lost")))
+  resume_process(registry)
+  use subscribed <- try(
+    process.receive(answers, 5000)
+    |> replace_error("the subscribe gave no answer within 5 seconds"),
+  )
+  use _subscription <- try(subscribed)
+  use lost <- try(receive_message(second))
+  open_gate(gated.gate)
+  use again <- try(receive_message(second))
+  Ok(#(lost, again))
 }

@@ -14,9 +14,11 @@ import dream_test/suite.{type TestSuite}
 import dream_test/unit
 import dream_test/unit_context.{describe, it}
 import driver/server_named_listener.{
-  type CrashOutcome, type NamedListener, crash_registry, listener_restart_type,
-  restart_listener, session_crash_setup, start_named_listener,
-  stop_named_listener,
+  type CrashOutcome, type GatedNamedListener, type NamedListener, crash_registry,
+  listener_restart_type, restart_listener, session_crash_setup,
+  start_gated_named_listener, start_named_listener, stop_gated_named_listener,
+  stop_named_listener, subscribe_before_up_report,
+  subscribe_during_unreported_loss,
 }
 import driver/servers.{first_driver_server}
 import fixtures/identity_sink.{identity_sink}
@@ -33,6 +35,8 @@ pub fn tests() -> TestSuite {
     restarted_tests(),
     session_crash_tests(),
     registry_crash_tests(),
+    up_rule_tests(),
+    unreported_loss_tests(),
     unit.describe("with no listener under the name", [
       unit.it("gives ListenerProcessDown for a subscribe", fn() {
         // Arrange
@@ -202,6 +206,47 @@ fn registry_crash_tests() -> TestSuite {
         |> be_ok
         |> be_equal(process.Killed)
         |> or_fail_with("Expected the Down of the killed registry")
+      }),
+    ],
+  )
+}
+
+/// A subscriber gets `NotListening` first if and only if the session is
+/// not up when the registry handles its subscribe: here the connection
+/// has logged in, but the registry has not handled the report of it yet.
+fn up_rule_tests() -> TestSuite {
+  describe(
+    "a subscribe that the registry handles before the report of the login",
+    context.setup(
+      setup: fn() { start_gated_named_listener(first_driver_server) },
+      teardown: stop_gated_named_listener,
+    ),
+    [
+      it("gives NotListening, then Listening", fn(gated: GatedNamedListener) {
+        subscribe_before_up_report(gated)
+        |> should
+        |> be_equal(Ok(#(NotListening, Listening(gated.channel))))
+        |> or_fail_with("Expected NotListening, then Listening")
+      }),
+    ],
+  )
+}
+
+/// A `LISTEN` that meets a loss the registry has not handled yet gives
+/// `NotListening`, then `Listening` after the reconnect.
+fn unreported_loss_tests() -> TestSuite {
+  describe(
+    "a subscribe whose LISTEN meets a loss that the registry has not handled",
+    context.setup(
+      setup: fn() { start_gated_named_listener(first_driver_server) },
+      teardown: stop_gated_named_listener,
+    ),
+    [
+      it("gives NotListening, then Listening", fn(gated: GatedNamedListener) {
+        subscribe_during_unreported_loss(gated)
+        |> should
+        |> be_equal(Ok(#(NotListening, Listening(gated.channel <> "_second"))))
+        |> or_fail_with("Expected NotListening, then Listening")
       }),
     ],
   )

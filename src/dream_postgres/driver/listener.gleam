@@ -36,10 +36,29 @@
 //// registry asks for `LISTEN` again for each channel, and each subscriber
 //// gets `Listening`, or `ListenFailed` when that `LISTEN` failed. The
 //// server keeps no notification for a session that is gone, so the
-//// notifications between `NotListening` and `Listening` may be missed. A
-//// subscribe while the connection is not up, lost or not connected yet
-//// under a supervisor, is kept the same way: the subscriber gets
-//// `NotListening` at once, and `Listening` once the session is up.
+//// notifications between `NotListening` and `Listening` may be missed.
+////
+//// The rule for a subscribe is exact. The session is up from the moment
+//// the registry handles the session's report that its connection logged
+//// in, until the registry handles a loss or the end of that session.
+////
+//// - A subscribe that the registry handles while the session is up sends
+////   `LISTEN` (for the first subscriber of the channel) and returns once
+////   the session listens. The subscriber gets no message for it.
+//// - A subscribe that the registry handles while the session is not up
+////   (not connected yet, lost, or no session) sends nothing. The
+////   subscriber gets `NotListening` at once, then `Listening` or
+////   `ListenFailed` after the next login.
+//// - A `LISTEN` that meets a loss the registry has not handled yet gives
+////   `NotListening` the same way.
+////
+//// So a subscriber gets `NotListening` first if and only if the session is
+//// not up when the registry handles its subscribe. A test that needs one
+//// exact sequence controls the connection: with the server out of reach,
+//// for example behind a closed TCP gate, a subscribe always gets
+//// `NotListening`, then `Listening` once the gate opens. With a listener
+//// from `start`, which returns once its session is up, a subscribe always
+//// gets no message.
 ////
 //// A crash of the session is a loss too. Under a supervisor
 //// (`supervised`), the registry and the session are the two children of a
@@ -287,6 +306,10 @@ type RegistryState {
     /// started, and none from the end of a session until the next one
     /// started.
     session: Option(SessionLink),
+    /// Whether the session is up: the registry handled the session's
+    /// report that its connection logged in, and no loss or new session
+    /// since. Only an up session gets a `LISTEN` for a subscribe.
+    up: Bool,
     /// The starter of `start`, until the first attempt of the connection
     /// ended. A supervised listener has none.
     starter: Option(Subject(Result(Nil, ConnectError))),
@@ -537,7 +560,8 @@ fn registry_initialised(
   subject: Subject(ListenerProcessMessage),
   starter: Option(Subject(Result(Nil, ConnectError))),
 ) -> actor.Initialised(RegistryState, ListenerProcessMessage, Listener) {
-  let state = RegistryState(session: None, starter:, subscriptions: dict.new())
+  let state =
+    RegistryState(session: None, up: False, starter:, subscriptions: dict.new())
   let selector =
     process.new_selector()
     |> process.select_record(
@@ -666,8 +690,10 @@ pub fn stop(listener: Listener) -> Nil {
 ///
 /// ## Returns
 ///
-/// - `Ok(Subscription)`: the session listens on the channel, or the
-///   connection is not up and the subscriber got `NotListening`
+/// - `Ok(Subscription)`: the session is up and listens on the channel,
+///   and the subscriber gets no message for it; or the session is not up,
+///   and the subscriber got `NotListening`, with `Listening` or
+///   `ListenFailed` after the next login (see the module documentation)
 /// - `Error(ListenerError)`: the name is too long, the sink's subject has
 ///   no process, the `LISTEN` failed with a `ListenFailure`, or the
 ///   registry is gone
@@ -752,7 +778,7 @@ fn handle_registry_message(
     SessionStarted(session:, pid:) ->
       actor.continue(session_started(state, session, pid))
     SessionUp -> actor.continue(session_up(state))
-    SessionLost -> actor.continue(lost(state))
+    SessionLost -> actor.continue(lost(RegistryState(..state, up: False)))
     SessionConnectFailed(error) -> first_connect_failed(state, error)
     NotificationReceived(notification) ->
       actor.continue(deliver(state, notification))
@@ -778,12 +804,16 @@ fn add_subscriber(
   state
 }
 
-/// Only the first subscriber of a channel needs a `LISTEN`. A later one
+/// A subscribe while the session is not up gets no `LISTEN`: the
+/// subscriber gets `NotListening`, and the `LISTEN` of the next session
+/// up gives it `Listening` or `ListenFailed`. On an up session only the
+/// first subscriber of a channel needs a `LISTEN`, and a later one
 /// listens when the others do.
 fn admission(state: RegistryState, channel: String) -> Admission {
-  case subscribers_on(state, channel) {
-    [] -> listen(state, channel) |> listen_admission
-    subscribers -> Admit(any(subscribers, is_listening))
+  case state.up, subscribers_on(state, channel) {
+    False, _subscribers -> Admit(False)
+    True, [] -> listen(state, channel) |> listen_admission
+    True, subscribers -> Admit(any(subscribers, is_listening))
   }
 }
 
@@ -892,7 +922,11 @@ fn session_started(
 ) -> RegistryState {
   let monitor = process.monitor(pid)
   lost(
-    RegistryState(..state, session: Some(SessionLink(subject:, pid:, monitor:))),
+    RegistryState(
+      ..state,
+      session: Some(SessionLink(subject:, pid:, monitor:)),
+      up: False,
+    ),
   )
 }
 
@@ -901,7 +935,7 @@ fn session_started(
 /// result. The first one of a listener from `start` also answers its
 /// starter.
 fn session_up(state: RegistryState) -> RegistryState {
-  let state = answer_starter(state)
+  let state = answer_starter(RegistryState(..state, up: True))
   list.fold(channels(state), state, listen_on_session)
 }
 
@@ -937,7 +971,7 @@ fn monitored_process_ended(
   monitor: Monitor,
 ) -> RegistryState {
   case option.map(state.session, monitor_of) == Some(monitor) {
-    True -> lost(RegistryState(..state, session: None))
+    True -> lost(RegistryState(..state, session: None, up: False))
     False -> remove_subscriber(state, monitor)
   }
 }
