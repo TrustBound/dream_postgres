@@ -17,6 +17,7 @@ import driver/encode_test
 import driver/listener_test
 import driver/login_server_test
 import driver/login_test
+import driver/parity_test
 import driver/query_server_test
 import driver/query_test
 import driver/recorded_test
@@ -49,6 +50,7 @@ pub fn suites() -> List(TestSuite) {
     catalog_table_test.tests(),
     catalog_test.tests(),
     listener_test.tests(),
+    parity_test.tests(),
   ]
 }
 
