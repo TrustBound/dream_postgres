@@ -1,12 +1,14 @@
 -module(dream_postgres_transport_ffi).
 -export([tcp_connect/4, tcp_send/2, tcp_receive/2, tcp_close/1,
          tls_connect/5, tls_send/2, tls_receive/2, tls_close/1,
-         peer_certificate/1, read_authority_file/1, reason_name/1,
+         peer_certificate/1, read_authority_file/1, reason_name/1, failure/1,
          tcp_receive_next/1, tls_receive_next/1, socket_event/2]).
 
 %% The socket calls of dream_postgres/driver/transport. Each function does
 %% one OTP call and gives a Gleam result: {ok, Value} or {error, Reason},
-%% where Reason is an atom that transport.gleam turns into a typed error.
+%% where Reason is a socket failure that transport.gleam turns into a typed
+%% error: {reason_atom, Atom}, {tls_alert, Alert}, or {other_reason, Text}
+%% (see failure/1).
 
 %% Opens a TCP connection. show_econnreset gives a reset by the peer as
 %% econnreset, not as closed. A send that waits longer than SendTimeout
@@ -15,13 +17,13 @@ tcp_connect(Host, Port, Timeout, SendTimeout) ->
     Options = [binary, {active, false}, {packet, raw}, {nodelay, true},
                {keepalive, true}, {show_econnreset, true},
                {send_timeout, SendTimeout}, {send_timeout_close, true}],
-    gen_tcp:connect(binary_to_list(Host), Port, Options, Timeout).
+    failure_result(gen_tcp:connect(binary_to_list(Host), Port, Options, Timeout)).
 
 tcp_send(Socket, Bytes) ->
-    nil_result(gen_tcp:send(Socket, Bytes)).
+    failure_result(nil_result(gen_tcp:send(Socket, Bytes))).
 
 tcp_receive(Socket, Timeout) ->
-    gen_tcp:recv(Socket, 0, Timeout).
+    failure_result(gen_tcp:recv(Socket, 0, Timeout)).
 
 tcp_close(Socket) ->
     gen_tcp:close(Socket),
@@ -85,19 +87,16 @@ tls_result({ok, TlsSocket}, _Reference) ->
     {ok, TlsSocket};
 tls_result({error, Reason}, Reference) ->
     receive
-        {Reference, CheckReason} -> {error, CheckReason}
+        {Reference, CheckReason} -> {error, {reason_atom, CheckReason}}
     after 0 ->
-        {error, alert_name(Reason)}
+        {error, failure(Reason)}
     end.
 
-alert_name({tls_alert, {Alert, _Description}}) -> Alert;
-alert_name(Reason) -> reason_name(Reason).
-
 tls_send(Socket, Bytes) ->
-    nil_result(ssl:send(Socket, Bytes)).
+    failure_result(nil_result(ssl:send(Socket, Bytes))).
 
 tls_receive(Socket, Timeout) ->
-    ssl:recv(Socket, 0, Timeout).
+    failure_result(ssl:recv(Socket, 0, Timeout)).
 
 tls_close(Socket) ->
     ssl:close(Socket),
@@ -121,10 +120,10 @@ nil_result({error, Reason}) -> {error, Reason}.
 %% Asks for the next bytes as one message to this process: {tcp, ...} or
 %% {ssl, ...}, then the socket goes back to passive mode.
 tcp_receive_next(Socket) ->
-    nil_result(inet:setopts(Socket, [{active, once}])).
+    failure_result(nil_result(inet:setopts(Socket, [{active, once}]))).
 
 tls_receive_next(Socket) ->
-    nil_result(ssl:setopts(Socket, [{active, once}])).
+    failure_result(nil_result(ssl:setopts(Socket, [{active, once}]))).
 
 %% Reads a message of the socket, for the socket given. A TCP and a TLS
 %% socket send the same three messages with a different tag.
@@ -133,6 +132,22 @@ socket_event({Tag, Socket, Bytes}, Socket) when Tag =:= tcp; Tag =:= ssl ->
 socket_event({Tag, Socket}, Socket) when Tag =:= tcp_closed; Tag =:= ssl_closed ->
     ended;
 socket_event({Tag, Socket, Reason}, Socket) when Tag =:= tcp_error; Tag =:= ssl_error ->
-    {failed, reason_name(Reason)};
+    {failed, failure(Reason)};
 socket_event(_Message, _Socket) ->
     other.
+
+failure_result({ok, Value}) -> {ok, Value};
+failure_result({error, Reason}) -> {error, failure(Reason)}.
+
+%% The reason of a failed socket call as a Gleam SocketFailure. gen_tcp
+%% and inet give an atom, such as econnreset, closed or timeout. ssl also
+%% gives {tls_alert, {Alert, Description}} when the TLS layer sends or gets
+%% an alert, for example bad_record_mac for a record that no key of the
+%% session protects; its reason type is term() (ssl.erl, -type reason()).
+%% Any other shape keeps its printed form, so no reason is lost.
+failure(Reason) when is_atom(Reason) ->
+    {reason_atom, Reason};
+failure({tls_alert, {Alert, _Description}}) when is_atom(Alert) ->
+    {tls_alert, Alert};
+failure(Reason) ->
+    {other_reason, unicode:characters_to_binary(io_lib:format("~0p", [Reason]))}.
