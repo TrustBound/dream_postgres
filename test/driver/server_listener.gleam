@@ -12,9 +12,12 @@ import dream_postgres/driver/listener.{
   type Listener, type ListenerConfig, type ListenerMessage, type Subscription,
   ListenerConfig, start, subscribe,
 }
-import driver/server_connection.{application_config, backend_pid, query_text}
+import driver/server_connection.{
+  application_config, backend_pid, query_text, start_connection,
+}
 import gleam/erlang/process.{type Subject}
 import gleam/int.{parse}
+import gleam/result
 import gleam/string.{inspect, replace}
 
 // Listeners -------------------------------------------------------------------
@@ -26,13 +29,14 @@ pub fn listener_config(
   application_name: String,
   reconnect: Backoff,
 ) -> ListenerConfig {
-  ListenerConfig(
-    connection: ConnectionConfig(
-      ..application_config(port, application_name),
-      reconnect:,
-    ),
-    deadline_milliseconds: 5000,
-  )
+  case application_config(port, application_name) {
+    Ok(config) ->
+      ListenerConfig(
+        connection: ConnectionConfig(..config, reconnect:),
+        deadline_milliseconds: 5000,
+      )
+    Error(error) -> panic as { "could not build the config: " <> error }
+  }
 }
 
 /// Starts a listener to localhost on `port`, with a first reconnect delay
@@ -77,9 +81,18 @@ pub fn subscribe_to(
 /// The backend process ID of the connection, as the number that a
 /// notification carries.
 pub fn backend_process_id(connection: Connection) -> Int {
-  case parse(backend_pid(connection)) {
-    Ok(process_id) -> process_id
-    Error(Nil) -> panic as "expected a backend process ID"
+  case backend_pid(connection) |> result.map(parse) {
+    Ok(Ok(process_id)) -> process_id
+    _other -> panic as "expected a backend process ID"
+  }
+}
+
+/// Starts the control connection to localhost on `port`. It panics with
+/// the start error when the connection does not start.
+pub fn start_control(port: Int) -> Connection {
+  case start_connection(port) {
+    Ok(control) -> control
+    Error(error) -> panic as error
   }
 }
 
@@ -107,11 +120,16 @@ pub fn listener_statement(
   control: Connection,
   application_name: String,
 ) -> String {
-  query_text(
-    control,
-    "SELECT query FROM pg_stat_activity WHERE application_name = "
-      <> literal(application_name),
-  )
+  case
+    query_text(
+      control,
+      "SELECT query FROM pg_stat_activity WHERE application_name = "
+        <> literal(application_name),
+    )
+  {
+    Ok(statement) -> statement
+    Error(error) -> panic as error
+  }
 }
 
 /// Asks the control connection again and again, without a sleep, until the
@@ -173,7 +191,7 @@ fn wait_for_no_backend(
         <> literal(application_name),
     )
   case count, attempts {
-    "0", _ -> Nil
+    Ok("0"), _ -> Nil
     _, 0 -> panic as "the backend of the listener did not end"
     _, _ -> wait_for_no_backend(control, application_name, attempts - 1)
   }

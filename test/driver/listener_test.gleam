@@ -25,12 +25,12 @@ import driver/listener_gate.{
   break_gate, open_gate, start_gate, stop_gate, wait_refused,
 }
 import driver/server_connection.{
-  caller_answer, start_caller, start_connection, start_in_ended_owner,
+  caller_answer, start_caller, start_in_ended_owner,
 }
 import driver/server_listener.{
   backend_process_id, end_listener_backend, listener_config, listener_statement,
-  send_notification, start_configured_listener, start_listener, subscribe_to,
-  wait_for_statement,
+  send_notification, start_configured_listener, start_control, start_listener,
+  subscribe_to, wait_for_statement,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import gleam/erlang/process
@@ -60,7 +60,7 @@ fn server_tests(server: Server) {
       let channel = "svc827_jobs_" <> to_string(server.version)
       let application_name = "svc827_notify_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
       let subscriber = process.new_subject()
       let _subscription = subscribe_to(listener, channel, subscriber)
       let sender = backend_process_id(control)
@@ -83,7 +83,7 @@ fn server_tests(server: Server) {
       let channel = "Svc827 \"Quoted\" " <> to_string(server.version)
       let application_name = "svc827_exact_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
       let subscriber = process.new_subject()
       let _subscription = subscribe_to(listener, channel, subscriber)
 
@@ -107,7 +107,7 @@ fn server_tests(server: Server) {
       let channel = "svc827_unlisten_" <> to_string(server.version)
       let application_name = "svc827_unlisten_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
       let subscription = subscribe_to(listener, channel, process.new_subject())
 
       // Act
@@ -127,7 +127,7 @@ fn server_tests(server: Server) {
       let channel = "svc827_shared_" <> to_string(server.version)
       let application_name = "svc827_shared_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
       let first = process.new_subject()
       let second = process.new_subject()
       let subscription = subscribe_to(listener, channel, first)
@@ -154,7 +154,7 @@ fn server_tests(server: Server) {
       let channel = "svc827_left_" <> to_string(server.version)
       let application_name = "svc827_left_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
       let first = process.new_subject()
       let second = process.new_subject()
       let subscription = subscribe_to(listener, channel, first)
@@ -179,7 +179,7 @@ fn server_tests(server: Server) {
       let channel = "svc827_down_" <> to_string(server.version)
       let application_name = "svc827_down_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
 
       // Act
       let caller =
@@ -207,7 +207,7 @@ fn server_tests(server: Server) {
       let channel = "svc827_again_" <> to_string(server.version)
       let application_name = "svc827_again_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
       let subscriber = process.new_subject()
       let _subscription = subscribe_to(listener, channel, subscriber)
 
@@ -230,7 +230,7 @@ fn server_tests(server: Server) {
       let channel = "svc827_lost_" <> to_string(server.version)
       let application_name = "svc827_lost_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
       let subscriber = process.new_subject()
       let _subscription = subscribe_to(listener, channel, subscriber)
 
@@ -252,7 +252,7 @@ fn server_tests(server: Server) {
       let channel = "svc827_after_" <> to_string(server.version)
       let application_name = "svc827_after_" <> to_string(server.version)
       let listener = start_listener(server.port, application_name, 10)
-      let control = start_connection(server.port)
+      let control = start_control(server.port)
       let subscriber = process.new_subject()
       let _subscription = subscribe_to(listener, channel, subscriber)
 
@@ -285,7 +285,7 @@ fn subscribe_tests() {
       // Arrange
       let port = first_driver_server.port
       let listener = start_listener(port, "svc827_routing", 10)
-      let control = start_connection(port)
+      let control = start_control(port)
       let first = process.new_subject()
       let second = process.new_subject()
       let _first = subscribe_to(listener, "svc827_routing_one", first)
@@ -310,7 +310,7 @@ fn subscribe_tests() {
       // Arrange
       let port = first_driver_server.port
       let listener = start_listener(port, "svc827_other", 10)
-      let control = start_connection(port)
+      let control = start_control(port)
       let first = process.new_subject()
       let second = process.new_subject()
       let _first = subscribe_to(listener, "svc827_other_one", first)
@@ -350,7 +350,7 @@ fn subscribe_tests() {
       let channel = "svc827_" <> repeat("b", 56)
       let port = first_driver_server.port
       let listener = start_listener(port, "svc827_longest", 10)
-      let control = start_connection(port)
+      let control = start_control(port)
       let subscriber = process.new_subject()
       let _subscription = subscribe_to(listener, channel, subscriber)
 
@@ -405,7 +405,7 @@ fn subscribe_tests() {
       // Arrange
       let port = first_driver_server.port
       let listener = start_listener(port, "svc827_lost", 60_000)
-      let control = start_connection(port)
+      let control = start_control(port)
       let subscriber = process.new_subject()
 
       // Act
@@ -426,7 +426,7 @@ fn subscribe_tests() {
       // Arrange
       let port = first_driver_server.port
       let listener = start_listener(port, "svc827_joined", 60_000)
-      let control = start_connection(port)
+      let control = start_control(port)
       let first = process.new_subject()
       let second = process.new_subject()
       let _first = subscribe_to(listener, "svc827_joined", first)
