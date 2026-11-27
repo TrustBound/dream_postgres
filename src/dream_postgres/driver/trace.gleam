@@ -25,7 +25,17 @@ import gleam/option.{type Option, None, Some}
 import gleam/string
 
 /// A span that runs.
-pub type Span
+pub opaque type Span {
+  Span(
+    context: SpanContext,
+    /// The target that names the span when the caller gave no summary,
+    /// for the rename at its end. `None` when the summary names it.
+    target_without_summary: Option(String),
+  )
+}
+
+/// The OpenTelemetry context of a span that runs.
+type SpanContext
 
 /// What the span of a statement of a connection names: the database and
 /// the server of the connection's settings.
@@ -69,8 +79,9 @@ const default_port = 5432
 /// The span, which `end` must end.
 pub fn start(target: SpanTarget, query: SpanQuery) -> Span {
   // The span name is the summary when the caller gave one, else the
-  // namespace target (semantic conventions at commit 7c8eb86d04,
-  // docs/db/database-spans.md lines 56-63 and 69-74).
+  // namespace target until `end` knows the operation (semantic
+  // conventions at commit 7c8eb86d04, docs/db/database-spans.md lines
+  // 56-63 and 69-74).
   let name = option.unwrap(query.summary, target.database)
   let strings =
     [
@@ -80,7 +91,18 @@ pub fn start(target: SpanTarget, query: SpanQuery) -> Span {
     ]
     |> list.append(optional("db.query.summary", query.summary))
     |> list.append(optional("db.query.text", query.text))
-  start_client_span(name, strings, port_attributes(target.port))
+  let context = start_client_span(name, strings, port_attributes(target.port))
+  Span(context:, target_without_summary: target_without_summary(query, target))
+}
+
+fn target_without_summary(
+  query: SpanQuery,
+  target: SpanTarget,
+) -> Option(String) {
+  case query.summary {
+    Some(_summary) -> None
+    None -> Some(target.database)
+  }
 }
 
 /// Ends the span of a statement with its result.
@@ -95,17 +117,35 @@ pub fn start(target: SpanTarget, query: SpanQuery) -> Span {
 /// `Nil`.
 pub fn end(span: Span, ending: SpanEnd) -> Nil {
   case ending {
-    Worked(operation:) ->
-      end_span(span, optional("db.operation.name", operation), False)
+    Worked(operation:) -> {
+      rename(span, operation)
+      end_span(span.context, optional("db.operation.name", operation), False)
+    }
     Failed(error_type:, status_code:) ->
       end_span(
-        span,
+        span.context,
         [
           #("error.type", error_type),
           ..optional("db.response.status_code", status_code)
         ],
         True,
       )
+  }
+}
+
+/// Names a span that has no summary `{db.operation.name} {target}` once
+/// its operation is known (semantic conventions at commit 7c8eb86d04,
+/// docs/db/database-spans.md lines 58-60: "If no summary is available,
+/// the span name SHOULD be `{db.operation.name} {target}` provided that a
+/// (low-cardinality) `db.operation.name` is available"). A span with a
+/// summary, or with no operation, keeps its name.
+fn rename(span: Span, operation: Option(String)) -> Nil {
+  case span.target_without_summary, operation {
+    Some(target), Some(operation_name) if operation_name != "" ->
+      update_name(span.context, operation_name <> " " <> target)
+    Some(_target), Some(_empty_operation) -> Nil
+    Some(_target), None -> Nil
+    None, _operation -> Nil
   }
 }
 
@@ -152,7 +192,14 @@ fn start_client_span(
   name: String,
   strings: List(#(String, String)),
   ints: List(#(String, Int)),
-) -> Span
+) -> SpanContext
+
+@external(erlang, "dream_postgres_trace_ffi", "update_name")
+fn update_name(context: SpanContext, name: String) -> Nil
 
 @external(erlang, "dream_postgres_trace_ffi", "end_span")
-fn end_span(span: Span, strings: List(#(String, String)), failed: Bool) -> Nil
+fn end_span(
+  context: SpanContext,
+  strings: List(#(String, String)),
+  failed: Bool,
+) -> Nil

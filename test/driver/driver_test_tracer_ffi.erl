@@ -54,6 +54,8 @@ finish_now(Id, Name, Kind, Attributes, Failed) ->
     receive
         {?MODULE, Id, {attributes, More}} ->
             finish_now(Id, Name, Kind, maps:merge(Attributes, More), Failed);
+        {?MODULE, Id, {name, NewName}} ->
+            finish_now(Id, NewName, Kind, Attributes, Failed);
         {?MODULE, Id, {status, Code}} ->
             finish_now(Id, Name, Kind, Attributes, Code =:= ?OTEL_STATUS_ERROR);
         {?MODULE, Id, ended} ->
@@ -77,6 +79,8 @@ finish(Id, Name, Kind, Attributes, Failed) ->
     receive
         {?MODULE, Id, {attributes, More}} ->
             finish(Id, Name, Kind, maps:merge(Attributes, More), Failed);
+        {?MODULE, Id, {name, NewName}} ->
+            finish(Id, NewName, Kind, Attributes, Failed);
         {?MODULE, Id, {status, Code}} ->
             finish(Id, Name, Kind, Attributes, Code =:= ?OTEL_STATUS_ERROR);
         {?MODULE, Id, ended} ->
@@ -132,7 +136,9 @@ set_status(#span_ctx{span_sdk = {?MODULE, {Id, Destination}}}, #status{code = Co
     Destination ! {?MODULE, Id, {status, Code}},
     true.
 
-update_name(_SpanCtx, _Name) -> true.
+update_name(#span_ctx{span_sdk = {?MODULE, {Id, Destination}}}, Name) ->
+    Destination ! {?MODULE, Id, {name, Name}},
+    true.
 
 end_span(#span_ctx{span_sdk = {?MODULE, {Id, Destination}}} = SpanCtx) ->
     Destination ! {?MODULE, Id, ended},

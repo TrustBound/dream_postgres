@@ -1,5 +1,5 @@
 -module(dream_postgres_trace_ffi).
--export([start_client_span/3, end_span/3]).
+-export([start_client_span/3, update_name/2, end_span/3]).
 
 -include_lib("opentelemetry_api/include/opentelemetry.hrl").
 
@@ -16,6 +16,12 @@ start_client_span(Name, StringAttributes, IntAttributes) ->
     Attributes = maps:from_list(StringAttributes ++ IntAttributes),
     otel_tracer:start_span(Tracer, Name, #{kind => ?SPAN_KIND_CLIENT,
                                            attributes => Attributes}).
+
+%% Renames a span that runs, once its operation is known. A span that does
+%% not record, as with no SDK, ignores it.
+update_name(Span, Name) ->
+    _ = otel_span:update_name(Span, Name),
+    nil.
 
 %% Sets the attributes known at the end, sets the status Error when the
 %% operation failed, and ends the span. The status description stays

@@ -36,11 +36,12 @@ import fixtures/copy_callbacks.{collect_row, send_then_fail}
 import fixtures/expected_failure.{expect_failure}
 import gleam/erlang/process
 import gleam/int.{to_string}
-import gleam/option.{None}
+import gleam/option.{None, Some}
 import gleam/result.{map_error, try}
 import gleam/string.{inspect}
 import matchers/extract_command_result.{extract_command_result}
 import matchers/extract_command_rows.{extract_command_rows}
+import matchers/extract_span_name.{extract_span_name}
 
 /// The tests of the spans of statements.
 pub fn tests() -> TestSuite {
@@ -124,7 +125,7 @@ fn housekeeping_tests() -> TestSuite {
           |> should
           |> be_equal([
             RecordedSpan(
-              name: database,
+              name: "SELECT " <> database,
               kind: "client",
               attributes: [
                 #("db.namespace", database),
@@ -200,7 +201,7 @@ fn statement_tests() -> TestSuite {
       |> should
       |> be_equal(
         Ok(RecordedSpan(
-          name: database,
+          name: "SELECT " <> database,
           kind: "client",
           attributes: [
             #("db.namespace", database),
@@ -229,7 +230,7 @@ fn statement_tests() -> TestSuite {
         |> should
         |> be_equal(
           Ok(RecordedSpan(
-            name: database,
+            name: "SELECT " <> database,
             kind: "client",
             attributes: [
               #("db.namespace", database),
@@ -436,7 +437,7 @@ fn copy_tests() -> TestSuite {
       |> should
       |> be_equal(
         Ok(RecordedSpan(
-          name: database,
+          name: "COPY " <> database,
           kind: "client",
           attributes: [
             #("db.namespace", database),
@@ -522,6 +523,54 @@ fn span_tests() -> TestSuite {
         )),
       )
       |> or_fail_with("Expected no server.port for 5432")
+    }),
+    unit.it("without a summary is named after its operation and target", fn() {
+      {
+        record_spans_here()
+        trace.start(
+          SpanTarget(database: "app", host: "db.example.com", port: 5432),
+          SpanQuery(summary: None, text: None),
+        )
+        |> trace.end(Worked(operation: Some("INSERT")))
+        next_span()
+      }
+      |> should
+      |> be_ok
+      |> extract_span_name
+      |> be_equal("INSERT app")
+      |> or_fail_with("Expected the name INSERT app")
+    }),
+    unit.it("with a summary keeps the summary as its name", fn() {
+      {
+        record_spans_here()
+        trace.start(
+          SpanTarget(database: "app", host: "db.example.com", port: 5432),
+          SpanQuery(summary: Some("user.create"), text: None),
+        )
+        |> trace.end(Worked(operation: Some("INSERT")))
+        next_span()
+      }
+      |> should
+      |> be_ok
+      |> extract_span_name
+      |> be_equal("user.create")
+      |> or_fail_with("Expected the summary as the name")
+    }),
+    unit.it("with an empty operation keeps its target as its name", fn() {
+      {
+        record_spans_here()
+        trace.start(
+          SpanTarget(database: "app", host: "db.example.com", port: 5432),
+          SpanQuery(summary: None, text: None),
+        )
+        |> trace.end(Worked(operation: Some("")))
+        next_span()
+      }
+      |> should
+      |> be_ok
+      |> extract_span_name
+      |> be_equal("app")
+      |> or_fail_with("Expected the target as the name")
     }),
     unit.it("names the user's database for an empty database", fn() {
       login.new(

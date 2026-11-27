@@ -1030,7 +1030,9 @@ pub fn stop(connection: Connection) -> Nil {
 
 // Requests --------------------------------------------------------------------
 
-/// A statement with no name: its span is named after the database.
+/// A statement with no name: its span is named after its operation and
+/// the database, for example `SELECT app`, or after the database alone
+/// when the operation is not known, as after a failure.
 ///
 /// ## Parameters
 ///
