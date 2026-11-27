@@ -23,6 +23,7 @@ import dream_postgres/driver/channel_binding.{
   type CertificateError, server_end_point_hash,
 }
 import dream_postgres/driver/crypto.{Md5, hash, random_bytes}
+import dream_postgres/driver/encode.{length_field, startup_message_length}
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ProtocolVersion,
   AuthenticationCleartextPassword, AuthenticationGss, AuthenticationKerberosV5,
@@ -44,7 +45,7 @@ import gleam/bool.{guard}
 import gleam/dict.{type Dict}
 import gleam/list.{append, contains, filter, reverse, try_each, try_fold}
 import gleam/option.{type Option, None, Some}
-import gleam/result.{map, map_error, replace_error, try, unwrap}
+import gleam/result.{map, map_error, replace, replace_error, try, unwrap}
 import gleam/set.{type Set}
 import gleam/string.{lowercase, to_graphemes}
 
@@ -108,6 +109,10 @@ pub type ConfigError {
   /// A `client_encoding` other than UTF-8. Every text of the driver is
   /// UTF-8.
   UnsupportedClientEncoding(value: String)
+  /// The StartupMessage of the settings, with the parameters that `new`
+  /// adds, is too long for its length field: `length` is above
+  /// 2147483647. The length field counts itself.
+  StartupMessageTooLong(length: Int)
 }
 
 /// A login method of the server.
@@ -333,7 +338,8 @@ pub fn database(config: LoginConfig) -> String {
 ///
 /// - `Ok(LoginConfig)`: the checked settings
 /// - `Error(ConfigError)`: a value that the StartupMessage cannot hold, a
-///   parameter given two times, or an encoding other than UTF-8
+///   parameter given two times, an encoding other than UTF-8, or a
+///   StartupMessage longer than its length field can hold
 pub fn new(
   user user: String,
   database database: String,
@@ -348,11 +354,13 @@ pub fn new(
   use _ <- try(try_each(given, check_parameter))
   use _ <- try(try_fold(given, set.new(), check_unique_name))
   use _ <- try(try_each(parameters, check_client_encoding))
+  let startup = startup_parameters(database, parameters)
+  use _ <- try(check_startup_length(user, startup))
   Ok(LoginConfig(
     user:,
     database:,
     password:,
-    parameters: startup_parameters(database, parameters),
+    parameters: startup,
     channel_binding:,
     protocol_version:,
   ))
@@ -390,15 +398,29 @@ fn check_unique_name(
 
 /// PostgreSQL's `clean_encoding_name` keeps the letters and digits of an
 /// encoding name, in lower case. `utf8` and `unicode` both name UTF-8.
+/// Only the value of `client_encoding` is read: the graphemes of a long
+/// value of another parameter would take a long time to find.
 fn check_client_encoding(
   parameter: #(String, String),
 ) -> Result(Nil, ConfigError) {
   let #(name, value) = parameter
-  let is_encoding = lowercase(name) == "client_encoding"
+  use <- guard(lowercase(name) != "client_encoding", Ok(Nil))
   let clean_value = to_graphemes(lowercase(value)) |> filter(is_letter_or_digit)
   let utf8 = clean_value == ["u", "t", "f", "8"] || clean_value == unicode
-  use <- guard(is_encoding && !utf8, Error(UnsupportedClientEncoding(value)))
+  use <- guard(!utf8, Error(UnsupportedClientEncoding(value)))
   Ok(Nil)
+}
+
+/// The length is worked out from the lengths of the texts, so that no
+/// bytes of the message are built for the check.
+fn check_startup_length(
+  user: String,
+  parameters: List(#(String, String)),
+) -> Result(Nil, ConfigError) {
+  let length = startup_message_length(user, parameters)
+  length_field(length)
+  |> replace_error(StartupMessageTooLong(length))
+  |> replace(Nil)
 }
 
 const unicode = ["u", "n", "i", "c", "o", "d", "e"]

@@ -18,10 +18,11 @@ import dream_postgres/driver/login.{
   EmptyParameterName, EmptyUser, GssLogin, KerberosV5Login, LoginOutcome,
   Md5Login, PasswordHasZeroByte, PasswordRequired, PreferChannelBinding,
   RequireChannelBinding, SaslLogin, ScramLogin, ScramServerFinalFailed,
-  ScramServerFirstFailed, ServerRejectedLogin, SspiLogin, TrustLogin,
-  UnexpectedMessage, UnsupportedClientEncoding, UnsupportedLoginMethod,
-  UnsupportedProtocolVersion, ZeroByteInParameter, ZeroByteInPassword,
-  client_nonce, new, no_password, password, password_function,
+  ScramServerFirstFailed, ServerRejectedLogin, SspiLogin, StartupMessageTooLong,
+  TrustLogin, UnexpectedMessage, UnsupportedClientEncoding,
+  UnsupportedLoginMethod, UnsupportedProtocolVersion, ZeroByteInParameter,
+  ZeroByteInPassword, client_nonce, new, no_password, password,
+  password_function,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ProtocolVersion,
@@ -40,6 +41,7 @@ import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/stored_password.{store_password, stored_password}
+import fixtures/long_startup_parameters.{long_startup_parameters}
 import gleam/dict
 import gleam/list.{map}
 import gleam/option.{type Option, None, Some}
@@ -456,6 +458,15 @@ fn config_error_cases() -> List(ConfigCase) {
       "a client_encoding other than UTF-8",
       with_parameters([#("client_encoding", "LATIN1")]),
       UnsupportedClientEncoding("LATIN1"),
+    ),
+    // The length field and the version are 8 bytes and the end of the list
+    // is 1. `user`, `database`, `application_name` and `client_encoding`
+    // with their values and zero bytes are 9 + 14 + 32 + 21. The names p0
+    // to p2047 are 9130 bytes, and each parameter has 1048576 + 2 more.
+    ConfigCase(
+      "a StartupMessage longer than its length field can hold",
+      with_parameters(long_startup_parameters()),
+      StartupMessageTooLong(2_147_496_959),
     ),
   ]
 }

@@ -23,7 +23,7 @@ import dream_postgres/internal/cell.{
 }
 import gleam/bit_array.{byte_size}
 import gleam/bool.{guard}
-import gleam/list.{length, try_fold, try_map}
+import gleam/list.{fold, length, try_fold, try_map}
 import gleam/option.{type Option, None, Some}
 import gleam/result.{map, map_error, try}
 import gleam/set.{type Set}
@@ -206,6 +206,43 @@ fn startup_message(
     0,
   >>
   unframed(body)
+}
+
+/// The length field of the StartupMessage of `user` and `parameters`,
+/// worked out from the lengths of the texts alone, with no bytes built:
+/// the length field itself, the protocol version, each name and value with
+/// its zero byte, and the zero byte that ends the list. `encode` writes
+/// this length, or gives `MessageTooLong` with it when it is above
+/// 2147483647.
+///
+/// ## Parameters
+///
+/// - `user`: the value of the `user` parameter
+/// - `parameters`: the other startup parameters
+///
+/// ## Returns
+///
+/// The length that the length field of the message holds.
+pub fn startup_message_length(
+  user: String,
+  parameters: List(#(String, String)),
+) -> Int {
+  let length_and_version = 8
+  let end_of_list = 1
+  fold(
+    parameters,
+    length_and_version + end_of_list + parameter_length(#("user", user)),
+    add_parameter_length,
+  )
+}
+
+fn add_parameter_length(total: Int, parameter: #(String, String)) -> Int {
+  total + parameter_length(parameter)
+}
+
+/// A name and a value, each with its zero byte.
+fn parameter_length(parameter: #(String, String)) -> Int {
+  string.byte_size(parameter.0) + 1 + string.byte_size(parameter.1) + 1
 }
 
 fn version_code(version: ProtocolVersion) -> Int {

@@ -184,7 +184,11 @@ pub type ConnectError {
   LoginRefused(error: LoginError)
   /// The server sent bytes during the login that are not a valid message.
   LoginUndecodable(error: ProtocolError)
-  /// A login message could not be written.
+  /// A login message after the StartupMessage could not be written. The
+  /// StartupMessage always can: `login.new` refuses settings that make it
+  /// too long. A PasswordMessage of a cleartext password, or a SCRAM
+  /// message with a client or server nonce, longer than its length field
+  /// can hold still gives this error.
   LoginUnencodable(error: EncodeError)
   /// The connect and the login took longer than the setup timeout.
   SetupTimedOut
