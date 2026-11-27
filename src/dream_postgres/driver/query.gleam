@@ -26,11 +26,12 @@
 import dream_postgres/driver/encode.{copy_done, copy_refusal, sync}
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ResultColumn, Bind,
-  BindComplete, CommandComplete, CopyBothResponse, CopyDataFromServer,
-  CopyDoneFromServer, CopyInResponse, CopyOutResponse, DataRow, Describe,
-  EmptyQueryResponse, ErrorResponse, Execute, NoData, NoticeResponse,
-  NotificationResponse, ParameterDescriptions, ParameterStatus, Parse,
-  ParseComplete, Portal, Query, ReadyForQuery, RowDescription, Statement, Sync,
+  BindComplete, Close, CloseComplete, CommandComplete, CopyBothResponse,
+  CopyDataFromServer, CopyDoneFromServer, CopyInResponse, CopyOutResponse,
+  DataRow, Describe, EmptyQueryResponse, ErrorResponse, Execute, NoData,
+  NoticeResponse, NotificationResponse, ParameterDescriptions, ParameterStatus,
+  Parse, ParseComplete, Portal, Query, ReadyForQuery, RowDescription, Statement,
+  Sync,
 }
 import dream_postgres/internal/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
@@ -79,6 +80,8 @@ pub type Phase {
   AwaitingStatementColumns
   /// BindComplete, the answer to Bind.
   AwaitingBindComplete
+  /// CloseComplete, the answer to Close.
+  AwaitingCloseComplete
   /// RowDescription or NoData, the answer to a Describe of a portal.
   AwaitingPortalColumns
   /// DataRow, or the end of an Execute: CommandComplete,
@@ -259,22 +262,64 @@ pub fn start_prepare(
   query: String,
   parameter_type_ids: List(Int),
 ) -> Start(PrepareState) {
-  let next_phases = [AwaitingParameterDescription, AwaitingStatementColumns]
-  let machine =
-    new_machine(
-      ExtendedProtocol,
-      AwaitingParseComplete,
-      next_phases,
-      BoundFormats([]),
+  start_prepare_closing([], statement, query, parameter_type_ids)
+}
+
+/// Starts to prepare a statement, after a Close of each named statement
+/// in `closing`, in the same round trip: Close for each, Parse, Describe
+/// of the statement, and Sync. The server answers each Close with
+/// CloseComplete, also for a name that has no statement.
+///
+/// ## Parameters
+///
+/// - `closing`: the names of the statements to close first
+/// - `statement`: the name of the statement to prepare
+/// - `query`: the SQL of one statement
+/// - `parameter_type_ids`: the type OIDs of the first parameters, where 0
+///   leaves a type for the server to choose
+///
+/// ## Returns
+///
+/// The messages to send and the state for `step_prepare`.
+pub fn start_prepare_closing(
+  closing: List(String),
+  statement: String,
+  query: String,
+  parameter_type_ids: List(Int),
+) -> Start(PrepareState) {
+  let #(first_phase, next_phases) = case closing {
+    [] -> #(AwaitingParseComplete, [
+      AwaitingParameterDescription,
+      AwaitingStatementColumns,
+    ])
+    [_first, ..others] -> #(
+      AwaitingCloseComplete,
+      list.append(map(others, close_phase), [
+        AwaitingParseComplete,
+        AwaitingParameterDescription,
+        AwaitingStatementColumns,
+      ]),
     )
+  }
+  let closes = map(closing, close_message)
+  let machine =
+    new_machine(ExtendedProtocol, first_phase, next_phases, BoundFormats([]))
   Start(
-    messages: [
+    messages: list.append(closes, [
       Parse(statement:, query:, parameter_type_ids:),
       Describe(Statement(statement)),
       Sync,
-    ],
+    ]),
     state: PrepareState(machine),
   )
+}
+
+fn close_phase(_name: String) -> Phase {
+  AwaitingCloseComplete
+}
+
+fn close_message(name: String) -> FrontendMessage {
+  Close(Statement(name))
 }
 
 /// Reads one message from the server in a prepare step.
@@ -622,6 +667,7 @@ fn receive_in_phase(
     AwaitingStatementColumns | AwaitingPortalColumns ->
       columns_answer(machine, message)
     AwaitingBindComplete -> bind_answer(machine, message)
+    AwaitingCloseComplete -> close_answer(machine, message)
     ReadingExecuteRows -> execute_answer(machine, message)
     AwaitingStatementResult -> statement_answer(machine, message)
     ReadingScriptRows -> script_row_answer(machine, message)
@@ -684,6 +730,16 @@ fn columns_answer(
     RowDescription(columns:) ->
       Ok(wait_with(advance(with_columns(machine, columns))))
     NoData -> Ok(wait_with(advance(with_columns(machine, []))))
+    _ -> unexpected(machine, message)
+  }
+}
+
+fn close_answer(
+  machine: Machine,
+  message: BackendMessage,
+) -> Result(Transition, UnexpectedMessage) {
+  case message {
+    CloseComplete -> Ok(wait_with(advance(machine)))
     _ -> unexpected(machine, message)
   }
 }
