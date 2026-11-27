@@ -19,6 +19,7 @@ import dream_postgres/driver/transport.{
 }
 import driver/servers.{type Server}
 import gleam/option.{type Option, None, Some}
+import gleam/pair
 import gleam/result.{map_error, try}
 
 @external(erlang, "crypto", "strong_rand_bytes")
@@ -55,7 +56,31 @@ pub fn log_in(
   use connection <- try(open(server, test_login))
   let outcome = run_login(connection, config)
   close(connection)
-  outcome
+  outcome |> result.map(pair.first)
+}
+
+/// Logs in and keeps the connection open. The caller closes it.
+///
+/// The result is the connection and the bytes that came after the
+/// ReadyForQuery of the login.
+pub fn open_logged_in(
+  server: Server,
+  test_login: TestLogin,
+) -> Result(#(Connection, BitArray), LoginFailure) {
+  use config <- try(login_config(test_login))
+  use connection <- try(open(server, test_login))
+  case run_login(connection, config) {
+    Ok(#(_outcome, rest)) -> Ok(#(connection, rest))
+    Error(failure) -> close_with(connection, failure)
+  }
+}
+
+fn close_with(
+  connection: Connection,
+  failure: LoginFailure,
+) -> Result(a, LoginFailure) {
+  close(connection)
+  Error(failure)
 }
 
 fn login_config(
@@ -87,7 +112,7 @@ fn open(
 fn run_login(
   connection: Connection,
   config: login.LoginConfig,
-) -> Result(LoginOutcome, LoginFailure) {
+) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
   use #(state, first) <- try(
     login.start(
       config,
@@ -104,7 +129,7 @@ fn read_messages(
   connection: Connection,
   state: LoginState,
   bytes: BitArray,
-) -> Result(LoginOutcome, LoginFailure) {
+) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
   case decode_backend(bytes) {
     Ok(Decoded(message, rest)) ->
       login.step(state, message)
@@ -119,9 +144,9 @@ fn next_step(
   connection: Connection,
   login_step: login.LoginStep,
   rest: BitArray,
-) -> Result(LoginOutcome, LoginFailure) {
+) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
   case login_step {
-    LoggedIn(outcome) -> Ok(outcome)
+    LoggedIn(outcome) -> Ok(#(outcome, rest))
     Continue(state:, reply:) -> reply_and_read(connection, state, reply, rest)
   }
 }
@@ -131,7 +156,7 @@ fn reply_and_read(
   state: LoginState,
   reply: Option(FrontendMessage),
   rest: BitArray,
-) -> Result(LoginOutcome, LoginFailure) {
+) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
   use Nil <- try(send_reply(connection, reply))
   read_messages(connection, state, rest)
 }
@@ -150,7 +175,7 @@ fn read_more(
   connection: Connection,
   state: LoginState,
   bytes: BitArray,
-) -> Result(LoginOutcome, LoginFailure) {
+) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
   use more <- try(receive(connection, 5000) |> map_error(TransportFailed))
   read_messages(connection, state, <<bytes:bits, more:bits>>)
 }
