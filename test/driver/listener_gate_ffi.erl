@@ -1,5 +1,5 @@
 -module(listener_gate_ffi).
--export([start/1, break/1, wait_refused/1, open/1, stop/1]).
+-export([start/1, break/1, cut_first_query/1, wait_refused/1, open/1, stop/1]).
 
 %% A TCP proxy with a gate, for the listener tests: it passes every byte
 %% both ways between each client and a driver server while the gate is
@@ -11,6 +11,10 @@
 %% when it cannot listen.
 %% - break(Gate): closes the gate and each client's connection, as a
 %%   broken network does;
+%% - cut_first_query(Gate): closes each client's connection, as break
+%%   does, but leaves the gate open. The next client passes its login,
+%%   and the gate closes it at its first Query message, so the request
+%%   after a reconnect meets a loss. The client after it passes again;
 %% - wait_refused(Gate): waits until the closed gate closed a new client,
 %%   so a reconnect failed;
 %% - open(Gate): opens the gate, so the next client gets a session;
@@ -28,6 +32,7 @@ start(ServerPort) ->
     end.
 
 break(Gate) -> command(Gate, break).
+cut_first_query(Gate) -> command(Gate, cut_first_query).
 wait_refused(Gate) -> command(Gate, wait_refused).
 open(Gate) -> command(Gate, open).
 stop(Gate) -> command(Gate, stop).
@@ -51,7 +56,7 @@ listening(Caller, Ready, ServerPort, Listen, {ok, Port}) ->
     Gate = self(),
     spawn_link(fun() -> accept(Listen, Gate) end),
     Caller ! {Ready, {ok, Port}},
-    gate(Listen, ServerPort, open, [], none);
+    gate(Listen, ServerPort, open, [], none, pass);
 listening(Caller, Ready, _ServerPort, Listen, {error, Reason}) ->
     gen_tcp:close(Listen),
     Caller ! {Ready, {error, Reason}}.
@@ -71,29 +76,34 @@ accept(Listen, Gate) ->
 give_client(Client, Gate, ok) -> Gate ! {accepted, Client};
 give_client(Client, _Gate, {error, _Reason}) -> gen_tcp:close(Client).
 
-%% Waiter is the command that waits for a refused client, or none.
-gate(Listen, ServerPort, Position, Relays, Waiter) ->
+%% Waiter is the command that waits for a refused client, or none. Cut is
+%% cut when the next client is closed at its first Query, else pass.
+gate(Listen, ServerPort, Position, Relays, Waiter, Cut) ->
     receive
         {accepted, Client} when Position =:= open ->
-            Relay = spawn(fun() -> relay_start(ServerPort) end),
+            Relay = spawn(fun() -> relay_start(ServerPort, Cut) end),
             Owned = gen_tcp:controlling_process(Client, Relay),
             Next = start_relay(Client, Relay, Owned, Relays),
-            gate(Listen, ServerPort, Position, Next, Waiter);
+            gate(Listen, ServerPort, Position, Next, Waiter, pass);
         {accepted, Client} ->
             gen_tcp:close(Client),
-            gate(Listen, ServerPort, refused, Relays, answer(Waiter));
+            gate(Listen, ServerPort, refused, Relays, answer(Waiter), Cut);
         {command, From, Reference, break} ->
             lists:foreach(fun close_relay/1, Relays),
             From ! {Reference, done},
-            gate(Listen, ServerPort, closed, [], Waiter);
+            gate(Listen, ServerPort, closed, [], Waiter, Cut);
+        {command, From, Reference, cut_first_query} ->
+            lists:foreach(fun close_relay/1, Relays),
+            From ! {Reference, done},
+            gate(Listen, ServerPort, open, [], Waiter, cut);
         {command, From, Reference, wait_refused} when Position =:= refused ->
             From ! {Reference, done},
-            gate(Listen, ServerPort, Position, Relays, Waiter);
+            gate(Listen, ServerPort, Position, Relays, Waiter, Cut);
         {command, From, Reference, wait_refused} ->
-            gate(Listen, ServerPort, Position, Relays, {From, Reference});
+            gate(Listen, ServerPort, Position, Relays, {From, Reference}, Cut);
         {command, From, Reference, open} ->
             From ! {Reference, done},
-            gate(Listen, ServerPort, open, Relays, Waiter);
+            gate(Listen, ServerPort, open, Relays, Waiter, Cut);
         {command, From, Reference, stop} ->
             lists:foreach(fun close_relay/1, Relays),
             gen_tcp:close(Listen),
@@ -125,33 +135,52 @@ close_relay(Relay) ->
 
 %% A client whose server connection fails is closed, so it sees a lost
 %% connection, and the relay ends.
-relay_start(ServerPort) ->
+relay_start(ServerPort, Cut) ->
     receive
         {client, Client} ->
             Connected = gen_tcp:connect("localhost", ServerPort, [binary, {active, once}]),
-            relay_connected(Client, Connected);
+            relay_connected(Client, Connected, Cut);
         close ->
             ok
     end.
 
-relay_connected(Client, {ok, Server}) ->
+relay_connected(Client, {ok, Server}, Cut) ->
     case inet:setopts(Client, [{active, once}]) of
-        ok -> relay(Client, Server);
+        ok -> relay(Client, Server, Cut);
         {error, _Reason} -> close_both(Client, Server)
     end;
-relay_connected(Client, {error, _Reason}) ->
+relay_connected(Client, {error, _Reason}, _Cut) ->
     gen_tcp:close(Client).
 
-relay(Client, Server) ->
+%% A login sends no Query, so the first bytes of the client that start
+%% with Q are the first request after the login.
+relay(Client, Server, cut) ->
+    receive
+        {tcp, Client, <<"Q", _/binary>>} ->
+            close_both(Client, Server);
+        {tcp, Client, Bytes} ->
+            gen_tcp:send(Server, Bytes),
+            inet:setopts(Client, [{active, once}]),
+            relay(Client, Server, cut);
+        {tcp, Server, Bytes} ->
+            gen_tcp:send(Client, Bytes),
+            inet:setopts(Server, [{active, once}]),
+            relay(Client, Server, cut);
+        close ->
+            close_both(Client, Server);
+        {tcp_closed, _Socket} ->
+            close_both(Client, Server)
+    end;
+relay(Client, Server, pass) ->
     receive
         {tcp, Client, Bytes} ->
             gen_tcp:send(Server, Bytes),
             inet:setopts(Client, [{active, once}]),
-            relay(Client, Server);
+            relay(Client, Server, pass);
         {tcp, Server, Bytes} ->
             gen_tcp:send(Client, Bytes),
             inet:setopts(Server, [{active, once}]),
-            relay(Client, Server);
+            relay(Client, Server, pass);
         close ->
             close_both(Client, Server);
         {tcp_closed, _Socket} ->

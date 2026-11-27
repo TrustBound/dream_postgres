@@ -8,25 +8,27 @@
 //// test sleeps. Setup hooks start each listener and stop it after the
 //// test.
 
-import dream_postgres/driver/connection.{
-  Backoff, Notification, ScriptUnencodable, TransportRefused,
-}
+import dream_postgres/driver/connection.{Backoff, Notification, TransportRefused}
 import dream_postgres/driver/listener.{
-  type Listener, type ListenerConfig, type ListenerMessage, ChannelTooLong,
-  ConnectFailed, ListenFailed, ListenerGone, ListenerNotStarted,
-  ListenerProcessDown, Listening, NotListening, NotificationArrived,
-  SubscribeFailed, SubscriberHasNoProcess, start, stop, subscribe, supervised,
-  unsubscribe,
+  type Listener, type ListenerConfig, type ListenerMessage, ChannelHasZeroByte,
+  ChannelTooLong, ConnectFailed, ListenAnswerUnexpected, ListenDeadlinePassed,
+  ListenFailed, ListenRefused, ListenerConnectionDown, ListenerGone,
+  ListenerNotStarted, ListenerProcessDown, Listening, NotListening,
+  NotificationArrived, SubscribeFailed, SubscriberHasNoProcess, start, stop,
+  subscribe, supervised, unsubscribe,
 }
-import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{ConnectRefused}
+import dream_postgres/internal/cell.{Idle}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit
 import dream_test/unit_context.{after_each, before_each, describe, group, it}
 import driver/fake_server.{free_port}
-import driver/listener_gate.{break_gate, open_gate, wait_refused}
+import driver/listener_gate.{
+  break_gate, cut_first_query, open_gate, wait_refused,
+}
+import driver/proxy.{answer_next_request}
 import driver/reconnect_server.{
   kill_linked_process, start_forwarder, start_watched_silent_server,
   wait_for_connection,
@@ -36,15 +38,20 @@ import driver/server_connection.{
 }
 import driver/server_listener.{
   type GatedListener, type GatedOutcome, type ListenerOutcome,
-  type ListenerSession, type SubscribedListener, end_session_backend,
-  end_subscription, gated_act_setup, listener_act_setup, listener_config,
-  listener_session_setup, listener_statement, receive_message, send_notification,
-  start_test_listener, start_test_subscribed, stop_listener_session,
+  type ListenerSession, type ProxiedListener, type SubscribedListener,
+  end_session_backend, end_subscription, gated_act_setup, listener_act_setup,
+  listener_config, listener_session_setup, listener_statement,
+  proxied_listener_setup, receive_message, refusal_bytes,
+  result_then_refusal_bytes, resume_listener_connection, send_notification,
+  start_test_listener, start_test_proxied_listener, start_test_subscribed,
+  stop_listener_connection, stop_listener_session, stop_proxied_listener,
   stop_subscribed_listener, subscribe_and_unsubscribe_first, subscribe_first,
   subscribe_first_to, subscribe_second, subscribe_second_to_other, subscribe_to,
-  subscribed_setup, wait_for_first_message, wait_for_statement,
+  subscribed_setup, suspend_listener_connection, wait_for_first_message,
+  wait_for_statement,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
+import fixtures/server_report.{server_report}
 import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/list.{map}
@@ -65,6 +72,8 @@ pub fn tests() -> TestSuite {
       map(driver_servers(), reconnect_tests),
     ),
     gate_tests(),
+    cut_query_tests(),
+    listen_failure_tests(),
     subscription_tests(),
     start_tests(),
     late_server_tests(),
@@ -328,9 +337,7 @@ fn subscribe_tests() {
         answer
         |> should
         |> be_error
-        |> be_equal(
-          SubscribeFailed(ScriptUnencodable(ZeroByteInString("query"))),
-        )
+        |> be_equal(SubscribeFailed(ChannelHasZeroByte))
         |> or_fail_with("Expected SubscribeFailed with the zero byte")
       },
     ),
@@ -809,9 +816,132 @@ fn late_server_tests() -> TestSuite {
           |> be_ok
           |> be_equal(ListenFailed(
             "svc827_late\u{0000}zero",
-            ScriptUnencodable(ZeroByteInString("query")),
+            ChannelHasZeroByte,
           ))
           |> or_fail_with("Expected ListenFailed with the zero byte")
+        },
+      ),
+    ],
+  )
+}
+
+// A LISTEN that meets a loss after a reconnect: one act, one test ----------------
+
+/// What the subscriber got after the gate cut its connection and then
+/// cut the first `LISTEN` after the reconnect.
+fn lose_listen_after_reconnect(
+  gated: GatedListener,
+) -> Result(#(ListenerMessage, ListenerMessage), String) {
+  use _first <- try(subscribe_to(gated.listener, "svc895_cut", gated.first))
+  cut_first_query(gated.gate)
+  use lost <- try(receive_message(gated.first))
+  use next <- try(receive_message(gated.first))
+  Ok(#(lost, next))
+}
+
+fn cut_query_tests() -> TestSuite {
+  describe(
+    "a LISTEN that meets a loss after a reconnect",
+    gated_act_setup(first_driver_server, lose_listen_after_reconnect),
+    [
+      it(
+        "gives no ListenFailed, only Listening after the next reconnect",
+        fn(shared: GatedOutcome(#(ListenerMessage, ListenerMessage))) {
+          shared.outcome
+          |> should
+          |> be_equal(#(NotListening, Listening("svc895_cut")))
+          |> or_fail_with("Expected NotListening, then Listening")
+        },
+      ),
+    ],
+  )
+}
+
+// A LISTEN that fails on a session that is up -----------------------------------
+
+fn listen_failure_tests() -> TestSuite {
+  describe(
+    "a LISTEN that fails on a session that is up",
+    proxied_listener_setup(first_driver_server),
+    [
+      before_each(start_test_proxied_listener(first_driver_server)),
+      after_each(stop_proxied_listener),
+      it(
+        "gives ListenRefused when the server refuses the LISTEN",
+        fn(proxied: ProxiedListener) {
+          // Arrange
+          answer_next_request(proxied.proxy, refusal_bytes())
+
+          // Act
+          let answer =
+            subscribe(proxied.listener, proxied.channel, proxied.subscriber)
+
+          // Assert
+          answer
+          |> should
+          |> be_error
+          |> be_equal(
+            SubscribeFailed(ListenRefused(
+              server_report("ERROR", "42501", "permission denied"),
+              Idle,
+            )),
+          )
+          |> or_fail_with("Expected ListenRefused with the report")
+        },
+      ),
+      it(
+        "gives ListenAnswerUnexpected when one LISTEN gets two answers",
+        fn(proxied: ProxiedListener) {
+          // Arrange
+          answer_next_request(proxied.proxy, result_then_refusal_bytes())
+
+          // Act
+          let answer =
+            subscribe(proxied.listener, proxied.channel, proxied.subscriber)
+
+          // Assert
+          answer
+          |> should
+          |> be_error
+          |> be_equal(SubscribeFailed(ListenAnswerUnexpected))
+          |> or_fail_with("Expected ListenAnswerUnexpected")
+        },
+      ),
+      it(
+        "gives ListenDeadlinePassed when the connection does not answer",
+        fn(proxied: ProxiedListener) {
+          // Arrange
+          suspend_listener_connection(proxied.listener)
+
+          // Act
+          let answer =
+            subscribe(proxied.listener, proxied.channel, proxied.subscriber)
+          resume_listener_connection(proxied.listener)
+
+          // Assert
+          answer
+          |> should
+          |> be_error
+          |> be_equal(SubscribeFailed(ListenDeadlinePassed(cancelled: False)))
+          |> or_fail_with("Expected ListenDeadlinePassed")
+        },
+      ),
+      it(
+        "gives ListenerConnectionDown when the connection process is gone",
+        fn(proxied: ProxiedListener) {
+          // Arrange
+          stop_listener_connection(proxied.listener)
+
+          // Act
+          let answer =
+            subscribe(proxied.listener, proxied.channel, proxied.subscriber)
+
+          // Assert
+          answer
+          |> should
+          |> be_error
+          |> be_equal(SubscribeFailed(ListenerConnectionDown))
+          |> or_fail_with("Expected ListenerConnectionDown")
         },
       ),
     ],

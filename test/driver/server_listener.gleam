@@ -21,12 +21,14 @@ import dream_postgres/driver/listener.{
 }
 import dream_test/context.{type Context}
 import driver/listener_gate.{type Gate, start_gate, stop_gate}
+import driver/proxy.{type Proxy, start_proxy, stop_proxy}
 import driver/server_connection.{
   application_config, backend_pid, query_text, setup_step, start_connection,
   stop_after_error,
 }
 import driver/servers.{type Server}
-import gleam/erlang/process.{type Subject}
+import gleam/bit_array
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int.{parse, to_string}
 import gleam/result.{map_error, replace, try}
 import gleam/string.{inspect, replace as replace_text}
@@ -438,6 +440,120 @@ fn run_gated_act(
     error
   })
 }
+
+// A listener through a proxy, with short timeouts -------------------------------
+
+/// A listener to a driver server through a proxy (see `proxy`), a
+/// subscriber of the calling process, and a channel that no other test
+/// uses. Each `LISTEN` has 100 milliseconds, and a caller of the
+/// connection waits 1.1 seconds more.
+pub type ProxiedListener {
+  ProxiedListener(
+    listener: Listener,
+    proxy: Proxy,
+    subscriber: Subject(ListenerMessage),
+    channel: String,
+  )
+}
+
+/// Starts a proxy to `server` and a listener through it.
+pub fn start_proxied_listener(
+  server: Server,
+) -> Result(ProxiedListener, String) {
+  use #(port, proxy) <- try(start_proxy(server.port))
+  short_listener_config(port)
+  |> try(start_configured_listener)
+  |> result.map(ProxiedListener(
+    _,
+    proxy,
+    process.new_subject(),
+    "svc895_listen_" <> to_string(unique_number()),
+  ))
+  |> map_error(stop_proxy_after_error(proxy, _))
+}
+
+fn short_listener_config(port: Int) -> Result(ListenerConfig, String) {
+  use config <- try(listener_config(port, "svc895_proxied", Backoff(10, 50)))
+  Ok(ListenerConfig(
+    connection: ConnectionConfig(
+      ..config.connection,
+      setup_timeout_milliseconds: 1000,
+      cancel_timeout_milliseconds: 100,
+    ),
+    deadline_milliseconds: 100,
+  ))
+}
+
+fn stop_proxy_after_error(proxy: Proxy, error: String) -> String {
+  stop_proxy(proxy)
+  error
+}
+
+/// Stops the listener and the proxy.
+pub fn stop_proxied_listener(proxied: ProxiedListener) -> Result(Nil, String) {
+  stop(proxied.listener)
+  Ok(stop_proxy(proxied.proxy))
+}
+
+/// A `before_each` hook that starts a proxied listener on `server` for the
+/// test.
+pub fn start_test_proxied_listener(
+  server: Server,
+) -> fn(ProxiedListener) -> Result(ProxiedListener, String) {
+  fn(_tree_proxied) { start_proxied_listener(server) }
+}
+
+/// The context of a describe whose tests each get a proxied listener: one
+/// for the tree, which gives the context its first value.
+/// `start_test_proxied_listener` gives each test its own.
+pub fn proxied_listener_setup(server: Server) -> Context(ProxiedListener) {
+  context.setup(
+    setup: fn() { start_proxied_listener(server) },
+    teardown: stop_proxied_listener,
+  )
+}
+
+/// The bytes of a server that refuses a statement: an ErrorResponse with
+/// ERROR, 42501 and `permission denied`, and ReadyForQuery, idle.
+pub fn refusal_bytes() -> BitArray {
+  let body = <<
+    "SERROR":utf8, 0, "VERROR":utf8, 0, "C42501":utf8, 0,
+    "Mpermission denied":utf8, 0, 0,
+  >>
+  <<"E":utf8, { bit_array.byte_size(body) + 4 }:32, body:bits, "Z", 5:32, "I">>
+}
+
+/// The bytes of a server that answers one `LISTEN` with a result and then
+/// an error, as no PostgreSQL server does.
+pub fn result_then_refusal_bytes() -> BitArray {
+  <<"C", 11:32, "LISTEN":utf8, 0, refusal_bytes():bits>>
+}
+
+/// Suspends the connection process of the listener, so it answers no
+/// request until `resume_listener_connection`.
+pub fn suspend_listener_connection(listener: Listener) -> Nil {
+  suspend(connection_pid(listener))
+}
+
+/// Resumes the connection process that `suspend_listener_connection`
+/// suspended.
+pub fn resume_listener_connection(listener: Listener) -> Nil {
+  resume(connection_pid(listener))
+}
+
+@external(erlang, "sys", "suspend")
+fn suspend(pid: Pid) -> Nil
+
+@external(erlang, "sys", "resume")
+fn resume(pid: Pid) -> Nil
+
+@external(erlang, "driver_listener_test_ffi", "connection_pid")
+fn connection_pid(listener: Listener) -> Pid
+
+/// Stops the connection process of the listener with an exit signal, and
+/// waits until it is gone. The listener stays.
+@external(erlang, "driver_listener_test_ffi", "stop_connection")
+pub fn stop_listener_connection(listener: Listener) -> Nil
 
 // The control connection ------------------------------------------------------
 

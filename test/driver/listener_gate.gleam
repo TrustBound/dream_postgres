@@ -16,6 +16,12 @@ pub fn start_gate(server_port: Int) -> Result(#(Int, Gate), String)
 @external(erlang, "listener_gate_ffi", "break")
 pub fn break_gate(gate: Gate) -> Nil
 
+/// Closes each client's connection and leaves the gate open. The next
+/// client passes its login, and the proxy closes it at its first Query, so
+/// the first request after the reconnect meets a loss.
+@external(erlang, "listener_gate_ffi", "cut_first_query")
+pub fn cut_first_query(gate: Gate) -> Nil
+
 /// Waits until the closed gate closed a new client, so a reconnect failed.
 @external(erlang, "listener_gate_ffi", "wait_refused")
 pub fn wait_refused(gate: Gate) -> Nil

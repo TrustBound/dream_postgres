@@ -37,6 +37,7 @@ import dream_postgres/driver/connection.{
   ScriptCopyRefused, ScriptFailed, ScriptNotConnected, ScriptRefused,
   ScriptRequestFailed, ScriptUnencodable, ServerEndedConnection,
 }
+import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{byte_size}
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{
@@ -78,8 +79,29 @@ pub type ListenerMessage {
   Listening(channel: String)
   /// The `LISTEN` for the channel failed on a session that is up, so the
   /// session does not listen on it. The listener tries again after the
+  /// next reconnect. A `LISTEN` that meets a loss gives no message: the
+  /// subscriber got `NotListening` already, and `Listening` follows the
   /// next reconnect.
-  ListenFailed(channel: String, error: ScriptError)
+  ListenFailed(channel: String, error: ListenFailure)
+}
+
+/// Why the `LISTEN` for a channel failed on a session that is up.
+pub type ListenFailure {
+  /// The server refused the `LISTEN`. The session stays usable.
+  ListenRefused(report: ServerReport, transaction_status: TransactionStatus)
+  /// The server answered the `LISTEN` as no PostgreSQL server does: with
+  /// an error after a first result, or with a COPY. The session stays
+  /// usable.
+  ListenAnswerUnexpected
+  /// The `LISTEN` did not end by the deadline of the listener. `cancelled`
+  /// says whether the server confirmed a cancel.
+  ListenDeadlinePassed(cancelled: Bool)
+  /// The channel name holds a zero byte, so the `LISTEN` cannot be
+  /// written. No byte went to the server.
+  ChannelHasZeroByte
+  /// The connection process of the listener is gone, for example because
+  /// an exit signal stopped it.
+  ListenerConnectionDown
 }
 
 /// Why a subscribe failed.
@@ -90,10 +112,10 @@ pub type ListenerError {
   /// The subscriber subject has no process: it has a name that no process
   /// has.
   SubscriberHasNoProcess
-  /// The server refused the `LISTEN`, or it could not be written, so the
-  /// subscription is not kept. A connection that is not up is not a
-  /// failure: the subscription is kept and gets `NotListening`.
-  SubscribeFailed(error: ScriptError)
+  /// The `LISTEN` failed on a session that is up, so the subscription is
+  /// not kept. A connection that is not up is not a failure: the
+  /// subscription is kept and gets `NotListening`.
+  SubscribeFailed(error: ListenFailure)
   /// The listener process is gone.
   ListenerProcessDown
 }
@@ -156,12 +178,23 @@ type Subscriber {
   )
 }
 
+/// What a `LISTEN` gave.
+type Listened {
+  /// The session listens on the channel.
+  ListenWorked
+  /// The session is not up: it is lost, or a supervised connection did not
+  /// connect yet. The listener listens after the next reconnect.
+  ListenLost
+  /// The `LISTEN` failed on a session that is up.
+  ListenNotDone(failure: ListenFailure)
+}
+
 /// What a subscribe does.
 type Admission {
   /// Adds the subscriber. With `listening` `False`, it gets `NotListening`.
   Admit(listening: Bool)
-  /// Refuses the subscriber with the error of its `LISTEN`.
-  Refuse(error: ScriptError)
+  /// Refuses the subscriber with the failure of its `LISTEN`.
+  Refuse(failure: ListenFailure)
 }
 
 type State {
@@ -349,7 +382,8 @@ pub fn stop(listener: Listener) -> Nil {
 /// - `Ok(Subscription)`: the session listens on the channel, or the
 ///   connection is not up and the subscriber got `NotListening`
 /// - `Error(ListenerError)`: the name is too long, the subject has no
-///   process, the server refused the `LISTEN`, or the listener is gone
+///   process, the `LISTEN` failed with a `ListenFailure`, or the listener
+///   is gone
 pub fn subscribe(
   listener: Listener,
   channel: String,
@@ -464,19 +498,11 @@ fn admission(state: State, channel: String) -> Admission {
 
 /// A `LISTEN` that failed because the connection is not up is kept: the
 /// connection process connects, and the listener listens then.
-fn listen_admission(listened: Result(Nil, ScriptError)) -> Admission {
+fn listen_admission(listened: Listened) -> Admission {
   case listened {
-    Ok(Nil) -> Admit(True)
-    Error(ScriptRequestFailed(ConnectionLost(_)))
-    | Error(ScriptNotConnected(_))
-    | Error(ScriptRequestFailed(ServerEndedConnection(_)))
-    | Error(ScriptRequestFailed(ProtocolViolation(_))) -> Admit(False)
-    Error(ScriptRequestFailed(ConnectionProcessDown) as error)
-    | Error(ScriptRequestFailed(DeadlinePassed(..)) as error)
-    | Error(ScriptUnencodable(..) as error)
-    | Error(ScriptRefused(..) as error)
-    | Error(ScriptFailed(..) as error)
-    | Error(ScriptCopyRefused(..) as error) -> Refuse(error)
+    ListenWorked -> Admit(True)
+    ListenLost -> Admit(False)
+    ListenNotDone(failure) -> Refuse(failure)
   }
 }
 
@@ -523,8 +549,32 @@ fn unlisten(state: State, channel: String) -> State {
   }
 }
 
-fn listen(state: State, channel: String) -> Result(Nil, ScriptError) {
-  run(state, "LISTEN " <> quoted(channel))
+fn listen(state: State, channel: String) -> Listened {
+  run(state, "LISTEN " <> quoted(channel)) |> listened
+}
+
+/// The SQL is one `LISTEN` in one Query message. Its only encode failure
+/// is the zero byte: the message is far below the 2 GiB limit, because
+/// the channel has at most 63 bytes. A PostgreSQL server answers it with
+/// one result or one error, so `ScriptFailed` and `ScriptCopyRefused` come
+/// only from a server that breaks the protocol.
+fn listened(result: Result(Nil, ScriptError)) -> Listened {
+  case result {
+    Ok(Nil) -> ListenWorked
+    Error(ScriptRequestFailed(ConnectionLost(_)))
+    | Error(ScriptNotConnected(_))
+    | Error(ScriptRequestFailed(ServerEndedConnection(_)))
+    | Error(ScriptRequestFailed(ProtocolViolation(_))) -> ListenLost
+    Error(ScriptRequestFailed(ConnectionProcessDown)) ->
+      ListenNotDone(ListenerConnectionDown)
+    Error(ScriptRequestFailed(DeadlinePassed(cancelled:))) ->
+      ListenNotDone(ListenDeadlinePassed(cancelled))
+    Error(ScriptUnencodable(_zero_byte)) -> ListenNotDone(ChannelHasZeroByte)
+    Error(ScriptRefused(report:, transaction_status:)) ->
+      ListenNotDone(ListenRefused(report, transaction_status))
+    Error(ScriptFailed(..)) | Error(ScriptCopyRefused(..)) ->
+      ListenNotDone(ListenAnswerUnexpected)
+  }
 }
 
 fn run(state: State, sql: String) -> Result(Nil, ScriptError) {
@@ -597,10 +647,13 @@ fn not_listening(_monitor: Monitor, subscriber: Subscriber) -> Subscriber {
 }
 
 fn listen_on_session(state: State, channel: String) -> State {
-  let result = listen(state, channel)
-  subscribers_of(state, channel)
-  |> each(process.send(_, listen_result_message(channel, result)))
-  let listening = result.is_ok(result)
+  let listened = listen(state, channel)
+  case listen_message(channel, listened) {
+    Some(message) ->
+      subscribers_of(state, channel) |> each(process.send(_, message))
+    None -> Nil
+  }
+  let listening = listened == ListenWorked
   State(
     ..state,
     subscriptions: dict.map_values(
@@ -612,13 +665,16 @@ fn listen_on_session(state: State, channel: String) -> State {
   )
 }
 
-fn listen_result_message(
+/// A `LISTEN` that meets a loss tells nothing: the subscribers got
+/// `NotListening` already, and the next reconnect listens again.
+fn listen_message(
   channel: String,
-  result: Result(Nil, ScriptError),
-) -> ListenerMessage {
-  case result {
-    Ok(Nil) -> Listening(channel)
-    Error(error) -> ListenFailed(channel, error)
+  listened: Listened,
+) -> Option(ListenerMessage) {
+  case listened {
+    ListenWorked -> Some(Listening(channel))
+    ListenLost -> None
+    ListenNotDone(failure) -> Some(ListenFailed(channel, failure))
   }
 }
 
