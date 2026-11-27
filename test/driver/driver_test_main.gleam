@@ -18,6 +18,7 @@ import driver/listener_test
 import driver/login_server_test
 import driver/login_test
 import driver/parity_test
+import driver/pool_test
 import driver/query_server_test
 import driver/query_test
 import driver/recorded_test
@@ -47,6 +48,7 @@ pub fn suites() -> List(TestSuite) {
     transport_test.tests(),
     statement_cache_test.tests(),
     connection_test.tests(),
+    pool_test.tests(),
     catalog_table_test.tests(),
     catalog_test.tests(),
     listener_test.tests(),
