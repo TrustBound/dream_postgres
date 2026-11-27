@@ -190,6 +190,20 @@ pub fn tls_config(config: ConnectionConfig, tls: Tls) -> ConnectionConfig {
   )
 }
 
+/// The config with a send timeout of `milliseconds`.
+pub fn send_timeout_config(
+  config: ConnectionConfig,
+  milliseconds: Int,
+) -> ConnectionConfig {
+  ConnectionConfig(
+    ..config,
+    transport: TransportConfig(
+      ..config.transport,
+      send_timeout_milliseconds: milliseconds,
+    ),
+  )
+}
+
 /// The config with the statement caching `caching`.
 pub fn caching_config(
   config: ConnectionConfig,

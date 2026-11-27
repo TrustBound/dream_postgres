@@ -65,14 +65,15 @@ import driver/server_connection.{
   release_advisory_lock, required_binding_config, resume_connection,
   run_control_script, run_control_setup_script, run_failing_script,
   run_failing_statement, run_failing_statement_within, run_setup_script,
-  run_setup_statement, send_stray_message, setup_timeout_config,
-  start_announced_caller, start_caller, start_configured, start_connection,
-  start_in_ended_owner, start_test_caching, start_test_configured,
-  start_test_connection, start_test_proxied, start_test_proxied_with_caching,
-  start_watched, stop_after_error, stop_connection, stop_proxied,
-  suspend_connection, terminate_backend, terminate_session, tls_config,
-  user_config, wait_for_lock_waiter, wait_for_mailbox_length, wait_for_message,
-  wait_for_table_waiter, watched_config,
+  run_setup_statement, send_stray_message, send_timeout_config,
+  setup_timeout_config, start_announced_caller, start_caller, start_configured,
+  start_connection, start_in_ended_owner, start_test_caching,
+  start_test_configured, start_test_connection, start_test_proxied,
+  start_test_proxied_with_caching, start_watched, stop_after_error,
+  stop_connection, stop_proxied, suspend_connection, terminate_backend,
+  terminate_session, tls_config, user_config, wait_for_lock_waiter,
+  wait_for_mailbox_length, wait_for_message, wait_for_table_waiter,
+  watched_config,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/copy_callbacks.{send_nothing}
@@ -853,6 +854,10 @@ fn start_tests() -> TestSuite {
         "gives LoginSendFailed when the server reads no password message",
         fn(_inputs: StartInputs) {
           // Arrange
+          // The StartupMessage of 4 MB fills the socket's queue, so the
+          // send of the PasswordMessage waits. The server reads nothing,
+          // so the wait never ends, and the shortest send timeout gives
+          // the same result as a longer one.
           let large_name = repeat("x", 4_000_000)
 
           // Act
@@ -863,7 +868,7 @@ fn start_tests() -> TestSuite {
               "application_name",
               large_name,
             ))
-            Ok(start(config))
+            Ok(start(send_timeout_config(config, 10)))
           }
 
           // Assert
