@@ -705,7 +705,10 @@ fn start_tests() -> TestSuite {
         // Arrange
         let supervisor =
           static_supervisor.new(static_supervisor.OneForOne)
-          |> static_supervisor.add(supervised(inputs.served))
+          |> static_supervisor.add(supervised(
+            inputs.served,
+            process.new_name("listener_test_supervised"),
+          ))
 
         // Act
         let started =
@@ -744,7 +747,10 @@ fn start_listener_before_server() -> Result(LateListener, String) {
     "svc827_late",
     Backoff(10, 100, capped_delay),
   ))
-  use started <- try(supervised(config).start() |> map_error(inspect))
+  use started <- try(
+    supervised(config, process.new_name("svc827_late_listener")).start()
+    |> map_error(inspect),
+  )
   watch_late_listener(started.data, port)
   |> map_error(fn(error) {
     stop(started.data)

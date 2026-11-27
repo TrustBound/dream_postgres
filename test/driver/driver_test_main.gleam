@@ -19,6 +19,7 @@ import driver/connection_test
 import driver/decode_test
 import driver/encode_test
 import driver/housekeeping_sql_test
+import driver/listener_name_test
 import driver/listener_test
 import driver/login_server_test
 import driver/login_test
@@ -66,6 +67,7 @@ pub fn suites() -> List(TestSuite) {
     catalog_table_test.tests(),
     catalog_test.tests(),
     listener_test.tests(),
+    listener_name_test.tests(),
     parity_test.tests(),
     setup_deadline_test.tests(),
     connection_events_test.tests(),

@@ -40,12 +40,12 @@ import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{byte_size}
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{
-  type Down, type Monitor, type Pid, type Subject, subject_owner,
+  type Down, type Monitor, type Name, type Pid, type Subject, subject_owner,
 }
 import gleam/list.{any, each, filter, unique}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
-import gleam/otp/supervision.{type ChildSpecification}
+import gleam/otp/supervision.{type ChildSpecification, Transient}
 import gleam/result.{map_error, replace, replace_error, try}
 import gleam/string.{replace as replace_text}
 
@@ -133,9 +133,11 @@ pub type StartError {
   ListenerNotStarted(error: actor.StartError)
 }
 
-/// A listener process.
+/// A listener process, or the name it runs under. Each call finds the
+/// process that has the subject now, so a handle of `from_name` stays
+/// valid when a supervisor starts the listener again.
 pub opaque type Listener {
-  Listener(subject: Subject(Message), pid: Pid)
+  Listener(subject: Subject(ListenerProcessMessage))
 }
 
 /// One subscription to one channel. `unsubscribe` ends it.
@@ -146,7 +148,9 @@ pub opaque type Subscription {
 /// A reply target: an alias of the caller (see the FFI module).
 type ReplyTo(reply)
 
-type Message {
+/// What a listener process receives. A program names a supervised
+/// listener with `process.new_name`, for this type.
+pub opaque type ListenerProcessMessage {
   SubscribeRequest(
     channel: String,
     subscriber: Subject(ListenerMessage),
@@ -237,7 +241,7 @@ fn reply(to: ReplyTo(reply), value: reply) -> Nil
 pub fn start(config: ListenerConfig) -> Result(Listener, StartError) {
   let opened = process.new_subject()
   use started <- try(
-    start_process(config, Some(opened)) |> map_error(ListenerNotStarted),
+    start_process(config, Some(opened), None) |> map_error(ListenerNotStarted),
   )
   wait_until_opened(started, opened)
 }
@@ -272,21 +276,51 @@ fn listener_down(down: Down) -> Opening {
   ListenerDown(down.reason)
 }
 
-/// The listener as a child of a gleam_otp supervisor.
+/// The listener as a child of a gleam_otp supervisor, with its process
+/// registered under `name`. When the supervisor starts the listener
+/// again, the new process takes the name, so a handle of `from_name` stays
+/// valid. The name must come from `process.new_name`, made once when the
+/// program starts.
 ///
 /// ## Parameters
 ///
 /// - `config`: the connection and the deadline of each `LISTEN`
+/// - `name`: the name of the listener process
 ///
 /// ## Returns
 ///
-/// A worker child that starts the listener with `config`. The start does
-/// not wait for the server: the connection connects after it and tries
-/// again after its backoff, so a server that is down never fails the
-/// supervisor. Until the connection is up, each subscriber gets
-/// `NotListening`.
-pub fn supervised(config: ListenerConfig) -> ChildSpecification(Listener) {
-  supervision.worker(fn() { start_process(config, None) })
+/// A transient worker child: the supervisor starts it again after an
+/// abnormal exit, and not after `stop`. The start does not wait for the
+/// server: the connection connects after it and tries again after its
+/// backoff, so a server that is down never fails the supervisor. Until the
+/// connection is up, each subscriber gets `NotListening`. The supervisor's
+/// shutdown stops the listener, and its connection sends Terminate before
+/// it stops. A new listener has no subscriber: each subscriber of the
+/// listener before it gets `ListenerProcessDown` from its next call and
+/// subscribes again.
+pub fn supervised(
+  config: ListenerConfig,
+  name: Name(ListenerProcessMessage),
+) -> ChildSpecification(Listener) {
+  supervision.worker(fn() { start_process(config, None, Some(name)) })
+  |> supervision.restart(Transient)
+}
+
+/// The listener that runs, or will run, under a name. It makes the handle
+/// from the name alone, with no call to the listener, so a handle made
+/// once stays valid when the supervisor starts the listener again under
+/// the name.
+///
+/// ## Parameters
+///
+/// - `name`: the name of `supervised`
+///
+/// ## Returns
+///
+/// A handle of the listener. While no listener has the name, each call
+/// with it gives `ListenerProcessDown`, and `stop` gives `Nil`.
+pub fn from_name(name: Name(ListenerProcessMessage)) -> Listener {
+  Listener(subject: process.named_subject(name))
 }
 
 /// The start of the listener does no I/O: its connection process starts
@@ -294,18 +328,30 @@ pub fn supervised(config: ListenerConfig) -> ChildSpecification(Listener) {
 fn start_process(
   config: ListenerConfig,
   starter: Option(Subject(Result(Nil, ConnectError))),
+  name: Option(Name(ListenerProcessMessage)),
 ) -> Result(actor.Started(Listener), actor.StartError) {
   let timeout = config.connection.setup_timeout_milliseconds
   actor.new_with_initialiser(timeout, initialise(_, config, starter))
   |> actor.on_message(handle_message)
+  |> with_name(name)
   |> actor.start
 }
 
+fn with_name(
+  builder: actor.Builder(State, ListenerProcessMessage, Listener),
+  name: Option(Name(ListenerProcessMessage)),
+) -> actor.Builder(State, ListenerProcessMessage, Listener) {
+  case name {
+    Some(name) -> actor.named(builder, name)
+    None -> builder
+  }
+}
+
 fn initialise(
-  subject: Subject(Message),
+  subject: Subject(ListenerProcessMessage),
   config: ListenerConfig,
   starter: Option(Subject(Result(Nil, ConnectError))),
-) -> Result(actor.Initialised(State, Message, Listener), String) {
+) -> Result(actor.Initialised(State, ListenerProcessMessage, Listener), String) {
   let notifications = process.new_subject()
   let events = process.new_subject()
   let connection_config =
@@ -321,13 +367,13 @@ fn initialise(
 }
 
 fn initialised(
-  subject: Subject(Message),
+  subject: Subject(ListenerProcessMessage),
   config: ListenerConfig,
   started: actor.Started(Connection),
   starter: Option(Subject(Result(Nil, ConnectError))),
   notifications: Subject(Notification),
   events: Subject(ConnectionEvent),
-) -> actor.Initialised(State, Message, Listener) {
+) -> actor.Initialised(State, ListenerProcessMessage, Listener) {
   let state =
     State(
       connection: started.data,
@@ -343,10 +389,10 @@ fn initialised(
     |> process.select_monitors(down_message)
   actor.initialised(state)
   |> actor.selecting(selector)
-  |> actor.returning(Listener(subject:, pid: process.self()))
+  |> actor.returning(Listener(subject:))
 }
 
-fn down_message(down: Down) -> Message {
+fn down_message(down: Down) -> ListenerProcessMessage {
   SubscriberDown(down.monitor)
 }
 
@@ -429,14 +475,15 @@ pub fn unsubscribe(
 /// listener is gone.
 fn call(
   listener: Listener,
-  make: fn(ReplyTo(reply)) -> Message,
+  make: fn(ReplyTo(reply)) -> ListenerProcessMessage,
 ) -> Result(reply, Nil) {
-  call_process(listener.pid, send_request(listener, make, _))
+  use pid <- try(process.subject_owner(listener.subject))
+  call_process(pid, send_request(listener, make, _))
 }
 
 fn send_request(
   listener: Listener,
-  make: fn(ReplyTo(reply)) -> Message,
+  make: fn(ReplyTo(reply)) -> ListenerProcessMessage,
   reply_to: ReplyTo(reply),
 ) -> Nil {
   process.send(listener.subject, make(reply_to))
@@ -446,8 +493,8 @@ fn send_request(
 
 fn handle_message(
   state: State,
-  message: Message,
-) -> actor.Next(State, Message) {
+  message: ListenerProcessMessage,
+) -> actor.Next(State, ListenerProcessMessage) {
   case message {
     SubscribeRequest(channel:, subscriber:, owner:, reply: reply_to) ->
       actor.continue(add_subscriber(state, channel, subscriber, owner, reply_to))
@@ -605,7 +652,7 @@ fn deliver(state: State, notification: Notification) -> Nil {
 fn connection_event(
   state: State,
   event: ConnectionEvent,
-) -> actor.Next(State, Message) {
+) -> actor.Next(State, ListenerProcessMessage) {
   case event, state.starter {
     Connected, Some(starter) -> {
       process.send(starter, Ok(Nil))
