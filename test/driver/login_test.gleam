@@ -11,16 +11,17 @@
 import dream_postgres/driver/channel_binding.{UnsupportedSignatureAlgorithm}
 import dream_postgres/driver/login.{
   type ChannelBindingSetting, type ConfigError, type LoginConfig,
-  type LoginError, type LoginOutcome, CancelKey, CertificateHashFailed,
-  ChannelBindingNotOffered, ChannelBindingOfferedWithoutTls,
-  ChannelBindingRequiresTls, CleartextLogin, ClientNonceTooShort,
-  DisableChannelBinding, DuplicateParameter, EmptyParameterName, EmptyUser,
-  GssLogin, InvalidConfig, KerberosV5Login, LoginOutcome, Md5Login,
-  PasswordRequired, PreferChannelBinding, RequireChannelBinding, SaslLogin,
-  ScramFailed, ScramLogin, ServerRejectedLogin, SspiLogin, TrustLogin,
-  UnexpectedMessage, UnsupportedClientEncoding, UnsupportedLoginMethod,
-  UnsupportedProtocolVersion, ZeroByteInParameter, ZeroByteInPassword, new,
-  no_password, password, password_function,
+  type LoginError, type LoginOutcome, type LoginStartError, CancelKey,
+  CertificateHashFailed, ChannelBindingNotOffered,
+  ChannelBindingOfferedWithoutTls, ChannelBindingRequiresTls, CleartextLogin,
+  ClientNonceTooShort, DisableChannelBinding, DuplicateParameter,
+  EmptyParameterName, EmptyUser, GssLogin, InvalidConfig, KerberosV5Login,
+  LoginOutcome, Md5Login, PasswordRequired, PreferChannelBinding,
+  RequireChannelBinding, SaslLogin, ScramFailed, ScramLogin, ServerRejectedLogin,
+  SspiLogin, TrustLogin, UnexpectedMessage, UnsupportedClientEncoding,
+  UnsupportedLoginMethod, UnsupportedProtocolVersion, ZeroByteInParameter,
+  ZeroByteInPassword, client_nonce, new, no_password, password,
+  password_function,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ProtocolVersion,
@@ -55,6 +56,7 @@ pub fn tests() -> TestSuite {
   describe("dream_postgres/driver/login", [
     group("the StartupMessage", map(startup_cases(), startup_test)),
     group("settings that new refuses", map(config_error_cases(), config_test)),
+    group("client_nonce", [client_nonce_test()]),
     group("start", map(start_error_cases(), start_error_test)),
     group("logins that work", map(login_cases(), login_test)),
     group("logins that fail", map(failure_cases(), login_test)),
@@ -458,6 +460,22 @@ fn config_error_cases() -> List(ConfigCase) {
   ]
 }
 
+// client_nonce ----------------------------------------------------------------
+
+fn client_nonce_test() {
+  it("refuses a client nonce of 17 bytes", fn() {
+    // Act
+    let made = client_nonce(<<0:136>>)
+
+    // Assert
+    made
+    |> should
+    |> be_error
+    |> be_equal(ClientNonceTooShort(17))
+    |> or_fail_with("Expected ClientNonceTooShort(17)")
+  })
+}
+
 // start -----------------------------------------------------------------------
 
 type StartErrorCase {
@@ -465,7 +483,7 @@ type StartErrorCase {
     name: String,
     channel_binding: ChannelBindingSetting,
     client_nonce: BitArray,
-    error: LoginError,
+    error: LoginStartError,
   )
 }
 
@@ -490,12 +508,6 @@ fn start_error_test(test_case: StartErrorCase) {
 
 fn start_error_cases() -> List(StartErrorCase) {
   [
-    StartErrorCase(
-      "a client nonce of 17 bytes",
-      PreferChannelBinding,
-      <<0:136>>,
-      ClientNonceTooShort(17),
-    ),
     StartErrorCase(
       "channel binding required on a connection with no TLS",
       RequireChannelBinding,

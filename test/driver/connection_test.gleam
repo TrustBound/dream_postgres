@@ -13,8 +13,8 @@ import dream_postgres/driver/connection.{
   type ConnectionStateError, type Outcome, type RequestFailure, type RunError,
   type ScriptError, type SettleError, Backoff, CacheStatements,
   ClosedAfterDeadline, ConnectionConfig, ConnectionLost, ConnectionProcessDown,
-  CopyFailed, DeadlinePassed, LoginUndecodable, NoAnswerInTime, PrepareFailed,
-  PrepareUnencodable, ProcessGone, ProtocolViolation, Reconnected,
+  CopyFailed, DeadlinePassed, LoginRequiresTls, LoginUndecodable, NoAnswerInTime,
+  PrepareFailed, PrepareUnencodable, ProcessGone, ProtocolViolation, Reconnected,
   RunCopyRefused, RunFailed, RunUnencodable, ScriptRequestFailed,
   ScriptUnencodable, SettleFailed, SetupTimedOut, SocketFailed, TransportRefused,
   UndecodableMessage, UnexpectedIdleMessage, UnnamedStatements, aborted_by,
@@ -59,17 +59,17 @@ import driver/server_connection.{
   hold_advisory_lock, inject_and_wait_for_parameter, lock_request,
   lock_waiter_pid, next_event, next_event_after_refused_reconnects,
   parameter_config, pid_of, protocol_config, proxied_act_setup, proxied_setup,
-  release_advisory_lock, resume_connection, run_control_script,
-  run_control_setup_script, run_failing_script, run_failing_statement,
-  run_failing_statement_within, run_setup_script, run_setup_statement,
-  send_stray_message, setup_timeout_config, start_announced_caller, start_caller,
-  start_configured, start_connection, start_in_ended_owner, start_test_caching,
-  start_test_configured, start_test_connection, start_test_proxied,
-  start_test_proxied_with_caching, start_watched, stop_after_error,
-  stop_connection, stop_proxied, suspend_connection, terminate_backend,
-  terminate_session, tls_config, user_config, wait_for_lock_waiter,
-  wait_for_mailbox_length, wait_for_message, wait_for_table_waiter,
-  watched_config,
+  release_advisory_lock, required_binding_config, resume_connection,
+  run_control_script, run_control_setup_script, run_failing_script,
+  run_failing_statement, run_failing_statement_within, run_setup_script,
+  run_setup_statement, send_stray_message, setup_timeout_config,
+  start_announced_caller, start_caller, start_configured, start_connection,
+  start_in_ended_owner, start_test_caching, start_test_configured,
+  start_test_connection, start_test_proxied, start_test_proxied_with_caching,
+  start_watched, stop_after_error, stop_connection, stop_proxied,
+  suspend_connection, terminate_backend, terminate_session, tls_config,
+  user_config, wait_for_lock_waiter, wait_for_mailbox_length, wait_for_message,
+  wait_for_table_waiter, watched_config,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/copy_callbacks.{send_nothing}
@@ -746,6 +746,7 @@ type StartInputs {
     undecodable_login: ConnectionConfig,
     first_server: ConnectionConfig,
     through_proxy: ConnectionConfig,
+    required_binding: ConnectionConfig,
     proxy: Proxy,
   )
 }
@@ -764,6 +765,7 @@ fn build_start_inputs() -> Result(StartInputs, String) {
     use undecodable_login <- try(connection_config(fake_port))
     use first_server <- try(connection_config(first_port))
     use through_proxy <- try(connection_config(proxy_port))
+    use required_binding <- try(required_binding_config(first_port))
     let silent_server =
       ConnectionConfig(..silent, setup_timeout_milliseconds: 100)
     Ok(StartInputs(
@@ -773,6 +775,7 @@ fn build_start_inputs() -> Result(StartInputs, String) {
       undecodable_login:,
       first_server:,
       through_proxy:,
+      required_binding:,
       proxy:,
     ))
   }
@@ -804,6 +807,20 @@ fn start_tests() -> TestSuite {
           |> extract_login_refusal_code
           |> be_equal("28P01")
           |> or_fail_with("Expected the login refusal 28P01")
+        },
+      ),
+      it(
+        "gives LoginRequiresTls when the login requires channel binding",
+        fn(inputs: StartInputs) {
+          // Act
+          let started = start(inputs.required_binding)
+
+          // Assert
+          started
+          |> should
+          |> be_error
+          |> be_equal(LoginRequiresTls)
+          |> or_fail_with("Expected LoginRequiresTls")
         },
       ),
       it(

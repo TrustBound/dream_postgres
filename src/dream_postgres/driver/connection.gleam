@@ -31,13 +31,13 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/driver/crypto.{random_bytes}
 import dream_postgres/driver/deadline.{type Deadline}
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
 import dream_postgres/driver/login.{
   type CancelKey, type LoginConfig, type LoginError, type LoginOutcome,
-  type LoginState, Continue, LoggedIn,
+  type LoginStartError, type LoginState, ChannelBindingRequiresTls, Continue,
+  LoggedIn,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type EncodeError, type FrontendMessage,
@@ -169,6 +169,10 @@ pub type ConnectionEvent {
 pub type ConnectError {
   /// The TCP connect or TLS failed.
   TransportRefused(error: TransportError)
+  /// The login settings require channel binding, and the connection has
+  /// no TLS: its transport has `NoTls`, or `PreferTls` and a server that
+  /// refused TLS. No login message went to the server.
+  LoginRequiresTls
   /// The login failed, for example with the server's 28P01.
   LoginRefused(error: LoginError)
   /// The server sent bytes during the login that are not a valid message.
@@ -3308,16 +3312,22 @@ fn log_in(
   use #(state, first) <- try(
     login.start(
       config.login,
-      random_bytes(login.shortest_client_nonce),
+      login.random_client_nonce(),
       transport.server_certificate(socket),
     )
-    |> map_error(LoginRefused),
+    |> map_error(login_start_error),
   )
   use Nil <- try(send_login_message(socket, first))
   use session <- try(login_messages(socket, state, <<>>, setup_deadline))
   transport.receive_next(socket)
   |> map_error(TransportRefused)
   |> result.replace(session)
+}
+
+fn login_start_error(error: LoginStartError) -> ConnectError {
+  case error {
+    ChannelBindingRequiresTls -> LoginRequiresTls
+  }
 }
 
 fn login_messages(

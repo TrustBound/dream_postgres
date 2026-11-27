@@ -7,7 +7,7 @@ import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
 import dream_postgres/driver/login.{
   type ChannelBindingSetting, type ConfigError, type LoginError,
-  type LoginOutcome, type LoginState, Continue, LoggedIn,
+  type LoginOutcome, type LoginStartError, type LoginState, Continue, LoggedIn,
 }
 import dream_postgres/driver/message.{
   type EncodeError, type FrontendMessage, type ProtocolError,
@@ -23,9 +23,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/pair
 import gleam/result.{map_error, try}
 
-@external(erlang, "crypto", "strong_rand_bytes")
-fn random_bytes(count: Int) -> BitArray
-
 /// Why a test login failed, at the layer where it failed.
 pub type LoginFailure {
   AddressRefused
@@ -33,6 +30,7 @@ pub type LoginFailure {
   TransportFailed(error: TransportError)
   EncodeFailed(error: EncodeError)
   DecodeFailed(error: ProtocolError)
+  StartFailed(error: LoginStartError)
   LoginFailed(error: LoginError)
 }
 
@@ -122,10 +120,10 @@ fn run_login(
   use #(state, first) <- try(
     login.start(
       config,
-      random_bytes(login.shortest_client_nonce),
+      login.random_client_nonce(),
       server_certificate(connection),
     )
-    |> map_error(LoginFailed),
+    |> map_error(StartFailed),
   )
   use Nil <- try(send_message(connection, first))
   read_messages(connection, state, <<>>)

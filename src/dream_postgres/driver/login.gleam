@@ -3,7 +3,8 @@
 ////
 //// The caller owns the socket. `new` checks the login settings before any
 //// connection is made. After the connection (and its TLS, if any) is up,
-//// `start` gives the StartupMessage. Then the caller gives each message of
+//// `start` gives the StartupMessage, with a client nonce from
+//// `random_client_nonce`. Then the caller gives each message of
 //// the server to `step`, and sends the reply that `step` gives, until
 //// `step` gives `LoggedIn` or an error.
 ////
@@ -21,7 +22,7 @@
 import dream_postgres/driver/channel_binding.{
   type CertificateError, server_end_point_hash,
 }
-import dream_postgres/driver/crypto.{Md5, hash}
+import dream_postgres/driver/crypto.{Md5, hash, random_bytes}
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ProtocolVersion,
   AuthenticationCleartextPassword, AuthenticationGss, AuthenticationKerberosV5,
@@ -129,6 +130,25 @@ pub type LoginMethod {
   SspiLogin
 }
 
+/// The random bytes of a SCRAM client nonce: `shortest_client_nonce` or
+/// more. Only `client_nonce` and `random_client_nonce` make one.
+pub opaque type ClientNonce {
+  ClientNonce(bytes: BitArray)
+}
+
+/// Why `client_nonce` refuses the bytes.
+pub type ClientNonceError {
+  /// The bytes are fewer than `shortest_client_nonce`.
+  ClientNonceTooShort(length: Int)
+}
+
+/// Why `start` refuses a login.
+pub type LoginStartError {
+  /// The setting is `RequireChannelBinding`, and the connection has no
+  /// TLS.
+  ChannelBindingRequiresTls
+}
+
 /// Why a login fails.
 pub type LoginError {
   /// The server sent an ErrorResponse, for example `28P01` for a wrong
@@ -143,11 +163,6 @@ pub type LoginError {
   PasswordRequired(method: LoginMethod)
   /// The password function gave a password that `new` would refuse.
   InvalidConfig(error: ConfigError)
-  /// The client nonce has fewer than `shortest_client_nonce` bytes.
-  ClientNonceTooShort(length: Int)
-  /// The setting is `RequireChannelBinding`, and the connection has no
-  /// TLS.
-  ChannelBindingRequiresTls
   /// The setting is `RequireChannelBinding`, and the server asks for a
   /// login method that does not bind to the channel.
   ChannelBindingNotOffered(method: LoginMethod)
@@ -420,14 +435,42 @@ fn find_parameter(
 
 // The state machine -----------------------------------------------------------
 
+/// A client nonce of `shortest_client_nonce` random bytes from
+/// `crypto:strong_rand_bytes/1`. Use a new one for each login.
+///
+/// ## Returns
+///
+/// The new client nonce.
+pub fn random_client_nonce() -> ClientNonce {
+  ClientNonce(random_bytes(shortest_client_nonce))
+}
+
+/// A client nonce of the given bytes, for a login that must be the same
+/// each time, as a test of the SCRAM exchange is.
+///
+/// ## Parameters
+///
+/// - `bytes`: `shortest_client_nonce` or more random bytes
+///
+/// ## Returns
+///
+/// - `Ok(ClientNonce)`: the client nonce
+/// - `Error(ClientNonceTooShort(length))`: the bytes are too few
+pub fn client_nonce(bytes: BitArray) -> Result(ClientNonce, ClientNonceError) {
+  let length = byte_size(bytes)
+  use <- guard(length < shortest_client_nonce, {
+    Error(ClientNonceTooShort(length))
+  })
+  Ok(ClientNonce(bytes))
+}
+
 /// Starts a login on a connection that is up.
 ///
 /// ## Parameters
 ///
 /// - `config`: the checked settings
-/// - `client_nonce`: `shortest_client_nonce` or more random bytes from
-///   `crypto:strong_rand_bytes/1`, new for each login. Only SCRAM uses
-///   them, as its client nonce.
+/// - `client_nonce`: a new one for each login, from `random_client_nonce`.
+///   Only SCRAM uses it.
 /// - `server_certificate`: the DER bytes of the server's TLS certificate,
 ///   or `None` for a connection with no TLS
 ///
@@ -435,22 +478,18 @@ fn find_parameter(
 ///
 /// - `Ok(#(LoginState, StartupMessage))`: the state, and the StartupMessage
 ///   to send
-/// - `Error(LoginError)`: the nonce is too short, or the settings require
-///   channel binding and the connection has no TLS
+/// - `Error(ChannelBindingRequiresTls)`: the settings require channel
+///   binding, and the connection has no TLS
 pub fn start(
   config: LoginConfig,
-  client_nonce: BitArray,
+  client_nonce: ClientNonce,
   server_certificate: Option(BitArray),
-) -> Result(#(LoginState, FrontendMessage), LoginError) {
-  let nonce_length = byte_size(client_nonce)
-  use <- guard(nonce_length < shortest_client_nonce, {
-    Error(ClientNonceTooShort(nonce_length))
-  })
+) -> Result(#(LoginState, FrontendMessage), LoginStartError) {
   let requires_tls = config.channel_binding == RequireChannelBinding
   use <- guard(requires_tls && server_certificate == None, {
     Error(ChannelBindingRequiresTls)
   })
-  let state = initial_state(config, client_nonce, server_certificate)
+  let state = initial_state(config, client_nonce.bytes, server_certificate)
   let startup =
     StartupMessage(config.protocol_version, config.user, config.parameters)
   Ok(#(state, startup))

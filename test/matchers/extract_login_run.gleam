@@ -1,14 +1,17 @@
 //// Runs a started login through the messages of a server.
 
 import dream_postgres/driver/login.{
-  type LoginError, type LoginOutcome, type LoginState, type LoginStep, Continue,
-  LoggedIn, step,
+  type LoginError, type LoginOutcome, type LoginStartError, type LoginState,
+  type LoginStep, Continue, LoggedIn, step,
 }
 import dream_postgres/driver/message.{type BackendMessage, type FrontendMessage}
-import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
+import dream_test/types.{
+  type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
+}
 import gleam/list.{reverse}
 import gleam/option.{type Option, None, Some}
 import gleam/result.{try}
+import gleam/string.{inspect}
 
 /// What a login gave: each reply in order, and the outcome if it ended.
 pub type LoginRun {
@@ -16,8 +19,9 @@ pub type LoginRun {
 }
 
 /// Takes the result of `start`, and gives each message to `step` in turn.
-/// Gives the replies and the outcome, or the first error of `start` or
-/// `step`. The run stops when the login ends or the messages end.
+/// Gives the replies and the outcome, or the first error of `step`. The
+/// run stops when the login ends or the messages end. Fails when `start`
+/// failed.
 ///
 /// ```gleam
 /// started
@@ -28,12 +32,30 @@ pub type LoginRun {
 /// |> or_fail_with("Expected a login with no password")
 /// ```
 pub fn extract_login_run(
-  result: MatchResult(Result(#(LoginState, FrontendMessage), LoginError)),
+  result: MatchResult(Result(#(LoginState, FrontendMessage), LoginStartError)),
   messages: List(BackendMessage),
 ) -> MatchResult(Result(LoginRun, LoginError)) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
-    MatchOk(started) -> MatchOk(try(started, run(_, messages)))
+    MatchOk(started) -> run_started(started, messages)
+  }
+}
+
+fn run_started(
+  started: Result(#(LoginState, FrontendMessage), LoginStartError),
+  messages: List(BackendMessage),
+) -> MatchResult(Result(LoginRun, LoginError)) {
+  case started {
+    Ok(started) -> MatchOk(run(started, messages))
+    Error(error) ->
+      MatchFailed(AssertionFailure(
+        operator: "extract_login_run",
+        message: "",
+        payload: Some(CustomMatcherFailure(
+          actual: inspect(error),
+          description: "Expected a login that started",
+        )),
+      ))
   }
 }
 

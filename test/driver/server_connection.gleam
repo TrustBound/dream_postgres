@@ -21,7 +21,8 @@ import dream_postgres/driver/connection.{
   run_script, server_parameter, start, stop, supervised, transaction_status,
 }
 import dream_postgres/driver/login.{
-  type LoginConfig, type Password, PreferChannelBinding, ServerRejectedLogin,
+  type ChannelBindingSetting, type LoginConfig, type Password,
+  PreferChannelBinding, RequireChannelBinding, ServerRejectedLogin,
 }
 import dream_postgres/driver/message.{type ProtocolVersion, Protocol30}
 import dream_postgres/driver/statement_cache.{default_limit}
@@ -218,6 +219,21 @@ fn server_address(port: Int) -> Result(Address, String) {
   |> map_error(fn(error) { "could not build the address: " <> inspect(error) })
 }
 
+/// The config of a connection to localhost on `port` as `dream`, over plain
+/// TCP, whose login requires channel binding.
+pub fn required_binding_config(port: Int) -> Result(ConnectionConfig, String) {
+  use config <- try(connection_config(port))
+  use login <- try(login_settings_with(
+    "dream",
+    servers.database,
+    login.password(servers.password),
+    [],
+    Protocol30,
+    RequireChannelBinding,
+  ))
+  Ok(ConnectionConfig(..config, login:))
+}
+
 fn login_config(
   user: String,
   password: String,
@@ -240,12 +256,30 @@ fn login_settings(
   parameters: List(#(String, String)),
   protocol_version: ProtocolVersion,
 ) -> Result(LoginConfig, String) {
+  login_settings_with(
+    user,
+    database,
+    password,
+    parameters,
+    protocol_version,
+    PreferChannelBinding,
+  )
+}
+
+fn login_settings_with(
+  user: String,
+  database: String,
+  password: Password,
+  parameters: List(#(String, String)),
+  protocol_version: ProtocolVersion,
+  channel_binding: ChannelBindingSetting,
+) -> Result(LoginConfig, String) {
   login.new(
     user:,
     database:,
     password:,
     parameters:,
-    channel_binding: PreferChannelBinding,
+    channel_binding:,
     protocol_version:,
   )
   |> map_error(fn(error) {
