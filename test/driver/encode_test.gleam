@@ -8,8 +8,8 @@ import dream_postgres/driver/message.{
   type EncodeError, type FrontendMessage, Bind, CancelRequest, Close, CopyData,
   CopyDone, CopyFail, Describe, DuplicateStartupParameter,
   EmptyStartupParameterName, Execute, Flush, FunctionCall, GssEncryptionRequest,
-  GssResponse, MessageTooLong, NumberOutOfRange, Parse, PasswordMessage, Portal,
-  Protocol30, Protocol32, Query, SaslInitialResponse, SaslResponse,
+  GssResponse, NumberOutOfRange, Parse, PasswordMessage, Portal, Protocol30,
+  Protocol32, Query, SaslInitialResponse, SaslResponse,
   SecretKeyLengthOutOfRange, SslRequest, StartupMessage, Statement, Sync,
   Terminate, TooManyItems, ZeroByteInString,
 }
@@ -361,8 +361,8 @@ fn length_field_tests() {
       bytes
       |> should
       |> be_error
-      |> be_equal(MessageTooLong(2_147_483_648))
-      |> or_fail_with("Expected MessageTooLong(2147483648)")
+      |> be_equal(2_147_483_648)
+      |> or_fail_with("Expected the length 2147483648")
     }),
   ]
 }

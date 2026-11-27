@@ -25,7 +25,7 @@ import gleam/bit_array.{byte_size}
 import gleam/bool.{guard}
 import gleam/list.{length, try_fold, try_map}
 import gleam/option.{type Option, None, Some}
-import gleam/result.{map, try}
+import gleam/result.{map, map_error, try}
 import gleam/set.{type Set}
 import gleam/string.{contains}
 
@@ -327,7 +327,7 @@ fn cell_value(value: Cell) -> Result(BitArray, EncodeError) {
 fn optional_value(value: Option(BitArray)) -> Result(BitArray, EncodeError) {
   case value {
     Some(bytes) -> {
-      use size <- map(length_field(byte_size(bytes)))
+      use size <- map(encoded_length(byte_size(bytes)))
       <<size:bits, bytes:bits>>
     }
     None -> Ok(<<-1:32>>)
@@ -419,7 +419,11 @@ fn unframed(body: BitArray) -> Result(BitArray, EncodeError) {
 
 /// The length field counts itself and the body, not the type byte.
 fn message_length(body: BitArray) -> Result(BitArray, EncodeError) {
-  length_field(byte_size(body) + 4)
+  encoded_length(byte_size(body) + 4)
+}
+
+fn encoded_length(byte_count: Int) -> Result(BitArray, EncodeError) {
+  length_field(byte_count) |> map_error(MessageTooLong)
 }
 
 /// Writes a 32-bit length field: of a whole message, or of one value of a
@@ -433,8 +437,9 @@ fn message_length(body: BitArray) -> Result(BitArray, EncodeError) {
 /// ## Returns
 ///
 /// - `Ok(bytes)`: the four bytes of the length
-/// - `Error(MessageTooLong(byte_count))`: the length is above 2147483647
-pub fn length_field(byte_count: Int) -> Result(BitArray, EncodeError) {
-  use <- guard(byte_count > largest_length, Error(MessageTooLong(byte_count)))
+/// - `Error(byte_count)`: the length is above 2147483647, so it is the
+///   only failure and the error is the length itself
+pub fn length_field(byte_count: Int) -> Result(BitArray, Int) {
+  use <- guard(byte_count > largest_length, Error(byte_count))
   Ok(<<byte_count:32>>)
 }
