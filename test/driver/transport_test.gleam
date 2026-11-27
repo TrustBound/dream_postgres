@@ -13,8 +13,8 @@ import dream_postgres/driver/transport.{
   NoCertificateCheck, NoTls, OtherTlsFailure, PostgresNegotiation, PreferTls,
   ReceiveTimedOut, RequireTls, SendTimedOut, ServerRefusedTls, SocketClosed,
   SystemAuthorities, TlsFailed, TlsRequestAnsweredWithError, TransportConfig,
-  UnexpectedTlsAnswer, UnknownAuthority, Unlisted, address, close, connect,
-  connect_error, send_error, server_certificate, socket_error, tls_error,
+  UnexpectedTlsAnswer, UnknownAuthority, Unlisted, address, close, connect_error,
+  send_error, server_certificate, socket_error, tls_error,
 }
 import dream_test/matchers.{
   be_equal, be_error, be_ok, be_true, or_fail_with, should,
@@ -26,6 +26,7 @@ import driver/fake_server.{
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/driver_tls.{verify_full}
+import fixtures/transport_connect.{connect_with_minute_deadline}
 import gleam/erlang/atom.{type Atom}
 import gleam/int.{to_string}
 import gleam/list.{map}
@@ -127,7 +128,7 @@ fn server_tests(server: Server) {
       let config = transport_config("localhost", server.port, NoTls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -142,7 +143,7 @@ fn server_tests(server: Server) {
       let config = transport_config("localhost", server.port, PreferTls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -158,7 +159,7 @@ fn server_tests(server: Server) {
       let config = transport_config("localhost", server.port, tls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -178,7 +179,7 @@ fn server_tests(server: Server) {
       let config = transport_config("127.0.0.1", server.port, tls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -193,7 +194,7 @@ fn server_tests(server: Server) {
       let config = transport_config("localhost", server.port, verify_full())
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -212,7 +213,10 @@ fn server_tests(server: Server) {
         let authorities = AuthorityCertificates([certificate])
         let tls =
           RequireTls(CheckAuthorityAndHost(authorities), PostgresNegotiation)
-        try(transport_config("localhost", server.port, tls), connect)
+        try(
+          transport_config("localhost", server.port, tls),
+          connect_with_minute_deadline,
+        )
       }
 
       // Assert
@@ -229,7 +233,7 @@ fn server_tests(server: Server) {
       let config = transport_config("127.0.0.1", server.port, verify_full())
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -249,7 +253,7 @@ fn server_tests(server: Server) {
       let config = transport_config("localhost", server.port, tls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -267,7 +271,9 @@ fn server_tests(server: Server) {
       // Act
       let certificates = {
         use expected <- try(read_pem_certificate("test/fixtures/ssl/server.crt"))
-        use connection <- try(try(config, connect) |> map_error(inspect))
+        use connection <- try(
+          try(config, connect_with_minute_deadline) |> map_error(inspect),
+        )
         let certificate = server_certificate(connection)
         close(connection)
         Ok(#(certificate, Some(expected)))
@@ -300,7 +306,7 @@ fn direct_tls_test(server: Server) {
         let config = transport_config("localhost", server.port, direct_tls())
 
         // Act
-        let connected = try(config, connect)
+        let connected = try(config, connect_with_minute_deadline)
 
         // Assert
         connected
@@ -316,7 +322,7 @@ fn direct_tls_test(server: Server) {
         let config = transport_config("localhost", server.port, direct_tls())
 
         // Act
-        let connected = try(config, connect)
+        let connected = try(config, connect_with_minute_deadline)
 
         // Assert
         connected
@@ -356,7 +362,7 @@ fn refusal_tests() {
           transport_config("localhost", server_without_tls, verify_full())
 
         // Act
-        let connected = try(config, connect)
+        let connected = try(config, connect_with_minute_deadline)
 
         // Assert
         connected
@@ -372,7 +378,7 @@ fn refusal_tests() {
       let config = transport_config("localhost", server_without_tls, PreferTls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -452,7 +458,10 @@ fn fake_error_test(
     // Act
     let connected = {
       use #(port, _server) <- result.map(start_fake_server(behavior))
-      try(transport_config("localhost", port, tls), connect)
+      try(
+        transport_config("localhost", port, tls),
+        connect_with_minute_deadline,
+      )
     }
 
     // Assert
@@ -471,7 +480,7 @@ fn fake_closed_test(name: String, behavior: FakeBehavior) {
     let connected = {
       use #(port, server) <- result.map(start_fake_server(behavior))
       let config = transport_config("localhost", port, verify_full())
-      #(try(config, connect), server)
+      #(try(config, connect_with_minute_deadline), server)
     }
 
     // Assert
@@ -489,7 +498,10 @@ fn prefer_reconnects_test(name: String, behavior: FakeBehavior) {
     // Act
     let connected = {
       use #(port, _server) <- result.map(start_fake_server(behavior))
-      try(transport_config("localhost", port, PreferTls), connect)
+      try(
+        transport_config("localhost", port, PreferTls),
+        connect_with_minute_deadline,
+      )
     }
 
     // Assert
@@ -512,7 +524,7 @@ fn connect_failure_tests() {
       let config = transport_config("localhost", free_port(), NoTls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -526,7 +538,7 @@ fn connect_failure_tests() {
       let config = transport_config("no-such-host.invalid", 5432, NoTls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -545,7 +557,7 @@ fn connect_failure_tests() {
       let config = transport_config("localhost", first_driver_server.port, tls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -569,7 +581,7 @@ fn connect_failure_tests() {
       let config = transport_config("localhost", first_driver_server.port, tls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -593,7 +605,7 @@ fn socket_tests() {
         transport_config("localhost", first_driver_server.port, NoTls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -610,7 +622,7 @@ fn socket_tests() {
         transport_config("localhost", first_driver_server.port, NoTls)
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -628,7 +640,7 @@ fn socket_tests() {
         transport_config("localhost", first_driver_server.port, verify_full())
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected
@@ -646,7 +658,7 @@ fn socket_tests() {
         transport_config("localhost", first_driver_server.port, verify_full())
 
       // Act
-      let connected = try(config, connect)
+      let connected = try(config, connect_with_minute_deadline)
 
       // Assert
       connected

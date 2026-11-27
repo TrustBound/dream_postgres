@@ -16,7 +16,7 @@
 
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionConfig, type ConnectionEvent, type DriverError,
-  type Outcome, type StatementCaching, Backoff, CacheStatements,
+  type Outcome, type StatementCaching, Backoff, CacheStatements, Connected,
   ConnectionConfig, LoginRefused, Outcome, ReconnectFailed, run, run_script,
   server_parameter, start, stop, transaction_status,
 }
@@ -188,6 +188,23 @@ pub fn start_configured(
 ) -> Result(Connection, String) {
   start(config)
   |> map_error(fn(error) { "could not start a connection: " <> inspect(error) })
+}
+
+/// Starts a connection whose events go to `events`, and takes its first
+/// event, which must be `Connected`, so the test reads only the events
+/// after it.
+pub fn start_watched(
+  config: ConnectionConfig,
+  events: Subject(ConnectionEvent),
+) -> Result(Connection, String) {
+  use connection <- try(start_configured(config))
+  case next_event(events) {
+    Ok(Connected) -> Ok(connection)
+    other -> {
+      stop(connection)
+      Error("expected Connected first, got " <> inspect(other))
+    }
+  }
 }
 
 /// Stops the connection. A teardown for `after_each` and for the context
@@ -399,12 +416,12 @@ fn start_through_proxy(
 ) -> Result(ProxiedConnection, String) {
   let events = process.new_subject()
   use config <- try(connection_config(port))
-  use connection <- try(
+  use connection <- try(start_watched(
     config
-    |> watched_config(events, first_delay)
-    |> configure
-    |> start_configured,
-  )
+      |> watched_config(events, first_delay)
+      |> configure,
+    events,
+  ))
   use control <- try(
     start_connection(server.port) |> map_error(stop_after_error(connection, _)),
   )
