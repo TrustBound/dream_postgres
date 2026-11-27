@@ -842,6 +842,27 @@ pub fn connection_act_setup(
   )
 }
 
+/// An `act_setup` whose act runs on a new connection to `server` that ran
+/// `BEGIN`, so the act runs inside a transaction.
+pub fn transaction_act_setup(
+  server: Server,
+  act: fn(Connection) -> Result(outcome, String),
+) -> Context(ActOutcome(Connection, outcome)) {
+  act_setup(
+    start: fn() { start_in_transaction(server) },
+    stop: stop_connection,
+    act:,
+  )
+}
+
+/// Starts a connection to `server` and runs `BEGIN` on it.
+pub fn start_in_transaction(server: Server) -> Result(Connection, String) {
+  use connection <- try(start_connection(server.port))
+  run_control_script(connection, "BEGIN")
+  |> replace(connection)
+  |> map_error(stop_after_error(connection, _))
+}
+
 // A connection with a control connection ---------------------------------------
 
 /// A connection straight to the server, its backend process ID, and a

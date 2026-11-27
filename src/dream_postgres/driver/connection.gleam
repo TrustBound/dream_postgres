@@ -1547,8 +1547,10 @@ pub fn send_chunk(
 /// them one at a time in the caller's process. The connection process
 /// reads the next row from the socket only after `fold` took the last one,
 /// so neither process holds the whole result. When `fold` fails, the
-/// driver reads the rest of the COPY and drops it. The connection serves
-/// no other request until `copy_to` returns.
+/// driver reads the rest of the COPY and drops it, so the session and a
+/// transaction that it is in stay usable. The time that this takes grows
+/// with the rows that are left, and the deadline bounds it. The
+/// connection serves no other request until `copy_to` returns.
 ///
 /// ## Parameters
 ///

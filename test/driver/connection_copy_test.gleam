@@ -9,17 +9,18 @@
 //// caller.
 
 import dream_postgres/driver/connection.{
-  type ChunkError, type Connection, type CopyError, type Outcome,
-  type ScriptError, AppFailed, ChunkCopyNotRunning, ChunkFailed, ConnectionEnded,
-  ConnectionLost, ConnectionProcessDown, CopyFailed, CopyNotStarted,
-  CopyUnencodable, DeadlinePassed, Outcome, ScriptRequestFailed,
+  type ChunkError, type Connection, type ConnectionStateError, type CopyError,
+  type Outcome, type ScriptError, AppFailed, ChunkCopyNotRunning, ChunkFailed,
+  ConnectionEnded, ConnectionLost, ConnectionProcessDown, CopyFailed,
+  CopyNotStarted, CopyUnencodable, DeadlinePassed, Outcome, ScriptRequestFailed,
   ServerStoppedReading, SocketFailed, copy_from, copy_to, run_script, send_chunk,
   transaction_status,
 }
 import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{SocketClosed}
 import dream_postgres/internal/cell.{
-  CommandResult, Idle, InFailedTransaction, Text,
+  type TransactionStatus, CommandResult, Idle, InFailedTransaction,
+  InTransaction, Text,
 }
 import dream_test/context.{type Context}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
@@ -36,8 +37,8 @@ import driver/server_connection.{
   run_setup_script, send_stray_down, start_caller, start_connection,
   start_test_connection, start_test_controlled, start_test_proxied,
   start_test_proxied_with_tls, stop_after_error, stop_connection,
-  stop_controlled, stop_proxied, suspend_connection, wait_for_message,
-  wait_for_reset,
+  stop_controlled, stop_proxied, suspend_connection, transaction_act_setup,
+  wait_for_message, wait_for_reset,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/copy_callbacks.{
@@ -93,6 +94,7 @@ pub fn tests() -> TestSuite {
     slow_produce_tests(),
     slow_fold_tests(),
     cut_off_fold_tests(),
+    fold_in_transaction_tests(),
     copy_inside_tests(),
     copy_stopping_tests(),
     rows_caller_tests(),
@@ -1547,6 +1549,74 @@ fn cut_off_fold_tests() -> TestSuite {
           |> extract_outcome_tags
           |> be_equal(["SELECT 1"])
           |> or_fail_with("Expected a usable connection")
+        },
+      ),
+    ],
+  )
+}
+
+/// What a COPY whose fold failed gave, and then the transaction status and
+/// the answer of a SELECT.
+type AfterFailedFold {
+  AfterFailedFold(
+    copied: Result(Int, CopyError(String)),
+    status: Result(TransactionStatus, ConnectionStateError),
+    next: Result(List(Outcome), ScriptError),
+  )
+}
+
+/// Inside a transaction, a COPY TO STDOUT of 100,000 rows whose fold
+/// fails at the first row, then the transaction status and a SELECT.
+fn fail_fold_in_transaction(
+  connection: Connection,
+) -> Result(AfterFailedFold, String) {
+  let copied =
+    copy_to(
+      connection,
+      connection.statement("COPY (SELECT generate_series(1, 100000)) TO STDOUT"),
+      5000,
+      0,
+      fail_at_first_row,
+    )
+  let status = transaction_status(connection)
+  let next = run_script(connection, connection.statement("SELECT 9"), 5000)
+  Ok(AfterFailedFold(copied:, status:, next:))
+}
+
+fn fold_in_transaction_tests() -> TestSuite {
+  describe(
+    "a failed fold inside a transaction",
+    transaction_act_setup(first_driver_server, fail_fold_in_transaction),
+    [
+      it(
+        "gives AppFailed for the fold that failed in a transaction",
+        fn(shared: ActOutcome(Connection, AfterFailedFold)) {
+          shared.outcome.copied
+          |> should
+          |> be_error
+          |> be_equal(AppFailed("enough"))
+          |> or_fail_with("Expected AppFailed with the fold's reason")
+        },
+      ),
+      it(
+        "keeps the transaction open after a failed fold",
+        fn(shared: ActOutcome(Connection, AfterFailedFold)) {
+          shared.outcome.status
+          |> should
+          |> be_ok
+          |> be_equal(InTransaction)
+          |> or_fail_with("Expected InTransaction after the failed fold")
+        },
+      ),
+      it(
+        "runs a SELECT in the transaction after a failed fold",
+        fn(shared: ActOutcome(Connection, AfterFailedFold)) {
+          shared.outcome.next
+          |> should
+          |> be_ok
+          |> extract_outcome_tags
+          |> be_equal(["SELECT 1"])
+          |> or_fail_with("Expected the SELECT to run in the transaction")
         },
       ),
     ],
