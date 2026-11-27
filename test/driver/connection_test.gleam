@@ -1897,8 +1897,102 @@ fn backend_state(
   Ok(list.flat_map(outcomes, row_texts))
 }
 
+@external(erlang, "driver_cancel_gate_ffi", "start")
+fn start_cancel_gate(server_port: Int) -> #(Int, CancelGate)
+
+@external(erlang, "driver_cancel_gate_ffi", "record")
+fn record_gate(gate: CancelGate) -> Nil
+
+@external(erlang, "driver_cancel_gate_ffi", "release")
+fn release_gate(gate: CancelGate) -> Nil
+
+@external(erlang, "driver_cancel_gate_ffi", "events")
+fn gate_events(gate: CancelGate) -> List(GateEvent)
+
+type CancelGate
+
+/// What the gate saw, in order.
+type GateEvent {
+  MainBytes
+  CancelPassed
+}
+
+/// Request A passes its deadline, and the gate holds its cancel. A's
+/// statement ends by itself, so A gets DeadlinePassed(False). Request B
+/// then waits: it must not reach the server before A's cancel did, or
+/// that cancel could stop B.
+fn check_cancel_before_next(server: Server) {
+  // Act
+  let seen = {
+    let #(port, gate) = start_cancel_gate(server.port)
+    use settings <- try(
+      config(port, "dream", "dream", 60_000, None)
+      |> result.map(with_timeouts(_, 5000, 5000)),
+    )
+    use connection <- with_started(settings)
+    let first = connection.run(connection, "SELECT pg_sleep(0.3)", [], [], 50)
+    record_gate(gate)
+    let calling = process.new_subject()
+    let second = start_announced_caller(connection, "SELECT 1", calling)
+    let _announced = process.receive(calling, 5000)
+    use Nil <- try(snapshots(connection, 20))
+    release_gate(gate)
+    let second_answer = caller_answer(second)
+    Ok(#(first |> result.replace(Nil), second_answer, gate_events(gate)))
+  }
+
+  // Assert
+  seen
+  |> should
+  |> be_equal(
+    Ok(
+      #(Error(DeadlinePassed(cancelled: False)), Ok(["SELECT 1"]), [
+        CancelPassed,
+        MainBytes,
+      ]),
+    ),
+  )
+  |> or_fail_with("Expected the next request to wait for the cancel")
+}
+
+/// Asks for the transaction status `count` times, so a request that a
+/// caller sent before has reached the connection process. No sleep.
+fn snapshots(connection: Connection, count: Int) -> Result(Nil, DriverError) {
+  use _status <- try(connection.transaction_status(connection))
+  case count {
+    0 -> Ok(Nil)
+    _ -> snapshots(connection, count - 1)
+  }
+}
+
+fn start_announced_caller(
+  connection: Connection,
+  sql: String,
+  calling: Subject(Nil),
+) -> Caller {
+  let answers = process.new_subject()
+  let pid =
+    process.spawn_unlinked(fn() {
+      announced_caller_body(connection, sql, calling, answers)
+    })
+  Caller(answers:, pid:)
+}
+
+fn announced_caller_body(
+  connection: Connection,
+  sql: String,
+  calling: Subject(Nil),
+  answers: Subject(Result(List(Outcome), DriverError)),
+) -> Nil {
+  process.send(calling, Nil)
+  process.send(answers, script(connection, sql))
+}
+
 fn deadline_tests(server: Server) {
   group("PostgreSQL " <> to_string(server.version), [
+    it("holds the next request until the cancel of the last one is done", fn() {
+      check_cancel_before_next(server)
+    }),
     it("cancels a statement at its deadline and stays usable", fn() {
       // Act
       let answers = {
