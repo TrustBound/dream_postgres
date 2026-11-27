@@ -1,7 +1,7 @@
 //// Checks a server-final-message against a SCRAM exchange.
 
 import dream_postgres/driver/scram.{
-  type ClientFinal, type ScramError, verify_server_final,
+  type ClientFinal, type ServerFinalError, verify_server_final,
 }
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
@@ -20,7 +20,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 pub fn extract_server_final_check(
   result: MatchResult(ClientFinal),
   server_final: BitArray,
-) -> MatchResult(Result(Nil, ScramError)) {
+) -> MatchResult(Result(Nil, ServerFinalError)) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(final) -> MatchOk(verify_server_final(final, server_final))

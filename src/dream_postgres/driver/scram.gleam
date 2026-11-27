@@ -42,8 +42,8 @@ pub type ChannelBinding {
   ServerEndPoint(certificate_hash: BitArray)
 }
 
-/// Why a SCRAM exchange fails.
-pub type ScramError {
+/// Why `client_final` refuses the server-first-message.
+pub type ServerFirstError {
   /// The server-first-message does not have the form
   /// `r=<nonce>,s=<salt>,i=<iteration count>`, with optional extensions
   /// after it (RFC 5802 section 7).
@@ -58,6 +58,10 @@ pub type ScramError {
   InvalidSalt(salt: String)
   /// The iteration count is not a whole number of 1 or more.
   InvalidIterationCount(iteration_count: String)
+}
+
+/// Why `verify_server_final` refuses the server-final-message.
+pub type ServerFinalError {
   /// The server-final-message is not `v=<signature>` or `e=<error>`, with
   /// optional extensions after it.
   InvalidServerFinalMessage(message: BitArray)
@@ -148,12 +152,12 @@ pub fn client_first_message(first: ClientFirst) -> BitArray {
 ///
 /// - `Ok(ClientFinal)`: the client-final-message and the server signature
 ///   to expect
-/// - `Error(ScramError)`: the server-first-message is not valid
+/// - `Error(ServerFirstError)`: the server-first-message is not valid
 pub fn client_final(
   first: ClientFirst,
   password: String,
   server_first_message: BitArray,
-) -> Result(ClientFinal, ScramError) {
+) -> Result(ClientFinal, ServerFirstError) {
   use text <- try(
     to_string(server_first_message)
     |> replace_error(InvalidServerFirstMessage(server_first_message)),
@@ -196,12 +200,12 @@ pub fn client_final_message(final: ClientFinal) -> BitArray {
 ///
 /// - `Ok(Nil)`: the signature is the expected one, so the server knows the
 ///   password's key
-/// - `Error(ScramError)`: the server sent an error, a signature that is
+/// - `Error(ServerFinalError)`: the server sent an error, a signature that is
 ///   wrong, or a message that is not valid
 pub fn verify_server_final(
   final: ClientFinal,
   server_final_message: BitArray,
-) -> Result(Nil, ScramError) {
+) -> Result(Nil, ServerFinalError) {
   let attributes = to_string(server_final_message) |> result.map(split(_, ","))
   case attributes {
     Ok(["v=" <> signature, ..]) ->
@@ -244,7 +248,7 @@ fn sasl_name(user_name: String) -> String {
 fn read_server_first(
   text: String,
   message: BitArray,
-) -> Result(ServerChallenge, ScramError) {
+) -> Result(ServerChallenge, ServerFirstError) {
   case split(text, ",") {
     ["m=" <> _, ..] -> Error(MandatoryExtension(text))
     ["r=" <> nonce, "s=" <> salt, "i=" <> iteration_count, ..] ->
@@ -257,13 +261,13 @@ fn server_challenge(
   nonce: String,
   salt: String,
   iteration_count: String,
-) -> Result(ServerChallenge, ScramError) {
+) -> Result(ServerChallenge, ServerFirstError) {
   use salt_bytes <- try(base64_decode(salt) |> replace_error(InvalidSalt(salt)))
   use count <- try(read_iteration_count(iteration_count))
   Ok(ServerChallenge(nonce:, salt: salt_bytes, iteration_count: count))
 }
 
-fn read_iteration_count(text: String) -> Result(Int, ScramError) {
+fn read_iteration_count(text: String) -> Result(Int, ServerFirstError) {
   case parse(text) {
     Ok(count) if count >= 1 -> Ok(count)
     _ -> Error(InvalidIterationCount(text))
@@ -273,7 +277,7 @@ fn read_iteration_count(text: String) -> Result(Int, ScramError) {
 fn check_nonce(
   server_nonce: String,
   client_nonce: String,
-) -> Result(Nil, ScramError) {
+) -> Result(Nil, ServerFirstError) {
   let extends_client_nonce =
     starts_with(server_nonce, client_nonce)
     && string.byte_size(server_nonce) > string.byte_size(client_nonce)
@@ -321,7 +325,7 @@ fn check_signature(
   final: ClientFinal,
   signature: String,
   message: BitArray,
-) -> Result(Nil, ScramError) {
+) -> Result(Nil, ServerFinalError) {
   case base64_decode(signature) {
     Ok(received) -> compare_signature(received, final.server_signature)
     Error(Nil) -> Error(InvalidServerFinalMessage(message))
@@ -331,7 +335,7 @@ fn check_signature(
 fn compare_signature(
   received: BitArray,
   expected: BitArray,
-) -> Result(Nil, ScramError) {
+) -> Result(Nil, ServerFinalError) {
   let same =
     byte_size(received) == byte_size(expected)
     && equal_in_constant_time(received, expected)

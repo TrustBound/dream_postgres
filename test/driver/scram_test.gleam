@@ -7,11 +7,11 @@
 //// 7677 example exactly.
 
 import dream_postgres/driver/scram.{
-  type ScramError, ClientWithoutChannelBinding, InvalidIterationCount,
-  InvalidSalt, InvalidServerFinalMessage, InvalidServerFirstMessage,
-  MandatoryExtension, ServerEndPoint, ServerNonceMismatch, ServerReportedError,
-  ServerSignatureMismatch, ServerWithoutChannelBinding, client_final,
-  client_first, client_first_message,
+  type ServerFinalError, type ServerFirstError, ClientWithoutChannelBinding,
+  InvalidIterationCount, InvalidSalt, InvalidServerFinalMessage,
+  InvalidServerFirstMessage, MandatoryExtension, ServerEndPoint,
+  ServerNonceMismatch, ServerReportedError, ServerSignatureMismatch,
+  ServerWithoutChannelBinding, client_final, client_first, client_first_message,
 }
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -294,11 +294,11 @@ const certificate_hash = <<
   0xD5,
 >>
 
-type ServerMessageCase {
-  ServerMessageCase(name: String, message: BitArray, error: ScramError)
+type ServerMessageCase(error) {
+  ServerMessageCase(name: String, message: BitArray, error: error)
 }
 
-fn server_first_test(test_case: ServerMessageCase) {
+fn server_first_test(test_case: ServerMessageCase(ServerFirstError)) {
   it(test_case.name, fn() {
     // Arrange
     let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
@@ -315,7 +315,7 @@ fn server_first_test(test_case: ServerMessageCase) {
   })
 }
 
-fn server_first_cases() -> List(ServerMessageCase) {
+fn server_first_cases() -> List(ServerMessageCase(ServerFirstError)) {
   [
     ServerMessageCase(
       "bytes that are not UTF-8",
@@ -360,7 +360,7 @@ fn server_first_cases() -> List(ServerMessageCase) {
   ]
 }
 
-fn server_final_test(test_case: ServerMessageCase) {
+fn server_final_test(test_case: ServerMessageCase(ServerFinalError)) {
   it(test_case.name, fn() {
     // Arrange
     let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
@@ -379,7 +379,7 @@ fn server_final_test(test_case: ServerMessageCase) {
   })
 }
 
-fn server_final_cases() -> List(ServerMessageCase) {
+fn server_final_cases() -> List(ServerMessageCase(ServerFinalError)) {
   [
     ServerMessageCase(
       "an error of the server",

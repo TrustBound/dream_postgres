@@ -17,11 +17,11 @@ import dream_postgres/driver/login.{
   ClientNonceTooShort, DisableChannelBinding, DuplicateParameter,
   EmptyParameterName, EmptyUser, GssLogin, KerberosV5Login, LoginOutcome,
   Md5Login, PasswordHasZeroByte, PasswordRequired, PreferChannelBinding,
-  RequireChannelBinding, SaslLogin, ScramFailed, ScramLogin, ServerRejectedLogin,
-  SspiLogin, TrustLogin, UnexpectedMessage, UnsupportedClientEncoding,
-  UnsupportedLoginMethod, UnsupportedProtocolVersion, ZeroByteInParameter,
-  ZeroByteInPassword, client_nonce, new, no_password, password,
-  password_function,
+  RequireChannelBinding, SaslLogin, ScramLogin, ScramServerFinalFailed,
+  ScramServerFirstFailed, ServerRejectedLogin, SspiLogin, TrustLogin,
+  UnexpectedMessage, UnsupportedClientEncoding, UnsupportedLoginMethod,
+  UnsupportedProtocolVersion, ZeroByteInParameter, ZeroByteInPassword,
+  client_nonce, new, no_password, password, password_function,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ProtocolVersion,
@@ -664,7 +664,7 @@ fn failure_cases() -> List(LoginCase) {
         AuthenticationSasl(["SCRAM-SHA-256"]),
         ..scram_messages(signature_with_flag_y)
       ],
-      Error(ScramFailed(ServerSignatureMismatch)),
+      Error(ScramServerFinalFailed(ServerSignatureMismatch)),
     ),
     LoginCase(
       "a server-first-message that is not valid",
@@ -674,7 +674,7 @@ fn failure_cases() -> List(LoginCase) {
         AuthenticationSasl(["SCRAM-SHA-256"]),
         AuthenticationSaslContinue(<<"x">>),
       ],
-      Error(ScramFailed(InvalidServerFirstMessage(<<"x">>))),
+      Error(ScramServerFirstFailed(InvalidServerFirstMessage(<<"x">>))),
     ),
     LoginCase(
       "no password for a cleartext request",

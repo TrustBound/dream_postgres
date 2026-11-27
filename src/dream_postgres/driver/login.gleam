@@ -33,10 +33,10 @@ import dream_postgres/driver/message.{
   SaslInitialResponse, SaslResponse, StartupMessage,
 }
 import dream_postgres/driver/scram.{
-  type ChannelBinding, type ClientFinal, type ClientFirst, type ScramError,
-  ClientWithoutChannelBinding, ServerEndPoint, ServerWithoutChannelBinding,
-  client_final, client_final_message, client_first, client_first_message,
-  verify_server_final,
+  type ChannelBinding, type ClientFinal, type ClientFirst, type ServerFinalError,
+  type ServerFirstError, ClientWithoutChannelBinding, ServerEndPoint,
+  ServerWithoutChannelBinding, client_final, client_final_message, client_first,
+  client_first_message, verify_server_final,
 }
 import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{base16_encode, byte_size}
@@ -173,8 +173,12 @@ pub type LoginError {
   ChannelBindingOfferedWithoutTls
   /// The server certificate gives no channel binding data.
   CertificateHashFailed(error: CertificateError)
-  /// The SCRAM exchange failed, for example on a wrong server signature.
-  ScramFailed(error: ScramError)
+  /// The server-first-message of SCRAM is not valid, for example a server
+  /// nonce that does not extend the client's nonce.
+  ScramServerFirstFailed(error: ServerFirstError)
+  /// The server-final-message of SCRAM is not valid, or it holds an error
+  /// or a wrong server signature.
+  ScramServerFinalFailed(error: ServerFinalError)
   /// The server answers with a protocol version that the driver does not
   /// speak, or a newer one than the login asked.
   UnsupportedProtocolVersion(major_version: Int, minor_version: Int)
@@ -772,7 +776,7 @@ fn scram_proof(
   let method = ScramLogin(mechanism)
   use password <- try(read_password(state.config.password, method))
   use final <- try(
-    client_final(first, password, data) |> map_error(ScramFailed),
+    client_final(first, password, data) |> map_error(ScramServerFirstFailed),
   )
   let reply = SaslResponse(client_final_message(final))
   continue(state, AwaitingServerFinal(final), Some(reply))
@@ -787,7 +791,9 @@ fn server_final(
 ) -> Result(LoginStep, LoginError) {
   case message {
     AuthenticationSaslFinal(data:) -> {
-      use _ <- try(verify_server_final(final, data) |> map_error(ScramFailed))
+      use _ <- try(
+        verify_server_final(final, data) |> map_error(ScramServerFinalFailed),
+      )
       continue(state, AwaitingAuthenticationOk, None)
     }
     _ -> Error(UnexpectedMessage(message))
