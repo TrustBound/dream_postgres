@@ -598,7 +598,19 @@ fn simple_query_tests() {
     it("reads a script from the bytes of the server", fn() {
       // Arrange
       let start = start_simple_query("SELECT 1 AS n, NULL AS m")
-      let bytes = select_bytes()
+      // The answer as the server sends it, with a ParameterStatus in the
+      // middle.
+      let bytes =
+        concat([
+          frame("T", <<
+            2:16, "n", 0, 0:32, 0:16, 23:32, 4:16, -1:32, 0:16, "m", 0, 0:32,
+            0:16, 25:32, -1:16, -1:32, 0:16,
+          >>),
+          frame("S", <<"application_name", 0, "dream", 0>>),
+          frame("D", <<2:16, 1:32, "1", -1:32>>),
+          frame("C", <<"SELECT 1", 0>>),
+          frame("Z", <<"I">>),
+        ])
 
       // Act and Assert
       bytes
@@ -633,21 +645,6 @@ fn simple_query_tests() {
       |> or_fail_with("Expected the result of the decoded messages")
     }),
   ]
-}
-
-/// The answer to `SELECT 1 AS n, NULL AS m`, as the server sends it, with a
-/// ParameterStatus in the middle.
-fn select_bytes() -> BitArray {
-  concat([
-    frame("T", <<
-      2:16, "n", 0, 0:32, 0:16, 23:32, 4:16, -1:32, 0:16, "m", 0, 0:32, 0:16,
-      25:32, -1:16, -1:32, 0:16,
-    >>),
-    frame("S", <<"application_name", 0, "dream", 0>>),
-    frame("D", <<2:16, 1:32, "1", -1:32>>),
-    frame("C", <<"SELECT 1", 0>>),
-    frame("Z", <<"I">>),
-  ])
 }
 
 fn frame(type_byte: String, body: BitArray) -> BitArray {
