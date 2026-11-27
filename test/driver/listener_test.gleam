@@ -83,6 +83,7 @@ fn connection_config(
     transport: TransportConfig(address, NoTls, 5000, 500),
     login: login_config,
     setup_timeout_milliseconds: 5000,
+    cancel_timeout_milliseconds: 2000,
     reconnect: Backoff(first_delay, 60_000),
     events: None,
     notifications: None,

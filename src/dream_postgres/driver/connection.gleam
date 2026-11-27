@@ -28,13 +28,13 @@ import dream_postgres/driver/crypto.{random_bytes}
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
 import dream_postgres/driver/login.{
-  type LoginConfig, type LoginError, type LoginOutcome, type LoginState,
-  Continue, LoggedIn,
+  type CancelKey, type LoginConfig, type LoginError, type LoginOutcome,
+  type LoginState, Continue, LoggedIn,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type EncodeError, type FrontendMessage,
-  type ProtocolError, Decoded, ErrorResponse, NeedMoreBytes, NoticeResponse,
-  NotificationResponse, ParameterStatus,
+  type ProtocolError, CancelRequest, Decoded, ErrorResponse, NeedMoreBytes,
+  NoticeResponse, NotificationResponse, ParameterStatus,
 }
 import dream_postgres/driver/query.{
   type AsynchronousMessage, type Failure, type PrepareAndRunState,
@@ -59,9 +59,12 @@ import dream_postgres/internal/cell.{
   type ServerReport, type StatementDescription, type TransactionStatus, Idle,
 }
 import gleam/bit_array.{concat}
+import gleam/bool.{guard}
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
-import gleam/erlang/process.{type ExitMessage, type Pid, type Subject}
+import gleam/erlang/process.{
+  type ExitMessage, type Pid, type Subject, type Timer,
+}
 import gleam/int.{min}
 import gleam/list.{append, filter_map, fold, reverse, try_map}
 import gleam/option.{type Option, None, Some}
@@ -85,6 +88,10 @@ pub type ConnectionConfig {
     login: LoginConfig,
     /// The longest time for the TCP connect, TLS and the login together.
     setup_timeout_milliseconds: Int,
+    /// The longest time that a cancel may take after a deadline passed:
+    /// to open its connection, and for the server to stop the statement.
+    /// After it, the connection is closed and replaced.
+    cancel_timeout_milliseconds: Int,
     reconnect: Backoff,
     /// Where the process tells of each loss and each reconnect, for
     /// example to its pool.
@@ -206,7 +213,14 @@ pub type DriverError {
 
 /// A connection process.
 pub opaque type Connection {
-  Connection(subject: Subject(Message), pid: Pid)
+  Connection(
+    subject: Subject(Message),
+    pid: Pid,
+    /// How much longer than its deadline a caller waits for the answer:
+    /// the time of a cancel, and of a reconnect that runs before the
+    /// request.
+    reply_margin_milliseconds: Int,
+  )
 }
 
 /// What a caller can read of the connection without a request to the
@@ -228,7 +242,13 @@ type CallFailure {
 }
 
 type Message {
-  Request(request: Request)
+  Request(request: Request, deadline_milliseconds: Int)
+  /// The deadline of the request `id` passed.
+  DeadlineReached(id: Int)
+  /// The cancel of the request `id` sent its CancelRequest, or failed.
+  CancelFinished(id: Int, result: Result(Nil, CancelFailure))
+  /// The cancel of the request `id` had all its time.
+  CancelOver(id: Int)
   SnapshotRequest(reply: ReplyTo(Snapshot))
   StopRequest(reply: ReplyTo(Nil))
   SocketMessage(message: Dynamic)
@@ -239,6 +259,8 @@ type Message {
 /// A request that goes to the server.
 type Request {
   StatementRequest(statement: StatementRequest)
+  /// The transaction status after every request before it.
+  SettledStatusRequest(reply: ReplyTo(Result(TransactionStatus, DriverError)))
   ScriptRequest(sql: String, reply: ReplyTo(Result(List(Outcome), DriverError)))
 }
 
@@ -314,12 +336,45 @@ type State {
     parameters: Dict(String, String),
     tracker: TransactionTracker,
     running: Option(Running),
+    /// The request that runs, with its deadline.
+    current: Option(Current),
     /// The requests that wait, newest first.
-    waiting: List(Request),
+    waiting: List(Ticket),
+    /// The number of the next request.
+    next_id: Int,
+    /// The key of this session for a CancelRequest.
+    cancel_key: Option(CancelKey),
     /// The notices and notifications since the last outcome, newest first.
     pending: List(AsynchronousMessage),
     /// The named statements of this session.
     cache: StatementCache,
+  )
+}
+
+/// Why a cancel did not reach the server.
+type CancelFailure {
+  CancelUnreachable(error: TransportError)
+  CancelUnencodable(error: EncodeError)
+}
+
+/// A request that waits, with its number and its deadline timer.
+type Ticket {
+  Ticket(id: Int, request: Request, timer: Timer)
+}
+
+/// The deadline of the request that runs. After the deadline, the caller
+/// gets `DeadlinePassed`; `cancel_confirmed` says whether the server
+/// stopped the statement with 57014. The request ends only when its step
+/// ended and its cancel is done (`cancel_done`): the server handles a
+/// CancelRequest on its own, and one that came late would stop the next
+/// statement.
+type Current {
+  Current(
+    id: Int,
+    timer: Timer,
+    deadline_passed: Bool,
+    cancel_confirmed: Bool,
+    cancel_done: Bool,
   )
 }
 
@@ -427,7 +482,12 @@ fn initialised(
     |> process.select_other(SocketMessage)
   actor.initialised(state)
   |> actor.selecting(selector)
-  |> actor.returning(Connection(subject:, pid: process.self()))
+  |> actor.returning(Connection(
+    subject:,
+    pid: process.self(),
+    reply_margin_milliseconds: config.cancel_timeout_milliseconds
+      + config.setup_timeout_milliseconds,
+  ))
 }
 
 fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
@@ -438,7 +498,10 @@ fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
     parameters: dict.new(),
     tracker: new_tracker(),
     running: None,
+    current: None,
     waiting: [],
+    next_id: 1,
+    cancel_key: None,
     pending: [],
     cache: new_cache(config),
   )
@@ -459,6 +522,7 @@ fn connected_state(state: State, session: Session) -> State {
     parameters: session.outcome.parameters,
     tracker: track(new_tracker(), session.outcome.transaction_status, None),
     cache: new_cache(state.config),
+    cancel_key: session.outcome.cancel_key,
     pending: append(notices, state.pending),
   )
 }
@@ -577,6 +641,28 @@ pub fn transaction_status(
   snapshot(connection) |> result.map(snapshot_status)
 }
 
+/// The transaction status after the running request and every request
+/// that waits before this one finished, for example the requests of a
+/// caller that stopped waiting. A pool reads it before it hands the
+/// connection to the next holder.
+///
+/// ## Parameters
+///
+/// - `connection`: the connection
+/// - `deadline_milliseconds`: the longest time to wait
+///
+/// ## Returns
+///
+/// - `Ok(TransactionStatus)`: idle, in a transaction, or in a failed one
+/// - `Error(DriverError)`: the connection is lost, the process is gone, or
+///   the deadline passed
+pub fn settled_transaction_status(
+  connection: Connection,
+  deadline_milliseconds: Int,
+) -> Result(TransactionStatus, DriverError) {
+  request(connection, SettledStatusRequest, deadline_milliseconds)
+}
+
 fn snapshot_status(snapshot: Snapshot) -> TransactionStatus {
   snapshot.transaction_status
 }
@@ -655,15 +741,17 @@ fn request(
   make: fn(ReplyTo(Result(value, DriverError))) -> Request,
   deadline_milliseconds: Int,
 ) -> Result(value, DriverError) {
-  call(connection, request_message(make, _), deadline_milliseconds)
+  let wait = deadline_milliseconds + connection.reply_margin_milliseconds
+  call(connection, request_message(make, deadline_milliseconds, _), wait)
   |> result.flatten
 }
 
 fn request_message(
   make: fn(ReplyTo(Result(value, DriverError))) -> Request,
+  deadline_milliseconds: Int,
   reply_to: ReplyTo(Result(value, DriverError)),
 ) -> Message {
-  Request(make(reply_to))
+  Request(make(reply_to), deadline_milliseconds)
 }
 
 fn call(
@@ -697,7 +785,12 @@ fn handle_message(
   message: Message,
 ) -> actor.Next(State, Message) {
   case message {
-    Request(request) -> actor.continue(accept_request(state, request))
+    Request(request:, deadline_milliseconds:) ->
+      actor.continue(new_request(state, request, deadline_milliseconds))
+    DeadlineReached(id:) -> actor.continue(deadline_reached(state, id))
+    CancelFinished(id:, result: cancel_result) ->
+      actor.continue(cancel_finished(state, id, cancel_result))
+    CancelOver(id:) -> actor.continue(cancel_over(state, id))
     SnapshotRequest(reply_to) -> {
       reply(reply_to, snapshot_of(state))
       actor.continue(state)
@@ -742,12 +835,22 @@ fn terminate(socket: transport.Connection) -> Nil {
 }
 
 /// A request runs at once when no other runs, and waits otherwise.
-fn accept_request(state: State, request: Request) -> State {
+/// Gives the request its number and starts its deadline timer.
+fn new_request(state: State, request: Request, deadline: Int) -> State {
+  let id = state.next_id
+  let timer = process.send_after(state.subject, deadline, DeadlineReached(id))
+  accept_request(State(..state, next_id: id + 1), Ticket(id:, request:, timer:))
+}
+
+fn accept_request(state: State, ticket: Ticket) -> State {
   case state.running, state.link {
-    None, Connected(socket:, ..) -> begin(state, socket, request)
-    Some(_running), _ -> State(..state, waiting: [request, ..state.waiting])
+    None, Connected(socket:, ..) -> {
+      let current = Current(ticket.id, ticket.timer, False, False, False)
+      begin(State(..state, current: Some(current)), socket, ticket.request)
+    }
+    Some(_running), _ -> State(..state, waiting: [ticket, ..state.waiting])
     None, Lost(error:) -> {
-      refuse(request, error)
+      refuse_ticket(ticket, error)
       state
     }
   }
@@ -768,6 +871,10 @@ fn begin(
         refuse(request, _),
       )
     StatementRequest(statement) -> begin_statement(state, socket, statement)
+    SettledStatusRequest(reply: reply_to) -> {
+      reply(reply_to, Ok(tracked_status(state.tracker)))
+      next_request(state)
+    }
   }
 }
 
@@ -906,6 +1013,7 @@ fn start_step(
 fn refuse(request: Request, error: DriverError) -> Nil {
   case request {
     StatementRequest(statement) -> refuse_statement(statement, error)
+    SettledStatusRequest(reply: reply_to) -> reply(reply_to, Error(error))
     ScriptRequest(reply: reply_to, ..) -> reply(reply_to, Error(error))
   }
 }
@@ -944,12 +1052,32 @@ fn sent(
   }
 }
 
-/// Starts the oldest waiting request, if no request runs and one waits.
+/// When no step runs, and no cancel of it is under way, the current
+/// request is done: its timer stops, and the oldest waiting request
+/// starts, if one waits.
 fn next_request(state: State) -> State {
-  case state.running, reverse(state.waiting) {
-    None, [oldest, ..others] ->
+  case state.running, state.current {
+    Some(_running), _ -> state
+    None, Some(Current(deadline_passed: True, cancel_done: False, ..)) -> state
+    None, _ -> start_waiting(end_current(state))
+  }
+}
+
+fn end_current(state: State) -> State {
+  option.map(state.current, stop_timer)
+  State(..state, current: None)
+}
+
+fn stop_timer(current: Current) -> Nil {
+  process.cancel_timer(current.timer)
+  Nil
+}
+
+fn start_waiting(state: State) -> State {
+  case reverse(state.waiting) {
+    [oldest, ..others] ->
       accept_request(State(..state, waiting: reverse(others)), oldest)
-    _, _ -> state
+    [] -> state
   }
 }
 
@@ -1024,7 +1152,12 @@ fn handle_server_message(
 ) -> State {
   case state.running {
     Some(running) ->
-      advance(State(..state, running: None), socket, running, message)
+      advance(
+        State(..confirm_cancel(state, message), running: None),
+        socket,
+        running,
+        message,
+      )
     None -> idle_message(state, socket, message)
   }
 }
@@ -1156,7 +1289,10 @@ fn follow(
     Ok(Send(bytes, step_state)) ->
       State(..state, running: Some(running(step_state)))
       |> sent(socket, transport.send(socket, bytes))
-    Ok(Finished(outcome)) -> finish(state, socket, outcome) |> next_request
+    Ok(Finished(outcome)) ->
+      answer_deadline(state, current)
+      |> finish(socket, outcome)
+      |> next_request
     Ok(ConnectionEnded(report, messages)) ->
       ended(state, socket, current, report, messages)
     Error(unexpected) ->
@@ -1300,6 +1436,7 @@ fn run_prepared(
   details: RunDetails,
   cached: CachedStatement,
 ) -> State {
+  use <- guard(deadline_passed(state), state)
   case details.previous {
     Some(previous) if previous != cached.description -> {
       reply(details.reply, Error(StatementChanged(cached.description)))
@@ -1483,16 +1620,21 @@ fn lose(
 ) -> State {
   transport.close(socket)
   option.map(state.running, refuse_running(_, error))
-  list.each(reverse(state.waiting), refuse(_, error))
+  list.each(reverse(state.waiting), refuse_ticket(_, error))
   tell(state, Disconnected(error))
   schedule_reconnect(state, error, 0)
   State(
-    ..state,
+    ..end_current(state),
     link: Lost(error),
     running: None,
     waiting: [],
     tracker: new_tracker(),
   )
+}
+
+fn refuse_ticket(ticket: Ticket, error: DriverError) -> Nil {
+  process.cancel_timer(ticket.timer)
+  refuse(ticket.request, error)
 }
 
 fn tell(state: State, event: ConnectionEvent) -> Nil {
@@ -1616,4 +1758,171 @@ fn send_login_message(
 ) -> Result(Nil, ConnectError) {
   use bytes <- try(encode(message) |> map_error(LoginUnencodable))
   transport.send(socket, bytes) |> map_error(TransportRefused)
+}
+
+// Deadlines and cancel -------------------------------------------------------
+
+fn deadline_passed(state: State) -> Bool {
+  state.current |> option.map(current_deadline_passed) |> option.unwrap(False)
+}
+
+fn current_deadline_passed(current: Current) -> Bool {
+  current.deadline_passed
+}
+
+/// After its deadline, a request's caller gets `DeadlinePassed` when its
+/// step ends, before the step's own answer, which the caller's alias then
+/// drops. A request that the deadline stopped goes no further.
+fn answer_deadline(state: State, running: Running) -> State {
+  case state.current {
+    Some(Current(deadline_passed: True, cancel_confirmed:, ..)) -> {
+      refuse_running(running, DeadlinePassed(cancelled: cancel_confirmed))
+      state
+    }
+    _ -> state
+  }
+}
+
+/// The server confirms a cancel with the error 57014.
+fn confirm_cancel(state: State, message: BackendMessage) -> State {
+  case message, state.current {
+    ErrorResponse(report), Some(current) if current.deadline_passed ->
+      State(
+        ..state,
+        current: Some(
+          Current(..current, cancel_confirmed: report.code == "57014"),
+        ),
+      )
+    _, _ -> state
+  }
+}
+
+/// The deadline of a waiting request ends it at once. The deadline of the
+/// running request sends a cancel on a new socket, with the TLS settings
+/// of the connection. A session with no cancel key cannot cancel, so its
+/// connection is closed and replaced.
+fn deadline_reached(state: State, id: Int) -> State {
+  case state.current, state.link {
+    Some(current), Connected(socket:, ..) if current.id == id ->
+      start_cancel(state, socket, current)
+    _, _ -> end_waiting(state, id)
+  }
+}
+
+fn start_cancel(
+  state: State,
+  socket: transport.Connection,
+  current: Current,
+) -> State {
+  let state =
+    State(..state, current: Some(Current(..current, deadline_passed: True)))
+  case state.cancel_key {
+    Some(key) -> {
+      process.spawn_unlinked(fn() {
+        cancel(state.config, key, state.subject, current.id)
+      })
+      let delay = state.config.cancel_timeout_milliseconds
+      process.send_after(state.subject, delay, CancelOver(current.id))
+      state
+    }
+    None -> lose(state, socket, DeadlinePassed(cancelled: False))
+  }
+}
+
+fn end_waiting(state: State, id: Int) -> State {
+  let #(ended, waiting) = list.partition(state.waiting, has_id(_, id))
+  list.each(ended, refuse_ticket(_, DeadlinePassed(cancelled: False)))
+  State(..state, waiting:)
+}
+
+fn has_id(ticket: Ticket, id: Int) -> Bool {
+  ticket.id == id
+}
+
+/// A cancel that the server took lets the request end. A cancel that could
+/// not reach the server leaves the statement running, so the connection
+/// is closed and replaced.
+fn cancel_finished(
+  state: State,
+  id: Int,
+  cancel_result: Result(Nil, CancelFailure),
+) -> State {
+  case cancel_result {
+    Ok(Nil) -> for_current(state, id, mark_cancel_done)
+    Error(_unreached) -> for_current(state, id, lose_at_deadline)
+  }
+}
+
+/// A cancel that did not end in time leaves the connection in an unknown
+/// state, so it is closed and replaced.
+fn cancel_over(state: State, id: Int) -> State {
+  for_current(state, id, lose_at_deadline)
+}
+
+/// Acts on the request `id` while it is the current one of a connected
+/// session. A message about a request that ended already changes nothing.
+fn for_current(
+  state: State,
+  id: Int,
+  action: fn(State, transport.Connection, Current) -> State,
+) -> State {
+  case state.current, state.link {
+    Some(current), Connected(socket:, ..) if current.id == id ->
+      action(state, socket, current)
+    _, _ -> state
+  }
+}
+
+fn mark_cancel_done(
+  state: State,
+  _socket: transport.Connection,
+  current: Current,
+) -> State {
+  State(..state, current: Some(Current(..current, cancel_done: True)))
+  |> next_request
+}
+
+fn lose_at_deadline(
+  state: State,
+  socket: transport.Connection,
+  _current: Current,
+) -> State {
+  lose(state, socket, DeadlinePassed(cancelled: False))
+}
+
+/// Opens a new connection with the same settings, sends the CancelRequest,
+/// and waits until the server closes it, which it does after the cancel.
+/// It runs in its own process, so the connection process goes on reading.
+fn cancel(
+  config: ConnectionConfig,
+  key: CancelKey,
+  owner: Subject(Message),
+  id: Int,
+) -> Nil {
+  process.send(owner, CancelFinished(id, send_cancel(config, key)))
+}
+
+fn send_cancel(
+  config: ConnectionConfig,
+  key: CancelKey,
+) -> Result(Nil, CancelFailure) {
+  use request <- try(
+    encode(CancelRequest(key.process_id, key.secret_key))
+    |> map_error(CancelUnencodable),
+  )
+  use socket <- try(
+    transport.connect(config.transport) |> map_error(CancelUnreachable),
+  )
+  let sent = transport.send(socket, request)
+  // The server closes the cancel connection once it took the cancel. The
+  // cancel process waits half the cancel timeout for that, so a cancel
+  // that never gets an answer fails before the timeout of the request.
+  let wait = config.cancel_timeout_milliseconds / 2
+  let closed = transport.receive(socket, wait)
+  transport.close(socket)
+  use Nil <- try(sent |> map_error(CancelUnreachable))
+  case closed {
+    Ok(_bytes) | Error(SocketClosed) -> Ok(Nil)
+    Error(error) -> Error(CancelUnreachable(error))
+  }
 }

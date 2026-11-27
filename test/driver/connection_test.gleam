@@ -55,8 +55,11 @@ fn close_client(proxy: Proxy) -> Nil
 @external(erlang, "driver_proxy_ffi", "reset_client")
 fn reset_client(proxy: Proxy) -> Nil
 
-@external(erlang, "driver_proxy_ffi", "stop_reading")
-fn stop_reading(proxy: Proxy) -> Nil
+@external(erlang, "driver_proxy_ffi", "answer_next_request")
+fn answer_next_request(proxy: Proxy, bytes: BitArray) -> Nil
+
+@external(erlang, "driver_proxy_ffi", "stop_listening")
+fn stop_listening(proxy: Proxy) -> Nil
 
 @external(erlang, "driver_proxy_ffi", "watch_client_end")
 fn watch_client_end(proxy: Proxy) -> ClientEndWatch
@@ -93,6 +96,8 @@ pub fn tests() -> TestSuite {
     group("callers", caller_tests()),
     group("more paths", more_tests()),
     group("the statement cache", map(driver_servers(), cache_tests)),
+    group("deadlines on each server", map(driver_servers(), deadline_tests)),
+    group("deadlines", more_deadline_tests()),
   ])
 }
 
@@ -124,6 +129,7 @@ fn config(
     transport: TransportConfig(address, NoTls, 5000, 500),
     login: login_config,
     setup_timeout_milliseconds: 5000,
+    cancel_timeout_milliseconds: 2000,
     reconnect: Backoff(first_delay, 60_000),
     events:,
     notifications: None,
@@ -729,6 +735,7 @@ fn event_code(event: ConnectionEvent) -> String {
       "violation running"
     ReconnectFailed(LoginRefused(ServerRejectedLogin(report))) ->
       "reconnect failed " <> report.code
+    Disconnected(DeadlinePassed(cancelled: False)) -> "lost at deadline"
     Reconnected -> "reconnected"
     _ -> "another event"
   }
@@ -779,25 +786,24 @@ fn check_running_violation() {
   |> or_fail_with("Expected a protocol violation for the running request")
 }
 
-/// The proxy stops reading, and a large script fills the socket's send
-/// queue. The proxy then sends a CopyInResponse as if the server answered.
-/// The step answers it with a CopyFail, whose send waits behind the full
-/// queue and fails after the send timeout of 500 milliseconds.
+/// The proxy reads the first bytes of a large script, answers them with a
+/// CopyInResponse as if the server did, and reads nothing more. The step
+/// answers with a CopyFail, whose send waits behind the rest of the script
+/// in the socket's queue and fails after the send timeout of 500
+/// milliseconds.
 fn check_send_timeout() {
   // Act
-  let event = {
+  let answer = {
     use setup <- with_setup(60_000)
-    stop_reading(setup.proxy)
+    answer_next_request(setup.proxy, <<"G", 7:32, 0, 0:16>>)
     let large = "SELECT '" <> repeat("x", 64_000_000) <> "'"
-    let _queued = connection.run_script(setup.connection, large, 50)
-    inject(setup.proxy, <<"G", 7:32, 0, 0:16>>)
-    Ok(next_event(setup.events) |> result.map(event_code))
+    Ok(script(setup.connection, large) |> result.replace(Nil))
   }
 
   // Assert
-  event
+  answer
   |> should
-  |> be_equal(Ok(Ok("lost send timeout")))
+  |> be_equal(Ok(Error(ConnectionLost(SendTimedOut))))
   |> or_fail_with("Expected the loss by a send timeout")
 }
 
@@ -951,33 +957,6 @@ fn caller_tests() {
       |> should
       |> be_equal(Ok([[Text(<<"2">>)]]))
       |> or_fail_with("Expected the next query's own result")
-    }),
-    it("gives DeadlinePassed and stays usable after a late answer", fn() {
-      // Act
-      let answers = {
-        use setup <- with_setup(60_000)
-        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(826)"))
-        let late =
-          connection.run_script(
-            setup.connection,
-            "SELECT pg_advisory_lock(826)",
-            50,
-          )
-        use _unlocked <- try(script(
-          setup.control,
-          "SELECT pg_advisory_unlock(826)",
-        ))
-        use outcome <- try(run(setup.connection, "SELECT 3", []))
-        Ok(#(late |> result.replace(Nil), rows(outcome)))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(
-        Ok(#(Error(DeadlinePassed(cancelled: False)), [[Text(<<"3">>)]])),
-      )
-      |> or_fail_with("Expected DeadlinePassed, then the next query's result")
     }),
     it("runs a request that waited behind another", fn() {
       // Act
@@ -1864,4 +1843,241 @@ fn refusal(error: DriverError) -> #(String, String) {
     )
     _ -> #("", "not a refusal")
   }
+}
+
+// Deadlines -------------------------------------------------------------------
+
+@external(erlang, "sys", "suspend")
+fn suspend(pid: Pid) -> Nil
+
+@external(erlang, "sys", "resume")
+fn resume(pid: Pid) -> Nil
+
+fn with_timeouts(
+  settings: ConnectionConfig,
+  setup: Int,
+  cancel: Int,
+) -> ConnectionConfig {
+  ConnectionConfig(
+    ..settings,
+    setup_timeout_milliseconds: setup,
+    cancel_timeout_milliseconds: cancel,
+  )
+}
+
+fn protocol_32_config(port: Int) -> Result(ConnectionConfig, DriverError) {
+  use settings <- try(config(port, "dream", "dream", 10, None))
+  use login_config <- try(
+    login.new(
+      user: "dream",
+      database: servers.database,
+      password: login.password("dream"),
+      parameters: [],
+      channel_binding: PreferChannelBinding,
+      protocol_version: message.Protocol32,
+    )
+    |> result.replace_error(ConnectionLost(SocketClosed)),
+  )
+  Ok(
+    ConnectionConfig(..settings, login: login_config)
+    |> with_timeouts(5000, 200),
+  )
+}
+
+/// The backend's state in pg_stat_activity, from the control connection.
+fn backend_state(
+  control: Connection,
+  pid: String,
+) -> Result(List(String), DriverError) {
+  use outcomes <- try(script(
+    control,
+    "SELECT state FROM pg_stat_activity WHERE pid = " <> pid,
+  ))
+  Ok(list.flat_map(outcomes, row_texts))
+}
+
+fn deadline_tests(server: Server) {
+  group("PostgreSQL " <> to_string(server.version), [
+    it("cancels a statement at its deadline and stays usable", fn() {
+      // Act
+      let answers = {
+        use settings <- try(protocol_32_config(server.port))
+        use connection <- with_started(settings)
+        use control <- with_connection(server.port)
+        use pid <- try(backend_pid(connection))
+        let late =
+          connection.run(connection, "SELECT pg_sleep(30)", [], [], 300)
+          |> result.replace(Nil)
+        use after <- try(backend_state(control, pid))
+        // The next statement runs longer than the cancel timeout, so the
+        // cancel's timer ends while the connection serves another request.
+        use next <- try(run(connection, "SELECT pg_sleep(0.3)::text", []))
+        Ok(#(late, after, tag(next)))
+      }
+
+      // Assert
+      answers
+      |> should
+      |> be_equal(
+        Ok(#(Error(DeadlinePassed(cancelled: True)), ["idle"], "SELECT 1")),
+      )
+      |> or_fail_with("Expected the cancel, an idle backend, then a new run")
+    }),
+  ])
+}
+
+fn more_deadline_tests() {
+  [
+    it("gives the settled transaction status after a request that waited", fn() {
+      // Act
+      let answers = {
+        use setup <- with_setup(60_000)
+        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(833)"))
+        let begun =
+          start_caller(setup.connection, "BEGIN; SELECT pg_advisory_lock(833)")
+        use Nil <- try(wait_for_lock_waiter(setup.control, 833, 5000))
+        let quick = connection.transaction_status(setup.connection)
+        use _unlocked <- try(script(
+          setup.control,
+          "SELECT pg_advisory_unlock(833)",
+        ))
+        let settled =
+          connection.settled_transaction_status(setup.connection, 5000)
+        let _answer = caller_answer(begun)
+        use _rolled_back <- try(script(setup.connection, "ROLLBACK"))
+        Ok(#(quick, settled))
+      }
+
+      // Assert
+      answers
+      |> should
+      |> be_equal(Ok(#(Ok(Idle), Ok(InTransaction))))
+      |> or_fail_with("Expected Idle at once, then InTransaction once settled")
+    }),
+    it("refuses the settled status while the connection is lost", fn() {
+      // Act
+      let answer = {
+        use setup <- with_setup(60_000)
+        close_client(setup.proxy)
+        let _lost = next_event(setup.events)
+        Ok(connection.settled_transaction_status(setup.connection, 5000))
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(ConnectionLost(SocketClosed))))
+      |> or_fail_with("Expected the error of the loss")
+    }),
+    it("closes the connection when the cancel never gets an answer", fn() {
+      // The cancel goes to the proxy, which serves one session at a time,
+      // so it never reaches the server.
+      check_failed_cancel(fn(_proxy) { Nil })
+    }),
+    it("closes the connection when the cancel cannot connect", fn() {
+      check_failed_cancel(stop_listening)
+    }),
+    it("closes the connection when the session has no cancel key", fn() {
+      // Arrange
+      let login_answer = <<"R", 8:32, 0:32, "Z", 5:32, "I">>
+      let #(port, _server) = start_fake_server(Answer(login_answer))
+
+      // Act
+      let answer = {
+        use settings <- try(
+          config(port, "dream", "dream", 60_000, None)
+          |> result.map(with_timeouts(_, 5000, 200)),
+        )
+        use connection <- with_started(settings)
+        Ok(
+          connection.run(connection, "SELECT 1", [], [], 100)
+          |> result.replace(Nil),
+        )
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(DeadlinePassed(cancelled: False))))
+      |> or_fail_with("Expected DeadlinePassed with no cancel")
+    }),
+    it("ends a waiting request at its deadline", fn() {
+      // Act
+      let answers = {
+        use setup <- with_setup(60_000)
+        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(832)"))
+        let first =
+          start_caller(setup.connection, "SELECT pg_advisory_lock(832)")
+        use Nil <- try(wait_for_lock_waiter(setup.control, 832, 5000))
+        let waiting =
+          connection.run_script(setup.connection, "SELECT 1", 100)
+          |> result.replace(Nil)
+        use _unlocked <- try(script(
+          setup.control,
+          "SELECT pg_advisory_unlock(832)",
+        ))
+        Ok(#(waiting, caller_answer(first)))
+      }
+
+      // Assert
+      answers
+      |> should
+      |> be_equal(
+        Ok(#(Error(DeadlinePassed(cancelled: False)), Ok(["SELECT 1"]))),
+      )
+      |> or_fail_with(
+        "Expected the waiting request to end, and the first to run",
+      )
+    }),
+    it("gives DeadlinePassed when the process does not answer in time", fn() {
+      // Act
+      let answer = {
+        use settings <- try(
+          config(first_server().port, "dream", "dream", 10, None)
+          |> result.map(with_timeouts(_, 100, 100)),
+        )
+        use connection <- with_started(settings)
+        suspend(pid_of(connection))
+        let answer = connection.run(connection, "SELECT 1", [], [], 10)
+        resume(pid_of(connection))
+        Ok(answer |> result.replace(Nil))
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(DeadlinePassed(cancelled: False))))
+      |> or_fail_with("Expected DeadlinePassed from the caller's wait")
+    }),
+  ]
+}
+
+/// A statement passes its deadline through the proxy, and its cancel goes
+/// to the proxy too, where it does not reach the server. After the cancel
+/// timeout, the connection is closed and the caller gets DeadlinePassed.
+fn check_failed_cancel(breaking: fn(Proxy) -> Nil) {
+  // Act
+  let answers = {
+    let server = first_server()
+    let #(port, proxy) = start_proxy(server.port)
+    let events = process.new_subject()
+    use settings <- try(
+      config(port, "dream", "dream", 60_000, Some(events))
+      |> result.map(with_timeouts(_, 5000, 200)),
+    )
+    use connection <- with_started(settings)
+    breaking(proxy)
+    let answer =
+      connection.run(connection, "SELECT pg_sleep(30)", [], [], 100)
+      |> result.replace(Nil)
+    Ok(#(answer, next_event(events) |> result.map(event_code)))
+  }
+
+  // Assert
+  answers
+  |> should
+  |> be_equal(
+    Ok(#(Error(DeadlinePassed(cancelled: False)), Ok("lost at deadline"))),
+  )
+  |> or_fail_with("Expected DeadlinePassed and the loss of the connection")
 }
