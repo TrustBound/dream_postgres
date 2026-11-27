@@ -10,8 +10,10 @@ import dream_test/suite.{type TestSuite}
 import driver/bit_array_test
 import driver/decode_test
 import driver/encode_test
+import driver/query_test
 import driver/recorded_test
 import driver/server_test
+import driver/transaction_test
 
 /// Every suite of the driver tests, in the order they run.
 pub fn suites() -> List(TestSuite) {
@@ -19,6 +21,8 @@ pub fn suites() -> List(TestSuite) {
     bit_array_test.tests(),
     encode_test.tests(),
     decode_test.tests(),
+    query_test.tests(),
+    transaction_test.tests(),
     recorded_test.tests(),
     server_test.tests(),
   ]
