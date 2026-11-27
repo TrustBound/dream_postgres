@@ -1098,7 +1098,7 @@ fn traced(
 
 fn prepare_ending(result: Result(value, PrepareError)) -> SpanEnd {
   case result {
-    Ok(_value) -> Worked(operation: None)
+    Ok(_value) -> Worked(operation: None, warning_code: None)
     Error(error) ->
       failed_ending(prepare_error_name(error), prepare_report(error))
   }
@@ -1112,14 +1112,26 @@ fn outcome_ending(result: Result(Outcome, RunError)) -> SpanEnd {
 }
 
 fn worked_ending(outcome: Outcome) -> SpanEnd {
-  Worked(operation: Some(trace.operation_of_tag(outcome.result.tag)))
+  Worked(
+    operation: Some(trace.operation_of_tag(outcome.result.tag)),
+    warning_code: warning_code([outcome]),
+  )
+}
+
+/// The last warning code of the notices of the outcomes, in order.
+fn warning_code(outcomes: List(Outcome)) -> Option(String) {
+  outcomes
+  |> list.flat_map(fn(outcome) { outcome.notices })
+  |> list.map(fn(notice) { notice.code })
+  |> trace.last_warning_code
 }
 
 /// A script names its operation only when it ran exactly one statement.
 fn script_ending(result: Result(List(Outcome), ScriptError)) -> SpanEnd {
   case result {
     Ok([outcome]) -> worked_ending(outcome)
-    Ok(_several_or_none) -> Worked(operation: None)
+    Ok(several_or_none) ->
+      Worked(operation: None, warning_code: warning_code(several_or_none))
     Error(error) ->
       failed_ending(script_error_name(error), script_report(error))
   }
@@ -1129,7 +1141,7 @@ fn script_ending(result: Result(List(Outcome), ScriptError)) -> SpanEnd {
 /// CopyOutResponse, and ends it with the tag `COPY`.
 fn copy_ending(result: Result(value, CopyError(reason))) -> SpanEnd {
   case result {
-    Ok(_value) -> Worked(operation: Some("COPY"))
+    Ok(_value) -> Worked(operation: Some("COPY"), warning_code: None)
     Error(error) -> failed_ending(copy_error_name(error), copy_report(error))
   }
 }

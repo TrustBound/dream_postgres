@@ -56,8 +56,9 @@ pub type SpanQuery {
 /// How the statement ended, for its span.
 pub type SpanEnd {
   /// It worked. `operation` is the operation of the server's command tag,
-  /// when there is exactly one tag.
-  Worked(operation: Option(String))
+  /// when there is exactly one tag. `warning_code` is the SQLSTATE of the
+  /// last warning (class 01) that the statement got, if any.
+  Worked(operation: Option(String), warning_code: Option(String))
   /// It failed. `error_type` names the error; `status_code` is the
   /// server's SQLSTATE, when the server gave one.
   Failed(error_type: String, status_code: Option(String))
@@ -117,9 +118,16 @@ fn target_without_summary(
 /// `Nil`.
 pub fn end(span: Span, ending: SpanEnd) -> Nil {
   case ending {
-    Worked(operation:) -> {
+    Worked(operation:, warning_code:) -> {
       rename(span, operation)
-      end_span(span.context, optional("db.operation.name", operation), False)
+      end_span(
+        span.context,
+        list.append(
+          optional("db.operation.name", operation),
+          optional("db.response.status_code", warning_code),
+        ),
+        False,
+      )
     }
     Failed(error_type:, status_code:) ->
       end_span(
@@ -146,6 +154,34 @@ fn rename(span: Span, operation: Option(String)) -> Nil {
     Some(_target), Some(_empty_operation) -> Nil
     Some(_target), None -> Nil
     None, _operation -> Nil
+  }
+}
+
+/// The last warning code of a statement's notices: the last SQLSTATE of
+/// class 01. A successful statement records it as
+/// `db.response.status_code` and stays OK (semantic conventions at commit
+/// 7c8eb86d04, docs/db/postgresql.md line 41: `db.response.status_code`
+/// is "Conditionally Required If response has ended with warning or an
+/// error"; note 3: "Response codes of "Class 02" or higher SHOULD be
+/// considered errors"). Class 00 and the other classes of a notice are
+/// not warnings.
+///
+/// ## Parameters
+///
+/// - `codes`: the SQLSTATE of each notice, in the order they came
+///
+/// ## Returns
+///
+/// - `Some(code)`: the last code of class 01
+/// - `None`: no code of class 01
+pub fn last_warning_code(codes: List(String)) -> Option(String) {
+  list.fold(codes, None, keep_warning_code)
+}
+
+fn keep_warning_code(last: Option(String), code: String) -> Option(String) {
+  case string.starts_with(code, "01") {
+    True -> Some(code)
+    False -> last
   }
 }
 

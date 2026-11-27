@@ -41,6 +41,7 @@ import gleam/result.{map_error, try}
 import gleam/string.{inspect}
 import matchers/extract_command_result.{extract_command_result}
 import matchers/extract_command_rows.{extract_command_rows}
+import matchers/extract_span_attribute.{extract_span_attribute}
 import matchers/extract_span_name.{extract_span_name}
 
 /// The tests of the spans of statements.
@@ -147,6 +148,17 @@ fn housekeeping_tests() -> TestSuite {
 
 const port = "5441"
 
+/// A statement that raises one warning, of the default code 01000.
+const warning_sql = "DO $$BEGIN RAISE WARNING 'late'; END$$"
+
+/// A statement that raises the warnings 01003 and 01004, then a notice of
+/// the code 00000.
+const several_warnings_sql =
+  "DO $$BEGIN RAISE WARNING 'first' USING ERRCODE = '01003'; RAISE WARNING 'second' USING ERRCODE = '01004'; RAISE NOTICE 'plain'; END$$"
+
+/// A statement that raises a notice of the code 00000 only.
+const notice_sql = "DO $$BEGIN RAISE NOTICE 'plain'; END$$"
+
 fn statement_tests() -> TestSuite {
   describe("of a statement", connection_setup(first_driver_server), [
     it("is named after the statement's name", fn(connection: Connection) {
@@ -183,6 +195,73 @@ fn statement_tests() -> TestSuite {
       )
       |> or_fail_with("Expected the span of the named statement")
     }),
+    it(
+      "records a warning's code as its status code and stays OK",
+      fn(connection: Connection) {
+        {
+          record_spans_here()
+          use _outcome <- try(
+            run(connection, statement(warning_sql), [], [], 5000)
+            |> map_error(inspect),
+          )
+          next_span()
+        }
+        |> should
+        |> be_equal(
+          Ok(RecordedSpan(
+            name: "DO " <> database,
+            kind: "client",
+            attributes: [
+              #("db.namespace", database),
+              #("db.operation.name", "DO"),
+              #("db.query.text", warning_sql),
+              #("db.response.status_code", "01000"),
+              #("db.system.name", "postgresql"),
+              #("server.address", "localhost"),
+              #("server.port", port),
+            ],
+            failed: False,
+          )),
+        )
+        |> or_fail_with("Expected the code 01000 and no failure")
+      },
+    ),
+    it(
+      "records the code of the last of several warnings",
+      fn(connection: Connection) {
+        {
+          record_spans_here()
+          use _outcome <- try(
+            run(connection, statement(several_warnings_sql), [], [], 5000)
+            |> map_error(inspect),
+          )
+          next_span()
+        }
+        |> should
+        |> be_ok
+        |> extract_span_attribute(key: "db.response.status_code")
+        |> be_equal(Some("01004"))
+        |> or_fail_with("Expected the code of the last warning, 01004")
+      },
+    ),
+    it(
+      "records no status code for a notice that is no warning",
+      fn(connection: Connection) {
+        {
+          record_spans_here()
+          use _outcome <- try(
+            run(connection, statement(notice_sql), [], [], 5000)
+            |> map_error(inspect),
+          )
+          next_span()
+        }
+        |> should
+        |> be_ok
+        |> extract_span_attribute(key: "db.response.status_code")
+        |> be_equal(None)
+        |> or_fail_with("Expected no status code for the code 00000")
+      },
+    ),
     it("records no parameter value", fn(connection: Connection) {
       {
         record_spans_here()
@@ -506,7 +585,7 @@ fn span_tests() -> TestSuite {
           SpanTarget(database: "app", host: "db.example.com", port: 5432),
           SpanQuery(summary: None, text: None),
         )
-        |> trace.end(Worked(operation: None))
+        |> trace.end(Worked(operation: None, warning_code: None))
         next_span()
       }
       |> should
@@ -531,7 +610,7 @@ fn span_tests() -> TestSuite {
           SpanTarget(database: "app", host: "db.example.com", port: 5432),
           SpanQuery(summary: None, text: None),
         )
-        |> trace.end(Worked(operation: Some("INSERT")))
+        |> trace.end(Worked(operation: Some("INSERT"), warning_code: None))
         next_span()
       }
       |> should
@@ -547,7 +626,7 @@ fn span_tests() -> TestSuite {
           SpanTarget(database: "app", host: "db.example.com", port: 5432),
           SpanQuery(summary: Some("user.create"), text: None),
         )
-        |> trace.end(Worked(operation: Some("INSERT")))
+        |> trace.end(Worked(operation: Some("INSERT"), warning_code: None))
         next_span()
       }
       |> should
@@ -563,7 +642,7 @@ fn span_tests() -> TestSuite {
           SpanTarget(database: "app", host: "db.example.com", port: 5432),
           SpanQuery(summary: None, text: None),
         )
-        |> trace.end(Worked(operation: Some("")))
+        |> trace.end(Worked(operation: Some(""), warning_code: None))
         next_span()
       }
       |> should
