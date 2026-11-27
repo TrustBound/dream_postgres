@@ -2571,7 +2571,7 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
         |> or_fail_with("Expected one named statement that ran two times")
       },
     ),
-    it("keeps one statement on the server for two prepares", fn(connection) {
+    it("prepares a statement one time for two prepares", fn(connection) {
       // Act
       let statements = {
         use _first <- try(
@@ -2593,10 +2593,8 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
       |> extract_first
       |> extract_command_result
       |> extract_command_rows
-      |> be_equal([[Text(<<"dream_postgres_2 0">>)]])
-      |> or_fail_with(
-        "Expected only the statement of the second prepare, which asked the server again",
-      )
+      |> be_equal([[Text(<<"dream_postgres_1 0">>)]])
+      |> or_fail_with("Expected one statement for two prepares")
     }),
     it("gives the same description for two prepares", fn(connection) {
       // Act

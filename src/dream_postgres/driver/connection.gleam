@@ -666,8 +666,22 @@ type Request {
 
 /// A request about one statement, which the statement cache serves.
 type StatementRequest {
-  PrepareStatement(sql: String, reply: ReplyTo(Result(Prepared, PrepareError)))
+  PrepareStatement(
+    sql: String,
+    source: DescriptionSource,
+    reply: ReplyTo(Result(Prepared, PrepareError)),
+  )
   RunStatement(details: RunDetails)
+}
+
+/// Where the description of a prepare comes from when the cache holds the
+/// statement.
+type DescriptionSource {
+  /// The cache's description, from the statement's last prepare.
+  CachedDescription
+  /// The server's description now: the cached statement is closed and
+  /// prepared again.
+  ServerDescription
 }
 
 /// What a run needs. `previous` is the description of a statement that
@@ -1329,11 +1343,13 @@ fn copy_report(error: CopyError(reason)) -> Option(ServerReport) {
   }
 }
 
-/// Prepares a statement and describes it, before any run. The answer is
-/// always the server's description now: a statement that the cache holds
-/// is closed and prepared again, so a schema change since the last
-/// prepare shows, and the cache keeps the new description for the next
-/// run.
+/// Prepares a statement and describes it, before any run. A statement
+/// that the cache holds is answered from the cache, with no round trip.
+/// That description can be stale: after a schema change that changes the
+/// statement's result columns, such as `ALTER TABLE ... ALTER COLUMN
+/// TYPE` or `DROP COLUMN`, it still shows the old columns, and a run of
+/// the statement gives `RunStatementChanged` with the new description.
+/// `describe_current` always asks the server.
 ///
 /// ## Parameters
 ///
@@ -1358,7 +1374,47 @@ pub fn prepare(
     use <- traced(connection, statement, Some(statement.sql), _, prepare_ending)
     request(
       connection,
-      prepare_request(statement.sql, _),
+      prepare_request(statement.sql, CachedDescription, _),
+      deadline_milliseconds,
+      PrepareFailed,
+    )
+  }
+  |> result.map(fn(prepared) { prepared.description })
+}
+
+/// Prepares a statement and gives the server's description of it now. A
+/// statement that the cache holds is closed and prepared again under a
+/// new name, in one round trip, and the cache keeps the new description
+/// for the next run. A Describe of the cached statement cannot give it:
+/// after a change of the result columns the server refuses that Describe
+/// with 0A000, "cached plan must not change result type" (checked on
+/// PostgreSQL 16 and 19).
+///
+/// ## Parameters
+///
+/// - `connection`: the connection
+/// - `sql`: the statement
+/// - `deadline_milliseconds`: the longest time to wait for the answer
+///
+/// ## Returns
+///
+/// - `Ok(StatementDescription)`: the parameter types and the result
+///   columns, as the server describes them now
+/// - `Error(PrepareRefused(report, status))`: the server refused it
+/// - `Error(PrepareUnencodable(error))`: the SQL cannot be written
+/// - `Error(PrepareNotConnected(error))`: a supervised process has not
+///   connected yet
+/// - `Error(PrepareFailed(failure))`: the request failed on its connection
+pub fn describe_current(
+  connection: Connection,
+  statement: Statement,
+  deadline_milliseconds: Int,
+) -> Result(StatementDescription, PrepareError) {
+  {
+    use <- traced(connection, statement, Some(statement.sql), _, prepare_ending)
+    request(
+      connection,
+      prepare_request(statement.sql, ServerDescription, _),
       deadline_milliseconds,
       PrepareFailed,
     )
@@ -1991,9 +2047,10 @@ fn end_copy(
 
 fn prepare_request(
   sql: String,
+  source: DescriptionSource,
   reply_to: ReplyTo(Result(Prepared, PrepareError)),
 ) -> Request {
-  StatementRequest(PrepareStatement(sql, reply_to))
+  StatementRequest(PrepareStatement(sql, source, reply_to))
 }
 
 fn run_request(
@@ -2255,7 +2312,7 @@ fn begin_unnamed(
   statement: StatementRequest,
 ) -> State {
   case statement {
-    PrepareStatement(sql:, reply: reply_to) ->
+    PrepareStatement(sql:, reply: reply_to, ..) ->
       start_step(
         state,
         socket,
@@ -2302,12 +2359,11 @@ fn statement_sql(statement: StatementRequest) -> String {
 
 /// A run uses the statement of the cache. A prepare always asks the
 /// server, because its answer is the server's description now, which a
-/// schema change since the cached prepare can make different. A Describe
-/// of the cached name cannot give it: after a change of the result
-/// columns the server refuses that Describe with 0A000, "cached plan must
-/// not change result type" (checked on PostgreSQL 16 and 19). So the
-/// prepare closes the cached statement and prepares it again under a new
-/// name, in one round trip, and the cache keeps what the server answered.
+/// A run uses the statement of the cache, and so does a prepare that
+/// takes the cache's description. A prepare that wants the server's
+/// description now closes the cached statement and prepares it again
+/// under a new name, in one round trip, and the cache keeps what the
+/// server answered (see `describe_current`).
 fn serve_cached(
   state: State,
   socket: transport.Connection,
@@ -2315,7 +2371,11 @@ fn serve_cached(
   cached: CachedStatement,
 ) -> State {
   case statement {
-    PrepareStatement(sql:, ..) -> {
+    PrepareStatement(source: CachedDescription, reply: reply_to, ..) -> {
+      reply(reply_to, Ok(Prepared(cached.description, warning_code: None)))
+      next_request(state)
+    }
+    PrepareStatement(sql:, source: ServerDescription, ..) -> {
       let cache = statement_cache.forget(state.cache, sql)
       prepare_named(State(..state, cache:), socket, statement)
     }
