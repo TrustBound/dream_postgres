@@ -262,6 +262,12 @@ fn tcp_receive_next(socket: TcpSocket) -> Result(Nil, Atom)
 @external(erlang, "dream_postgres_transport_ffi", "tls_receive_next")
 fn tls_receive_next(socket: TlsSocket) -> Result(Nil, Atom)
 
+@external(erlang, "dream_postgres_transport_ffi", "tcp_received_bytes")
+fn tcp_received_bytes(socket: TcpSocket) -> BitArray
+
+@external(erlang, "dream_postgres_transport_ffi", "tls_received_bytes")
+fn tls_received_bytes(socket: TlsSocket) -> BitArray
+
 @external(erlang, "dream_postgres_transport_ffi", "socket_event")
 fn socket_event_of(message: Dynamic, socket: socket) -> FfiSocketEvent
 
@@ -680,6 +686,26 @@ pub fn receive_next(connection: Connection) -> Result(Nil, TransportError) {
     TlsConnection(socket:) -> tls_receive_next(socket)
   }
   |> map_error(socket_error)
+}
+
+/// The bytes that the server sent before a write failed: those that came
+/// as messages to the owner and wait in its mailbox, in order. A server
+/// that ends a session sends its error and then closes, so a write can
+/// fail on the close while the error waits unread in the mailbox. It
+/// never waits.
+///
+/// ## Parameters
+///
+/// - `connection`: a connection that the calling process owns
+///
+/// ## Returns
+///
+/// The bytes, or no bytes when nothing came.
+pub fn received_bytes(connection: Connection) -> BitArray {
+  case connection {
+    PlainConnection(socket:) -> tcp_received_bytes(socket)
+    TlsConnection(socket:) -> tls_received_bytes(socket)
+  }
 }
 
 /// Reads a message that the owner process got, after `receive_next`.
