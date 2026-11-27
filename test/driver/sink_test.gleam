@@ -19,8 +19,9 @@ import driver/server_listener.{
   start_test_listener, stop_listener_session, wait_for_statement,
 }
 import driver/server_sink.{
-  ConnectionSinks, hold_text, notify_self, receive_sent, start_sunk_connection,
-  start_sunk_pool, subscribe_sink,
+  ConnectionSinks, hold_text, notify_self, raise_across_replacement,
+  raise_notice, raise_notification, receive_sent, replace_after_events_crash,
+  start_sunk_connection, start_sunk_pool, subscribe_sink,
 }
 import driver/servers.{first_driver_server}
 import fixtures/sink_maps.{
@@ -31,6 +32,8 @@ import gleam/erlang/process.{type Subject}
 import gleam/option.{None, Some}
 import gleam/result.{flatten, map_error, try}
 import gleam/string.{inspect}
+import matchers/extract_later_call.{extract_later_call}
+import matchers/extract_replaced_answers.{extract_replaced_answers}
 
 /// The tests of the sinks.
 pub fn tests() -> TestSuite {
@@ -355,6 +358,133 @@ fn pool_tests() -> TestSuite {
         |> be_ok
         |> be_equal(Wrapped(MemberConnected(0)))
         |> or_fail_with("Expected the pool event after the map crashed")
+      },
+    ),
+    unit.it(
+      "call a crashed connection events map no more, also after a connection is replaced",
+      fn() {
+        // Arrange
+        let witness = process.new_subject()
+        let receiver: Subject(Wrapped(String)) = process.new_subject()
+        let events = sink.to(receiver, crash_after_telling(witness))
+
+        // Act
+        let later_call =
+          replace_after_events_crash(first_driver_server.port, events, witness)
+
+        // Assert
+        later_call
+        |> should
+        |> be_ok
+        |> be_error
+        |> or_fail_with("Expected no call of the events map after its crash")
+      },
+    ),
+    unit.it(
+      "call a crashed notices map no more, also after a connection is replaced",
+      fn() {
+        // Arrange
+        let witness = process.new_subject()
+        let receiver: Subject(Wrapped(String)) = process.new_subject()
+        let notices = sink.to(receiver, crash_after_telling(witness))
+        let sinks = ConnectionSinks(None, Some(notices), None)
+
+        // Act
+        let run =
+          raise_across_replacement(
+            first_driver_server.port,
+            sinks,
+            witness,
+            raise_notice,
+          )
+
+        // Assert
+        run
+        |> should
+        |> be_ok
+        |> extract_later_call
+        |> be_error
+        |> or_fail_with("Expected no call of the notices map after its crash")
+      },
+    ),
+    unit.it("still serve each connection after the notices map crashed", fn() {
+      // Arrange
+      let witness = process.new_subject()
+      let receiver: Subject(Wrapped(String)) = process.new_subject()
+      let notices = sink.to(receiver, crash_after_telling(witness))
+      let sinks = ConnectionSinks(None, Some(notices), None)
+
+      // Act
+      let run =
+        raise_across_replacement(
+          first_driver_server.port,
+          sinks,
+          witness,
+          raise_notice,
+        )
+
+      // Assert
+      run
+      |> should
+      |> be_ok
+      |> extract_replaced_answers
+      |> be_equal(#("answered", "answered"))
+      |> or_fail_with("Expected both connections to answer")
+    }),
+    unit.it(
+      "call a crashed notifications map no more, also after a connection is replaced",
+      fn() {
+        // Arrange
+        let witness = process.new_subject()
+        let receiver: Subject(Wrapped(String)) = process.new_subject()
+        let notifications = sink.to(receiver, crash_after_telling(witness))
+        let sinks = ConnectionSinks(None, None, Some(notifications))
+
+        // Act
+        let run =
+          raise_across_replacement(
+            first_driver_server.port,
+            sinks,
+            witness,
+            raise_notification,
+          )
+
+        // Assert
+        run
+        |> should
+        |> be_ok
+        |> extract_later_call
+        |> be_error
+        |> or_fail_with(
+          "Expected no call of the notifications map after its crash",
+        )
+      },
+    ),
+    unit.it(
+      "still serve each connection after the notifications map crashed",
+      fn() {
+        // Arrange
+        let witness = process.new_subject()
+        let receiver: Subject(Wrapped(String)) = process.new_subject()
+        let notifications = sink.to(receiver, crash_after_telling(witness))
+        let sinks = ConnectionSinks(None, None, Some(notifications))
+
+        // Act
+        let run =
+          raise_across_replacement(
+            first_driver_server.port,
+            sinks,
+            witness,
+            raise_notification,
+          )
+
+        // Assert
+        run
+        |> should
+        |> be_ok
+        |> extract_replaced_answers
+        |> be_equal(#("answered", "answered"))
+        |> or_fail_with("Expected both connections to answer")
       },
     ),
   ])

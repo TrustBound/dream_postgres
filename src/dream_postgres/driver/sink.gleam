@@ -8,12 +8,15 @@
 ////
 //// The map function must be a plain conversion. It runs in the driver's
 //// process, between the driver's own steps. A map that crashes does not
-//// stop the driver: the delivery catches the crash and gives `MapFailed`,
-//// and the owner of the sink drops it. A pool or a connection process
-//// sets that sink to `None` and sends nothing to it again. A listener
-//// removes the subscription of that sink, the same as when the
-//// subscriber's process stops. The driver has no logger, so the drop is
-//// the only sign: the receiver gets no more messages from that sink.
+//// stop the driver: the delivery catches the crash, sets the sink's drop
+//// flag and gives `MapFailed`. Every copy of the sink shares that flag,
+//// so no copy calls the map again: a pool gives copies of the sinks of its
+//// connection settings to each connection, also to each one that starts
+//// later, and none of them calls a crashed map. The owner of the sink
+//// also drops it: a pool or a connection process sets that sink to `None`,
+//// and a listener removes the subscription of that sink, the same as when
+//// the subscriber's process stops. The driver has no logger, so the drop
+//// is the only sign: the receiver gets no more messages from that sink.
 ////
 //// This module is internal to dream_postgres.
 
@@ -36,15 +39,17 @@ pub type Delivery {
   /// The map function converted the event, and the sink sent the result
   /// to its subject.
   Delivered
-  /// The map function crashed. The sink sent nothing. The owner of the
-  /// sink must drop it.
+  /// The map function crashed, now or at an earlier delivery through any
+  /// copy of the sink. The sink sent nothing. The owner of the sink must
+  /// drop it.
   MapFailed
 }
 
 // Making a sink ---------------------------------------------------------------
 
 /// Makes a sink that converts each event with `map`, then sends the
-/// result to `subject`.
+/// result to `subject`. Each copy of the sink shares one drop flag: once
+/// `map` crashed, no copy calls it again, in any process.
 ///
 /// `map` must be a plain conversion, for example a wrap in a constructor
 /// of the receiver's message type. It runs in the driver's process, so it
@@ -61,20 +66,31 @@ pub type Delivery {
 ///
 /// The sink.
 pub fn to(subject: Subject(message), map: fn(event) -> message) -> Sink(event) {
+  let dropped = new_drop_flag()
   Sink(
-    deliver: fn(event) { deliver_mapped(map, send_to(subject, _), event) },
+    deliver: fn(event) {
+      deliver_mapped(dropped, map, send_to(subject, _), event)
+    },
     owner: fn() { process.subject_owner(subject) },
   )
 }
+
+/// A flag that every copy of a sink shares, set once its map crashed.
+type DropFlag
+
+@external(erlang, "dream_postgres_sink_ffi", "new_drop_flag")
+fn new_drop_flag() -> DropFlag
 
 fn send_to(subject: Subject(message), message: message) -> Nil {
   process.send(subject, message)
 }
 
 /// Calls `map` on the event, catches a crash of it, and sends the result
-/// with `send` outside the catch.
+/// with `send` outside the catch. A crash sets the drop flag, and a sink
+/// whose flag is set calls nothing and gives `MapFailed`.
 @external(erlang, "dream_postgres_sink_ffi", "deliver")
 fn deliver_mapped(
+  dropped: DropFlag,
   map: fn(event) -> message,
   send: fn(message) -> Nil,
   event: event,
