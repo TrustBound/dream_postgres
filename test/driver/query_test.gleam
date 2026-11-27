@@ -5,13 +5,13 @@
 
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/message.{
-  type BackendMessage, type FrontendMessage, type ResultColumn, Bind,
-  BindComplete, CloseComplete, CommandComplete, CopyBothResponse,
-  CopyDataFromServer, CopyDone, CopyDoneFromServer, CopyFail, CopyInResponse,
-  CopyOutResponse, DataRow, Decoded, Describe, EmptyQueryResponse, ErrorResponse,
-  Execute, NoData, NoticeResponse, NotificationResponse, ParameterDescriptions,
-  ParameterStatus, Parse, ParseComplete, Portal, PortalSuspended, Query,
-  ReadyForQuery, ResultColumn, RowDescription, Statement, Sync,
+  type BackendMessage, type ResultColumn, Bind, BindComplete, CloseComplete,
+  CommandComplete, CopyBothResponse, CopyDataFromServer, CopyDoneFromServer,
+  CopyInResponse, CopyOutResponse, DataRow, Decoded, Describe,
+  EmptyQueryResponse, ErrorResponse, Execute, NoData, NoticeResponse,
+  NotificationResponse, ParameterDescriptions, ParameterStatus, Parse,
+  ParseComplete, Portal, PortalSuspended, Query, ReadyForQuery, ResultColumn,
+  RowDescription, Statement, Sync,
 }
 import dream_postgres/driver/query.{
   type Step, type UnexpectedMessage, AwaitingBindComplete, AwaitingCopyComplete,
@@ -34,7 +34,7 @@ import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import gleam/bit_array.{byte_size, concat}
-import gleam/list.{append, map}
+import gleam/list.{map}
 import gleam/option.{type Option, None, Some}
 
 /// The tests of the query steps.
@@ -57,13 +57,10 @@ pub fn tests() -> TestSuite {
 
 // The feeding of messages ---------------------------------------------------
 
-/// The messages that the steps asked to send, in order, and what the last
+/// The bytes that the steps asked to send, in order, and what the last
 /// step gave.
 type Fed(state, outcome) {
-  Fed(
-    sent: List(FrontendMessage),
-    last: Result(Step(state, outcome), UnexpectedMessage),
-  )
+  Fed(sent: BitArray, last: Result(Step(state, outcome), UnexpectedMessage))
 }
 
 /// Gives each message to the step, one at a time, while the step waits.
@@ -73,7 +70,7 @@ fn feed(
   step: fn(state, BackendMessage) ->
     Result(Step(state, outcome), UnexpectedMessage),
 ) -> Fed(state, outcome) {
-  feed_from(Fed(sent: [], last: Ok(Wait(state))), messages, step)
+  feed_from(Fed(sent: <<>>, last: Ok(Wait(state))), messages, step)
 }
 
 fn feed_from(
@@ -91,11 +88,11 @@ fn feed_from(
 }
 
 fn record(
-  sent: List(FrontendMessage),
+  sent: BitArray,
   last: Result(Step(state, outcome), UnexpectedMessage),
 ) -> Fed(state, outcome) {
   case last {
-    Ok(Send(messages:, ..)) -> Fed(sent: append(sent, messages), last:)
+    Ok(Send(bytes:, ..)) -> Fed(sent: <<sent:bits, bytes:bits>>, last:)
     _ -> Fed(sent:, last:)
   }
 }
@@ -294,7 +291,7 @@ fn prepare_tests() {
       // Assert
       fed.sent
       |> should
-      |> be_equal([])
+      |> be_equal(<<>>)
       |> or_fail_with("Expected no messages to send")
     }),
   ]
@@ -968,7 +965,9 @@ fn copy_tests() {
       // Assert
       fed.sent
       |> should
-      |> be_equal([CopyFail("COPY is not supported by this step"), Sync])
+      |> be_equal(<<
+        "f", 39:32, "COPY is not supported by this step":utf8, 0, "S", 4:32,
+      >>)
       |> or_fail_with("Expected CopyFail and Sync")
     }),
     it("refuses a COPY FROM STDIN with the server's error", fn() {
@@ -1075,7 +1074,7 @@ fn copy_tests() {
       // Assert
       fed.sent
       |> should
-      |> be_equal([CopyDone, Sync])
+      |> be_equal(<<"c", 4:32, "S", 4:32>>)
       |> or_fail_with("Expected CopyDone and Sync")
     }),
     it("answers CopyInResponse with CopyFail only in a simple query", fn() {
@@ -1093,7 +1092,7 @@ fn copy_tests() {
       // Assert
       fed.sent
       |> should
-      |> be_equal([CopyFail("COPY is not supported by this step")])
+      |> be_equal(<<"f", 39:32, "COPY is not supported by this step":utf8, 0>>)
       |> or_fail_with("Expected CopyFail only")
     }),
     it("answers CopyBothResponse with CopyDone only in a simple query", fn() {
@@ -1107,7 +1106,7 @@ fn copy_tests() {
       // Assert
       fed.sent
       |> should
-      |> be_equal([CopyDone])
+      |> be_equal(<<"c", 4:32>>)
       |> or_fail_with("Expected CopyDone only")
     }),
     it("goes on with the script after a COPY TO STDOUT", fn() {

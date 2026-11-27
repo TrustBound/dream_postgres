@@ -16,10 +16,11 @@ import dream_postgres/driver/transport.{
   CheckAuthorityAndHost, ConnectRefused, ConnectTimedOut, ConnectionReset,
   DirectNegotiation, DnsLookupFailed, HostNameMismatch, InvalidHost, InvalidPort,
   NoCertificateCheck, NoTls, OtherTlsFailure, PostgresNegotiation, PreferTls,
-  ReceiveTimedOut, RequireTls, ServerRefusedTls, SocketClosed, SystemAuthorities,
-  TlsFailed, TlsRequestAnsweredWithError, TransportConfig, UnexpectedTlsAnswer,
-  UnknownAuthority, Unlisted, address, close, connect, connect_error, receive,
-  send, server_certificate, socket_error, tls_error,
+  ReceiveTimedOut, RequireTls, SendTimedOut, ServerRefusedTls, SocketClosed,
+  SystemAuthorities, TlsFailed, TlsRequestAnsweredWithError, TransportConfig,
+  UnexpectedTlsAnswer, UnknownAuthority, Unlisted, address, close, connect,
+  connect_error, receive, send, send_error, server_certificate, socket_error,
+  tls_error,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -235,7 +236,7 @@ fn config(
   tls: Tls,
 ) -> Result(transport.TransportConfig, TransportError) {
   case address(host, port) {
-    Ok(checked) -> Ok(TransportConfig(checked, tls, 5000))
+    Ok(checked) -> Ok(TransportConfig(checked, tls, 5000, 5000))
     Error(_) -> Error(Unlisted("test address"))
   }
 }
@@ -675,9 +676,12 @@ fn reason_tests() {
     reason_test(ConnectReason, "econnrefused", ConnectRefused),
     reason_test(SocketReason, "closed", SocketClosed),
     reason_test(SocketReason, "enotconn", SocketClosed),
+    reason_test(SocketReason, "einval", SocketClosed),
     reason_test(SocketReason, "econnreset", ConnectionReset),
     reason_test(SocketReason, "timeout", ReceiveTimedOut),
     reason_test(SocketReason, "ehostunreach", Unlisted("ehostunreach")),
+    reason_test(SendReason, "timeout", SendTimedOut),
+    reason_test(SendReason, "closed", SocketClosed),
     reason_test(TlsReason, "hostname_check_failed", TlsFailed(HostNameMismatch)),
     reason_test(TlsReason, "unknown_ca", TlsFailed(UnknownAuthority)),
     reason_test(TlsReason, "cert_expired", TlsFailed(CertificateExpired)),
@@ -695,6 +699,7 @@ fn reason_tests() {
 type ReasonKind {
   ConnectReason
   SocketReason
+  SendReason
   TlsReason
 }
 
@@ -708,6 +713,7 @@ fn kind_name(kind: ReasonKind) -> String {
   case kind {
     ConnectReason -> "connect"
     SocketReason -> "socket call"
+    SendReason -> "send"
     TlsReason -> "TLS handshake"
   }
 }
@@ -720,6 +726,7 @@ fn check_reason(kind: ReasonKind, reason: String, expected: TransportError) {
   let error = case kind {
     ConnectReason -> connect_error(reason_atom, "db")
     SocketReason -> socket_error(reason_atom)
+    SendReason -> send_error(reason_atom)
     TlsReason -> tls_error(reason_atom)
   }
 

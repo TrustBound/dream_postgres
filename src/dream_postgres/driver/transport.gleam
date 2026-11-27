@@ -34,6 +34,7 @@ import dream_postgres/driver/message.{
   NeedMoreBytes, UnknownAnswer,
 }
 import gleam/bool.{guard}
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
 import gleam/list.{all}
 import gleam/option.{type Option, None}
@@ -107,6 +108,10 @@ pub type TransportConfig {
     /// The longest time for the TCP connect, the TLS answer and the TLS
     /// handshake, each.
     connect_timeout_milliseconds: Int,
+    /// The longest time that one send may wait while the server reads
+    /// nothing. After it, the send fails with `SendTimedOut` and the
+    /// socket closes, so a stuck server never blocks its owner.
+    send_timeout_milliseconds: Int,
   )
 }
 
@@ -156,6 +161,8 @@ pub type TransportError {
   ConnectionReset
   /// No bytes came within the receive timeout.
   ReceiveTimedOut
+  /// The server read nothing for the send timeout. The socket is closed.
+  SendTimedOut
   /// Any other OS error: its name, for example `ehostunreach`.
   Unlisted(reason: String)
 }
@@ -184,6 +191,27 @@ type TlsAnswer {
   TlsAnsweredWithError
 }
 
+/// A socket message as the FFI reads it.
+type FfiSocketEvent {
+  Received(BitArray)
+  Ended
+  Failed(Atom)
+  Other
+}
+
+/// What a message to the owner process says about its connection.
+pub type SocketEvent {
+  /// Bytes from the server.
+  BytesReceived(bytes: BitArray)
+  /// The server or the network closed the connection.
+  SocketEnded
+  /// The socket failed, for example with a reset.
+  SocketFailed(error: TransportError)
+  /// The message is not about this connection: another socket's, or no
+  /// socket's.
+  NotThisSocket
+}
+
 /// The CA list as the FFI takes it.
 type AuthorityList {
   System
@@ -191,7 +219,12 @@ type AuthorityList {
 }
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_connect")
-fn tcp_connect(host: String, port: Int, timeout: Int) -> Result(TcpSocket, Atom)
+fn tcp_connect(
+  host: String,
+  port: Int,
+  timeout: Int,
+  send_timeout: Int,
+) -> Result(TcpSocket, Atom)
 
 @external(erlang, "dream_postgres_transport_ffi", "tcp_send")
 fn tcp_send(socket: TcpSocket, bytes: BitArray) -> Result(Nil, Atom)
@@ -222,6 +255,15 @@ fn tls_close(socket: TlsSocket) -> Nil
 
 @external(erlang, "dream_postgres_transport_ffi", "peer_certificate")
 fn tls_peer_certificate(socket: TlsSocket) -> Result(BitArray, Atom)
+
+@external(erlang, "dream_postgres_transport_ffi", "tcp_receive_next")
+fn tcp_receive_next(socket: TcpSocket) -> Result(Nil, Atom)
+
+@external(erlang, "dream_postgres_transport_ffi", "tls_receive_next")
+fn tls_receive_next(socket: TlsSocket) -> Result(Nil, Atom)
+
+@external(erlang, "dream_postgres_transport_ffi", "socket_event")
+fn socket_event_of(message: Dynamic, socket: socket) -> FfiSocketEvent
 
 @external(erlang, "dream_postgres_transport_ffi", "read_authority_file")
 fn read_authority_file(path: String) -> Result(List(BitArray), Atom)
@@ -304,7 +346,12 @@ pub fn connect(config: TransportConfig) -> Result(Connection, TransportError) {
 
 fn open_tcp(config: TransportConfig) -> Result(TcpSocket, TransportError) {
   let Address(host:, port:) = config.address
-  tcp_connect(host, port, config.connect_timeout_milliseconds)
+  tcp_connect(
+    host,
+    port,
+    config.connect_timeout_milliseconds,
+    config.send_timeout_milliseconds,
+  )
   |> map_error(connect_error(_, host))
 }
 
@@ -480,7 +527,7 @@ pub fn send(
     PlainConnection(socket:) -> tcp_send(socket, bytes)
     TlsConnection(socket:) -> tls_send(socket, bytes)
   }
-  |> map_error(socket_error)
+  |> map_error(send_error)
 }
 
 /// Waits for bytes, and gives all the bytes that have come.
@@ -569,10 +616,28 @@ pub fn connect_error(reason: Atom, host: String) -> TransportError {
 pub fn socket_error(reason: Atom) -> TransportError {
   case atom.to_string(reason) {
     "econnrefused" -> ConnectRefused
-    "closed" | "enotconn" -> SocketClosed
+    // A call on a socket that is closed already gives einval or enotconn
+    // on some systems, and closed on others.
+    "closed" | "enotconn" | "einval" -> SocketClosed
     "econnreset" -> ConnectionReset
     "timeout" -> ReceiveTimedOut
     name -> Unlisted(name)
+  }
+}
+
+/// Turns the reason of a failed send into a typed error.
+///
+/// ## Parameters
+///
+/// - `reason`: the error atom of `gen_tcp:send` or `ssl:send`
+///
+/// ## Returns
+///
+/// `SendTimedOut` for a send timeout, else the error of `socket_error`.
+pub fn send_error(reason: Atom) -> TransportError {
+  case atom.to_string(reason) {
+    "timeout" -> SendTimedOut
+    _ -> socket_error(reason)
   }
 }
 
@@ -593,5 +658,49 @@ pub fn tls_error(reason: Atom) -> TransportError {
     "closed" -> SocketClosed
     "timeout" -> ConnectTimedOut
     name -> TlsFailed(OtherTlsFailure(name))
+  }
+}
+
+/// Asks the socket to send its next bytes to the process that owns the
+/// connection, as one message, which `socket_event` reads. After that one
+/// message the socket waits for the next call. The owner gets a message
+/// at once when the server closes the connection, even while it is idle.
+///
+/// ## Parameters
+///
+/// - `connection`: a connection that the calling process owns
+///
+/// ## Returns
+///
+/// - `Ok(Nil)`: the next bytes, the close or the error comes as a message
+/// - `Error(TransportError)`: the socket is closed already
+pub fn receive_next(connection: Connection) -> Result(Nil, TransportError) {
+  case connection {
+    PlainConnection(socket:) -> tcp_receive_next(socket)
+    TlsConnection(socket:) -> tls_receive_next(socket)
+  }
+  |> map_error(socket_error)
+}
+
+/// Reads a message that the owner process got, after `receive_next`.
+///
+/// ## Parameters
+///
+/// - `connection`: the connection that the message may be about
+/// - `message`: any message of the owner's mailbox
+///
+/// ## Returns
+///
+/// The event, or `NotThisSocket` for any other message.
+pub fn socket_event(connection: Connection, message: Dynamic) -> SocketEvent {
+  let event = case connection {
+    PlainConnection(socket:) -> socket_event_of(message, socket)
+    TlsConnection(socket:) -> socket_event_of(message, socket)
+  }
+  case event {
+    Received(bytes) -> BytesReceived(bytes)
+    Ended -> SocketEnded
+    Failed(reason) -> SocketFailed(socket_error(reason))
+    Other -> NotThisSocket
   }
 }

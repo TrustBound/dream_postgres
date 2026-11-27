@@ -23,11 +23,12 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/encode.{copy_done, copy_refusal, sync}
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ResultColumn, Bind,
-  BindComplete, CommandComplete, CopyBothResponse, CopyDataFromServer, CopyDone,
-  CopyDoneFromServer, CopyFail, CopyInResponse, CopyOutResponse, DataRow,
-  Describe, EmptyQueryResponse, ErrorResponse, Execute, NoData, NoticeResponse,
+  BindComplete, CommandComplete, CopyBothResponse, CopyDataFromServer,
+  CopyDoneFromServer, CopyInResponse, CopyOutResponse, DataRow, Describe,
+  EmptyQueryResponse, ErrorResponse, Execute, NoData, NoticeResponse,
   NotificationResponse, ParameterDescriptions, ParameterStatus, Parse,
   ParseComplete, Portal, Query, ReadyForQuery, RowDescription, Statement, Sync,
 }
@@ -46,8 +47,6 @@ import gleam/string.{split, split_once}
 
 /// The message of the CopyFail that a step sends when the server asks for
 /// the data of a `COPY ... FROM STDIN`.
-const copy_refusal = "COPY is not supported by this step"
-
 /// The commands whose tag ends with a row count (docs, "CommandComplete").
 const counted_commands = [
   "INSERT", "UPDATE", "DELETE", "MERGE", "SELECT", "MOVE", "FETCH", "COPY",
@@ -162,8 +161,10 @@ pub type Start(state) {
 
 /// What a step gives after one message from the server.
 pub type Step(state, outcome) {
-  /// Send these messages, in order, then wait for the next message.
-  Send(messages: List(FrontendMessage), state: state)
+  /// Send these bytes, then wait for the next message. A step sends only
+  /// messages that the driver writes itself (CopyFail, CopyDone, Sync), so
+  /// they come as bytes that cannot fail to encode.
+  Send(bytes: BitArray, state: state)
   /// Wait for the next message.
   Wait(state: state)
   /// The step read its ReadyForQuery.
@@ -233,7 +234,7 @@ type Machine {
 
 /// What the shared state machine gives after one message.
 type Transition {
-  Continue(send: List(FrontendMessage), machine: Machine)
+  Continue(send: BitArray, machine: Machine)
   Ready(status: TransactionStatus, machine: Machine)
   Ended(report: ServerReport, machine: Machine)
 }
@@ -521,7 +522,7 @@ fn to_step(
   build_outcome: fn(Machine, TransactionStatus) -> outcome,
 ) -> Step(state, outcome) {
   case transition {
-    Continue(send: [], machine:) -> Wait(wrap_state(machine))
+    Continue(send: <<>>, machine:) -> Wait(wrap_state(machine))
     Continue(send:, machine:) -> Send(send, wrap_state(machine))
     Ready(status:, machine:) -> Finished(build_outcome(machine, status))
     Ended(report:, machine:) ->
@@ -751,21 +752,18 @@ fn copy_answer(
 ) -> Result(Transition, UnexpectedMessage) {
   case message {
     CopyInResponse(..) ->
-      Ok(refuse_copy(machine, CopyFail(copy_refusal), AwaitingCopyComplete))
+      Ok(refuse_copy(machine, copy_refusal(), AwaitingCopyComplete))
     CopyOutResponse(..) -> Ok(refuse_copy_out(machine))
-    CopyBothResponse(..) -> Ok(refuse_copy(machine, CopyDone, ReadingCopyOut))
+    CopyBothResponse(..) ->
+      Ok(refuse_copy(machine, copy_done(), ReadingCopyOut))
     _ -> unexpected(machine, message)
   }
 }
 
-fn refuse_copy(
-  machine: Machine,
-  answer: FrontendMessage,
-  phase: Phase,
-) -> Transition {
+fn refuse_copy(machine: Machine, answer: BitArray, phase: Phase) -> Transition {
   let send = case machine.protocol {
-    ExtendedProtocol -> [answer, Sync]
-    SimpleProtocol -> [answer]
+    ExtendedProtocol -> <<answer:bits, sync():bits>>
+    SimpleProtocol -> answer
   }
   Continue(send:, machine: Machine(..machine, phase:, copy_refused: True))
 }
@@ -820,7 +818,7 @@ fn advance(machine: Machine) -> Machine {
 }
 
 fn wait_with(machine: Machine) -> Transition {
-  Continue(send: [], machine:)
+  Continue(send: <<>>, machine:)
 }
 
 fn unexpected(

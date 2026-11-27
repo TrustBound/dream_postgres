@@ -77,16 +77,16 @@ pub fn encode(message: FrontendMessage) -> Result(BitArray, EncodeError) {
       bind(portal, statement, parameters, result_formats)
     Describe(target:) -> target_message("D", target)
     Execute(portal:, row_limit:) -> execute(portal, row_limit)
-    Sync -> Ok(<<"S", 4:32>>)
+    Sync -> Ok(sync())
     Flush -> Ok(<<"H", 4:32>>)
     Close(target:) -> target_message("C", target)
     Query(query:) -> string_message("Q", "query", query)
     FunctionCall(function_id:, arguments:, result_format:) ->
       function_call(function_id, arguments, result_format)
     CopyData(data:) -> framed(data, "d")
-    CopyDone -> Ok(<<"c", 4:32>>)
+    CopyDone -> Ok(copy_done())
     CopyFail(message:) -> string_message("f", "message", message)
-    Terminate -> Ok(<<"X", 4:32>>)
+    Terminate -> Ok(terminate())
   }
 }
 
@@ -98,6 +98,48 @@ pub fn encode(message: FrontendMessage) -> Result(BitArray, EncodeError) {
 /// The eight bytes of the SSLRequest.
 pub fn ssl_request() -> BitArray {
   <<8:32, ssl_request_code:32>>
+}
+
+/// The bytes of a Sync. It has no field, so it cannot fail.
+///
+/// ## Returns
+///
+/// The five bytes of the Sync.
+pub fn sync() -> BitArray {
+  <<"S", 4:32>>
+}
+
+/// The bytes of a CopyDone. It has no field, so it cannot fail.
+///
+/// ## Returns
+///
+/// The five bytes of the CopyDone.
+pub fn copy_done() -> BitArray {
+  <<"c", 4:32>>
+}
+
+/// The reason in the CopyFail that refuses a COPY. The server puts it in
+/// its 57014 error.
+pub const copy_refusal_reason = "COPY is not supported by this step"
+
+/// The bytes of the CopyFail that refuses a COPY, with
+/// `copy_refusal_reason`. Its text has no zero byte, so it cannot fail.
+///
+/// ## Returns
+///
+/// The bytes of the CopyFail.
+pub fn copy_refusal() -> BitArray {
+  let body = <<copy_refusal_reason:utf8, 0>>
+  <<"f", { byte_size(body) + 4 }:32, body:bits>>
+}
+
+/// The bytes of a Terminate. It has no field, so it cannot fail.
+///
+/// ## Returns
+///
+/// The five bytes of the Terminate.
+pub fn terminate() -> BitArray {
+  <<"X", 4:32>>
 }
 
 fn startup_message(

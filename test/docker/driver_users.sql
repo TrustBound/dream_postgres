@@ -12,3 +12,7 @@ CREATE ROLE dream_tls LOGIN PASSWORD 'dream';
 SET password_encryption = 'md5';
 CREATE ROLE dream_md5 LOGIN PASSWORD 'dream';
 RESET password_encryption;
+
+-- The connection tests change this user's password while a connection is
+-- logged in, so a reconnect fails, and set it back. No other test uses it.
+CREATE ROLE dream_reconnect LOGIN PASSWORD 'dream';

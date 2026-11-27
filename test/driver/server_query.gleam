@@ -100,18 +100,18 @@ fn next_step(
   case query_step {
     Finished(outcome) -> Ok(#(outcome, session))
     Wait(state) -> read_messages(session, state, step)
-    Send(messages, state) -> send_and_read(session, messages, state, step)
+    Send(bytes, state) -> send_and_read(session, bytes, state, step)
     ConnectionEnded(report, _messages) -> Error(ServerEnded(report))
   }
 }
 
 fn send_and_read(
   session: Session,
-  messages: List(FrontendMessage),
+  bytes: BitArray,
   state: state,
   step: StepFunction(state, outcome),
 ) -> Result(#(outcome, Session), QueryFailure) {
-  use Nil <- try(send_messages(session.connection, messages))
+  use Nil <- try(send(session.connection, bytes) |> map_error(TransportFailed))
   read_messages(session, state, step)
 }
 

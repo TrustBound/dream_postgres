@@ -1,5 +1,5 @@
 -module(driver_fake_server_ffi).
--export([start/1, client_closed/1]).
+-export([start/1, client_closed/1, start_silent/0]).
 
 %% A fake PostgreSQL server for the transport tests: it does one thing a
 %% real server never does, then reports whether the client closed its end.
@@ -82,3 +82,20 @@ second_connection(Listen) ->
         {error, _Reason} -> ok
     end,
     gen_tcp:close(Listen).
+
+%% A server that accepts one connection and never sends a byte, until the
+%% client closes. It gives its port.
+start_silent() ->
+    Caller = self(),
+    Ready = make_ref(),
+    spawn(fun() ->
+        {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]),
+        {ok, Port} = inet:port(Listen),
+        Caller ! {Ready, Port},
+        {ok, Socket} = gen_tcp:accept(Listen, ?WAIT),
+        wait_for_close(gen_tcp, Socket),
+        gen_tcp:close(Listen)
+    end),
+    receive
+        {Ready, Port} -> Port
+    end.

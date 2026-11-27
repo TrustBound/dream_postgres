@@ -105,7 +105,7 @@ fn open(
     address(test_login.host, server.port)
     |> result.replace_error(AddressRefused),
   )
-  connect(TransportConfig(checked, test_login.tls, 5000))
+  connect(TransportConfig(checked, test_login.tls, 5000, 5000))
   |> map_error(TransportFailed)
 }
 

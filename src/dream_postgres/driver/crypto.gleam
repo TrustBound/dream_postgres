@@ -117,3 +117,16 @@ pub fn exclusive_or(first: BitArray, second: BitArray) -> BitArray
 /// `True` when the bytes are equal.
 @external(erlang, "crypto", "hash_equals")
 pub fn equal_in_constant_time(first: BitArray, second: BitArray) -> Bool
+
+/// Random bytes from the operating system's secure source, for example the
+/// client nonce of a SCRAM login.
+///
+/// ## Parameters
+///
+/// - `count`: how many bytes
+///
+/// ## Returns
+///
+/// `count` random bytes.
+@external(erlang, "crypto", "strong_rand_bytes")
+pub fn random_bytes(count: Int) -> BitArray
