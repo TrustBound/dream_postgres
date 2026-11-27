@@ -9,8 +9,13 @@ read_recording(Name) ->
         {error, Reason} -> {error, atom_to_binary(Reason)}
     end.
 
-%% The DER bytes of the first certificate of a PEM file.
+%% The DER bytes of the first certificate of a PEM file, or an error text
+%% when the file cannot be read or holds no certificate.
 read_certificate(Path) ->
-    {ok, Pem} = file:read_file(Path),
-    [{'Certificate', Der, not_encrypted} | _] = public_key:pem_decode(Pem),
-    Der.
+    case file:read_file(Path) of
+        {ok, Pem} -> first_certificate(public_key:pem_decode(Pem));
+        {error, Reason} -> {error, atom_to_binary(Reason)}
+    end.
+
+first_certificate([{'Certificate', Der, not_encrypted} | _]) -> {ok, Der};
+first_certificate(_Entries) -> {error, <<"no certificate in the file">>}.
