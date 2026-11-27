@@ -35,3 +35,16 @@ pub fn start_silent_server() -> Int
 /// A port on localhost with no listener.
 @external(erlang, "port_ffi", "free_port")
 pub fn free_port() -> Int
+
+/// Starts a fake server on a free port of localhost that reads the
+/// StartupMessage of its one client and answers with the FATAL
+/// ErrorResponse 28P01. `client_closed` then tells whether the client
+/// closed its socket.
+@external(erlang, "driver_parity_ffi", "start_login_refusing_server")
+pub fn start_login_refusing_server() -> #(Int, FakeServer)
+
+/// Starts a fake server on a free port of localhost that reads the
+/// SSLRequest of its one client and then closes its sending side.
+/// `client_closed` then tells whether the client closed its socket.
+@external(erlang, "driver_parity_ffi", "start_closing_server")
+pub fn start_closing_server() -> #(Int, FakeServer)

@@ -1,759 +1,300 @@
 //// The parity tests: behaviors that the Common Test suites of the pgo fork
 //// proved, run on the driver, on the driver servers of PostgreSQL 16 to
 //// 19. `test/driver/PARITY.md` maps each case of the fork to its test.
+////
+//// Each describe has its own kind of setup: a connection, a connection
+//// through a proxy, a pool, a pool through a proxy, nothing, or a
+//// supervised connection. Each start is in a setup whose teardown stops it.
 
 import dream_postgres/driver/connection.{
-  type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type DriverError, type Outcome, type StatementCaching,
-  Backoff, CacheStatements, ConnectionConfig, ConnectionLost, Disconnected,
-  LoginRefused, Reconnected, ServerEndedConnection, ServerRefused, SocketFailed,
-  StatementChanged, TransportRefused, UnnamedStatements,
+  type Connection, type ConnectionConfig, type StatementCaching, CacheStatements,
+  ConnectionLost, Disconnected, SocketFailed, TransportRefused,
+  UnnamedStatements, run, run_script, server_parameter, start,
 }
-import dream_postgres/driver/login.{
-  type Password, PreferChannelBinding, ServerRejectedLogin,
-}
-import dream_postgres/driver/message.{Protocol30}
-import dream_postgres/driver/pool.{
-  type Pool, type PoolConfig, type PoolStatus, PoolConfig, PoolStatus,
-}
-import dream_postgres/driver/statement_cache
+import dream_postgres/driver/pool.{PoolStatus}
 import dream_postgres/driver/transport.{
-  type Tls, type TransportError, AuthorityFile, AuthorityFileUnreadable,
-  CheckAuthorityAndHost, ConnectionReset, DnsLookupFailed, InvalidPort,
-  NoCertificateCheck, NoTls, PostgresNegotiation, RequireTls, ServerRefusedTls,
-  SocketClosed, TlsFailed, TransportConfig,
+  AuthorityFile, AuthorityFileUnreadable, CheckAuthorityAndHost, ConnectionReset,
+  DnsLookupFailed, InvalidPort, NoCertificateCheck, PostgresNegotiation,
+  RequireTls, ServerRefusedTls, SocketClosed, TlsFailed, address, connect,
 }
 import dream_postgres/internal/cell.{
-  type Cell, type ColumnDescription, type Format, type ServerReport, Binary,
-  BinaryFormat, Null, Text, TextFormat,
+  type Cell, Binary, BinaryFormat, Null, Text, TextFormat,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/context
+import dream_test/matchers.{
+  be_equal, be_error, be_ok, be_some, be_true, or_fail_with, should,
+}
 import dream_test/suite.{type TestSuite}
-import dream_test/unit.{describe, group, it}
-import driver/servers.{type Server, driver_servers}
-import gleam/bit_array
-import gleam/erlang/process.{type Pid, type Subject}
-import gleam/int.{to_string}
-import gleam/list.{map, try_map}
-import gleam/option.{None, Some}
-import gleam/otp/static_supervisor
-import gleam/pair
-import gleam/result.{try}
-import gleam/string
-
-@external(erlang, "driver_parity_ffi", "start_login_refusing_server")
-fn start_login_refusing_server() -> #(Int, FakeServer)
-
-@external(erlang, "driver_parity_ffi", "start_closing_server")
-fn start_closing_server() -> #(Int, FakeServer)
-
-@external(erlang, "driver_parity_ffi", "client_closed")
-fn parity_client_closed(server: FakeServer) -> Bool
-
-@external(erlang, "driver_parity_ffi", "status_holds")
-fn status_holds(pid: Pid, text: String) -> Bool
-
-@external(erlang, "driver_parity_ffi", "stop_process")
-fn stop_process(pid: Pid) -> Nil
-
-@external(erlang, "driver_fake_server_ffi", "start")
-fn start_fake_server(behavior: FakeBehavior) -> #(Int, FakeServer)
-
-@external(erlang, "driver_fake_server_ffi", "client_closed")
-fn fake_client_closed(server: FakeServer) -> Bool
-
-@external(erlang, "driver_proxy_ffi", "start")
-fn start_proxy(server_port: Int) -> #(Int, Proxy)
-
-@external(erlang, "driver_proxy_ffi", "close_client")
-fn close_client(proxy: Proxy) -> Nil
-
-@external(erlang, "driver_proxy_ffi", "reset_client")
-fn reset_client(proxy: Proxy) -> Nil
-
-@external(erlang, "driver_connection_test_ffi", "pid_of")
-fn pid_of(connection: Connection) -> Pid
-
-type FakeServer
-
-type Proxy
-
-/// What the fake server of `driver_fake_server_ffi` does after the
-/// SSLRequest.
-type FakeBehavior {
-  Answer(BitArray)
+import dream_test/unit_context.{
+  type ContextNode, after_each, before_each, describe, group, it,
 }
+import driver/fake_server.{
+  Answer, start_closing_server, start_fake_server, start_login_refusing_server,
+}
+import driver/proxy.{close_client, reset_client}
+import driver/server_connection.{
+  type ProxiedConnection, backend_pid, caching_config, connection_config,
+  connection_setup, database_config, host_config, next_event,
+  on_proxied_connection, parameter_config, parameters_config,
+  password_function_config, pid_of, proxied_setup, query_text,
+  run_failing_statement, run_failing_statement_with_parameters, run_setup_script,
+  run_setup_statement, start_test_configured, start_test_proxied,
+  stop_connection, stop_proxied, supervised_connection_setup, terminate_backend,
+  tls_config, user_config, wait_for_proxied_reconnect, wait_for_reconnect,
+}
+import driver/server_pool.{
+  type PoolSession, type ProxiedPool, held_backend_pid, hold_connection,
+  pool_session_setup, pool_status, proxied_pool_setup, start_test_pool,
+  start_test_proxied_pool, stop_pool_session, stop_proxied_pool,
+  wait_for_available_count, while_holding,
+}
+import driver/servers.{
+  type Server, driver_servers, first_driver_server, server_without_tls,
+}
+import fixtures/driver_tls.{transport_config}
+import gleam/bit_array
+import gleam/int.{to_string}
+import gleam/list.{append, map, try_map}
+import gleam/option.{None}
+import gleam/result.{try}
+import gleam/string.{join}
+import matchers/be_different_parts.{be_different_parts}
+import matchers/extract_changed_column_names.{extract_changed_column_names}
+import matchers/extract_client_closed.{extract_client_closed}
+import matchers/extract_column_names.{extract_column_names}
+import matchers/extract_command_result.{extract_command_result}
+import matchers/extract_command_rows.{extract_command_rows}
+import matchers/extract_command_tag.{extract_command_tag}
+import matchers/extract_driver_error_code.{extract_driver_error_code}
+import matchers/extract_ending_report.{extract_ending_report}
+import matchers/extract_first.{extract_first}
+import matchers/extract_login_refusal_code.{extract_login_refusal_code}
+import matchers/extract_login_refusal_report.{extract_login_refusal_report}
+import matchers/extract_outcome_tags.{extract_outcome_tags}
+import matchers/extract_printed_status.{extract_printed_status}
+import matchers/extract_report_code.{extract_report_code}
+import matchers/extract_report_message.{extract_report_message}
+import matchers/extract_report_severity.{extract_report_severity}
+import matchers/extract_result_columns.{extract_result_columns}
+import matchers/not_contain_text.{not_contain_text}
 
 /// The longest time of each request.
 const deadline = 5000
 
-/// The PostgreSQL 16 server of the old client tests, with SSL off.
-const server_without_tls = 5436
-
 /// The printed form of the password `dream`, as a binary.
 const printed_password = "<<\"dream\">>"
 
-/// The tests of the parity suite.
+/// The tests of the parity suite. The describes run one after the other;
+/// the tests of one describe run at the same time.
 pub fn tests() -> TestSuite {
-  describe("dream_postgres/driver parity with the pgo fork", [
-    group("on each driver server", map(driver_servers(), server_tests)),
-    group("addresses", address_tests()),
-    group("closed sockets", socket_tests()),
-    group("the password", password_tests()),
+  suite.group("dream_postgres/driver parity with the pgo fork", [
+    connection_tests(),
+    proxied_tests(),
+    pool_tests(),
+    proxied_pool_tests(),
+    unstarted_tests(),
+    supervisor_tests(),
   ])
 }
 
 // Settings --------------------------------------------------------------------
 
-fn login_config(
-  port: Int,
-  user: String,
-  database: String,
-  password: Password,
-  parameters: List(#(String, String)),
-) -> Result(ConnectionConfig, String) {
-  use address <- try(
-    transport.address("localhost", port) |> result.map_error(string.inspect),
-  )
-  use login_settings <- try(
-    login.new(
-      user:,
-      database:,
-      password:,
-      parameters:,
-      channel_binding: PreferChannelBinding,
-      protocol_version: Protocol30,
-    )
-    |> result.map_error(string.inspect),
-  )
-  Ok(ConnectionConfig(
-    transport: TransportConfig(address, NoTls, 5000, 5000),
-    login: login_settings,
-    setup_timeout_milliseconds: 5000,
-    cancel_timeout_milliseconds: 2000,
-    reconnect: Backoff(10, 1000),
-    events: None,
-    notifications: None,
-    statements: CacheStatements(statement_cache.default_limit),
-  ))
-}
-
-/// The user `dream`, with the session time zone UTC.
-fn dream_config(port: Int) -> Result(ConnectionConfig, String) {
-  login_config(
-    port,
-    "dream",
-    servers.database,
-    login.password(servers.password),
-    [#("TimeZone", "UTC")],
-  )
-}
-
-fn with_caching(
-  config: ConnectionConfig,
+/// A `before_each` hook that starts a connection as `dream` to `server`,
+/// with the session time zone UTC and the statement caching `caching`.
+fn dream_connection(
+  server: Server,
   caching: StatementCaching,
-) -> ConnectionConfig {
-  ConnectionConfig(..config, statements: caching)
-}
-
-fn with_events(
-  config: ConnectionConfig,
-  events: Subject(ConnectionEvent),
-) -> ConnectionConfig {
-  ConnectionConfig(..config, events: Some(events))
-}
-
-fn with_tls(config: ConnectionConfig, tls: Tls) -> ConnectionConfig {
-  ConnectionConfig(
-    ..config,
-    transport: TransportConfig(..config.transport, tls:),
+) -> fn(Connection) -> Result(Connection, String) {
+  start_test_configured(
+    parameter_config(server.port, "TimeZone", "UTC")
+    |> result.map(caching_config(_, caching)),
   )
 }
 
-fn read_password() -> String {
-  servers.password
+/// The user `dream_md5` logs in with the password `dream`. Its own name
+/// prints as `<<"dream_md5">>`, so only the password prints as
+/// `<<"dream">>`.
+fn md5_config() -> Result(ConnectionConfig, String) {
+  user_config(first_driver_server.port, "dream_md5", servers.password)
 }
 
-// Requests --------------------------------------------------------------------
+// With a connection of its own ------------------------------------------------
 
-fn with_connection(
-  config: Result(ConnectionConfig, String),
-  body: fn(Connection) -> Result(value, String),
-) -> Result(value, String) {
-  use settings <- try(config)
-  use started <- try(
-    connection.start(settings) |> result.map_error(string.inspect),
+fn connection_tests() -> TestSuite {
+  describe(
+    "with a connection of its own",
+    connection_setup(first_driver_server),
+    [
+      after_each(stop_connection),
+      group("on each driver server", map(driver_servers(), server_tests)),
+      group("the password", [
+        before_each(start_test_configured(md5_config())),
+        it("stays out of the status of the connection process", fn(connection) {
+          pid_of(connection)
+          |> should
+          |> extract_printed_status
+          |> not_contain_text(printed_password)
+          |> or_fail_with("Expected no password in the status")
+        }),
+      ]),
+    ],
   )
-  let value = body(started)
-  connection.stop(started)
-  value
 }
 
-fn run(
-  connection: Connection,
-  sql: String,
-  parameters: List(Cell),
-) -> Result(Outcome, String) {
-  connection.run(connection, sql, parameters, [], deadline)
-  |> result.map_error(string.inspect)
-}
-
-fn rows(
-  connection: Connection,
-  sql: String,
-  parameters: List(Cell),
-) -> Result(List(List(String)), String) {
-  run(connection, sql, parameters) |> result.map(texts)
-}
-
-fn script(connection: Connection, sql: String) -> Result(List(String), String) {
-  connection.run_script(connection, sql, deadline)
-  |> result.map(map(_, tag))
-  |> result.map_error(string.inspect)
-}
-
-fn tag(outcome: Outcome) -> String {
-  outcome.result.tag
-}
-
-fn texts(outcome: Outcome) -> List(List(String)) {
-  map(outcome.result.rows, row_texts)
-}
-
-fn row_texts(row: List(Cell)) -> List(String) {
-  map(row, cell_text)
-}
-
-fn cell_text(cell: Cell) -> String {
-  case cell {
-    Text(bytes) -> bit_array.to_string(bytes) |> result.unwrap("not UTF-8")
-    Binary(bytes) -> string.inspect(bytes)
-    Null -> "NULL"
-  }
-}
-
-/// What a run that should fail gave: the SQLSTATE of a refusal, the
-/// SQLSTATE of a session that the server ended, StatementChanged, or the
-/// tag of a run that worked.
-fn answer_kind(answer: Result(Outcome, DriverError)) -> String {
-  case answer {
-    Ok(outcome) -> "ran " <> tag(outcome)
-    Error(ServerRefused(report, _status)) -> report.code
-    Error(ServerEndedConnection(report)) -> "ended " <> report.code
-    Error(StatementChanged(_description)) -> "StatementChanged"
-    Error(other) -> string.inspect(other)
-  }
-}
-
-fn try_run(
-  connection: Connection,
-  sql: String,
-  parameters: List(Cell),
-) -> String {
-  connection.run(connection, sql, parameters, [], deadline) |> answer_kind
-}
-
-fn current_setting(
-  connection: Connection,
-  name: String,
-) -> Result(String, String) {
-  use answer <- try(
-    rows(connection, "SELECT current_setting($1)", [
-      Text(bit_array.from_string(name)),
-    ]),
-  )
-  case answer {
-    [[value]] -> Ok(value)
-    _ -> Error("not one value: " <> string.inspect(answer))
-  }
-}
-
-fn backend_pid(connection: Connection) -> Result(String, String) {
-  current_value(connection, "SELECT pg_backend_pid()::text")
-}
-
-fn current_value(
-  connection: Connection,
-  sql: String,
-) -> Result(String, String) {
-  use answer <- try(rows(connection, sql, []))
-  case answer {
-    [[value]] -> Ok(value)
-    _ -> Error("not one value: " <> string.inspect(answer))
-  }
-}
-
-/// Waits for the event `Reconnected`, and skips the events before it.
-fn wait_for_reconnect(events: Subject(ConnectionEvent)) -> Result(Nil, String) {
-  case process.receive(events, 5000) {
-    Ok(Reconnected) -> Ok(Nil)
-    Ok(_other) -> wait_for_reconnect(events)
-    Error(Nil) -> Error("no reconnect within 5 seconds")
-  }
-}
-
-fn start_refusal(config: ConnectionConfig) -> Result(ServerReport, String) {
-  case connection.start(config) {
-    Ok(started) -> stopped_with(started, Error("the login worked"))
-    Error(LoginRefused(ServerRejectedLogin(report))) -> Ok(report)
-    Error(other) -> Error(string.inspect(other))
-  }
-}
-
-fn stopped_with(started: Connection, value: value) -> value {
-  connection.stop(started)
-  value
-}
-
-fn start_error(config: ConnectionConfig) -> Result(ConnectError, String) {
-  case connection.start(config) {
-    Ok(started) -> stopped_with(started, Error("the connection started"))
-    Error(error) -> Ok(error)
-  }
-}
-
-fn severity_and_code(report: ServerReport) -> #(String, String) {
-  #(report.severity, report.code)
-}
-
-fn code_and_message(report: ServerReport) -> #(String, String) {
-  #(report.code, report.message)
-}
-
-fn outcome_rows(outcome: Outcome) -> List(List(Cell)) {
-  outcome.result.rows
-}
-
-fn column_name(column: ColumnDescription) -> String {
-  column.name
-}
-
-fn text_cell(text: String) -> Cell {
-  Text(bit_array.from_string(text))
-}
-
-// On each server --------------------------------------------------------------
-
-fn server_tests(server: Server) {
+fn server_tests(server: Server) -> ContextNode(Connection) {
   group("PostgreSQL " <> to_string(server.version), [
-    group("login errors", login_tests(server)),
-    group("startup parameters", parameter_tests(server)),
-    group("sessions that the server ends", session_tests(server)),
+    group("login errors", [
+      before_each(start_test_configured(password_function_config(server.port))),
+      it("logs in with a password from a function", fn(connection) {
+        // Act
+        let outcome = run(connection, "SELECT 1", [], [], deadline)
+
+        // Assert
+        outcome
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Text(<<"1">>)]])
+        |> or_fail_with("Expected the login to work and the query to run")
+      }),
+    ]),
+    group("startup parameters", map(setting_cases(), setting_test(server, _))),
+    group("sessions that the server ends", [
+      before_each(dream_connection(server, CacheStatements(512))),
+      it(
+        "gives the 57P01 of a session that the server ends during a run",
+        fn(connection) {
+          // Act
+          let answer = run(connection, terminate_own_session, [], [], deadline)
+
+          // Assert
+          answer
+          |> should
+          |> be_error
+          |> extract_ending_report
+          |> extract_report_code
+          |> be_equal("57P01")
+          |> or_fail_with("Expected ServerEndedConnection with 57P01")
+        },
+      ),
+    ]),
     group("requests", request_tests(server)),
     group("the format of each column and parameter", format_tests(server)),
-    group(
-      "a column type that changes, with named statements",
-      map(type_changes(), cached_change_test(server, _)),
-    ),
-    group(
-      "a column type that changes, with unnamed statements",
-      map(type_changes(), unnamed_change_test(server, _)),
-    ),
+    group("a column type that changes, with named statements", [
+      before_each(dream_connection(server, CacheStatements(512))),
+      ..map(type_changes(), cached_change_tests)
+    ]),
+    group("a column type that changes, with unnamed statements", [
+      before_each(dream_connection(server, UnnamedStatements)),
+      ..map(type_changes(), unnamed_change_tests)
+    ]),
     group("statements after a schema change", schema_tests(server)),
-    group("the pool", pool_tests(server)),
   ])
-}
-
-// Login errors ----------------------------------------------------------------
-
-fn login_tests(server: Server) {
-  [
-    it("gives the FATAL 28P01 of the server for a wrong password", fn() {
-      check_wrong_password(server)
-    }),
-    it("gives the 3D000 of the server for a database that does not exist", fn() {
-      check_missing_database(server)
-    }),
-    it("logs in with a password from a function", fn() {
-      check_password_function(server)
-    }),
-  ]
-}
-
-fn check_wrong_password(server: Server) {
-  // Arrange
-  let config =
-    login_config(
-      server.port,
-      "dream",
-      servers.database,
-      login.password("wrong"),
-      [],
-    )
-
-  // Act
-  let refusal = config |> try(start_refusal) |> result.map(severity_and_code)
-
-  // Assert
-  refusal
-  |> should
-  |> be_equal(Ok(#("FATAL", "28P01")))
-  |> or_fail_with("Expected the FATAL 28P01 of the server")
-}
-
-fn check_missing_database(server: Server) {
-  // Arrange
-  let config =
-    login_config(
-      server.port,
-      "dream",
-      "parity_no_such_database",
-      login.password(servers.password),
-      [],
-    )
-
-  // Act
-  let refusal = config |> try(start_refusal) |> result.map(code_and_message)
-
-  // Assert
-  refusal
-  |> should
-  |> be_equal(
-    Ok(#("3D000", "database \"parity_no_such_database\" does not exist")),
-  )
-  |> or_fail_with("Expected the 3D000 of the server")
-}
-
-fn check_password_function(server: Server) {
-  // Arrange
-  let config =
-    login_config(
-      server.port,
-      "dream",
-      servers.database,
-      login.password_function(read_password),
-      [],
-    )
-
-  // Act
-  let answer = {
-    use connection <- with_connection(config)
-    rows(connection, "SELECT 1", [])
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok([["1"]]))
-  |> or_fail_with("Expected the login to work and the query to run")
-}
-
-// Startup parameters ------------------------------------------------------------
-
-fn parameter_tests(server: Server) {
-  [
-    it("sets the caller's application_name", fn() {
-      check_settings(server, [#("application_name", "billing")], [
-        #("application_name", "billing"),
-      ])
-    }),
-    it("sets the default application_name when the caller gives none", fn() {
-      check_settings(server, [], [#("application_name", "dream_postgres")])
-    }),
-    it("sets the caller's application_name in any case of its name", fn() {
-      check_settings(server, [#("Application_Name", "billing")], [
-        #("application_name", "billing"),
-      ])
-    }),
-    it("sets application_name between other parameters", fn() {
-      check_settings(
-        server,
-        [
-          #("client_encoding", "UTF8"),
-          #("application_name", "billing"),
-          #("TimeZone", "Europe/Paris"),
-        ],
-        expected_settings(),
-      )
-    }),
-    it("sets parameters in any order", fn() {
-      check_settings(
-        server,
-        [
-          #("TimeZone", "Europe/Paris"),
-          #("application_name", "billing"),
-          #("client_encoding", "UTF8"),
-        ],
-        expected_settings(),
-      )
-    }),
-  ]
-}
-
-fn expected_settings() -> List(#(String, String)) {
-  [
-    #("application_name", "billing"),
-    #("client_encoding", "UTF8"),
-    #("TimeZone", "Europe/Paris"),
-  ]
-}
-
-fn check_settings(
-  server: Server,
-  parameters: List(#(String, String)),
-  expected: List(#(String, String)),
-) {
-  // Arrange
-  let config =
-    login_config(
-      server.port,
-      "dream",
-      servers.database,
-      login.password(servers.password),
-      parameters,
-    )
-  let names = map(expected, setting_name)
-
-  // Act
-  let settings = {
-    use connection <- with_connection(config)
-    try_map(names, named_setting(connection, _))
-  }
-
-  // Assert
-  settings
-  |> should
-  |> be_equal(Ok(expected))
-  |> or_fail_with("Expected the settings of the startup parameters")
-}
-
-fn setting_name(setting: #(String, String)) -> String {
-  setting.0
-}
-
-fn named_setting(
-  connection: Connection,
-  name: String,
-) -> Result(#(String, String), String) {
-  current_setting(connection, name) |> result.map(pair.new(name, _))
-}
-
-// Sessions that the server ends --------------------------------------------------
-
-fn session_tests(server: Server) {
-  [
-    it("gives the 57P01 of a session that the server ends during a run", fn() {
-      check_session_ended_in_run(server)
-    }),
-    it("runs on a new session after the server ended the last one", fn() {
-      check_run_after_end(server)
-    }),
-    it("connects again when the server ends an idle session", fn() {
-      check_idle_session_ended(server)
-    }),
-    it("prepares its statements again on the new session", fn() {
-      check_reconnect_starts_empty(server)
-    }),
-    it("tells of a reset by the network as ConnectionReset", fn() {
-      check_network_loss(server, reset_client, ConnectionReset)
-    }),
-    it("tells of a close by the network as SocketClosed", fn() {
-      check_network_loss(server, close_client, SocketClosed)
-    }),
-  ]
 }
 
 const terminate_own_session = "SELECT pg_terminate_backend(pg_backend_pid())"
 
-fn check_session_ended_in_run(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    Ok(try_run(connection, terminate_own_session, []))
-  }
+// Startup parameters ------------------------------------------------------------
 
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok("ended 57P01"))
-  |> or_fail_with("Expected ServerEndedConnection with 57P01")
-}
-
-fn check_run_after_end(server: Server) {
-  // Arrange
-  let events = process.new_subject()
-  let config = dream_config(server.port) |> result.map(with_events(_, events))
-
-  // Act
-  let answer = {
-    use connection <- with_connection(config)
-    let _ended = try_run(connection, terminate_own_session, [])
-    use Nil <- try(wait_for_reconnect(events))
-    rows(connection, "SELECT 1", [])
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok([["1"]]))
-  |> or_fail_with("Expected the run on the new session")
-}
-
-fn check_idle_session_ended(server: Server) {
-  // Arrange
-  let events = process.new_subject()
-  let config = dream_config(server.port) |> result.map(with_events(_, events))
-
-  // Act
-  let answer = {
-    use connection <- with_connection(config)
-    use control <- with_connection(dream_config(server.port))
-    use old_pid <- try(backend_pid(connection))
-    use _ended <- try(
-      rows(control, "SELECT pg_terminate_backend($1::int4)", [
-        text_cell(old_pid),
-      ]),
-    )
-    use Nil <- try(wait_for_reconnect(events))
-    use new_pid <- try(backend_pid(connection))
-    Ok(new_pid != old_pid)
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(True))
-  |> or_fail_with("Expected a new backend after the reconnect")
-}
-
-fn check_network_loss(
-  server: Server,
-  breaking: fn(Proxy) -> Nil,
-  expected: TransportError,
-) {
-  // Arrange
-  let #(port, proxy) = start_proxy(server.port)
-  let events = process.new_subject()
-  let config = dream_config(port) |> result.map(with_events(_, events))
-
-  // Act
-  let event = {
-    use _connection <- with_connection(config)
-    breaking(proxy)
-    process.receive(events, 5000) |> result.replace_error("no event")
-  }
-
-  // Assert
-  event
-  |> should
-  |> be_equal(Ok(Disconnected(ConnectionLost(SocketFailed(expected)))))
-  |> or_fail_with("Expected the loss with its typed error")
-}
-
-fn check_reconnect_starts_empty(server: Server) {
-  // Arrange
-  let events = process.new_subject()
-  let config = dream_config(server.port) |> result.map(with_events(_, events))
-
-  // Act
-  let answer = {
-    use connection <- with_connection(config)
-    use _first <- try(rows(connection, "SELECT 42", []))
-    let _ended = try_run(connection, terminate_own_session, [])
-    use Nil <- try(wait_for_reconnect(events))
-    use again <- try(rows(connection, "SELECT 42", []))
-    use statements <- try(prepared_statements(connection))
-    Ok(#(again, statements))
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(#([["42"]], ["SELECT 42"])))
-  |> or_fail_with("Expected one statement, prepared on the new session")
-}
-
-/// The SQL of the prepared statements of the session. A script runs with
-/// the simple protocol, so it adds no statement of its own.
-fn prepared_statements(connection: Connection) -> Result(List(String), String) {
-  connection.run_script(
-    connection,
-    "SELECT statement FROM pg_prepared_statements ORDER BY statement",
-    deadline,
+/// A test of the settings that a connection with the startup parameters
+/// `parameters` has: `sql` gives the rows `expected`.
+type SettingCase {
+  SettingCase(
+    name: String,
+    setup: String,
+    parameters: List(#(String, String)),
+    sql: String,
+    expected: List(List(Cell)),
   )
-  |> result.map(list.flat_map(_, texts))
-  |> result.map(list.flatten)
-  |> result.map_error(string.inspect)
+}
+
+fn setting_cases() -> List(SettingCase) {
+  [
+    SettingCase(
+      name: "sets the caller's application_name",
+      setup: "with application_name",
+      parameters: [#("application_name", "billing")],
+      sql: application_name_setting,
+      expected: [[Text(<<"billing">>)]],
+    ),
+    SettingCase(
+      name: "sets the default application_name when the caller gives none",
+      setup: "with no parameter",
+      parameters: [],
+      sql: application_name_setting,
+      expected: [[Text(<<"dream_postgres">>)]],
+    ),
+    SettingCase(
+      name: "sets the caller's application_name in any case of its name",
+      setup: "with Application_Name",
+      parameters: [#("Application_Name", "billing")],
+      sql: application_name_setting,
+      expected: [[Text(<<"billing">>)]],
+    ),
+    SettingCase(
+      name: "sets application_name between other parameters",
+      setup: "with application_name between two parameters",
+      parameters: [
+        #("client_encoding", "UTF8"),
+        #("application_name", "billing"),
+        #("TimeZone", "Europe/Paris"),
+      ],
+      sql: three_settings,
+      expected: three_settings_rows,
+    ),
+    SettingCase(
+      name: "sets parameters in any order",
+      setup: "with the parameters in another order",
+      parameters: [
+        #("TimeZone", "Europe/Paris"),
+        #("application_name", "billing"),
+        #("client_encoding", "UTF8"),
+      ],
+      sql: three_settings,
+      expected: three_settings_rows,
+    ),
+  ]
+}
+
+const application_name_setting = "SELECT current_setting('application_name')"
+
+const three_settings =
+  "SELECT current_setting('application_name'), current_setting('client_encoding'), current_setting('TimeZone')"
+
+const three_settings_rows = [
+  [Text(<<"billing">>), Text(<<"UTF8">>), Text(<<"Europe/Paris">>)],
+]
+
+fn setting_test(
+  server: Server,
+  test_case: SettingCase,
+) -> ContextNode(Connection) {
+  group(test_case.setup, [
+    before_each(
+      start_test_configured(parameters_config(server.port, test_case.parameters)),
+    ),
+    it(test_case.name, fn(connection) {
+      // Act
+      let outcome = run(connection, test_case.sql, [], [], deadline)
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal(test_case.expected)
+      |> or_fail_with("Expected the settings of the startup parameters")
+    }),
+  ])
 }
 
 // Requests ----------------------------------------------------------------------
 
-fn request_tests(server: Server) {
-  [
-    it("keeps a SET of a reported parameter as the server parameter", fn() {
-      check_set_parameter(server)
-    }),
-    it("gives the 08P01 of the server for a wrong number of parameters", fn() {
-      check_parameter_count(server)
-    }),
-    it("stays usable after the server refuses a parameter", fn() {
-      check_refused_parameter(server)
-    }),
-    it("gives the tag and the rows of inserts, updates and selects", fn() {
-      check_insert_update(server)
-    }),
-    it("names each result column, so a decoder can name it", fn() {
-      check_column_names(server)
-    }),
-  ]
-}
+const set_application_name = "SET application_name = 'testset'"
 
-fn check_set_parameter(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    use tags <- try(script(connection, "SET application_name = 'testset'"))
-    use setting <- try(current_setting(connection, "application_name"))
-    use parameter <- try(
-      connection.server_parameter(connection, "application_name")
-      |> result.map_error(string.inspect),
-    )
-    Ok(#(tags, setting, parameter))
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(#(["SET"], "testset", Some("testset"))))
-  |> or_fail_with("Expected the SET in the setting and the server parameter")
-}
-
-fn check_parameter_count(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    let none = try_run(connection, "SELECT $1::int4", [])
-    let two =
-      try_run(connection, "SELECT $1::int4", [text_cell("1"), text_cell("2")])
-    use null <- try(run(connection, "SELECT NULL", []))
-    Ok(#(none, two, null.result.rows))
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(#("08P01", "08P01", [[Null]])))
-  |> or_fail_with("Expected 08P01 two times, then the NULL")
-}
-
-fn check_refused_parameter(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    let refused =
-      try_run(connection, "SELECT $1::uuid", [Binary(<<1, 2, 3, 4, 5>>)])
-    use created <- try(
-      run(connection, "CREATE TEMP TABLE parity_after_refusal (id integer)", []),
-    )
-    Ok(#(refused, tag(created)))
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(#("08P01", "CREATE TABLE")))
-  |> or_fail_with("Expected 08P01, then the CREATE TABLE")
-}
+const unreadable_uuid = "SELECT $1::uuid"
 
 const insert_update_statements = [
   "CREATE TEMP TABLE parity_rows (id integer PRIMARY KEY, some_text text)",
@@ -765,167 +306,372 @@ const insert_update_statements = [
   "SELECT * FROM parity_rows WHERE id = 3",
 ]
 
-fn check_insert_update(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    use outcomes <- try(
-      try_map(insert_update_statements, run(connection, _, [])),
-    )
-    use all <- try(
-      rows(connection, "SELECT * FROM parity_rows ORDER BY id", []),
-    )
-    use swapped <- try(
-      rows(connection, "SELECT some_text, id FROM parity_rows ORDER BY id", []),
-    )
-    Ok(#(map(outcomes, tag), all, swapped))
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(
-    Ok(
-      #(
-        [
-          "CREATE TABLE", "INSERT 0 1", "UPDATE 1", "INSERT 0 1", "UPDATE 1",
-          "UPDATE 0", "SELECT 0",
-        ],
-        [["1", "hello world"], ["2", "hello again"]],
-        [["hello world", "1"], ["hello again", "2"]],
-      ),
-    ),
-  )
-  |> or_fail_with("Expected each tag and the rows in order")
-}
-
-fn check_column_names(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    use outcome <- try(
-      run(connection, "SELECT 1 AS first_column, 'x' AS second_column, 2", []),
-    )
-    Ok(map(outcome.columns, column_name))
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(["first_column", "second_column", "?column?"]))
-  |> or_fail_with("Expected the name of each column")
-}
-
-// Formats -----------------------------------------------------------------------
-
-fn format_tests(server: Server) {
+fn request_tests(server: Server) -> List(ContextNode(Connection)) {
   [
-    it("gives each column in the format the caller asks for it", fn() {
-      check_mixed_formats(server)
+    before_each(dream_connection(server, CacheStatements(512))),
+    it("gives the tag SET for a SET of a reported parameter", fn(connection) {
+      // Act
+      let outcomes = run_script(connection, set_application_name, deadline)
+
+      // Assert
+      outcomes
+      |> should
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SET"])
+      |> or_fail_with("Expected the tag SET")
     }),
-    it("sends a text parameter for a type with no binary format", fn() {
-      check_text_parameter(server)
-    }),
-    it("sends a NULL parameter for a type with no binary format", fn() {
-      check_null_parameter(server)
-    }),
-    it("writes and reads a row with binary and text cells", fn() {
-      check_round_trip(server)
+    group("after a SET of a reported parameter", set_tests()),
+    group("with a wrong number of parameters", parameter_count_tests()),
+    group("with a parameter that the server cannot read", refusal_tests()),
+    group("with inserts and updates", insert_update_tests()),
+    it("names each result column, so a decoder can name it", fn(connection) {
+      // Act
+      let outcome =
+        run(
+          connection,
+          "SELECT 1 AS first_column, 'x' AS second_column, 2",
+          [],
+          [],
+          deadline,
+        )
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_result_columns
+      |> extract_column_names
+      |> be_equal(["first_column", "second_column", "?column?"])
+      |> or_fail_with("Expected the name of each column")
     }),
   ]
 }
 
-fn run_formats(
-  connection: Connection,
-  sql: String,
-  parameters: List(Cell),
-  formats: List(Format),
-) -> Result(List(List(Cell)), String) {
-  connection.run(connection, sql, parameters, formats, deadline)
-  |> result.map(outcome_rows)
-  |> result.map_error(string.inspect)
+fn set_tests() -> List(ContextNode(Connection)) {
+  [
+    before_each(run_setup_script(set_application_name)),
+    it(
+      "keeps a SET of a reported parameter as the server parameter",
+      fn(connection) {
+        // Act
+        let parameter = server_parameter(connection, "application_name")
+
+        // Assert
+        parameter
+        |> should
+        |> be_ok
+        |> be_some
+        |> be_equal("testset")
+        |> or_fail_with("Expected the SET in the server parameter")
+      },
+    ),
+    it("keeps a SET of a reported parameter as the setting", fn(connection) {
+      // Act
+      let outcome = run(connection, application_name_setting, [], [], deadline)
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"testset">>)]])
+      |> or_fail_with("Expected the SET in the setting")
+    }),
+  ]
 }
 
-fn check_mixed_formats(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    run_formats(
-      connection,
-      "SELECT 1::int4, 'dream=r/dream'::aclitem, '[1,2]'::int4range",
-      [],
-      [BinaryFormat, TextFormat, BinaryFormat],
-    )
-  }
+fn parameter_count_tests() -> List(ContextNode(Connection)) {
+  [
+    it(
+      "gives the 08P01 of the server for a wrong number of parameters",
+      fn(connection) {
+        // Act
+        let answer = run(connection, "SELECT $1::int4", [], [], deadline)
 
-  // Assert
-  answer
-  |> should
-  |> be_equal(
-    Ok([
-      [
-        Binary(<<1:32>>),
-        Text(<<"dream=r/dream">>),
-        Binary(<<2, 4:32, 1:32, 4:32, 3:32>>),
-      ],
+        // Assert
+        answer
+        |> should
+        |> be_error
+        |> extract_driver_error_code
+        |> be_equal("08P01")
+        |> or_fail_with("Expected 08P01 for no parameter")
+      },
+    ),
+    it("gives the 08P01 of the server for too many parameters", fn(connection) {
+      // Act
+      let answer =
+        run(
+          connection,
+          "SELECT $1::int4",
+          [Text(<<"1">>), Text(<<"2">>)],
+          [],
+          deadline,
+        )
+
+      // Assert
+      answer
+      |> should
+      |> be_error
+      |> extract_driver_error_code
+      |> be_equal("08P01")
+      |> or_fail_with("Expected 08P01 for two parameters")
+    }),
+    group("after the refusal", [
+      before_each(run_failing_statement("SELECT $1::int4")),
+      it("gives the NULL of SELECT NULL after the refusal", fn(connection) {
+        // Act
+        let outcome = run(connection, "SELECT NULL", [], [], deadline)
+
+        // Assert
+        outcome
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Null]])
+        |> or_fail_with("Expected the NULL")
+      }),
     ]),
-  )
-  |> or_fail_with("Expected binary, text and binary cells")
+  ]
 }
 
-fn check_text_parameter(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    rows(connection, "SELECT $1::aclitem::text", [text_cell("dream=r/dream")])
-  }
+fn refusal_tests() -> List(ContextNode(Connection)) {
+  [
+    it(
+      "gives the 08P01 of the server for a parameter it cannot read",
+      fn(connection) {
+        // Act
+        let answer =
+          run(
+            connection,
+            unreadable_uuid,
+            [Binary(<<1, 2, 3, 4, 5>>)],
+            [],
+            deadline,
+          )
 
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok([["dream=r/dream"]]))
-  |> or_fail_with("Expected the aclitem from its text")
+        // Assert
+        answer
+        |> should
+        |> be_error
+        |> extract_driver_error_code
+        |> be_equal("08P01")
+        |> or_fail_with("Expected 08P01 for the parameter")
+      },
+    ),
+    group("after the refusal", [
+      before_each(
+        run_failing_statement_with_parameters(unreadable_uuid, [
+          Binary(<<1, 2, 3, 4, 5>>),
+        ]),
+      ),
+      it("stays usable after the server refuses a parameter", fn(connection) {
+        // Act
+        let outcome =
+          run(
+            connection,
+            "CREATE TEMP TABLE parity_after_refusal (id integer)",
+            [],
+            [],
+            deadline,
+          )
+
+        // Assert
+        outcome
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_tag
+        |> be_equal("CREATE TABLE")
+        |> or_fail_with("Expected the CREATE TABLE after the refusal")
+      }),
+    ]),
+  ]
 }
 
-fn check_null_parameter(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    run_formats(connection, "SELECT $1::aclitem", [Null], [])
-  }
+fn insert_update_tests() -> List(ContextNode(Connection)) {
+  [
+    it(
+      "gives the tag and the rows of inserts, updates and selects",
+      fn(connection) {
+        // Act
+        let outcomes =
+          try_map(insert_update_statements, run(connection, _, [], [], deadline))
 
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok([[Null]]))
-  |> or_fail_with("Expected a NULL aclitem")
+        // Assert
+        outcomes
+        |> should
+        |> be_ok
+        |> extract_outcome_tags
+        |> be_equal([
+          "CREATE TABLE", "INSERT 0 1", "UPDATE 1", "INSERT 0 1", "UPDATE 1",
+          "UPDATE 0", "SELECT 0",
+        ])
+        |> or_fail_with("Expected each tag in order")
+      },
+    ),
+    group("after them", [
+      before_each(run_setup_script(join(insert_update_statements, "; "))),
+      it("gives the rows of the inserts and updates in order", fn(connection) {
+        // Act
+        let outcome =
+          run(
+            connection,
+            "SELECT * FROM parity_rows ORDER BY id",
+            [],
+            [],
+            deadline,
+          )
+
+        // Assert
+        outcome
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([
+          [Text(<<"1">>), Text(<<"hello world">>)],
+          [Text(<<"2">>), Text(<<"hello again">>)],
+        ])
+        |> or_fail_with("Expected the rows in order")
+      }),
+      it(
+        "gives the columns of each row in the order of the select",
+        fn(connection) {
+          // Act
+          let outcome =
+            run(
+              connection,
+              "SELECT some_text, id FROM parity_rows ORDER BY id",
+              [],
+              [],
+              deadline,
+            )
+
+          // Assert
+          outcome
+          |> should
+          |> be_ok
+          |> extract_command_result
+          |> extract_command_rows
+          |> be_equal([
+            [Text(<<"hello world">>), Text(<<"1">>)],
+            [Text(<<"hello again">>), Text(<<"2">>)],
+          ])
+          |> or_fail_with("Expected the columns in the order of the select")
+        },
+      ),
+    ]),
+  ]
 }
 
-fn check_round_trip(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    use _created <- try(script(
-      connection,
-      "CREATE TEMP TABLE parity_acl (id int4, acl aclitem)",
-    ))
-    use _inserted <- try(
-      run(connection, "INSERT INTO parity_acl (id, acl) VALUES ($1, $2)", [
-        Binary(<<7:32>>),
-        text_cell("dream=arw/dream"),
-      ]),
-    )
-    run_formats(connection, "SELECT id, acl FROM parity_acl", [], [
-      BinaryFormat,
-      TextFormat,
-    ])
-  }
+// Formats -----------------------------------------------------------------------
 
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok([[Binary(<<7:32>>), Text(<<"dream=arw/dream">>)]]))
-  |> or_fail_with("Expected the row as it was written")
+fn format_tests(server: Server) -> List(ContextNode(Connection)) {
+  [
+    before_each(dream_connection(server, CacheStatements(512))),
+    it("gives each column in the format the caller asks for it", fn(connection) {
+      // Act
+      let outcome =
+        run(
+          connection,
+          "SELECT 1::int4, 'dream=r/dream'::aclitem, '[1,2]'::int4range",
+          [],
+          [BinaryFormat, TextFormat, BinaryFormat],
+          deadline,
+        )
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([
+        [
+          Binary(<<1:32>>),
+          Text(<<"dream=r/dream">>),
+          Binary(<<2, 4:32, 1:32, 4:32, 3:32>>),
+        ],
+      ])
+      |> or_fail_with("Expected binary, text and binary cells")
+    }),
+    it(
+      "sends a text parameter for a type with no binary format",
+      fn(connection) {
+        // Act
+        let outcome =
+          run(
+            connection,
+            "SELECT $1::aclitem::text",
+            [Text(<<"dream=r/dream">>)],
+            [],
+            deadline,
+          )
+
+        // Assert
+        outcome
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Text(<<"dream=r/dream">>)]])
+        |> or_fail_with("Expected the aclitem from its text")
+      },
+    ),
+    it(
+      "sends a NULL parameter for a type with no binary format",
+      fn(connection) {
+        // Act
+        let outcome =
+          run(connection, "SELECT $1::aclitem", [Null], [], deadline)
+
+        // Assert
+        outcome
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Null]])
+        |> or_fail_with("Expected a NULL aclitem")
+      },
+    ),
+    group("with a table of an int4 and an aclitem", [
+      before_each(run_setup_script(
+        "CREATE TEMP TABLE parity_acl (id int4, acl aclitem)",
+      )),
+      it("writes and reads a row with binary and text cells", fn(connection) {
+        // Act
+        let outcome = {
+          use _inserted <- try(run(
+            connection,
+            "INSERT INTO parity_acl (id, acl) VALUES ($1, $2)",
+            [Binary(<<7:32>>), Text(<<"dream=arw/dream">>)],
+            [],
+            deadline,
+          ))
+          run(
+            connection,
+            "SELECT id, acl FROM parity_acl",
+            [],
+            [BinaryFormat, TextFormat],
+            deadline,
+          )
+        }
+
+        // Assert
+        outcome
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Binary(<<7:32>>), Text(<<"dream=arw/dream">>)]])
+        |> or_fail_with("Expected the row as it was written")
+      }),
+    ]),
+  ]
 }
 
 // Column type changes -------------------------------------------------------------
@@ -980,333 +726,778 @@ fn change_name(change: TypeChange) -> String {
   change.from <> " to " <> change.to
 }
 
-fn cached_change_test(server: Server, change: TypeChange) {
-  it(
-    "gives StatementChanged, then the new value, for " <> change_name(change),
-    fn() { check_cached_change(server, change) },
-  )
-}
-
-fn unnamed_change_test(server: Server, change: TypeChange) {
-  it("gives the new value at once for " <> change_name(change), fn() {
-    check_unnamed_change(server, change)
-  })
-}
-
 const changing_select = "SELECT c FROM parity_change"
 
-/// Makes the table, runs the select two times, and alters the column.
-fn prepare_change(
-  connection: Connection,
-  change: TypeChange,
-) -> Result(Nil, String) {
-  use _created <- try(script(
-    connection,
-    "CREATE TEMP TABLE parity_change (c "
+/// The hooks that make the table, run the select two times, and alter the
+/// column.
+fn change_hooks(change: TypeChange) -> List(ContextNode(Connection)) {
+  [
+    before_each(run_setup_script(
+      "CREATE TEMP TABLE parity_change (c "
       <> change.from
       <> "); INSERT INTO parity_change VALUES ("
       <> change.value
       <> ")",
-  ))
-  use _first <- try(run(connection, changing_select, []))
-  use _second <- try(run(connection, changing_select, []))
-  script(
-    connection,
-    "ALTER TABLE parity_change ALTER COLUMN c TYPE "
+    )),
+    before_each(run_setup_statement(changing_select)),
+    before_each(run_setup_statement(changing_select)),
+    before_each(run_setup_script(
+      "ALTER TABLE parity_change ALTER COLUMN c TYPE "
       <> change.to
       <> " USING "
       <> change.using,
+    )),
+  ]
+}
+
+fn cached_change_tests(change: TypeChange) -> ContextNode(Connection) {
+  group(
+    "from " <> change_name(change),
+    append(change_hooks(change), [
+      it("gives StatementChanged for " <> change_name(change), fn(connection) {
+        // Act
+        let answer = run(connection, changing_select, [], [], deadline)
+
+        // Assert
+        answer
+        |> should
+        |> be_error
+        |> extract_changed_column_names
+        |> be_equal(["c"])
+        |> or_fail_with("Expected StatementChanged")
+      }),
+      group("after the StatementChanged", [
+        before_each(run_failing_statement(changing_select)),
+        it(
+          "gives StatementChanged, then the new value, for "
+            <> change_name(change),
+          fn(connection) {
+            // Act
+            let outcome = run(connection, changing_select, [], [], deadline)
+
+            // Assert
+            outcome
+            |> should
+            |> be_ok
+            |> extract_command_result
+            |> extract_command_rows
+            |> be_equal([[Text(bit_array.from_string(change.expected))]])
+            |> or_fail_with("Expected the value of the new type")
+          },
+        ),
+      ]),
+    ]),
   )
-  |> result.replace(Nil)
 }
 
-fn check_cached_change(server: Server, change: TypeChange) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    use Nil <- try(prepare_change(connection, change))
-    let changed = try_run(connection, changing_select, [])
-    use again <- try(rows(connection, changing_select, []))
-    Ok(#(changed, again))
-  }
+fn unnamed_change_tests(change: TypeChange) -> ContextNode(Connection) {
+  group(
+    "from " <> change_name(change),
+    append(change_hooks(change), [
+      it(
+        "gives the new value at once for " <> change_name(change),
+        fn(connection) {
+          // Act
+          let outcome = run(connection, changing_select, [], [], deadline)
 
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(#("StatementChanged", [[change.expected]])))
-  |> or_fail_with("Expected StatementChanged, then the value of the new type")
-}
-
-fn check_unnamed_change(server: Server, change: TypeChange) {
-  // Arrange
-  let config =
-    dream_config(server.port) |> result.map(with_caching(_, UnnamedStatements))
-
-  // Act
-  let answer = {
-    use connection <- with_connection(config)
-    use Nil <- try(prepare_change(connection, change))
-    rows(connection, changing_select, [])
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok([[change.expected]]))
-  |> or_fail_with("Expected the value of the new type")
+          // Assert
+          outcome
+          |> should
+          |> be_ok
+          |> extract_command_result
+          |> extract_command_rows
+          |> be_equal([[Text(bit_array.from_string(change.expected))]])
+          |> or_fail_with("Expected the value of the new type")
+        },
+      ),
+    ]),
+  )
 }
 
 // Schema changes ------------------------------------------------------------------
 
-fn schema_tests(server: Server) {
+fn schema_tests(server: Server) -> List(ContextNode(Connection)) {
   [
-    it("inserts one row for each run of a changed INSERT RETURNING", fn() {
-      check_insert_returning(server, CacheStatements(512))
-    }),
-    it("inserts one row for each changed INSERT RETURNING, unnamed", fn() {
-      check_insert_returning(server, UnnamedStatements)
-    }),
-    it("gives a column added to a text column after StatementChanged", fn() {
-      check_added_column(
-        server,
-        AddedColumn("c aclitem", "'dream=r/dream'", "d int4 DEFAULT 3", [
-          "dream=r/dream", "3",
-        ]),
-      )
-    }),
-    it("gives a text column added to a column after StatementChanged", fn() {
-      check_added_column(
-        server,
-        AddedColumn("c int4", "1", "d aclitem DEFAULT 'dream=r/dream'", [
-          "1", "dream=r/dream",
-        ]),
-      )
-    }),
-    it("gives the added column at once with unnamed statements", fn() {
-      check_unnamed_added_column(server)
-    }),
-    it("refuses a changed statement in a transaction, then prepares it", fn() {
-      check_change_in_transaction(server)
-    }),
+    group("with a cache of 512 statements", [
+      before_each(dream_connection(server, CacheStatements(512))),
+      group("a changed INSERT RETURNING", cached_returning_tests()),
+      group(
+        "a column added to a table",
+        map(added_columns(), added_column_tests),
+      ),
+      group("a changed statement in a transaction", transaction_tests()),
+    ]),
+    group("with unnamed statements", [
+      before_each(dream_connection(server, UnnamedStatements)),
+      group("a changed INSERT RETURNING", unnamed_returning_tests()),
+      group("a column added to an aclitem column", [
+        before_each(run_setup_script(
+          "CREATE TEMP TABLE parity_added (c aclitem); "
+          <> "INSERT INTO parity_added VALUES ('dream=r/dream')",
+        )),
+        before_each(run_setup_statement(added_select)),
+        before_each(run_setup_script(
+          "ALTER TABLE parity_added ADD COLUMN d int4 DEFAULT 3",
+        )),
+        it(
+          "gives the added column at once with unnamed statements",
+          fn(connection) {
+            // Act
+            let outcome = run(connection, added_select, [], [], deadline)
+
+            // Assert
+            outcome
+            |> should
+            |> be_ok
+            |> extract_command_result
+            |> extract_command_rows
+            |> be_equal([[Text(<<"dream=r/dream">>), Text(<<"3">>)]])
+            |> or_fail_with("Expected both columns")
+          },
+        ),
+      ]),
+    ]),
   ]
 }
 
 const returning_insert =
   "INSERT INTO parity_returning (v) VALUES (1) RETURNING w"
 
-fn check_insert_returning(server: Server, caching: StatementCaching) {
-  // Arrange
-  let config = dream_config(server.port) |> result.map(with_caching(_, caching))
+const returning_table =
+  "CREATE TEMP TABLE parity_returning (v int4, w aclitem DEFAULT 'dream=r/dream')"
 
-  // Act
-  let answer = {
-    use connection <- with_connection(config)
-    use _created <- try(script(
-      connection,
-      "CREATE TEMP TABLE parity_returning (v int4, w aclitem DEFAULT 'dream=r/dream')",
-    ))
-    use first <- try(rows(connection, returning_insert, []))
-    use _altered <- try(script(
-      connection,
-      "ALTER TABLE parity_returning ALTER COLUMN w DROP DEFAULT; "
-        <> "ALTER TABLE parity_returning ALTER COLUMN w TYPE int8 USING 1; "
-        <> "ALTER TABLE parity_returning ALTER COLUMN w SET DEFAULT 5",
-    ))
-    use after <- try(returned_after_change(connection))
-    use count <- try(
-      rows(connection, "SELECT count(*) FROM parity_returning", []),
-    )
-    Ok(#(first, after, count))
-  }
+const returning_change =
+  "ALTER TABLE parity_returning ALTER COLUMN w DROP DEFAULT; ALTER TABLE parity_returning ALTER COLUMN w TYPE int8 USING 1; ALTER TABLE parity_returning ALTER COLUMN w SET DEFAULT 5"
 
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(#([["dream=r/dream"]], [["5"]], [["2"]])))
-  |> or_fail_with("Expected the new value and two rows in all")
+const returning_count = "SELECT count(*) FROM parity_returning"
+
+fn cached_returning_tests() -> List(ContextNode(Connection)) {
+  [
+    before_each(run_setup_script(returning_table)),
+    it(
+      "gives the old default from an INSERT RETURNING before the change",
+      fn(connection) {
+        run(connection, returning_insert, [], [], deadline)
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Text(<<"dream=r/dream">>)]])
+        |> or_fail_with("Expected the default of the aclitem column")
+      },
+    ),
+    group("after the change", [
+      before_each(run_setup_statement(returning_insert)),
+      before_each(run_setup_script(returning_change)),
+      before_each(run_failing_statement(returning_insert)),
+      it(
+        "gives the new default from a changed INSERT RETURNING after StatementChanged",
+        fn(connection) {
+          run(connection, returning_insert, [], [], deadline)
+          |> should
+          |> be_ok
+          |> extract_command_result
+          |> extract_command_rows
+          |> be_equal([[Text(<<"5">>)]])
+          |> or_fail_with("Expected the new default")
+        },
+      ),
+      group("and the INSERT again", [
+        before_each(run_setup_statement(returning_insert)),
+        it(
+          "inserts one row for each run of a changed INSERT RETURNING",
+          fn(connection) {
+            run(connection, returning_count, [], [], deadline)
+            |> should
+            |> be_ok
+            |> extract_command_result
+            |> extract_command_rows
+            |> be_equal([[Text(<<"2">>)]])
+            |> or_fail_with("Expected two rows in all")
+          },
+        ),
+      ]),
+    ]),
+  ]
 }
 
-/// The rows of the INSERT after the change. A StatementChanged means that
-/// the INSERT did not run: the caller runs it again.
-fn returned_after_change(
-  connection: Connection,
-) -> Result(List(List(String)), String) {
-  case connection.run(connection, returning_insert, [], [], deadline) {
-    Ok(outcome) -> Ok(texts(outcome))
-    Error(StatementChanged(_description)) ->
-      rows(connection, returning_insert, [])
-    Error(other) -> Error(string.inspect(other))
-  }
+fn unnamed_returning_tests() -> List(ContextNode(Connection)) {
+  [
+    before_each(run_setup_script(returning_table)),
+    it(
+      "gives the old default from an INSERT RETURNING, unnamed",
+      fn(connection) {
+        run(connection, returning_insert, [], [], deadline)
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Text(<<"dream=r/dream">>)]])
+        |> or_fail_with("Expected the default of the aclitem column")
+      },
+    ),
+    group("after the change", [
+      before_each(run_setup_statement(returning_insert)),
+      before_each(run_setup_script(returning_change)),
+      it(
+        "gives the new default from a changed INSERT RETURNING, unnamed",
+        fn(connection) {
+          run(connection, returning_insert, [], [], deadline)
+          |> should
+          |> be_ok
+          |> extract_command_result
+          |> extract_command_rows
+          |> be_equal([[Text(<<"5">>)]])
+          |> or_fail_with("Expected the new default")
+        },
+      ),
+      group("and the INSERT again", [
+        before_each(run_setup_statement(returning_insert)),
+        it(
+          "inserts one row for each changed INSERT RETURNING, unnamed",
+          fn(connection) {
+            run(connection, returning_count, [], [], deadline)
+            |> should
+            |> be_ok
+            |> extract_command_result
+            |> extract_command_rows
+            |> be_equal([[Text(<<"2">>)]])
+            |> or_fail_with("Expected two rows in all")
+          },
+        ),
+      ]),
+    ]),
+  ]
 }
+
+const added_select = "SELECT * FROM parity_added"
 
 /// A table with `column` and one row of `value`, that gets the column
 /// `added`. The row then holds `expected`.
 type AddedColumn {
   AddedColumn(
+    setup: String,
+    changed_name: String,
+    name: String,
     column: String,
     value: String,
     added: String,
-    expected: List(String),
+    expected: List(Cell),
   )
 }
 
-fn check_added_column(server: Server, change: AddedColumn) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    use _created <- try(script(
-      connection,
-      "CREATE TEMP TABLE parity_added ("
-        <> change.column
-        <> "); INSERT INTO parity_added VALUES ("
-        <> change.value
-        <> ")",
-    ))
-    use _first <- try(run(connection, "SELECT * FROM parity_added", []))
-    use _altered <- try(script(
-      connection,
-      "ALTER TABLE parity_added ADD COLUMN " <> change.added,
-    ))
-    let changed = try_run(connection, "SELECT * FROM parity_added", [])
-    use again <- try(rows(connection, "SELECT * FROM parity_added", []))
-    Ok(#(changed, list.flatten(again)))
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(#("StatementChanged", change.expected)))
-  |> or_fail_with("Expected StatementChanged, then both columns")
-}
-
-fn check_unnamed_added_column(server: Server) {
-  // Arrange
-  let config =
-    dream_config(server.port) |> result.map(with_caching(_, UnnamedStatements))
-
-  // Act
-  let answer = {
-    use connection <- with_connection(config)
-    use _created <- try(script(
-      connection,
-      "CREATE TEMP TABLE parity_added (c aclitem); "
-        <> "INSERT INTO parity_added VALUES ('dream=r/dream')",
-    ))
-    use _first <- try(run(connection, "SELECT * FROM parity_added", []))
-    use _altered <- try(script(
-      connection,
-      "ALTER TABLE parity_added ADD COLUMN d int4 DEFAULT 3",
-    ))
-    rows(connection, "SELECT * FROM parity_added", [])
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok([["dream=r/dream", "3"]]))
-  |> or_fail_with("Expected both columns")
-}
-
-fn check_change_in_transaction(server: Server) {
-  // Act
-  let answer = {
-    use connection <- with_connection(dream_config(server.port))
-    use _created <- try(script(
-      connection,
-      "CREATE TEMP TABLE parity_in_transaction (c int8); "
-        <> "INSERT INTO parity_in_transaction VALUES (5)",
-    ))
-    use _first <- try(
-      run(connection, "SELECT c FROM parity_in_transaction", []),
-    )
-    use _altered <- try(script(
-      connection,
-      "ALTER TABLE parity_in_transaction ALTER COLUMN c TYPE float8; BEGIN",
-    ))
-    let refused = try_run(connection, "SELECT c FROM parity_in_transaction", [])
-    let next = try_run(connection, "SELECT 1", [])
-    use _rolled_back <- try(script(connection, "ROLLBACK"))
-    use after <- try(
-      rows(connection, "SELECT c FROM parity_in_transaction", []),
-    )
-    Ok(#(refused, next, after))
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok(#("0A000", "25P02", [["5"]])))
-  |> or_fail_with("Expected 0A000, 25P02, then the float8 value")
-}
-
-// Addresses ---------------------------------------------------------------------
-
-fn address_tests() {
+fn added_columns() -> List(AddedColumn) {
   [
-    it("refuses a negative port", fn() {
-      // Act
-      let refused = transport.address("localhost", -1) |> result.replace(Nil)
+    AddedColumn(
+      setup: "a column added to an aclitem column",
+      changed_name: "gives StatementChanged for a column added to a text column",
+      name: "gives a column added to a text column after StatementChanged",
+      column: "c aclitem",
+      value: "'dream=r/dream'",
+      added: "d int4 DEFAULT 3",
+      expected: [Text(<<"dream=r/dream">>), Text(<<"3">>)],
+    ),
+    AddedColumn(
+      setup: "an aclitem column added to an int4 column",
+      changed_name: "gives StatementChanged for a text column added to a column",
+      name: "gives a text column added to a column after StatementChanged",
+      column: "c int4",
+      value: "1",
+      added: "d aclitem DEFAULT 'dream=r/dream'",
+      expected: [Text(<<"1">>), Text(<<"dream=r/dream">>)],
+    ),
+  ]
+}
 
-      // Assert
-      refused
+fn added_column_tests(change: AddedColumn) -> ContextNode(Connection) {
+  group(change.setup, [
+    before_each(run_setup_script(
+      "CREATE TEMP TABLE parity_added ("
+      <> change.column
+      <> "); INSERT INTO parity_added VALUES ("
+      <> change.value
+      <> ")",
+    )),
+    before_each(run_setup_statement(added_select)),
+    before_each(run_setup_script(
+      "ALTER TABLE parity_added ADD COLUMN " <> change.added,
+    )),
+    it(change.changed_name, fn(connection) {
+      run(connection, added_select, [], [], deadline)
       |> should
-      |> be_equal(Error(InvalidPort(-1)))
+      |> be_error
+      |> extract_changed_column_names
+      |> be_equal(["c", "d"])
+      |> or_fail_with("Expected StatementChanged with both columns")
+    }),
+    group("after the StatementChanged", [
+      before_each(run_failing_statement(added_select)),
+      it(change.name, fn(connection) {
+        run(connection, added_select, [], [], deadline)
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([change.expected])
+        |> or_fail_with("Expected both columns")
+      }),
+    ]),
+  ])
+}
+
+const transaction_select = "SELECT c FROM parity_in_transaction"
+
+fn transaction_tests() -> List(ContextNode(Connection)) {
+  [
+    before_each(run_setup_script(
+      "CREATE TEMP TABLE parity_in_transaction (c int8); "
+      <> "INSERT INTO parity_in_transaction VALUES (5)",
+    )),
+    before_each(run_setup_statement(transaction_select)),
+    before_each(run_setup_script(
+      "ALTER TABLE parity_in_transaction ALTER COLUMN c TYPE float8; BEGIN",
+    )),
+    it(
+      "refuses a changed statement in a transaction with 0A000",
+      fn(connection) {
+        run(connection, transaction_select, [], [], deadline)
+        |> should
+        |> be_error
+        |> extract_driver_error_code
+        |> be_equal("0A000")
+        |> or_fail_with("Expected 0A000")
+      },
+    ),
+    group("after the refusal", [
+      before_each(run_failing_statement(transaction_select)),
+      it(
+        "refuses the next statement of the failed transaction with 25P02",
+        fn(connection) {
+          run(connection, "SELECT 1", [], [], deadline)
+          |> should
+          |> be_error
+          |> extract_driver_error_code
+          |> be_equal("25P02")
+          |> or_fail_with("Expected 25P02")
+        },
+      ),
+      group("and a ROLLBACK", [
+        before_each(run_failing_statement("SELECT 1")),
+        before_each(run_setup_script("ROLLBACK")),
+        it(
+          "refuses a changed statement in a transaction, then prepares it",
+          fn(connection) {
+            run(connection, transaction_select, [], [], deadline)
+            |> should
+            |> be_ok
+            |> extract_command_result
+            |> extract_command_rows
+            |> be_equal([[Text(<<"5">>)]])
+            |> or_fail_with("Expected the float8 value")
+          },
+        ),
+      ]),
+    ]),
+  ]
+}
+
+// With a proxied connection of its own --------------------------------------------
+
+fn proxied_tests() -> TestSuite {
+  describe(
+    "with a proxied connection of its own",
+    proxied_setup(first_driver_server, 10),
+    [
+      after_each(stop_proxied),
+      group("on each driver server", map(driver_servers(), session_tests)),
+    ],
+  )
+}
+
+/// The SQL of the prepared statements of the session. A script runs with
+/// the simple protocol, so it adds no statement of its own.
+const prepared_statements =
+  "SELECT statement FROM pg_prepared_statements ORDER BY statement"
+
+fn session_tests(server: Server) -> ContextNode(ProxiedConnection) {
+  group("PostgreSQL " <> to_string(server.version), [
+    before_each(start_test_proxied(server, 10)),
+    group("sessions that the server ends", [
+      it(
+        "connects again when the server ends an idle session",
+        fn(proxied: ProxiedConnection) {
+          // Act
+          let backends = {
+            use old <- try(backend_pid(proxied.connection))
+            use _ended <- try(terminate_backend(proxied.control, old))
+            use _back <- try(wait_for_reconnect(proxied.events))
+            use new <- try(backend_pid(proxied.connection))
+            Ok(#(old, new))
+          }
+
+          // Assert
+          backends
+          |> should
+          |> be_ok
+          |> be_different_parts
+          |> or_fail_with("Expected a new backend after the reconnect")
+        },
+      ),
+      it(
+        "tells of a reset by the network as ConnectionReset",
+        fn(proxied: ProxiedConnection) {
+          // Act
+          reset_client(proxied.proxy)
+          let event = next_event(proxied.events)
+
+          // Assert
+          event
+          |> should
+          |> be_ok
+          |> be_equal(
+            Disconnected(ConnectionLost(SocketFailed(ConnectionReset))),
+          )
+          |> or_fail_with("Expected the loss with ConnectionReset")
+        },
+      ),
+      it(
+        "tells of a close by the network as SocketClosed",
+        fn(proxied: ProxiedConnection) {
+          // Act
+          close_client(proxied.proxy)
+          let event = next_event(proxied.events)
+
+          // Assert
+          event
+          |> should
+          |> be_ok
+          |> be_equal(Disconnected(ConnectionLost(SocketFailed(SocketClosed))))
+          |> or_fail_with("Expected the loss with SocketClosed")
+        },
+      ),
+      group("after the server ended the session during a run", [
+        before_each(on_proxied_connection(run_setup_statement("SELECT 42"))),
+        before_each(
+          on_proxied_connection(run_failing_statement(terminate_own_session)),
+        ),
+        before_each(wait_for_proxied_reconnect),
+        reconnected_tests(),
+      ]),
+    ]),
+  ])
+}
+
+fn reconnected_tests() -> ContextNode(ProxiedConnection) {
+  group("and the reconnect", [
+    it(
+      "runs on a new session after the server ended the last one",
+      fn(proxied: ProxiedConnection) {
+        run(proxied.connection, "SELECT 1", [], [], deadline)
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Text(<<"1">>)]])
+        |> or_fail_with("Expected the run on the new session")
+      },
+    ),
+    it(
+      "runs a statement again on the new session",
+      fn(proxied: ProxiedConnection) {
+        run(proxied.connection, "SELECT 42", [], [], deadline)
+        |> should
+        |> be_ok
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Text(<<"42">>)]])
+        |> or_fail_with("Expected the statement to run again")
+      },
+    ),
+    it(
+      "prepares its statements again on the new session",
+      fn(proxied: ProxiedConnection) {
+        // Act
+        let outcomes = {
+          use _again <- try(run(
+            proxied.connection,
+            "SELECT 42",
+            [],
+            [],
+            deadline,
+          ))
+          run_script(proxied.connection, prepared_statements, deadline)
+        }
+
+        // Assert
+        outcomes
+        |> should
+        |> be_ok
+        |> extract_first
+        |> extract_command_result
+        |> extract_command_rows
+        |> be_equal([[Text(<<"SELECT 42">>)]])
+        |> or_fail_with("Expected one statement, prepared on the new session")
+      },
+    ),
+  ])
+}
+
+// With a pool of its own ----------------------------------------------------------
+
+fn pool_tests() -> TestSuite {
+  describe("with a pool of its own", pool_session_setup(first_driver_server), [
+    after_each(stop_pool_session),
+    group("on each driver server", map(driver_servers(), pool_server_tests)),
+  ])
+}
+
+fn pool_server_tests(server: Server) -> ContextNode(PoolSession) {
+  group("PostgreSQL " <> to_string(server.version), [
+    group("the pool", [
+      group("with one connection", [
+        before_each(start_test_pool(server, 1)),
+        it("runs a query on a held connection", fn(session: PoolSession) {
+          // Act
+          let answer = hold_connection(session.pool, query_text(_, "SELECT 1"))
+
+          // Assert
+          answer
+          |> should
+          |> be_ok
+          |> be_equal("1")
+          |> or_fail_with("Expected the query to run on the held connection")
+        }),
+      ]),
+      group("with two connections", [
+        before_each(start_test_pool(server, 2)),
+        it(
+          "gives each connection back when its hold ends",
+          fn(session: PoolSession) {
+            // Act
+            let status = {
+              use _answers <- try(
+                while_holding(session.pool, 2, fn(held) {
+                  try_map(held, query_text(_, "SELECT 1"))
+                })
+                |> result.flatten,
+              )
+              use _back <- try(wait_for_available_count(session.pool, 2))
+              pool_status(session.pool)
+            }
+
+            // Assert
+            status
+            |> should
+            |> be_ok
+            |> be_equal(PoolStatus(
+              size: 2,
+              connected: 2,
+              available: 2,
+              held: 0,
+              waiting: 0,
+              last_connect_error: None,
+            ))
+            |> or_fail_with("Expected both connections back and free")
+          },
+        ),
+      ]),
+    ]),
+  ])
+}
+
+// With a proxied pool of its own --------------------------------------------------
+
+fn proxied_pool_tests() -> TestSuite {
+  describe(
+    "with a proxied pool of its own",
+    proxied_pool_setup(first_driver_server),
+    [
+      after_each(stop_proxied_pool),
+      group(
+        "on each driver server",
+        map(driver_servers(), proxied_pool_server_tests),
+      ),
+    ],
+  )
+}
+
+fn proxied_pool_server_tests(server: Server) -> ContextNode(ProxiedPool) {
+  group("PostgreSQL " <> to_string(server.version), [
+    group("the pool", [
+      before_each(start_test_proxied_pool(server)),
+      it(
+        "replaces an idle connection whose socket closed",
+        fn(proxied: ProxiedPool) {
+          // Act
+          let backends = {
+            use first <- try(held_backend_pid(proxied.pool))
+            close_client(proxied.proxy)
+            use _back <- try(wait_for_reconnect(proxied.events))
+            use second <- try(held_backend_pid(proxied.pool))
+            Ok(#(first, second))
+          }
+
+          // Assert
+          backends
+          |> should
+          |> be_ok
+          |> be_different_parts
+          |> or_fail_with("Expected a new backend after the socket closed")
+        },
+      ),
+    ]),
+  ])
+}
+
+// With no setup ---------------------------------------------------------------------
+
+fn unstarted_tests() -> TestSuite {
+  describe("with no setup", context.value(Nil), [
+    group("on each driver server", map(driver_servers(), login_error_tests)),
+    group("addresses", address_tests()),
+    group("closed sockets", socket_tests()),
+  ])
+}
+
+fn login_error_tests(server: Server) -> ContextNode(Nil) {
+  group("PostgreSQL " <> to_string(server.version), [
+    group("login errors", [
+      it(
+        "gives the FATAL 28P01 of the server for a wrong password",
+        fn(_nothing) {
+          // Act
+          let started =
+            user_config(server.port, "dream", "wrong") |> result.map(start)
+
+          // Assert
+          started
+          |> should
+          |> be_ok
+          |> be_error
+          |> extract_login_refusal_code
+          |> be_equal("28P01")
+          |> or_fail_with("Expected the 28P01 of the server")
+        },
+      ),
+      it(
+        "gives the severity FATAL of the server for a wrong password",
+        fn(_nothing) {
+          // Act
+          let started =
+            user_config(server.port, "dream", "wrong") |> result.map(start)
+
+          // Assert
+          started
+          |> should
+          |> be_ok
+          |> be_error
+          |> extract_login_refusal_report
+          |> extract_report_severity
+          |> be_equal("FATAL")
+          |> or_fail_with("Expected the severity FATAL")
+        },
+      ),
+      it(
+        "gives the 3D000 of the server for a database that does not exist",
+        fn(_nothing) {
+          // Act
+          let started =
+            database_config(server.port, "parity_no_such_database")
+            |> result.map(start)
+
+          // Assert
+          started
+          |> should
+          |> be_ok
+          |> be_error
+          |> extract_login_refusal_code
+          |> be_equal("3D000")
+          |> or_fail_with("Expected the 3D000 of the server")
+        },
+      ),
+      it(
+        "gives the message of the server for a database that does not exist",
+        fn(_nothing) {
+          // Act
+          let started =
+            database_config(server.port, "parity_no_such_database")
+            |> result.map(start)
+
+          // Assert
+          started
+          |> should
+          |> be_ok
+          |> be_error
+          |> extract_login_refusal_report
+          |> extract_report_message
+          |> be_equal("database \"parity_no_such_database\" does not exist")
+          |> or_fail_with("Expected the message of the server")
+        },
+      ),
+    ]),
+  ])
+}
+
+fn address_tests() -> List(ContextNode(Nil)) {
+  [
+    it("refuses a negative port", fn(_nothing) {
+      address("localhost", -1)
+      |> should
+      |> be_error
+      |> be_equal(InvalidPort(-1))
       |> or_fail_with("Expected InvalidPort(-1)")
     }),
-    it("takes the ports 1 and 65535 and an IP address as the host", fn() {
+    it(
+      "takes the ports 1 and 65535 and an IP address as the host",
+      fn(_nothing) {
+        address("127.0.0.1", 1)
+        |> result.map(transport.port)
+        |> should
+        |> be_ok
+        |> be_equal(1)
+        |> or_fail_with("Expected the port 1")
+      },
+    ),
+    it(
+      "takes the IPv6 address ::1 as the host with the port 65535",
+      fn(_nothing) {
+        address("::1", 65_535)
+        |> result.map(transport.host)
+        |> should
+        |> be_ok
+        |> be_equal("::1")
+        |> or_fail_with("Expected the host ::1")
+      },
+    ),
+    it("gives DnsLookupFailed for a host with no address", fn(_nothing) {
       // Act
-      let taken = #(
-        transport.address("127.0.0.1", 1) |> result.map(transport.port),
-        transport.address("::1", 65_535) |> result.map(transport.host),
-      )
+      let started =
+        host_config("no-such-host.invalid", 5432) |> result.map(start)
 
       // Assert
-      taken
+      started
       |> should
-      |> be_equal(#(Ok(1), Ok("::1")))
-      |> or_fail_with("Expected both addresses")
-    }),
-    it("gives DnsLookupFailed for a host with no address", fn() {
-      // Arrange
-      let config = {
-        use address <- try(
-          transport.address("no-such-host.invalid", 5432)
-          |> result.map_error(string.inspect),
-        )
-        use settings <- try(dream_config(5441))
-        Ok(
-          ConnectionConfig(
-            ..settings,
-            transport: TransportConfig(..settings.transport, address:),
-          ),
-        )
-      }
-
-      // Act
-      let failed = config |> try(start_error)
-
-      // Assert
-      failed
-      |> should
-      |> be_equal(Ok(TransportRefused(DnsLookupFailed("no-such-host.invalid"))))
+      |> be_ok
+      |> be_error
+      |> be_equal(TransportRefused(DnsLookupFailed("no-such-host.invalid")))
       |> or_fail_with("Expected DnsLookupFailed with the host")
     }),
-    it("gives ServerRefusedTls for a server with no TLS", fn() {
-      // Arrange
-      let config =
-        dream_config(server_without_tls)
-        |> result.map(with_tls(
+    it("gives ServerRefusedTls for a server with no TLS", fn(_nothing) {
+      // Act
+      let started =
+        connection_config(server_without_tls)
+        |> result.map(tls_config(
           _,
           RequireTls(NoCertificateCheck, PostgresNegotiation),
         ))
-
-      // Act
-      let failed = config |> try(start_error)
+        |> result.map(start)
 
       // Assert
-      failed
+      started
       |> should
-      |> be_equal(Ok(TransportRefused(ServerRefusedTls)))
+      |> be_ok
+      |> be_error
+      |> be_equal(TransportRefused(ServerRefusedTls))
       |> or_fail_with("Expected ServerRefusedTls")
     }),
   ]
@@ -1316,271 +1507,182 @@ fn address_tests() {
 
 const missing_authority_file = "test/fixtures/ssl/parity_missing_ca.crt"
 
-const unreadable_authority =
-  TlsFailed(AuthorityFileUnreadable(missing_authority_file, "enoent"))
+const missing_authority_tls =
+  RequireTls(
+    CheckAuthorityAndHost(AuthorityFile(missing_authority_file)),
+    PostgresNegotiation,
+  )
 
-fn socket_tests() {
+const closing_tls = RequireTls(NoCertificateCheck, PostgresNegotiation)
+
+fn socket_tests() -> List(ContextNode(Nil)) {
   [
-    it("closes the socket when the server refuses the login", fn() {
+    group("when the server refuses the login", login_refusal_tests()),
+    group("when the CA file cannot be read", authority_tests()),
+    group("when the server closes", closing_tests()),
+  ]
+}
+
+fn login_refusal_tests() -> List(ContextNode(Nil)) {
+  [
+    it("closes the socket when the server refuses the login", fn(_nothing) {
       // Arrange
-      let #(port, server) = start_login_refusing_server()
-      let config = dream_config(port)
+      let #(refusing_port, refusing_server) = start_login_refusing_server()
 
       // Act
-      let refusal =
-        config |> try(start_refusal) |> result.map(severity_and_code)
-      let closed = parity_client_closed(server)
+      let started = connection_config(refusing_port) |> result.map(start)
 
       // Assert
-      #(refusal, closed)
+      started
       |> should
-      |> be_equal(#(Ok(#("FATAL", "28P01")), True))
-      |> or_fail_with("Expected the refusal and a closed socket")
+      |> be_ok
+      |> be_error
+      |> extract_client_closed(refusing_server)
+      |> be_true
+      |> or_fail_with("Expected a closed socket")
     }),
-    it("closes the socket when the CA file cannot be read", fn() {
+    it("gives the 28P01 of a server that refuses the login", fn(_nothing) {
       // Arrange
-      let #(port, server) = start_fake_server(Answer(<<"S">>))
-      let tls =
-        RequireTls(
-          CheckAuthorityAndHost(AuthorityFile(missing_authority_file)),
-          PostgresNegotiation,
+      let #(refusing_port, _refusing_server) = start_login_refusing_server()
+
+      // Act
+      let started = connection_config(refusing_port) |> result.map(start)
+
+      // Assert
+      started
+      |> should
+      |> be_ok
+      |> be_error
+      |> extract_login_refusal_code
+      |> be_equal("28P01")
+      |> or_fail_with("Expected the 28P01 of the refusal")
+    }),
+    it(
+      "gives the severity FATAL of a server that refuses the login",
+      fn(_nothing) {
+        // Arrange
+        let #(refusing_port, _refusing_server) = start_login_refusing_server()
+
+        // Act
+        let started = connection_config(refusing_port) |> result.map(start)
+
+        // Assert
+        started
+        |> should
+        |> be_ok
+        |> be_error
+        |> extract_login_refusal_report
+        |> extract_report_severity
+        |> be_equal("FATAL")
+        |> or_fail_with("Expected the severity FATAL of the refusal")
+      },
+    ),
+  ]
+}
+
+fn authority_tests() -> List(ContextNode(Nil)) {
+  [
+    it("closes the socket when the CA file cannot be read", fn(_nothing) {
+      // Arrange
+      let #(fake_port, fake) = start_fake_server(Answer(<<"S">>))
+
+      // Act
+      let connected =
+        transport_config("localhost", fake_port, missing_authority_tls)
+        |> try(connect)
+
+      // Assert
+      connected
+      |> should
+      |> be_error
+      |> extract_client_closed(fake)
+      |> be_true
+      |> or_fail_with("Expected a closed socket")
+    }),
+    it(
+      "gives AuthorityFileUnreadable when the CA file cannot be read",
+      fn(_nothing) {
+        // Arrange
+        let #(fake_port, _fake) = start_fake_server(Answer(<<"S">>))
+
+        // Act
+        let connected =
+          transport_config("localhost", fake_port, missing_authority_tls)
+          |> try(connect)
+
+        // Assert
+        connected
+        |> should
+        |> be_error
+        |> be_equal(
+          TlsFailed(AuthorityFileUnreadable(missing_authority_file, "enoent")),
         )
-
-      // Act
-      let failed = connect_only(port, tls)
-      let closed = fake_client_closed(server)
-
-      // Assert
-      #(failed, closed)
-      |> should
-      |> be_equal(#(Error(string.inspect(unreadable_authority)), True))
-      |> or_fail_with("Expected AuthorityFileUnreadable and a closed socket")
-    }),
-    it("gives SocketClosed and closes the socket when the server closes", fn() {
-      // Arrange
-      let #(port, server) = start_closing_server()
-
-      // Act
-      let failed =
-        connect_only(port, RequireTls(NoCertificateCheck, PostgresNegotiation))
-      let closed = parity_client_closed(server)
-
-      // Assert
-      #(failed, closed)
-      |> should
-      |> be_equal(#(Error(string.inspect(SocketClosed)), True))
-      |> or_fail_with("Expected SocketClosed and a closed socket")
-    }),
+        |> or_fail_with("Expected AuthorityFileUnreadable")
+      },
+    ),
   ]
 }
 
-fn connect_only(port: Int, tls: Tls) -> Result(Nil, String) {
-  use address <- try(
-    transport.address("localhost", port) |> result.map_error(string.inspect),
-  )
-  transport.connect(TransportConfig(address, tls, 5000, 5000))
-  |> result.map(transport.close)
-  |> result.map_error(string.inspect)
-}
-
-// The password ------------------------------------------------------------------
-
-/// The user `dream_md5` logs in with the password `dream`. Its own name
-/// prints as `<<"dream_md5">>`, so only the password prints as
-/// `<<"dream">>`.
-fn md5_config() -> Result(ConnectionConfig, String) {
-  login_config(
-    5441,
-    "dream_md5",
-    servers.database,
-    login.password(servers.password),
-    [],
-  )
-}
-
-fn password_tests() {
+fn closing_tests() -> List(ContextNode(Nil)) {
   [
-    it("stays out of the status of the connection process", fn() {
-      // Act
-      let shown = {
-        use connection <- with_connection(md5_config())
-        Ok(status_holds(pid_of(connection), printed_password))
-      }
+    it(
+      "gives SocketClosed and closes the socket when the server closes",
+      fn(_nothing) {
+        // Arrange
+        let #(closing_port, _closing_server) = start_closing_server()
 
-      // Assert
-      shown
-      |> should
-      |> be_equal(Ok(False))
-      |> or_fail_with("Expected no password in the status")
-    }),
-    it("stays out of the status of the supervisor", fn() {
-      // Act
-      let shown = {
-        use config <- try(md5_config())
-        use started <- try(
-          static_supervisor.new(static_supervisor.OneForOne)
-          |> static_supervisor.add(connection.supervised(config))
-          |> static_supervisor.start
-          |> result.map_error(string.inspect),
-        )
-        let holds = status_holds(started.pid, printed_password)
-        stop_process(started.pid)
-        Ok(holds)
-      }
+        // Act
+        let connected =
+          transport_config("localhost", closing_port, closing_tls)
+          |> try(connect)
 
-      // Assert
-      shown
-      |> should
-      |> be_equal(Ok(False))
-      |> or_fail_with("Expected no password in the status")
-    }),
+        // Assert
+        connected
+        |> should
+        |> be_error
+        |> be_equal(SocketClosed)
+        |> or_fail_with("Expected SocketClosed")
+      },
+    ),
+    it(
+      "closes the socket when the server closes after the SSLRequest",
+      fn(_nothing) {
+        // Arrange
+        let #(closing_port, closing_server) = start_closing_server()
+
+        // Act
+        let connected =
+          transport_config("localhost", closing_port, closing_tls)
+          |> try(connect)
+
+        // Assert
+        connected
+        |> should
+        |> be_error
+        |> extract_client_closed(closing_server)
+        |> be_true
+        |> or_fail_with("Expected a closed socket")
+      },
+    ),
   ]
 }
 
-// The pool ----------------------------------------------------------------------
+// With a supervised connection of its own ---------------------------------------
 
-fn pool_config(connection: ConnectionConfig) -> PoolConfig {
-  PoolConfig(
-    connection:,
-    health_check_interval_milliseconds: 60_000,
-    health_check_deadline_milliseconds: 5000,
-    rollback_deadline_milliseconds: 5000,
-    shutdown_deadline_milliseconds: 5000,
+fn supervisor_tests() -> TestSuite {
+  describe(
+    "with a supervised connection of its own",
+    supervised_connection_setup(md5_config()),
+    [
+      group("the password", [
+        it("stays out of the status of the supervisor", fn(supervisor) {
+          supervisor
+          |> should
+          |> extract_printed_status
+          |> not_contain_text(printed_password)
+          |> or_fail_with("Expected no password in the status")
+        }),
+      ]),
+    ],
   )
-}
-
-fn with_pool(
-  config: Result(PoolConfig, String),
-  size: Int,
-  body: fn(Pool) -> Result(value, String),
-) -> Result(value, String) {
-  use settings <- try(config)
-  use started <- try(
-    pool.start(settings, size) |> result.map_error(string.inspect),
-  )
-  let value = body(started)
-  pool.stop(started, 1000)
-  value
-}
-
-fn held(
-  pool: Pool,
-  body: fn(Connection) -> Result(value, String),
-) -> Result(value, String) {
-  pool.hold(pool, deadline, body)
-  |> result.map_error(string.inspect)
-  |> result.flatten
-}
-
-fn held_backend_pid(pool: Pool) -> Result(String, String) {
-  held(pool, backend_pid)
-}
-
-fn held_one(connection: Connection) -> Result(List(List(String)), String) {
-  rows(connection, "SELECT 1", [])
-}
-
-fn held_two(
-  pool: Pool,
-  first: Connection,
-) -> Result(List(List(String)), String) {
-  use first_rows <- try(held_one(first))
-  use second_rows <- try(held(pool, held_one))
-  Ok(list.append(first_rows, second_rows))
-}
-
-/// Asks for the status until all connections are available: no sleep.
-fn wait_for_available(
-  pool: Pool,
-  wanted: Int,
-  attempts: Int,
-) -> Result(PoolStatus, String) {
-  use current <- try(pool.status(pool) |> result.map_error(string.inspect))
-  case current.available == wanted, attempts {
-    True, _ -> Ok(current)
-    False, 0 -> Error("the connections did not come back")
-    False, _ -> wait_for_available(pool, wanted, attempts - 1)
-  }
-}
-
-fn pool_tests(server: Server) {
-  [
-    it("runs a query on a held connection", fn() { check_held_query(server) }),
-    it("gives each connection back when its hold ends", fn() {
-      check_holds_end(server)
-    }),
-    it("replaces an idle connection whose socket closed", fn() {
-      check_idle_socket_closed(server)
-    }),
-  ]
-}
-
-fn check_held_query(server: Server) {
-  // Arrange
-  let config = dream_config(server.port) |> result.map(pool_config)
-
-  // Act
-  let answer = {
-    use pool <- with_pool(config, 1)
-    held(pool, held_one)
-  }
-
-  // Assert
-  answer
-  |> should
-  |> be_equal(Ok([["1"]]))
-  |> or_fail_with("Expected the query to run on the held connection")
-}
-
-fn check_holds_end(server: Server) {
-  // Arrange
-  let config = dream_config(server.port) |> result.map(pool_config)
-
-  // Act
-  let status = {
-    use pool <- with_pool(config, 2)
-    use _rows <- try(held(pool, held_two(pool, _)))
-    wait_for_available(pool, 2, 1000)
-  }
-
-  // Assert
-  status
-  |> should
-  |> be_equal(
-    Ok(PoolStatus(
-      size: 2,
-      connected: 2,
-      available: 2,
-      held: 0,
-      waiting: 0,
-      last_connect_error: None,
-    )),
-  )
-  |> or_fail_with("Expected both connections back and free")
-}
-
-fn check_idle_socket_closed(server: Server) {
-  // Arrange
-  let #(port, proxy) = start_proxy(server.port)
-  let events = process.new_subject()
-  let config =
-    dream_config(port)
-    |> result.map(with_events(_, events))
-    |> result.map(pool_config)
-
-  // Act
-  let changed = {
-    use pool <- with_pool(config, 1)
-    use first <- try(held_backend_pid(pool))
-    close_client(proxy)
-    use Nil <- try(wait_for_reconnect(events))
-    use second <- try(held_backend_pid(pool))
-    Ok(first != second)
-  }
-
-  // Assert
-  changed
-  |> should
-  |> be_equal(Ok(True))
-  |> or_fail_with("Expected a new backend after the socket closed")
 }

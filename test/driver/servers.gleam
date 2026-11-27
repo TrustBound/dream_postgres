@@ -26,6 +26,10 @@ pub fn driver_servers() -> List(Server) {
   ]
 }
 
+/// The port of the PostgreSQL 16 server of the client tests, with SSL off:
+/// the one server that refuses TLS.
+pub const server_without_tls = 5436
+
 /// The password of every database user of the driver servers.
 pub const password = "dream"
 

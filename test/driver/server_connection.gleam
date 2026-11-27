@@ -3,8 +3,8 @@
 //// connection through a test proxy with a control connection beside it, a
 //// connection with a control connection beside it, one act that several
 //// tests check, the backend process IDs, a suspended connection process,
-//// the mailbox and the memory of a connection process, and callers in
-//// their own processes.
+//// the mailbox and the memory of a connection process, callers in their
+//// own processes, and a connection under a supervisor.
 ////
 //// Each fixture that can fail gives a `Result` with a text error, so a
 //// setup of dream_test reports the failure as a failed setup. The hooks
@@ -17,18 +17,18 @@
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionConfig, type ConnectionEvent, type DriverError,
   type Outcome, type StatementCaching, Backoff, CacheStatements,
-  ConnectionConfig, LoginRefused, Outcome, ReconnectFailed, run, run_script,
-  server_parameter, start, stop, transaction_status,
+  ConnectionConfig, LoginRefused, Outcome, ReconnectFailed, Reconnected, run,
+  run_script, server_parameter, start, stop, supervised, transaction_status,
 }
 import dream_postgres/driver/login.{
-  type LoginConfig, PreferChannelBinding, ServerRejectedLogin,
+  type LoginConfig, type Password, PreferChannelBinding, ServerRejectedLogin,
 }
 import dream_postgres/driver/message.{type ProtocolVersion, Protocol30}
 import dream_postgres/driver/statement_cache.{default_limit}
 import dream_postgres/driver/transport.{
   type Address, type Tls, NoTls, TransportConfig, address,
 }
-import dream_postgres/internal/cell.{CommandResult, Text}
+import dream_postgres/internal/cell.{type Cell, CommandResult, Text}
 import dream_test/context.{type Context}
 import driver/proxy.{type Proxy, inject, start_proxy, stop_proxy}
 import driver/servers.{type Server}
@@ -36,6 +36,7 @@ import gleam/bit_array
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int.{to_string}
 import gleam/option.{None, Some}
+import gleam/otp/static_supervisor
 import gleam/result.{map_error, replace, try}
 import gleam/string.{inspect}
 
@@ -84,11 +85,72 @@ pub fn parameter_config(
   name: String,
   value: String,
 ) -> Result(ConnectionConfig, String) {
+  parameters_config(port, [#(name, value)])
+}
+
+/// The config of a connection as `dream` that sends the startup
+/// parameters `parameters`, in their order.
+pub fn parameters_config(
+  port: Int,
+  parameters: List(#(String, String)),
+) -> Result(ConnectionConfig, String) {
+  login_settings_config(
+    port,
+    servers.database,
+    login.password(servers.password),
+    parameters,
+  )
+}
+
+/// The config of a connection as `dream` to the database `database`.
+pub fn database_config(
+  port: Int,
+  database: String,
+) -> Result(ConnectionConfig, String) {
+  login_settings_config(port, database, login.password(servers.password), [])
+}
+
+/// The config of a connection as `dream` whose password comes from a
+/// function.
+pub fn password_function_config(port: Int) -> Result(ConnectionConfig, String) {
+  login_settings_config(
+    port,
+    servers.database,
+    login.password_function(fn() { servers.password }),
+    [],
+  )
+}
+
+/// The config of a connection as `dream` to `host` on `port`.
+pub fn host_config(
+  host: String,
+  port: Int,
+) -> Result(ConnectionConfig, String) {
   use config <- try(connection_config(port))
-  use login <- try(login_config(
+  use host_address <- try(
+    address(host, port)
+    |> map_error(fn(error) { "could not build the address: " <> inspect(error) }),
+  )
+  Ok(
+    ConnectionConfig(
+      ..config,
+      transport: TransportConfig(..config.transport, address: host_address),
+    ),
+  )
+}
+
+fn login_settings_config(
+  port: Int,
+  database: String,
+  password: Password,
+  parameters: List(#(String, String)),
+) -> Result(ConnectionConfig, String) {
+  use config <- try(connection_config(port))
+  use login <- try(login_settings(
     "dream",
-    servers.password,
-    [#(name, value)],
+    database,
+    password,
+    parameters,
     Protocol30,
   ))
   Ok(ConnectionConfig(..config, login:))
@@ -146,10 +208,26 @@ fn login_config(
   parameters: List(#(String, String)),
   protocol_version: ProtocolVersion,
 ) -> Result(LoginConfig, String) {
+  login_settings(
+    user,
+    servers.database,
+    login.password(password),
+    parameters,
+    protocol_version,
+  )
+}
+
+fn login_settings(
+  user: String,
+  database: String,
+  password: Password,
+  parameters: List(#(String, String)),
+  protocol_version: ProtocolVersion,
+) -> Result(LoginConfig, String) {
   login.new(
     user:,
-    database: servers.database,
-    password: login.password(password),
+    database:,
+    password:,
     parameters:,
     channel_binding: PreferChannelBinding,
     protocol_version:,
@@ -296,6 +374,18 @@ pub fn run_failing_statement_within(
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
     run(connection, sql, [], [], deadline) |> require_failure(connection, sql)
+  }
+}
+
+/// A hook that runs the statement `sql` with `parameters`, which must
+/// fail. The setup fails when the statement works.
+pub fn run_failing_statement_with_parameters(
+  sql: String,
+  parameters: List(Cell),
+) -> fn(Connection) -> Result(Connection, String) {
+  fn(connection) {
+    run(connection, sql, parameters, [], 5000)
+    |> require_failure(connection, sql)
   }
 }
 
@@ -467,6 +557,22 @@ pub fn run_proxied_setup_script(
   setup_step(fn(proxied: ProxiedConnection) {
     run_control_script(proxied.connection, sql)
   })
+}
+
+/// A hook that runs the connection hook `hook` on the proxied connection,
+/// for example `run_failing_statement(sql)`.
+pub fn on_proxied_connection(
+  hook: fn(Connection) -> Result(Connection, String),
+) -> fn(ProxiedConnection) -> Result(ProxiedConnection, String) {
+  setup_step(fn(proxied: ProxiedConnection) { hook(proxied.connection) })
+}
+
+/// A hook that waits for the event `Reconnected` of the proxied
+/// connection.
+pub fn wait_for_proxied_reconnect(
+  proxied: ProxiedConnection,
+) -> Result(ProxiedConnection, String) {
+  wait_for_reconnect(proxied.events) |> replace(proxied)
 }
 
 /// What an act gave, with the proxied connection that it ran on.
@@ -745,6 +851,17 @@ pub fn next_event(
   events: Subject(ConnectionEvent),
 ) -> Result(ConnectionEvent, Nil) {
   process.receive(events, 5000)
+}
+
+/// Waits for the event `Reconnected`, and drops the events before it.
+pub fn wait_for_reconnect(
+  events: Subject(ConnectionEvent),
+) -> Result(Nil, String) {
+  case next_event(events) {
+    Ok(Reconnected) -> Ok(Nil)
+    Ok(_other) -> wait_for_reconnect(events)
+    Error(Nil) -> Error("no reconnect within 5 seconds")
+  }
 }
 
 /// The next event that is not a reconnect refused with 28P01.
@@ -1063,3 +1180,39 @@ fn owner_body(start: fn() -> answer, answers: Subject(answer)) -> Nil {
   process.trap_exits(True)
   process.send(answers, start())
 }
+
+// Supervised connections -------------------------------------------------------
+
+/// Starts a supervisor with one connection of `config` as its child, and
+/// gives the process of the supervisor. `stop_supervisor` stops it.
+pub fn start_supervised_connection(
+  config: Result(ConnectionConfig, String),
+) -> Result(Pid, String) {
+  use settings <- try(config)
+  static_supervisor.new(static_supervisor.OneForOne)
+  |> static_supervisor.add(supervised(settings))
+  |> static_supervisor.start
+  |> result.map(fn(started) { started.pid })
+  |> map_error(fn(error) { "could not start a supervisor: " <> inspect(error) })
+}
+
+/// The context of a describe whose tests each check a supervisor with
+/// one connection of `config` as its child. The teardown stops it.
+pub fn supervised_connection_setup(
+  config: Result(ConnectionConfig, String),
+) -> Context(Pid) {
+  context.setup(
+    setup: fn() { start_supervised_connection(config) },
+    teardown: stop_supervisor,
+  )
+}
+
+/// Stops a supervisor that `start_supervised_connection` started, and its
+/// connection, and waits until the supervisor is down. A teardown for the
+/// context setup.
+pub fn stop_supervisor(supervisor: Pid) -> Result(Nil, String) {
+  Ok(stop_process(supervisor))
+}
+
+@external(erlang, "driver_parity_ffi", "stop_process")
+fn stop_process(pid: Pid) -> Nil

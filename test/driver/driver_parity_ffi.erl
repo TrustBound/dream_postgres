@@ -1,6 +1,6 @@
 -module(driver_parity_ffi).
 -export([start_login_refusing_server/0, start_closing_server/0,
-         client_closed/1, status_holds/2, stop_process/1]).
+         printed_status/1, stop_process/1]).
 
 %% Fake servers and process checks for the parity tests.
 %%
@@ -10,7 +10,8 @@
 %% open. start_closing_server() does the same, but reads the 8-byte
 %% SSLRequest and then shuts its sending side, as a server that closes
 %% the connection. Both then wait for the client to close its socket, and
-%% client_closed(Reference) gives true when it did within 5 seconds.
+%% send {Reference, closed}, or {Reference, open} when 5 seconds pass
+%% first, as driver_fake_server_ffi does: its client_closed reads it.
 
 -define(WAIT, 5000).
 
@@ -19,12 +20,6 @@ start_login_refusing_server() ->
 
 start_closing_server() ->
     start(fun close_after_tls_request/1).
-
-client_closed(Reference) ->
-    receive
-        {Reference, closed} -> true;
-        {Reference, open} -> false
-    end.
 
 start(Behave) ->
     Caller = self(),
@@ -62,11 +57,10 @@ wait_for_close(Socket) ->
         {ok, _Bytes} -> wait_for_close(Socket)
     end.
 
-%% True when the printed status of the process holds Text.
-status_holds(Pid, Text) ->
+%% The status of the process, printed with ~p.
+printed_status(Pid) ->
     Status = sys:get_status(Pid, ?WAIT),
-    Printed = unicode:characters_to_binary(io_lib:format("~p", [Status])),
-    binary:match(Printed, Text) =/= nomatch.
+    unicode:characters_to_binary(io_lib:format("~p", [Status])).
 
 %% Stops a linked process, such as a supervisor, without an exit signal
 %% to the caller, and waits until it is gone.

@@ -5,16 +5,15 @@
 
 import dream_postgres/driver/message.{AuthenticationOk, AuthenticationSasl}
 import dream_postgres/driver/transport.{
-  type AddressError, type Tls, type TransportConfig, type TransportError,
-  AuthorityCertificates, AuthorityFile, AuthorityFileEmpty,
-  AuthorityFileUnreadable, BytesBeforeTls, CertificateExpired, CheckAuthority,
-  CheckAuthorityAndHost, ConnectRefused, ConnectTimedOut, ConnectionReset,
-  DirectNegotiation, DnsLookupFailed, HostNameMismatch, InvalidHost, InvalidPort,
-  NoCertificateCheck, NoTls, OtherTlsFailure, PostgresNegotiation, PreferTls,
-  ReceiveTimedOut, RequireTls, SendTimedOut, ServerRefusedTls, SocketClosed,
-  SystemAuthorities, TlsFailed, TlsRequestAnsweredWithError, TransportConfig,
-  UnexpectedTlsAnswer, UnknownAuthority, Unlisted, address, connect,
-  connect_error, send_error, socket_error, tls_error,
+  type AddressError, type Tls, type TransportError, AuthorityCertificates,
+  AuthorityFile, AuthorityFileEmpty, AuthorityFileUnreadable, BytesBeforeTls,
+  CertificateExpired, CheckAuthority, CheckAuthorityAndHost, ConnectRefused,
+  ConnectTimedOut, ConnectionReset, DirectNegotiation, DnsLookupFailed,
+  HostNameMismatch, InvalidHost, InvalidPort, NoCertificateCheck, NoTls,
+  OtherTlsFailure, PostgresNegotiation, PreferTls, ReceiveTimedOut, RequireTls,
+  SendTimedOut, ServerRefusedTls, SocketClosed, SystemAuthorities, TlsFailed,
+  TlsRequestAnsweredWithError, UnexpectedTlsAnswer, UnknownAuthority, Unlisted,
+  address, connect, connect_error, send_error, socket_error, tls_error,
 }
 import dream_test/matchers.{
   be_equal, be_error, be_ok, be_true, or_fail_with, should,
@@ -24,13 +23,15 @@ import dream_test/unit.{describe, group, it}
 import driver/fake_server.{
   type FakeBehavior, Answer, NotTls, Reset, Tls, free_port, start_fake_server,
 }
-import driver/servers.{type Server, driver_servers, first_driver_server}
-import fixtures/driver_tls.{certificate_authority, verify_full}
+import driver/servers.{
+  type Server, driver_servers, first_driver_server, server_without_tls,
+}
+import fixtures/driver_tls.{certificate_authority, transport_config, verify_full}
 import gleam/erlang/atom.{type Atom}
 import gleam/int.{to_string}
 import gleam/list.{map}
 import gleam/option.{None, Some}
-import gleam/result.{replace_error, try}
+import gleam/result.{try}
 import matchers/close_connection.{close_connection}
 import matchers/extract_address_parts.{extract_address_parts}
 import matchers/extract_client_closed.{extract_client_closed}
@@ -319,22 +320,7 @@ fn direct_tls_test(server: Server) {
   }
 }
 
-/// The transport settings for a host and a port, with a timeout of five
-/// seconds. An address that the transport refuses gives an error.
-fn transport_config(
-  host: String,
-  port: Int,
-  tls: Tls,
-) -> Result(TransportConfig, TransportError) {
-  address(host, port)
-  |> result.map(TransportConfig(_, tls, 5000, 5000))
-  |> replace_error(Unlisted("test address"))
-}
-
 // Refusals --------------------------------------------------------------------
-
-/// The PostgreSQL 16 server of the client tests, with SSL off.
-const server_without_tls = 5436
 
 fn refusal_tests() {
   [

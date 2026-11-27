@@ -831,6 +831,11 @@ pub fn wait_for_waiting_count(pool: Pool, count: Int) -> Result(Nil, String) {
   wait_for_status(pool, fn(status) { status.waiting }, count, 100_000)
 }
 
+/// Waits until `count` connections of the pool are available.
+pub fn wait_for_available_count(pool: Pool, count: Int) -> Result(Nil, String) {
+  wait_for_status(pool, fn(status) { status.available }, count, 100_000)
+}
+
 /// Waits until `count` holds of the pool run.
 pub fn wait_for_held_count(pool: Pool, count: Int) -> Result(Nil, String) {
   wait_for_status(pool, fn(status) { status.held }, count, 100_000)
