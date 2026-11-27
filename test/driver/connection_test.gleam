@@ -5,25 +5,27 @@
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type DriverError, type Outcome, Backoff,
-  ConnectionConfig, ConnectionLost, ConnectionProcessDown, CopyStatementRefused,
-  DeadlinePassed, Disconnected, InvalidRequest, LoginRefused, ProtocolViolation,
-  ReconnectFailed, Reconnected, ScriptFailed, ServerEndedConnection,
-  ServerRefused, SetupTimedOut, TransportRefused, UndecodableMessage,
-  UnexpectedIdleMessage, UnexpectedServerMessage,
+  type ConnectionEvent, type DriverError, type Outcome, type StatementCaching,
+  Backoff, CacheStatements, ConnectionConfig, ConnectionLost,
+  ConnectionProcessDown, CopyStatementRefused, DeadlinePassed, Disconnected,
+  InvalidRequest, LoginRefused, ProtocolViolation, ReconnectFailed, Reconnected,
+  ScriptFailed, ServerEndedConnection, ServerRefused, SetupTimedOut,
+  TransportRefused, UndecodableMessage, UnexpectedIdleMessage,
+  UnexpectedServerMessage, UnnamedStatements,
 }
 import dream_postgres/driver/login.{PreferChannelBinding, ServerRejectedLogin}
 import dream_postgres/driver/message.{
-  BindComplete, Protocol30, UnknownMessageType, ZeroByteInString,
+  BindComplete, Protocol30, TooManyItems, UnknownMessageType, ZeroByteInString,
 }
+import dream_postgres/driver/statement_cache
 import dream_postgres/driver/transport.{
   ConnectRefused, ConnectionReset, NoTls, SendTimedOut, SocketClosed,
   TransportConfig,
 }
 import dream_postgres/internal/cell.{
-  type Cell, type ServerReport, Binary, BinaryFormat, ColumnDescription,
-  CommandResult, Idle, InFailedTransaction, InTransaction, Null,
-  ParameterDescription, StatementDescription, Text,
+  type Cell, type ColumnDescription, type ServerReport, Binary, BinaryFormat,
+  ColumnDescription, CommandResult, Idle, InFailedTransaction, InTransaction,
+  Null, ParameterDescription, StatementDescription, Text,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -53,8 +55,11 @@ fn close_client(proxy: Proxy) -> Nil
 @external(erlang, "driver_proxy_ffi", "reset_client")
 fn reset_client(proxy: Proxy) -> Nil
 
-@external(erlang, "driver_proxy_ffi", "stop_reading")
-fn stop_reading(proxy: Proxy) -> Nil
+@external(erlang, "driver_proxy_ffi", "answer_next_request")
+fn answer_next_request(proxy: Proxy, bytes: BitArray) -> Nil
+
+@external(erlang, "driver_proxy_ffi", "stop_listening")
+fn stop_listening(proxy: Proxy) -> Nil
 
 @external(erlang, "driver_proxy_ffi", "watch_client_end")
 fn watch_client_end(proxy: Proxy) -> ClientEndWatch
@@ -90,6 +95,9 @@ pub fn tests() -> TestSuite {
     group("losing the connection", loss_tests()),
     group("callers", caller_tests()),
     group("more paths", more_tests()),
+    group("the statement cache", map(driver_servers(), cache_tests)),
+    group("deadlines on each server", map(driver_servers(), deadline_tests)),
+    group("deadlines", more_deadline_tests()),
   ])
 }
 
@@ -121,8 +129,11 @@ fn config(
     transport: TransportConfig(address, NoTls, 5000, 500),
     login: login_config,
     setup_timeout_milliseconds: 5000,
+    cancel_timeout_milliseconds: 2000,
     reconnect: Backoff(first_delay, 60_000),
     events:,
+    notifications: None,
+    statements: CacheStatements(statement_cache.default_limit),
   ))
 }
 
@@ -522,6 +533,13 @@ fn start_tests() {
   ]
 }
 
+fn with_caching(
+  settings: ConnectionConfig,
+  caching: StatementCaching,
+) -> ConnectionConfig {
+  ConnectionConfig(..settings, statements: caching)
+}
+
 fn short_setup(settings: ConnectionConfig) -> ConnectionConfig {
   ConnectionConfig(..settings, setup_timeout_milliseconds: 100)
 }
@@ -550,10 +568,25 @@ fn with_setup(
   first_delay: Int,
   body: fn(Setup) -> Result(value, DriverError),
 ) -> Result(value, DriverError) {
+  with_caching_setup(
+    first_delay,
+    CacheStatements(statement_cache.default_limit),
+    body,
+  )
+}
+
+fn with_caching_setup(
+  first_delay: Int,
+  caching: StatementCaching,
+  body: fn(Setup) -> Result(value, DriverError),
+) -> Result(value, DriverError) {
   let server = first_server()
   let #(port, proxy) = start_proxy(server.port)
   let events = process.new_subject()
-  use settings <- try(config(port, "dream", "dream", first_delay, Some(events)))
+  use settings <- try(
+    config(port, "dream", "dream", first_delay, Some(events))
+    |> result.map(with_caching(_, caching)),
+  )
   use connection <- with_started(settings)
   use control <- with_connection(server.port)
   body(Setup(connection:, control:, proxy:, events:))
@@ -702,6 +735,7 @@ fn event_code(event: ConnectionEvent) -> String {
       "violation running"
     ReconnectFailed(LoginRefused(ServerRejectedLogin(report))) ->
       "reconnect failed " <> report.code
+    Disconnected(DeadlinePassed(cancelled: False)) -> "lost at deadline"
     Reconnected -> "reconnected"
     _ -> "another event"
   }
@@ -752,25 +786,24 @@ fn check_running_violation() {
   |> or_fail_with("Expected a protocol violation for the running request")
 }
 
-/// The proxy stops reading, and a large script fills the socket's send
-/// queue. The proxy then sends a CopyInResponse as if the server answered.
-/// The step answers it with a CopyFail, whose send waits behind the full
-/// queue and fails after the send timeout of 500 milliseconds.
+/// The proxy reads the first bytes of a large script, answers them with a
+/// CopyInResponse as if the server did, and reads nothing more. The step
+/// answers with a CopyFail, whose send waits behind the rest of the script
+/// in the socket's queue and fails after the send timeout of 500
+/// milliseconds.
 fn check_send_timeout() {
   // Act
-  let event = {
+  let answer = {
     use setup <- with_setup(60_000)
-    stop_reading(setup.proxy)
+    answer_next_request(setup.proxy, <<"G", 7:32, 0, 0:16>>)
     let large = "SELECT '" <> repeat("x", 64_000_000) <> "'"
-    let _queued = connection.run_script(setup.connection, large, 50)
-    inject(setup.proxy, <<"G", 7:32, 0, 0:16>>)
-    Ok(next_event(setup.events) |> result.map(event_code))
+    Ok(script(setup.connection, large) |> result.replace(Nil))
   }
 
   // Assert
-  event
+  answer
   |> should
-  |> be_equal(Ok(Ok("lost send timeout")))
+  |> be_equal(Ok(Error(ConnectionLost(SendTimedOut))))
   |> or_fail_with("Expected the loss by a send timeout")
 }
 
@@ -924,33 +957,6 @@ fn caller_tests() {
       |> should
       |> be_equal(Ok([[Text(<<"2">>)]]))
       |> or_fail_with("Expected the next query's own result")
-    }),
-    it("gives DeadlinePassed and stays usable after a late answer", fn() {
-      // Act
-      let answers = {
-        use setup <- with_setup(60_000)
-        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(826)"))
-        let late =
-          connection.run_script(
-            setup.connection,
-            "SELECT pg_advisory_lock(826)",
-            50,
-          )
-        use _unlocked <- try(script(
-          setup.control,
-          "SELECT pg_advisory_unlock(826)",
-        ))
-        use outcome <- try(run(setup.connection, "SELECT 3", []))
-        Ok(#(late |> result.replace(Nil), rows(outcome)))
-      }
-
-      // Assert
-      answers
-      |> should
-      |> be_equal(
-        Ok(#(Error(DeadlinePassed(cancelled: False)), [[Text(<<"3">>)]])),
-      )
-      |> or_fail_with("Expected DeadlinePassed, then the next query's result")
     }),
     it("runs a request that waited behind another", fn() {
       // Act
@@ -1280,11 +1286,17 @@ fn more_tests() {
       |> be_equal(Ok("lost closed"))
       |> or_fail_with("Expected the loss for the running request")
     }),
-    it("fails a running run when the network closes", fn() {
-      check_running_lost(RunCaller)
+    it("fails a running cached run when the network closes", fn() {
+      check_running_lost(RunCaller, Cached)
     }),
-    it("fails a running prepare when the network closes", fn() {
-      check_running_lost(PrepareCaller)
+    it("fails a running named prepare when the network closes", fn() {
+      check_running_lost(PrepareCaller, Cached)
+    }),
+    it("fails a running unnamed run when the network closes", fn() {
+      check_running_lost(RunCaller, Unnamed)
+    }),
+    it("fails a running unnamed prepare when the network closes", fn() {
+      check_running_lost(PrepareCaller, Unnamed)
     }),
     it("refuses COPY FROM STDIN in a run and stays usable", fn() {
       // Act
@@ -1375,22 +1387,50 @@ type CallerKind {
   PrepareCaller
 }
 
+/// Whether the connection of the test caches statements. Each kind uses
+/// its own lock key and table, so the tests can run at the same time.
+type Caching {
+  Cached
+  Unnamed
+}
+
+fn caching_setting(caching: Caching) -> StatementCaching {
+  case caching {
+    Cached -> CacheStatements(statement_cache.default_limit)
+    Unnamed -> UnnamedStatements
+  }
+}
+
+fn lock_key(caching: Caching) -> Int {
+  case caching {
+    Cached -> 830
+    Unnamed -> 831
+  }
+}
+
+fn lock_table(caching: Caching) -> String {
+  case caching {
+    Cached -> "driver_prepare_lock_cached"
+    Unnamed -> "driver_prepare_lock_unnamed"
+  }
+}
+
 /// A run waits on an advisory lock. A prepare waits on a table that the
 /// control connection locks: its Parse needs a lock on the table too. The
 /// proxy closes the connection, and the caller gets the loss.
-fn check_running_lost(kind: CallerKind) {
+fn check_running_lost(kind: CallerKind, caching: Caching) {
   // Act
   let answer = {
-    use setup <- with_setup(60_000)
-    use _held <- try(hold_lock(setup.control, kind))
+    use setup <- with_caching_setup(60_000, caching_setting(caching))
+    use _held <- try(hold_lock(setup.control, kind, caching))
     let answers = process.new_subject()
     process.spawn_unlinked(fn() {
-      blocked_call(setup.connection, kind, answers)
+      blocked_call(setup.connection, kind, caching, answers)
     })
-    use Nil <- try(wait_for_blocked(setup.control, kind, 5000))
+    use Nil <- try(wait_for_blocked(setup.control, kind, caching, 5000))
     close_client(setup.proxy)
     let answer = process.receive(answers, 5000)
-    use _released <- try(release_lock(setup.control, kind))
+    use _released <- try(release_lock(setup.control, kind, caching))
     Ok(answer)
   }
 
@@ -1404,17 +1444,23 @@ fn check_running_lost(kind: CallerKind) {
 fn hold_lock(
   control: Connection,
   kind: CallerKind,
+  caching: Caching,
 ) -> Result(List(Outcome), DriverError) {
+  let table = lock_table(caching)
   case kind {
-    RunCaller -> script(control, "SELECT pg_advisory_lock(830)")
+    RunCaller ->
+      script(
+        control,
+        "SELECT pg_advisory_lock(" <> to_string(lock_key(caching)) <> ")",
+      )
     PrepareCaller -> {
       use _created <- try(script(
         control,
-        "CREATE TABLE IF NOT EXISTS driver_prepare_lock (x int)",
+        "CREATE TABLE IF NOT EXISTS " <> table <> " (x int)",
       ))
       script(
         control,
-        "BEGIN; LOCK TABLE driver_prepare_lock IN ACCESS EXCLUSIVE MODE",
+        "BEGIN; LOCK TABLE " <> table <> " IN ACCESS EXCLUSIVE MODE",
       )
     }
   }
@@ -1423,9 +1469,14 @@ fn hold_lock(
 fn release_lock(
   control: Connection,
   kind: CallerKind,
+  caching: Caching,
 ) -> Result(List(Outcome), DriverError) {
   case kind {
-    RunCaller -> script(control, "SELECT pg_advisory_unlock(830)")
+    RunCaller ->
+      script(
+        control,
+        "SELECT pg_advisory_unlock(" <> to_string(lock_key(caching)) <> ")",
+      )
     PrepareCaller -> script(control, "ROLLBACK")
   }
 }
@@ -1433,13 +1484,23 @@ fn release_lock(
 fn blocked_call(
   connection: Connection,
   kind: CallerKind,
+  caching: Caching,
   answers: Subject(Result(Nil, DriverError)),
 ) -> Nil {
   let answer = case kind {
     RunCaller ->
-      run(connection, "SELECT pg_advisory_lock(830)", []) |> result.replace(Nil)
+      run(
+        connection,
+        "SELECT pg_advisory_lock(" <> to_string(lock_key(caching)) <> ")",
+        [],
+      )
+      |> result.replace(Nil)
     PrepareCaller ->
-      connection.prepare(connection, "SELECT x FROM driver_prepare_lock", 5000)
+      connection.prepare(
+        connection,
+        "SELECT x FROM " <> lock_table(caching),
+        5000,
+      )
       |> result.replace(Nil)
   }
   process.send(answers, answer)
@@ -1448,25 +1509,575 @@ fn blocked_call(
 fn wait_for_blocked(
   control: Connection,
   kind: CallerKind,
+  caching: Caching,
   attempts: Int,
 ) -> Result(Nil, DriverError) {
   case kind {
-    RunCaller -> wait_for_lock_waiter(control, 830, attempts)
-    PrepareCaller -> wait_for_table_waiter(control, attempts)
+    RunCaller -> wait_for_lock_waiter(control, lock_key(caching), attempts)
+    PrepareCaller ->
+      wait_for_table_waiter(control, lock_table(caching), attempts)
   }
 }
 
 fn wait_for_table_waiter(
   control: Connection,
+  table: String,
   attempts: Int,
 ) -> Result(Nil, DriverError) {
   use outcomes <- try(script(
     control,
-    "SELECT count(*)::text FROM pg_locks WHERE locktype = 'relation' AND NOT granted AND relation = 'driver_prepare_lock'::regclass",
+    "SELECT count(*)::text FROM pg_locks WHERE locktype = 'relation' AND NOT granted AND relation = '"
+      <> table
+      <> "'::regclass",
   ))
   case map(outcomes, rows), attempts {
     [[[Text(<<"1">>)]]], _ -> Ok(Nil)
     _, 0 -> Error(ConnectionLost(SocketClosed))
-    _, _ -> wait_for_table_waiter(control, attempts - 1)
+    _, _ -> wait_for_table_waiter(control, table, attempts - 1)
   }
+}
+
+// The statement cache -------------------------------------------------------
+
+fn with_caching_connection(
+  port: Int,
+  caching: StatementCaching,
+  body: fn(Connection) -> Result(value, DriverError),
+) -> Result(value, DriverError) {
+  use settings <- try(
+    config(port, "dream", "dream", 10, None)
+    |> result.map(with_caching(_, caching)),
+  )
+  with_started(settings, body)
+}
+
+/// The prepared statements of the connection, from pg_prepared_statements,
+/// as "name executions" in name order. A script runs with the simple
+/// protocol, so it adds no statement of its own.
+fn prepared_statements(
+  connection: Connection,
+) -> Result(List(String), DriverError) {
+  use outcomes <- try(script(
+    connection,
+    "SELECT name || ' ' || (generic_plans + custom_plans)::text FROM pg_prepared_statements ORDER BY name",
+  ))
+  Ok(list.flat_map(outcomes, row_texts))
+}
+
+fn row_texts(outcome: Outcome) -> List(String) {
+  list.flat_map(rows(outcome), cell_texts)
+}
+
+fn cell_texts(row: List(Cell)) -> List(String) {
+  list.filter_map(row, cell_text)
+}
+
+fn cell_text(cell: Cell) -> Result(String, Nil) {
+  case cell {
+    Text(bytes) -> bit_array.to_string(bytes)
+    _ -> Error(Nil)
+  }
+}
+
+fn cache_tests(server: Server) {
+  group("PostgreSQL " <> to_string(server.version), [
+    it("prepares a statement one time and runs it again by its name", fn() {
+      // Act
+      let statements = {
+        use connection <- with_caching_connection(
+          server.port,
+          CacheStatements(512),
+        )
+        use _first <- try(run(connection, "SELECT 41 + 1", []))
+        use _second <- try(run(connection, "SELECT 41 + 1", []))
+        prepared_statements(connection)
+      }
+
+      // Assert
+      statements
+      |> should
+      |> be_equal(Ok(["dream_postgres_1 2"]))
+      |> or_fail_with("Expected one named statement that ran two times")
+    }),
+    it("prepares a statement one time for two prepares", fn() {
+      // Act
+      let statements = {
+        use connection <- with_caching_connection(
+          server.port,
+          CacheStatements(512),
+        )
+        use first <- try(connection.prepare(connection, "SELECT 1", 5000))
+        use second <- try(connection.prepare(connection, "SELECT 1", 5000))
+        use statements <- try(prepared_statements(connection))
+        Ok(#(first == second, statements))
+      }
+
+      // Assert
+      statements
+      |> should
+      |> be_equal(Ok(#(True, ["dream_postgres_1 0"])))
+      |> or_fail_with("Expected one statement and the same description")
+    }),
+    it("closes the least recently used statement when the cache is full", fn() {
+      // Act
+      let statements = {
+        use connection <- with_caching_connection(
+          server.port,
+          CacheStatements(2),
+        )
+        use _a <- try(run(connection, "SELECT 'a'", []))
+        use _b <- try(run(connection, "SELECT 'b'", []))
+        use _a_again <- try(run(connection, "SELECT 'a'", []))
+        use _c <- try(run(connection, "SELECT 'c'", []))
+        prepared_statements(connection)
+      }
+
+      // Assert
+      statements
+      |> should
+      |> be_equal(Ok(["dream_postgres_1 2", "dream_postgres_3 1"]))
+      |> or_fail_with("Expected b to be closed, as the least recently used")
+    }),
+    it("prepares again and runs when the statement is gone (26000)", fn() {
+      // Act
+      let answer = {
+        use connection <- with_caching_connection(
+          server.port,
+          CacheStatements(512),
+        )
+        use _first <- try(run(connection, "SELECT 41 + 1", []))
+        use _gone <- try(script(connection, "DEALLOCATE ALL"))
+        run(connection, "SELECT 41 + 1", []) |> result.map(rows)
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok([[Text(<<"42">>)]]))
+      |> or_fail_with("Expected the run to work after a new prepare")
+    }),
+    it("gives StatementChanged when the result type changed (0A000)", fn() {
+      // Act
+      let answer = {
+        use connection <- with_caching_connection(
+          server.port,
+          CacheStatements(512),
+        )
+        use _table <- try(script(
+          connection,
+          "CREATE TEMP TABLE changing (a int)",
+        ))
+        use _first <- try(run(connection, "SELECT * FROM changing", []))
+        use _altered <- try(script(
+          connection,
+          "ALTER TABLE changing ADD COLUMN b int",
+        ))
+        Ok(
+          run(connection, "SELECT * FROM changing", [])
+          |> result.map_error(changed_columns),
+        )
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(["a", "b"])))
+      |> or_fail_with("Expected StatementChanged with both columns")
+    }),
+    it("runs the changed statement after StatementChanged", fn() {
+      // Act
+      let answer = {
+        use connection <- with_caching_connection(
+          server.port,
+          CacheStatements(512),
+        )
+        use _table <- try(script(
+          connection,
+          "CREATE TEMP TABLE changing (a int)",
+        ))
+        use _first <- try(run(connection, "SELECT * FROM changing", []))
+        use _altered <- try(script(
+          connection,
+          "ALTER TABLE changing ADD COLUMN b int",
+        ))
+        let _changed = run(connection, "SELECT * FROM changing", [])
+        run(connection, "SELECT * FROM changing", []) |> result.map(tag)
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok("SELECT 0"))
+      |> or_fail_with("Expected the new statement to run")
+    }),
+    it("gives the error inside a transaction (0A000)", fn() {
+      // Act
+      let answer = {
+        use connection <- with_caching_connection(
+          server.port,
+          CacheStatements(512),
+        )
+        use _table <- try(script(
+          connection,
+          "CREATE TEMP TABLE changing (a int)",
+        ))
+        use _first <- try(run(connection, "SELECT * FROM changing", []))
+        use _begun <- try(script(
+          connection,
+          "BEGIN; ALTER TABLE changing ADD COLUMN b int",
+        ))
+        let failed =
+          run(connection, "SELECT * FROM changing", [])
+          |> result.map_error(refusal)
+        use _rolled_back <- try(script(connection, "ROLLBACK"))
+        Ok(failed)
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(#("0A000", "in a failed transaction"))))
+      |> or_fail_with("Expected 0A000 in the failed transaction")
+    }),
+    it("refuses a run with 65536 parameters before it sends them", fn() {
+      // Act
+      let answer = {
+        use connection <- with_caching_connection(
+          server.port,
+          CacheStatements(512),
+        )
+        use _prepared <- try(run(connection, "SELECT 1", []))
+        Ok(
+          run(connection, "SELECT 1", list.repeat(Null, 65_536))
+          |> result.replace(Nil),
+        )
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(InvalidRequest(TooManyItems("parameters", 65_536)))))
+      |> or_fail_with("Expected TooManyItems for the Bind")
+    }),
+    it(
+      "refuses a prepare and a run with a zero byte with UnnamedStatements",
+      fn() {
+        // Act
+        let answers = {
+          use connection <- with_caching_connection(
+            server.port,
+            UnnamedStatements,
+          )
+          let prepared =
+            connection.prepare(connection, "SELECT 1\u{0000}", 5000)
+          let ran = run(connection, "SELECT 1\u{0000}", [])
+          Ok(#(prepared |> result.replace(Nil), ran |> result.replace(Nil)))
+        }
+
+        // Assert
+        answers
+        |> should
+        |> be_equal(
+          Ok(#(
+            Error(InvalidRequest(ZeroByteInString("query"))),
+            Error(InvalidRequest(ZeroByteInString("query"))),
+          )),
+        )
+        |> or_fail_with("Expected InvalidRequest for both")
+      },
+    ),
+    it("gives the server's error for a run with UnnamedStatements", fn() {
+      // Act
+      let answer = {
+        use connection <- with_caching_connection(
+          server.port,
+          UnnamedStatements,
+        )
+        Ok(run(connection, "SELECT 1/0", []) |> result.map_error(code))
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error("22012")))
+      |> or_fail_with("Expected 22012")
+    }),
+    it("prepares no named statement with UnnamedStatements", fn() {
+      // Act
+      let statements = {
+        use connection <- with_caching_connection(
+          server.port,
+          UnnamedStatements,
+        )
+        use _first <- try(run(connection, "SELECT 1", []))
+        use _second <- try(connection.prepare(connection, "SELECT 1", 5000))
+        prepared_statements(connection)
+      }
+
+      // Assert
+      statements
+      |> should
+      |> be_equal(Ok([]))
+      |> or_fail_with("Expected no named statement")
+    }),
+  ])
+}
+
+fn changed_columns(error: DriverError) -> List(String) {
+  case error {
+    connection.StatementChanged(description) ->
+      map(description.columns, column_name)
+    _ -> ["not StatementChanged"]
+  }
+}
+
+fn column_name(column: ColumnDescription) -> String {
+  column.name
+}
+
+fn refusal(error: DriverError) -> #(String, String) {
+  case error {
+    ServerRefused(report, InFailedTransaction) -> #(
+      report.code,
+      "in a failed transaction",
+    )
+    _ -> #("", "not a refusal")
+  }
+}
+
+// Deadlines -------------------------------------------------------------------
+
+@external(erlang, "sys", "suspend")
+fn suspend(pid: Pid) -> Nil
+
+@external(erlang, "sys", "resume")
+fn resume(pid: Pid) -> Nil
+
+fn with_timeouts(
+  settings: ConnectionConfig,
+  setup: Int,
+  cancel: Int,
+) -> ConnectionConfig {
+  ConnectionConfig(
+    ..settings,
+    setup_timeout_milliseconds: setup,
+    cancel_timeout_milliseconds: cancel,
+  )
+}
+
+fn protocol_32_config(port: Int) -> Result(ConnectionConfig, DriverError) {
+  use settings <- try(config(port, "dream", "dream", 10, None))
+  use login_config <- try(
+    login.new(
+      user: "dream",
+      database: servers.database,
+      password: login.password("dream"),
+      parameters: [],
+      channel_binding: PreferChannelBinding,
+      protocol_version: message.Protocol32,
+    )
+    |> result.replace_error(ConnectionLost(SocketClosed)),
+  )
+  Ok(
+    ConnectionConfig(..settings, login: login_config)
+    |> with_timeouts(5000, 200),
+  )
+}
+
+/// The backend's state in pg_stat_activity, from the control connection.
+fn backend_state(
+  control: Connection,
+  pid: String,
+) -> Result(List(String), DriverError) {
+  use outcomes <- try(script(
+    control,
+    "SELECT state FROM pg_stat_activity WHERE pid = " <> pid,
+  ))
+  Ok(list.flat_map(outcomes, row_texts))
+}
+
+fn deadline_tests(server: Server) {
+  group("PostgreSQL " <> to_string(server.version), [
+    it("cancels a statement at its deadline and stays usable", fn() {
+      // Act
+      let answers = {
+        use settings <- try(protocol_32_config(server.port))
+        use connection <- with_started(settings)
+        use control <- with_connection(server.port)
+        use pid <- try(backend_pid(connection))
+        let late =
+          connection.run(connection, "SELECT pg_sleep(30)", [], [], 300)
+          |> result.replace(Nil)
+        use after <- try(backend_state(control, pid))
+        // The next statement runs longer than the cancel timeout, so the
+        // cancel's timer ends while the connection serves another request.
+        use next <- try(run(connection, "SELECT pg_sleep(0.3)::text", []))
+        Ok(#(late, after, tag(next)))
+      }
+
+      // Assert
+      answers
+      |> should
+      |> be_equal(
+        Ok(#(Error(DeadlinePassed(cancelled: True)), ["idle"], "SELECT 1")),
+      )
+      |> or_fail_with("Expected the cancel, an idle backend, then a new run")
+    }),
+  ])
+}
+
+fn more_deadline_tests() {
+  [
+    it("gives the settled transaction status after a request that waited", fn() {
+      // Act
+      let answers = {
+        use setup <- with_setup(60_000)
+        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(833)"))
+        let begun =
+          start_caller(setup.connection, "BEGIN; SELECT pg_advisory_lock(833)")
+        use Nil <- try(wait_for_lock_waiter(setup.control, 833, 5000))
+        let quick = connection.transaction_status(setup.connection)
+        use _unlocked <- try(script(
+          setup.control,
+          "SELECT pg_advisory_unlock(833)",
+        ))
+        let settled =
+          connection.settled_transaction_status(setup.connection, 5000)
+        let _answer = caller_answer(begun)
+        use _rolled_back <- try(script(setup.connection, "ROLLBACK"))
+        Ok(#(quick, settled))
+      }
+
+      // Assert
+      answers
+      |> should
+      |> be_equal(Ok(#(Ok(Idle), Ok(InTransaction))))
+      |> or_fail_with("Expected Idle at once, then InTransaction once settled")
+    }),
+    it("refuses the settled status while the connection is lost", fn() {
+      // Act
+      let answer = {
+        use setup <- with_setup(60_000)
+        close_client(setup.proxy)
+        let _lost = next_event(setup.events)
+        Ok(connection.settled_transaction_status(setup.connection, 5000))
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(ConnectionLost(SocketClosed))))
+      |> or_fail_with("Expected the error of the loss")
+    }),
+    it("closes the connection when the cancel never gets an answer", fn() {
+      // The cancel goes to the proxy, which serves one session at a time,
+      // so it never reaches the server.
+      check_failed_cancel(fn(_proxy) { Nil })
+    }),
+    it("closes the connection when the cancel cannot connect", fn() {
+      check_failed_cancel(stop_listening)
+    }),
+    it("closes the connection when the session has no cancel key", fn() {
+      // Arrange
+      let login_answer = <<"R", 8:32, 0:32, "Z", 5:32, "I">>
+      let #(port, _server) = start_fake_server(Answer(login_answer))
+
+      // Act
+      let answer = {
+        use settings <- try(
+          config(port, "dream", "dream", 60_000, None)
+          |> result.map(with_timeouts(_, 5000, 200)),
+        )
+        use connection <- with_started(settings)
+        Ok(
+          connection.run(connection, "SELECT 1", [], [], 100)
+          |> result.replace(Nil),
+        )
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(DeadlinePassed(cancelled: False))))
+      |> or_fail_with("Expected DeadlinePassed with no cancel")
+    }),
+    it("ends a waiting request at its deadline", fn() {
+      // Act
+      let answers = {
+        use setup <- with_setup(60_000)
+        use _locked <- try(script(setup.control, "SELECT pg_advisory_lock(832)"))
+        let first =
+          start_caller(setup.connection, "SELECT pg_advisory_lock(832)")
+        use Nil <- try(wait_for_lock_waiter(setup.control, 832, 5000))
+        let waiting =
+          connection.run_script(setup.connection, "SELECT 1", 100)
+          |> result.replace(Nil)
+        use _unlocked <- try(script(
+          setup.control,
+          "SELECT pg_advisory_unlock(832)",
+        ))
+        Ok(#(waiting, caller_answer(first)))
+      }
+
+      // Assert
+      answers
+      |> should
+      |> be_equal(
+        Ok(#(Error(DeadlinePassed(cancelled: False)), Ok(["SELECT 1"]))),
+      )
+      |> or_fail_with(
+        "Expected the waiting request to end, and the first to run",
+      )
+    }),
+    it("gives DeadlinePassed when the process does not answer in time", fn() {
+      // Act
+      let answer = {
+        use settings <- try(
+          config(first_server().port, "dream", "dream", 10, None)
+          |> result.map(with_timeouts(_, 100, 100)),
+        )
+        use connection <- with_started(settings)
+        suspend(pid_of(connection))
+        let answer = connection.run(connection, "SELECT 1", [], [], 10)
+        resume(pid_of(connection))
+        Ok(answer |> result.replace(Nil))
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(DeadlinePassed(cancelled: False))))
+      |> or_fail_with("Expected DeadlinePassed from the caller's wait")
+    }),
+  ]
+}
+
+/// A statement passes its deadline through the proxy, and its cancel goes
+/// to the proxy too, where it does not reach the server. After the cancel
+/// timeout, the connection is closed and the caller gets DeadlinePassed.
+fn check_failed_cancel(breaking: fn(Proxy) -> Nil) {
+  // Act
+  let answers = {
+    let server = first_server()
+    let #(port, proxy) = start_proxy(server.port)
+    let events = process.new_subject()
+    use settings <- try(
+      config(port, "dream", "dream", 60_000, Some(events))
+      |> result.map(with_timeouts(_, 5000, 200)),
+    )
+    use connection <- with_started(settings)
+    breaking(proxy)
+    let answer =
+      connection.run(connection, "SELECT pg_sleep(30)", [], [], 100)
+      |> result.replace(Nil)
+    Ok(#(answer, next_event(events) |> result.map(event_code)))
+  }
+
+  // Assert
+  answers
+  |> should
+  |> be_equal(
+    Ok(#(Error(DeadlinePassed(cancelled: False)), Ok("lost at deadline"))),
+  )
+  |> or_fail_with("Expected DeadlinePassed and the loss of the connection")
 }

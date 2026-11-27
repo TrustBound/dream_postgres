@@ -1,5 +1,6 @@
 -module(driver_proxy_ffi).
 -export([start/1, inject/2, close_client/1, reset_client/1, stop_reading/1,
+         stop_listening/1, answer_next_request/2,
          watch_client_end/1, client_end/1]).
 
 %% A TCP proxy between a connection process and a driver server, for the
@@ -15,7 +16,12 @@
 %% - close_client(Proxy): closes the client's socket;
 %% - reset_client(Proxy): resets the client's socket (linger 0);
 %% - stop_reading(Proxy): reads nothing more from the client, so its sends
-%%   fill the buffers and block.
+%%   fill the buffers and block;
+%% - stop_listening(Proxy): closes the listening socket, so a new connect to
+%%   the proxy is refused, and the session goes on;
+%% - answer_next_request(Proxy, Bytes): the next bytes from the client do
+%%   not reach the server; the proxy answers them with Bytes and then reads
+%%   nothing more from the client.
 %%
 %% Each command waits until the proxy did it.
 %%
@@ -35,6 +41,8 @@ inject(Proxy, Bytes) -> command(Proxy, {inject, Bytes}).
 close_client(Proxy) -> command(Proxy, close_client).
 reset_client(Proxy) -> command(Proxy, reset_client).
 stop_reading(Proxy) -> command(Proxy, stop_reading).
+stop_listening(Proxy) -> command(Proxy, stop_listening).
+answer_next_request(Proxy, Bytes) -> command(Proxy, {answer_next_request, Bytes}).
 
 watch_client_end(Proxy) ->
     Reference = make_ref(),
@@ -62,17 +70,22 @@ listen(Caller, Ready, ServerPort) ->
 %% One client after the other: a client that connects again after a loss
 %% gets a new session with the server.
 accept(Listen, ServerPort, Watch) ->
-    {ok, Client} = gen_tcp:accept(Listen),
+    accepted(gen_tcp:accept(Listen), Listen, ServerPort, Watch).
+
+%% After stop_listening the listening socket is closed, and the proxy ends.
+accepted({error, _Closed}, _Listen, _ServerPort, _Watch) ->
+    ok;
+accepted({ok, Client}, Listen, ServerPort, Watch) ->
     {ok, Server} = gen_tcp:connect("localhost", ServerPort, [binary, {active, once}]),
     ok = inet:setopts(Client, [{active, once}]),
+    put(listen_socket, Listen),
     NextWatch = loop(Client, Server, <<>>, Watch),
     accept(Listen, ServerPort, NextWatch).
 
 loop(Client, Server, Last, Watch) ->
     receive
         {tcp, Client, Bytes} ->
-            ok = gen_tcp:send(Server, Bytes),
-            ok = inet:setopts(Client, [{active, once}]),
+            client_bytes(get(answer_next_request), Client, Server, Bytes),
             loop(Client, Server, Bytes, Watch);
         {tcp, Server, Bytes} ->
             gen_tcp:send(Client, Bytes),
@@ -92,6 +105,14 @@ loop(Client, Server, Last, Watch) ->
             gen_tcp:close(Client),
             Watch
     end.
+
+client_bytes(undefined, Client, Server, Bytes) ->
+    ok = gen_tcp:send(Server, Bytes),
+    ok = inet:setopts(Client, [{active, once}]);
+client_bytes(Answer, Client, _Server, _Bytes) ->
+    erase(answer_next_request),
+    ok = gen_tcp:send(Client, Answer),
+    inet:setopts(Client, [{recbuf, 1024}]).
 
 %% After a close or a reset the session is over, and the proxy waits for
 %% the next client.
@@ -114,6 +135,12 @@ run(reset_client, Client) ->
     inet:setopts(Client, [{linger, {true, 0}}]),
     gen_tcp:close(Client),
     ended;
+run({answer_next_request, Bytes}, _Client) ->
+    put(answer_next_request, Bytes),
+    continue;
+run(stop_listening, _Client) ->
+    gen_tcp:close(get(listen_socket)),
+    continue;
 run(stop_reading, Client) ->
     inet:setopts(Client, [{active, false}, {recbuf, 1024}]),
     continue.

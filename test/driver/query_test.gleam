@@ -5,24 +5,26 @@
 
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/message.{
-  type BackendMessage, type ResultColumn, Bind, BindComplete, CloseComplete,
-  CommandComplete, CopyBothResponse, CopyDataFromServer, CopyDoneFromServer,
-  CopyInResponse, CopyOutResponse, DataRow, Decoded, Describe,
-  EmptyQueryResponse, ErrorResponse, Execute, NoData, NoticeResponse,
+  type BackendMessage, type ResultColumn, Bind, BindComplete, Close,
+  CloseComplete, CommandComplete, CopyBothResponse, CopyDataFromServer,
+  CopyDoneFromServer, CopyInResponse, CopyOutResponse, DataRow, Decoded,
+  Describe, EmptyQueryResponse, ErrorResponse, Execute, NoData, NoticeResponse,
   NotificationResponse, ParameterDescriptions, ParameterStatus, Parse,
   ParseComplete, Portal, PortalSuspended, Query, ReadyForQuery, ResultColumn,
   RowDescription, Statement, Sync,
 }
 import dream_postgres/driver/query.{
-  type Step, type UnexpectedMessage, AwaitingBindComplete, AwaitingCopyComplete,
+  type Failure, type Outcome, type Step, type UnexpectedMessage,
+  AwaitingBindComplete, AwaitingCloseComplete, AwaitingCopyComplete,
   AwaitingParameterDescription, AwaitingParseComplete, AwaitingPortalColumns,
   AwaitingReadyForQuery, AwaitingReadyForQueryAfterError,
   AwaitingStatementColumns, AwaitingStatementResult, ConnectionEnded,
   CopyNotSupported, Finished, Notice, Notification, Outcome, ParameterChanged,
   ReadingCopyOut, ReadingExecuteRows, ReadingScriptRows, ScriptFailure, Send,
   ServerError, StatementResult, UnexpectedMessage, Wait, failure_report,
-  start_prepare, start_prepare_and_run, start_run, start_simple_query,
-  step_prepare, step_prepare_and_run, step_run, step_simple_query,
+  start_prepare, start_prepare_and_run, start_prepare_closing, start_run,
+  start_simple_query, step_prepare, step_prepare_and_run, step_run,
+  step_simple_query,
 }
 import dream_postgres/internal/cell.{
   type ColumnDescription, type Format, type ServerReport, Binary, BinaryFormat,
@@ -36,6 +38,7 @@ import dream_test/unit.{describe, group, it}
 import gleam/bit_array.{byte_size, concat}
 import gleam/list.{map}
 import gleam/option.{type Option, None, Some}
+import gleam/result
 
 /// The tests of the query steps.
 pub fn tests() -> TestSuite {
@@ -169,6 +172,59 @@ fn notice() -> ServerReport {
 
 fn prepare_tests() {
   [
+    it("closes each stale statement before the Parse, in one round trip", fn() {
+      // Act
+      let start = start_prepare_closing(["s1", "s2"], "s3", "SELECT 1", [])
+
+      // Assert
+      start.messages
+      |> should
+      |> be_equal([
+        Close(Statement("s1")),
+        Close(Statement("s2")),
+        Parse(statement: "s3", query: "SELECT 1", parameter_type_ids: []),
+        Describe(Statement("s3")),
+        Sync,
+      ])
+      |> or_fail_with("Expected two Close messages, then the prepare")
+    }),
+    it("reads each CloseComplete before the ParseComplete", fn() {
+      // Arrange
+      let start = start_prepare_closing(["s1", "s2"], "s3", "SELECT 1", [])
+      let answers = [
+        CloseComplete,
+        CloseComplete,
+        ParseComplete,
+        ParameterDescriptions([]),
+        NoData,
+        ReadyForQuery(Idle),
+      ]
+
+      // Act
+      let fed = feed(start.state, answers, step_prepare)
+
+      // Assert
+      finished_result(fed.last)
+      |> should
+      |> be_equal(Some(Ok(StatementDescription([], []))))
+      |> or_fail_with("Expected the description after both CloseComplete")
+    }),
+    it("refuses a ParseComplete where a CloseComplete must come", fn() {
+      // Arrange
+      let start = start_prepare_closing(["s1"], "s2", "SELECT 1", [])
+
+      // Act
+      let step = step_prepare(start.state, ParseComplete)
+
+      // Assert
+      step
+      |> result.replace(Nil)
+      |> should
+      |> be_equal(
+        Error(UnexpectedMessage(ParseComplete, AwaitingCloseComplete, [])),
+      )
+      |> or_fail_with("Expected an unexpected message in AwaitingCloseComplete")
+    }),
     it("sends Parse, Describe of the statement, and Sync", fn() {
       // Act
       let start = start_prepare("s1", "SELECT $1::int4", [23])
@@ -1487,4 +1543,13 @@ fn unexpected_cases() -> List(UnexpectedCase) {
       ),
     ),
   ]
+}
+
+fn finished_result(
+  last: Result(Step(state, Outcome(value, Failure)), UnexpectedMessage),
+) -> Option(Result(value, Failure)) {
+  case last {
+    Ok(Finished(outcome)) -> Some(outcome.result)
+    _ -> None
+  }
 }
