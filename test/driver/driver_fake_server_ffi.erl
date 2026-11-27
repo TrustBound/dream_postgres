@@ -19,54 +19,89 @@
 %% {Reference, open} when 5 seconds pass first. After that it accepts one
 %% more connection and keeps it open until the client closes it, for the
 %% tests where the client connects again.
+%%
+%% start gives {ok, {Port, Reference}}, or {error, Reason} when the server
+%% cannot listen. client_closed gives {ok, true} or {ok, false}, or
+%% {error, Reason} when a step of the server failed. Reason is a text.
 
 -define(WAIT, 5000).
 
 start(Behavior) ->
     Caller = self(),
     Reference = make_ref(),
-    Ready = make_ref(),
-    spawn(fun() -> listen(Caller, Reference, Ready, Behavior) end),
+    spawn(fun() -> listen(Caller, Reference, Behavior) end),
     receive
-        {Ready, Port} -> {Port, Reference}
+        {Reference, {ready, Port}} -> {ok, {Port, Reference}};
+        {Reference, {failed, Reason}} -> {error, Reason}
     end.
 
 client_closed(Reference) ->
     receive
-        {Reference, closed} -> true;
-        {Reference, open} -> false
+        {Reference, closed} -> {ok, true};
+        {Reference, open} -> {ok, false};
+        {Reference, {failed, Reason}} -> {error, Reason}
     end.
 
-listen(Caller, Reference, Ready, Behavior) ->
-    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]),
-    {ok, Port} = inet:port(Listen),
-    Caller ! {Ready, Port},
-    {ok, Socket} = gen_tcp:accept(Listen, ?WAIT),
-    {ok, _Request} = gen_tcp:recv(Socket, 8, ?WAIT),
-    Caller ! {Reference, behave(Socket, Behavior)},
-    second_connection(Listen).
+listen(Caller, Reference, Behavior) ->
+    Options = [binary, {active, false}, {reuseaddr, true}],
+    case gen_tcp:listen(0, Options) of
+        {ok, Listen} ->
+            listening(Caller, Reference, Behavior, Listen, inet:port(Listen));
+        {error, Reason} ->
+            Caller ! {Reference, failed(Reason)}
+    end.
+
+listening(Caller, Reference, Behavior, Listen, {ok, Port}) ->
+    Caller ! {Reference, {ready, Port}},
+    Caller ! {Reference, serve(Listen, Behavior)},
+    second_connection(Listen);
+listening(Caller, Reference, _Behavior, Listen, {error, Reason}) ->
+    gen_tcp:close(Listen),
+    Caller ! {Reference, failed(Reason)}.
+
+serve(Listen, Behavior) ->
+    then(gen_tcp:accept(Listen, ?WAIT), fun(Socket) ->
+        then(gen_tcp:recv(Socket, 8, ?WAIT), fun(_Request) ->
+            behave(Socket, Behavior)
+        end)
+    end).
 
 behave(Socket, {answer, Bytes}) ->
-    ok = gen_tcp:send(Socket, Bytes),
-    wait_for_close(gen_tcp, Socket);
+    then(gen_tcp:send(Socket, Bytes), fun(_) ->
+        wait_for_close(gen_tcp, Socket)
+    end);
 behave(Socket, reset) ->
-    ok = inet:setopts(Socket, [{linger, {true, 0}}]),
-    gen_tcp:close(Socket),
-    closed;
+    then(inet:setopts(Socket, [{linger, {true, 0}}]), fun(_) ->
+        gen_tcp:close(Socket),
+        closed
+    end);
 behave(Socket, not_tls) ->
-    ok = gen_tcp:send(Socket, <<"S">>),
-    {ok, _Hello} = gen_tcp:recv(Socket, 0, ?WAIT),
-    ok = gen_tcp:send(Socket, <<"this is not TLS">>),
-    wait_for_close(gen_tcp, Socket);
+    then(gen_tcp:send(Socket, <<"S">>), fun(_) ->
+        then(gen_tcp:recv(Socket, 0, ?WAIT), fun(_Hello) ->
+            then(gen_tcp:send(Socket, <<"this is not TLS">>), fun(_) ->
+                wait_for_close(gen_tcp, Socket)
+            end)
+        end)
+    end);
 behave(Socket, {tls, CertificateFile, KeyFile}) ->
-    ok = gen_tcp:send(Socket, <<"S">>),
     Options = [{certfile, binary_to_list(CertificateFile)},
                {keyfile, binary_to_list(KeyFile)},
                {log_level, none}],
-    tls_handshake(ssl:handshake(Socket, Options, ?WAIT), Socket).
+    then(gen_tcp:send(Socket, <<"S">>), fun(_) ->
+        tls_handshake(ssl:handshake(Socket, Options, ?WAIT), Socket)
+    end).
 
 tls_handshake({ok, TlsSocket}, _Socket) -> wait_for_close(ssl, TlsSocket);
 tls_handshake({error, _Reason}, Socket) -> wait_for_close(gen_tcp, Socket).
+
+%% Runs Next with the value of a step that worked, or gives the failure of
+%% a step that failed.
+then(ok, Next) -> Next(ok);
+then({ok, Value}, Next) -> Next(Value);
+then({error, Reason}, _Next) -> failed(Reason).
+
+failed(Reason) ->
+    {failed, unicode:characters_to_binary(io_lib:format("~p", [Reason]))}.
 
 wait_for_close(Module, Socket) ->
     case Module:recv(Socket, 0, ?WAIT) of

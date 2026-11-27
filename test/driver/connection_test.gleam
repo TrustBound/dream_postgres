@@ -572,8 +572,12 @@ type StartInputs {
 
 fn build_start_inputs() -> Result(StartInputs, String) {
   let #(proxy_port, proxy) = start_proxy(first_driver_server.port)
-  let #(fake_port, _fake_server) = start_fake_server(Answer(<<"x", 4:32>>))
-  build_configs(proxy, proxy_port, fake_port)
+  {
+    use #(fake_port, _fake_server) <- try(
+      start_fake_server(Answer(<<"x", 4:32>>)),
+    )
+    build_configs(proxy, proxy_port, fake_port)
+  }
   |> map_error(fn(error) {
     stop_proxy(proxy)
     error
