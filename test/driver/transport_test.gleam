@@ -25,7 +25,9 @@ import driver/fake_server.{
   type FakeBehavior, Answer, NotTls, Reset, Tls, free_port, start_fake_server,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
-import gleam/erlang/atom.{type Atom}
+import driver/test_files.{read_certificate}
+import driver/transport_reason.{reason_name}
+import gleam/erlang/atom
 import gleam/int.{to_string}
 import gleam/list.{map}
 import gleam/option.{None, Some}
@@ -39,12 +41,6 @@ import matchers/extract_receive_result.{extract_receive_result}
 import matchers/extract_send_result.{extract_send_result}
 import matchers/extract_server_certificate.{extract_server_certificate}
 import matchers/extract_startup_answer.{extract_startup_answer}
-
-@external(erlang, "dream_postgres_transport_ffi", "reason_name")
-fn reason_name(reason: #(Atom, Atom)) -> Atom
-
-@external(erlang, "driver_file_ffi", "read_certificate")
-fn read_certificate(path: String) -> Result(BitArray, String)
 
 const certificate_authority = "test/fixtures/ssl/ca.crt"
 

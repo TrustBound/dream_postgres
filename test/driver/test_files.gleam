@@ -4,3 +4,8 @@
 /// `test/driver/recorded`.
 @external(erlang, "driver_file_ffi", "read_recording")
 pub fn read_recording(name: String) -> Result(BitArray, String)
+
+/// The DER bytes of the first certificate of the PEM file at `path`, or an
+/// error text when the file cannot be read or holds no certificate.
+@external(erlang, "driver_file_ffi", "read_certificate")
+pub fn read_certificate(path: String) -> Result(BitArray, String)
