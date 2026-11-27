@@ -45,8 +45,12 @@ pub type ChannelBinding {
 /// Why a SCRAM exchange fails.
 pub type ScramError {
   /// The server-first-message does not have the form
-  /// `r=<nonce>,s=<salt>,i=<iteration count>`.
+  /// `r=<nonce>,s=<salt>,i=<iteration count>`, with optional extensions
+  /// after it (RFC 5802 section 7).
   InvalidServerFirstMessage(message: BitArray)
+  /// The server-first-message starts with the reserved attribute `m=`. RFC
+  /// 5802 section 5.1 says that a client must then fail the exchange.
+  MandatoryExtension(attribute: String)
   /// The server's nonce does not start with the client's nonce, or adds
   /// nothing to it.
   ServerNonceMismatch(server_nonce: String)
@@ -54,7 +58,8 @@ pub type ScramError {
   InvalidSalt(salt: String)
   /// The iteration count is not a whole number of 1 or more.
   InvalidIterationCount(iteration_count: String)
-  /// The server-final-message is not `v=<signature>` or `e=<error>`.
+  /// The server-final-message is not `v=<signature>` or `e=<error>`, with
+  /// optional extensions after it.
   InvalidServerFinalMessage(message: BitArray)
   /// The server ended the exchange with an error (`e=`), for example
   /// `invalid-proof`.
@@ -197,10 +202,11 @@ pub fn verify_server_final(
   final: ClientFinal,
   server_final_message: BitArray,
 ) -> Result(Nil, ScramError) {
-  case to_string(server_final_message) {
-    Ok("v=" <> signature) ->
+  let attributes = to_string(server_final_message) |> result.map(split(_, ","))
+  case attributes {
+    Ok(["v=" <> signature, ..]) ->
       check_signature(final, signature, server_final_message)
-    Ok("e=" <> error) -> Error(ServerReportedError(error))
+    Ok(["e=" <> error, ..]) -> Error(ServerReportedError(error))
     _ -> Error(InvalidServerFinalMessage(server_final_message))
   }
 }
@@ -240,7 +246,8 @@ fn read_server_first(
   message: BitArray,
 ) -> Result(ServerChallenge, ScramError) {
   case split(text, ",") {
-    ["r=" <> nonce, "s=" <> salt, "i=" <> iteration_count] ->
+    ["m=" <> _, ..] -> Error(MandatoryExtension(text))
+    ["r=" <> nonce, "s=" <> salt, "i=" <> iteration_count, ..] ->
       server_challenge(nonce, salt, iteration_count)
     _ -> Error(InvalidServerFirstMessage(message))
   }

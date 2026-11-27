@@ -6,12 +6,12 @@
 import dream_postgres/driver/encode.{encode, length_field}
 import dream_postgres/driver/message.{
   type EncodeError, type FrontendMessage, Bind, CancelRequest, Close, CopyData,
-  CopyDone, CopyFail, Describe, DuplicateStartupParameter, Execute, Flush,
-  FunctionCall, GssEncryptionRequest, GssResponse, MessageTooLong,
-  NumberOutOfRange, Parse, PasswordMessage, Portal, Protocol30, Protocol32,
-  Query, SaslInitialResponse, SaslResponse, SecretKeyLengthOutOfRange,
-  SslRequest, StartupMessage, Statement, Sync, Terminate, TooManyItems,
-  ZeroByteInString,
+  CopyDone, CopyFail, Describe, DuplicateStartupParameter,
+  EmptyStartupParameterName, Execute, Flush, FunctionCall, GssEncryptionRequest,
+  GssResponse, MessageTooLong, NumberOutOfRange, Parse, PasswordMessage, Portal,
+  Protocol30, Protocol32, Query, SaslInitialResponse, SaslResponse,
+  SecretKeyLengthOutOfRange, SslRequest, StartupMessage, Statement, Sync,
+  Terminate, TooManyItems, ZeroByteInString,
 }
 import dream_postgres/internal/cell.{
   Binary, BinaryFormat, Null, Text, TextFormat,
@@ -260,6 +260,11 @@ fn error_cases() -> List(ErrorCase) {
       "a zero byte in the user",
       StartupMessage(Protocol30, "a\u{0000}da", []),
       ZeroByteInString("startup parameter value"),
+    ),
+    ErrorCase(
+      "a startup parameter with an empty name",
+      StartupMessage(Protocol30, "ada", [#("", "x")]),
+      EmptyStartupParameterName,
     ),
     ErrorCase(
       "a startup parameter named user",

@@ -9,10 +9,10 @@
 import dream_postgres/driver/scram.{
   type ClientFinal, type ScramError, ClientWithoutChannelBinding,
   InvalidIterationCount, InvalidSalt, InvalidServerFinalMessage,
-  InvalidServerFirstMessage, ServerEndPoint, ServerNonceMismatch,
-  ServerReportedError, ServerSignatureMismatch, ServerWithoutChannelBinding,
-  client_final, client_final_message, client_first, client_first_message,
-  verify_server_final,
+  InvalidServerFirstMessage, MandatoryExtension, ServerEndPoint,
+  ServerNonceMismatch, ServerReportedError, ServerSignatureMismatch,
+  ServerWithoutChannelBinding, client_final, client_final_message, client_first,
+  client_first_message, verify_server_final,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -37,6 +37,16 @@ pub fn tests() -> TestSuite {
       it(
         "uses a password that SASLprep refuses as given",
         check_refused_password,
+      ),
+    ]),
+    group("the extensions of RFC 5802 section 7", [
+      it(
+        "reads a server-first-message with an extension after it",
+        check_server_first_extension,
+      ),
+      it(
+        "reads a server-final-message with an extension after it",
+        check_server_final_extension,
       ),
     ]),
     group(
@@ -124,6 +134,46 @@ fn check_rfc_server_final() {
   |> should
   |> be_equal(Ok(Nil))
   |> or_fail_with("Expected the server signature of RFC 7677 to verify")
+}
+
+fn check_server_first_extension() {
+  // Arrange
+  let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
+  let server_first = <<rfc_server_first:utf8, ",x=later-extension">>
+
+  // Act
+  let message =
+    client_final(first, "pencil", server_first)
+    |> result.map(client_final_message)
+
+  // Assert
+  message
+  |> should
+  |> be_equal(
+    Ok(<<
+      "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=Eki7g8gSabXzUcBbHMW0YjX8eKNV2eh2a8/mpS4wvj0=",
+    >>),
+  )
+  |> or_fail_with("Expected the proof over the message with its extension")
+}
+
+fn check_server_final_extension() {
+  // Arrange
+  let server_final = <<
+    "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=,x=later-extension",
+  >>
+
+  // Act
+  let verified = {
+    use final <- try(rfc_client_final())
+    verify_server_final(final, server_final)
+  }
+
+  // Assert
+  verified
+  |> should
+  |> be_equal(Ok(Nil))
+  |> or_fail_with("Expected the signature to verify before the extension")
 }
 
 fn check_saslprep_password() {
@@ -255,6 +305,11 @@ fn server_first_cases() -> List(ServerMessageCase) {
       "bytes that are not UTF-8",
       <<255>>,
       InvalidServerFirstMessage(<<255>>),
+    ),
+    ServerMessageCase(
+      "a message that starts with the mandatory extension m=",
+      <<"m=future,r=rOprNGfwEbeRWgbNEkqOabc,s=AAAA,i=4096">>,
+      MandatoryExtension("m=future,r=rOprNGfwEbeRWgbNEkqOabc,s=AAAA,i=4096"),
     ),
     ServerMessageCase(
       "a message without the iteration count",

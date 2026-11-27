@@ -265,4 +265,7 @@ pub type EncodeError {
   /// A startup parameter name given two times, or the name `user`, which
   /// the StartupMessage has as its own field.
   DuplicateStartupParameter(name: String)
+  /// A startup parameter with an empty name. Its zero byte would end the
+  /// parameter list early.
+  EmptyStartupParameterName
 }

@@ -11,11 +11,12 @@
 import dream_postgres/driver/message.{
   type EncodeError, type FrontendMessage, type ProtocolVersion, type Target,
   Bind, CancelRequest, Close, CopyData, CopyDone, CopyFail, Describe,
-  DuplicateStartupParameter, Execute, Flush, FunctionCall, GssEncryptionRequest,
-  GssResponse, MessageTooLong, NumberOutOfRange, Parse, PasswordMessage, Portal,
-  Protocol30, Protocol32, Query, SaslInitialResponse, SaslResponse,
-  SecretKeyLengthOutOfRange, SslRequest, StartupMessage, Statement, Sync,
-  Terminate, TooManyItems, ZeroByteInString,
+  DuplicateStartupParameter, EmptyStartupParameterName, Execute, Flush,
+  FunctionCall, GssEncryptionRequest, GssResponse, MessageTooLong,
+  NumberOutOfRange, Parse, PasswordMessage, Portal, Protocol30, Protocol32,
+  Query, SaslInitialResponse, SaslResponse, SecretKeyLengthOutOfRange,
+  SslRequest, StartupMessage, Statement, Sync, Terminate, TooManyItems,
+  ZeroByteInString,
 }
 import dream_postgres/internal/cell.{
   type Cell, type Format, Binary, BinaryFormat, Null, Text, TextFormat,
@@ -128,6 +129,7 @@ fn check_parameter_name(
   parameter: #(String, String),
 ) -> Result(Set(String), EncodeError) {
   let name = parameter.0
+  use <- guard(name == "", Error(EmptyStartupParameterName))
   let repeated = name == "user" || set.contains(seen, name)
   use <- guard(repeated, Error(DuplicateStartupParameter(name)))
   Ok(set.insert(seen, name))
