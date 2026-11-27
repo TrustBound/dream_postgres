@@ -4,8 +4,8 @@
 
 import dream_postgres/driver/transport.{
   type Tls, type TransportConfig, type TransportError, AuthorityFile,
-  CheckAuthorityAndHost, PostgresNegotiation, RequireTls, TransportConfig,
-  Unlisted, address,
+  CheckAuthorityAndHost, ConnectUnlisted, PostgresNegotiation, RequireTls,
+  TransportConfig, address,
 }
 import gleam/result.{map, replace_error}
 
@@ -29,5 +29,5 @@ pub fn transport_config(
 ) -> Result(TransportConfig, TransportError) {
   address(host, port)
   |> map(TransportConfig(_, tls, 5000, 5000))
-  |> replace_error(Unlisted("test address"))
+  |> replace_error(ConnectUnlisted("test address"))
 }

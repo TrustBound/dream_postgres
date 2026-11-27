@@ -5,14 +5,16 @@
 
 import dream_postgres/driver/message.{AuthenticationOk, AuthenticationSasl}
 import dream_postgres/driver/transport.{
-  type AddressError, type SocketFailure, type Tls, type TransportError,
-  AuthorityCertificates, AuthorityFile, AuthorityFileEmpty,
-  AuthorityFileUnreadable, BytesBeforeTls, CertificateExpired, CheckAuthority,
-  CheckAuthorityAndHost, ConnectRefused, ConnectTimedOut, ConnectionReset,
-  DirectNegotiation, DnsLookupFailed, HostNameMismatch, InvalidHost, InvalidPort,
-  NoCertificateCheck, NoTls, OtherReason, OtherTlsFailure, PostgresNegotiation,
-  PreferTls, ReasonAtom, ReceiveTimedOut, RequireTls, SendTimedOut,
-  ServerRefusedTls, SocketClosed, SystemAuthorities, TlsAlert, TlsFailed,
+  type AddressError, type SendError, type SocketError, type SocketFailure,
+  type Tls, type TransportError, AuthorityCertificates, AuthorityFile,
+  AuthorityFileEmpty, AuthorityFileUnreadable, BytesBeforeTls,
+  CertificateExpired, CheckAuthority, CheckAuthorityAndHost, ConnectClosed,
+  ConnectRefused, ConnectReset, ConnectTimedOut, ConnectUnlisted,
+  ConnectionReset, DirectNegotiation, DnsLookupFailed, HostNameMismatch,
+  InvalidHost, InvalidPort, NoCertificateCheck, NoTls, OtherReason,
+  OtherTlsFailure, PostgresNegotiation, PreferTls, ReasonAtom, ReceiveFailed,
+  ReceiveTimedOut, RequireTls, SendFailed, SendTimedOut, ServerRefusedTls,
+  SocketClosed, SystemAuthorities, TlsAlert, TlsAlertRaised, TlsFailed,
   TlsRequestAnsweredWithError, UnexpectedTlsAnswer, UnknownAuthority, Unlisted,
   address, close, connect_error, send_error, server_certificate, socket_error,
   tls_error,
@@ -312,7 +314,7 @@ fn direct_tls_test(server: Server) {
         |> should
         |> extract_startup_answer
         |> be_error
-        |> be_equal(SocketClosed)
+        |> be_equal(ConnectClosed)
         |> or_fail_with("Expected the connect error")
       })
     _ ->
@@ -400,7 +402,7 @@ fn refusal_tests() {
       "gives the typed error for a reset after the SSLRequest",
       Reset,
       verify_full(),
-      ConnectionReset,
+      ConnectReset,
     ),
     fake_closed_test("an unknown answer byte", Answer(<<"X">>)),
     fake_closed_test("bytes after the S", Answer(<<"S", "R":utf8>>)),
@@ -615,7 +617,7 @@ fn socket_tests() {
       |> close_connection
       |> extract_send_result(<<"X", 4:32>>)
       |> be_error
-      |> be_equal(SocketClosed)
+      |> be_equal(SendFailed(SocketClosed))
       |> or_fail_with("Expected SocketClosed")
     }),
     it("gives SocketClosed for a send on a closed TLS connection", fn() {
@@ -633,7 +635,7 @@ fn socket_tests() {
       |> close_connection
       |> extract_send_result(<<"X", 4:32>>)
       |> be_error
-      |> be_equal(SocketClosed)
+      |> be_equal(SendFailed(SocketClosed))
       |> or_fail_with("Expected SocketClosed")
     }),
     it("gives the TLS alert of a record that is not valid TLS", fn() {
@@ -662,9 +664,7 @@ fn socket_tests() {
       event
       |> should
       |> be_ok
-      |> be_equal(
-        transport.SocketFailed(TlsFailed(OtherTlsFailure("bad_record_mac"))),
-      )
+      |> be_equal(transport.SocketFailed(TlsAlertRaised("bad_record_mac")))
       |> or_fail_with("Expected the TLS alert as a typed error")
     }),
     it("gives SocketClosed for a receive on a closed TLS connection", fn() {
@@ -682,7 +682,7 @@ fn socket_tests() {
       |> close_connection
       |> extract_receive_result(timeout: 50)
       |> be_error
-      |> be_equal(SocketClosed)
+      |> be_equal(ReceiveFailed(SocketClosed))
       |> or_fail_with("Expected SocketClosed")
     }),
   ]
@@ -744,15 +744,22 @@ fn reason_tests() {
     ),
     connect_reason_test(
       TlsAlert(atom.create("bad_record_mac")),
-      TlsFailed(OtherTlsFailure("bad_record_mac")),
+      ConnectUnlisted("bad_record_mac"),
     ),
-    connect_reason_test(OtherReason("{some,reason}"), Unlisted("{some,reason}")),
+    connect_reason_test(
+      OtherReason("{some,reason}"),
+      ConnectUnlisted("{some,reason}"),
+    ),
     socket_reason_test(ReasonAtom(atom.create("einval")), SocketClosed),
+    socket_reason_test(OtherReason("{some,reason}"), Unlisted("{some,reason}")),
     send_reason_test(ReasonAtom(atom.create("timeout")), SendTimedOut),
-    send_reason_test(ReasonAtom(atom.create("closed")), SocketClosed),
+    send_reason_test(
+      ReasonAtom(atom.create("closed")),
+      SendFailed(SocketClosed),
+    ),
     send_reason_test(
       TlsAlert(atom.create("bad_record_mac")),
-      TlsFailed(OtherTlsFailure("bad_record_mac")),
+      SendFailed(TlsAlertRaised("bad_record_mac")),
     ),
     tls_reason_test(
       OtherReason("{some,reason}"),
@@ -763,7 +770,6 @@ fn reason_tests() {
     socket_reason_test(ReasonAtom(atom.create("closed")), SocketClosed),
     socket_reason_test(ReasonAtom(atom.create("enotconn")), SocketClosed),
     socket_reason_test(ReasonAtom(atom.create("econnreset")), ConnectionReset),
-    socket_reason_test(ReasonAtom(atom.create("timeout")), ReceiveTimedOut),
     socket_reason_test(
       ReasonAtom(atom.create("ehostunreach")),
       Unlisted("ehostunreach"),
@@ -780,7 +786,7 @@ fn reason_tests() {
       ReasonAtom(atom.create("cert_expired")),
       TlsFailed(CertificateExpired),
     ),
-    tls_reason_test(ReasonAtom(atom.create("closed")), SocketClosed),
+    tls_reason_test(ReasonAtom(atom.create("closed")), ConnectClosed),
     tls_reason_test(ReasonAtom(atom.create("timeout")), ConnectTimedOut),
     tls_reason_test(
       ReasonAtom(atom.create("handshake_failure")),
@@ -802,7 +808,7 @@ fn connect_reason_test(reason: SocketFailure, expected: TransportError) {
   })
 }
 
-fn socket_reason_test(reason: SocketFailure, expected: TransportError) {
+fn socket_reason_test(reason: SocketFailure, expected: SocketError) {
   it("maps the reason " <> inspect(reason) <> " of a socket call", fn() {
     // Act
     let error = socket_error(reason)
@@ -815,7 +821,7 @@ fn socket_reason_test(reason: SocketFailure, expected: TransportError) {
   })
 }
 
-fn send_reason_test(reason: SocketFailure, expected: TransportError) {
+fn send_reason_test(reason: SocketFailure, expected: SendError) {
   it("maps the reason " <> inspect(reason) <> " of a send", fn() {
     // Act
     let error = send_error(reason)

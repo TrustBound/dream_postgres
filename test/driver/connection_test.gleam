@@ -13,13 +13,15 @@ import dream_postgres/driver/connection.{
   type ConnectionStateError, type Outcome, type RequestFailure, type RunError,
   type ScriptError, type SettleError, Backoff, CacheStatements,
   ClosedAfterDeadline, ConnectionConfig, ConnectionLost, ConnectionProcessDown,
-  CopyFailed, DeadlinePassed, LoginRequiresTls, LoginUndecodable, NoAnswerInTime,
-  PrepareFailed, PrepareUnencodable, ProcessGone, ProtocolViolation, Reconnected,
+  CopyFailed, DeadlinePassed, LoginRequiresTls, LoginSendFailed,
+  LoginSocketFailed, LoginUndecodable, NoAnswerInTime, PrepareFailed,
+  PrepareUnencodable, ProcessGone, ProtocolViolation, Reconnected,
   RunCopyRefused, RunFailed, RunUnencodable, ScriptRequestFailed,
-  ScriptUnencodable, SettleFailed, SetupTimedOut, SocketFailed, TransportRefused,
-  UndecodableMessage, UnexpectedIdleMessage, UnnamedStatements, aborted_by,
-  copy_from, prepare, run, run_script, server_parameter,
-  settled_transaction_status, start, stop, supervised, transaction_status,
+  ScriptUnencodable, ServerStoppedReading, SettleFailed, SetupTimedOut,
+  SocketFailed, TransportRefused, UndecodableMessage, UnexpectedIdleMessage,
+  UnnamedStatements, aborted_by, copy_from, prepare, run, run_script,
+  server_parameter, settled_transaction_status, start, stop, supervised,
+  transaction_status,
 }
 import dream_postgres/driver/message.{
   BindComplete, Protocol32, TooManyItems, UnknownMessageType, ZeroByteInString,
@@ -46,7 +48,8 @@ import driver/cancel_gate.{
   record_gate, release_gate, start_cancel_gate, stop_cancel_gate,
 }
 import driver/fake_server.{
-  Answer, free_port, start_fake_server, start_silent_server,
+  Answer, free_port, start_closing_server, start_deaf_server, start_fake_server,
+  start_silent_server,
 }
 import driver/proxy.{
   type Proxy, answer_next_request, client_end, close_client, inject,
@@ -735,6 +738,9 @@ const copy_script = "SELECT 1; COPY (SELECT 1) TO STDOUT"
 
 // Starting --------------------------------------------------------------------
 
+/// An AuthenticationCleartextPassword request.
+const cleartext_password_request = <<"R", 8:32, 3:32>>
+
 /// The configs that the start tests start with, built once. The teardown
 /// stops the proxy; a start that fails leaves no process, and each start
 /// that works ends with the process that made it.
@@ -821,6 +827,51 @@ fn start_tests() -> TestSuite {
           |> be_error
           |> be_equal(LoginRequiresTls)
           |> or_fail_with("Expected LoginRequiresTls")
+        },
+      ),
+      it(
+        "gives LoginSocketFailed when the server closes during the login",
+        fn(_inputs: StartInputs) {
+          // Act
+          let started = {
+            use #(port, _server) <- try(start_closing_server())
+            use config <- try(connection_config(port))
+            Ok(start(config))
+          }
+
+          // Assert
+          started
+          |> should
+          |> be_ok
+          |> be_error
+          |> be_equal(LoginSocketFailed(SocketClosed))
+          |> or_fail_with("Expected LoginSocketFailed(SocketClosed)")
+        },
+      ),
+      it(
+        "gives LoginSendFailed when the server reads no password message",
+        fn(_inputs: StartInputs) {
+          // Arrange
+          let large_name = repeat("x", 4_000_000)
+
+          // Act
+          let started = {
+            use port <- try(start_deaf_server(cleartext_password_request))
+            use config <- try(parameter_config(
+              port,
+              "application_name",
+              large_name,
+            ))
+            Ok(start(config))
+          }
+
+          // Assert
+          started
+          |> should
+          |> be_ok
+          |> be_error
+          |> be_equal(LoginSendFailed(SendTimedOut))
+          |> or_fail_with("Expected LoginSendFailed(SendTimedOut)")
         },
       ),
       it(
@@ -1197,9 +1248,7 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
         answer
         |> should
         |> be_error
-        |> be_equal(
-          ScriptRequestFailed(ConnectionLost(SocketFailed(SendTimedOut))),
-        )
+        |> be_equal(ScriptRequestFailed(ConnectionLost(ServerStoppedReading)))
         |> or_fail_with("Expected the loss by a send timeout")
       },
     ),

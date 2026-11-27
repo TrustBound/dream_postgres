@@ -12,11 +12,11 @@ import dream_postgres/driver/connection.{
   type ChunkError, type Connection, type CopyError, type Outcome,
   type ScriptError, AppFailed, ChunkCopyNotRunning, ChunkFailed, ConnectionLost,
   ConnectionProcessDown, CopyFailed, CopyNotStarted, CopyUnencodable,
-  DeadlinePassed, Outcome, ScriptRequestFailed, SocketFailed, copy_from, copy_to,
-  run_script, send_chunk, transaction_status,
+  DeadlinePassed, Outcome, ScriptRequestFailed, ServerStoppedReading,
+  SocketFailed, copy_from, copy_to, run_script, send_chunk, transaction_status,
 }
 import dream_postgres/driver/message.{ZeroByteInString}
-import dream_postgres/driver/transport.{SendTimedOut, SocketClosed}
+import dream_postgres/driver/transport.{SocketClosed}
 import dream_postgres/internal/cell.{
   CommandResult, Idle, InFailedTransaction, Text,
 }
@@ -1189,7 +1189,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         |> should
         |> be_error
         |> extract_copy_failure
-        |> be_equal(ConnectionLost(SocketFailed(SendTimedOut)))
+        |> be_equal(ConnectionLost(ServerStoppedReading))
         |> or_fail_with("Expected the loss by a send timeout")
       },
     ),

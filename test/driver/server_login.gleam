@@ -14,8 +14,9 @@ import dream_postgres/driver/message.{
   type ProtocolVersion, Decoded, NeedMoreBytes,
 }
 import dream_postgres/driver/transport.{
-  type Connection, type Tls, type TransportError, TransportConfig, address,
-  close, receive, send, server_certificate,
+  type Connection, type ReceiveError, type SendError, type Tls,
+  type TransportError, TransportConfig, address, close, receive, send,
+  server_certificate,
 }
 import driver/servers.{type Server}
 import fixtures/transport_connect.{connect_with_minute_deadline}
@@ -28,6 +29,8 @@ pub type LoginFailure {
   AddressRefused
   ConfigRefused(error: ConfigError)
   TransportFailed(error: TransportError)
+  SendRefused(error: SendError)
+  ReceiveRefused(error: ReceiveError)
   EncodeFailed(error: EncodeError)
   DecodeFailed(error: ProtocolError)
   StartFailed(error: LoginStartError)
@@ -180,7 +183,7 @@ fn read_more(
   state: LoginState,
   bytes: BitArray,
 ) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
-  use more <- try(receive(connection, 5000) |> map_error(TransportFailed))
+  use more <- try(receive(connection, 5000) |> map_error(ReceiveRefused))
   read_messages(connection, state, <<bytes:bits, more:bits>>)
 }
 
@@ -189,5 +192,5 @@ fn send_message(
   message: FrontendMessage,
 ) -> Result(Nil, LoginFailure) {
   use bytes <- try(encode(message) |> map_error(EncodeFailed))
-  send(connection, bytes) |> map_error(TransportFailed)
+  send(connection, bytes) |> map_error(SendRefused)
 }

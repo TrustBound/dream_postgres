@@ -22,8 +22,10 @@
 //// then TLS) needs a failed login to decide, so it is not a transport
 //// setting.
 ////
-//// Every failure is a typed `TransportError`, and every failed setup step
-//// closes the socket before it returns.
+//// Every failure of the connect is a typed `TransportError`, and every
+//// failed setup step closes the socket before it returns. A call on an
+//// open connection fails with a typed `SendError`, `ReceiveError` or
+//// `SocketError`.
 ////
 //// This module is internal to dream_postgres.
 
@@ -157,16 +159,42 @@ pub type TransportError {
   /// They did not come over TLS, so the connection is refused
   /// (CVE-2021-23222).
   BytesBeforeTls
-  /// The server closed the connection.
+  /// The server closed the connection during the connect.
+  ConnectClosed
+  /// The connection was reset during the connect, for example by a proxy
+  /// or a firewall.
+  ConnectReset
+  /// Any other OS error of the connect: its name, for example
+  /// `ehostunreach`.
+  ConnectUnlisted(reason: String)
+}
+
+/// Why a socket of an open connection failed.
+pub type SocketError {
+  /// The server or the network closed the connection.
   SocketClosed
   /// The connection was reset, for example by a proxy or a firewall.
   ConnectionReset
-  /// No bytes came within the receive timeout.
-  ReceiveTimedOut
-  /// The server read nothing for the send timeout. The socket is closed.
-  SendTimedOut
+  /// The TLS layer sent or got an alert, for example `bad_record_mac`.
+  TlsAlertRaised(alert: String)
   /// Any other OS error: its name, for example `ehostunreach`.
   Unlisted(reason: String)
+}
+
+/// Why `send` failed.
+pub type SendError {
+  /// The server read nothing for the send timeout. The socket is closed.
+  SendTimedOut
+  /// The socket failed.
+  SendFailed(error: SocketError)
+}
+
+/// Why `receive` failed.
+pub type ReceiveError {
+  /// No bytes came within the timeout.
+  ReceiveTimedOut
+  /// The socket failed.
+  ReceiveFailed(error: SocketError)
 }
 
 /// An open connection, plain or over TLS.
@@ -220,7 +248,7 @@ pub type SocketEvent {
   /// The server or the network closed the connection.
   SocketEnded
   /// The socket failed, for example with a reset.
-  SocketFailed(error: TransportError)
+  SocketFailed(error: SocketError)
   /// The message is not about this connection: another socket's, or no
   /// socket's.
   NotThisSocket
@@ -458,11 +486,12 @@ fn request_tls(
   socket: TcpSocket,
   opening: Opening,
 ) -> Result(TlsAnswer, TransportError) {
-  // A send maps its reason as a send: a send timeout is SendTimedOut, not
-  // the ReceiveTimedOut of socket_error. The 8 bytes of the SSLRequest on
-  // a new socket fit in its send buffer, so in practice this send does not
-  // wait; the mapping says what a timeout would be.
-  use Nil <- try(tcp_send(socket, ssl_request()) |> map_error(send_error))
+  // The 8 bytes of the SSLRequest on a new socket fit in its send buffer,
+  // so this send cannot wait for its send timeout.
+  let host = opening.config.address.host
+  use Nil <- try(
+    tcp_send(socket, ssl_request()) |> map_error(connect_error(_, host)),
+  )
   read_tls_answer(socket, <<>>, opening)
 }
 
@@ -489,7 +518,7 @@ fn receive_tls_answer(
 ) -> Result(TlsAnswer, TransportError) {
   use more <- try(
     tcp_receive(socket, step_timeout(opening))
-    |> map_error(socket_error),
+    |> map_error(connect_error(_, opening.config.address.host)),
   )
   read_tls_answer(socket, <<bytes:bits, more:bits>>, opening)
 }
@@ -569,11 +598,9 @@ fn close_with_error(
 /// ## Returns
 ///
 /// - `Ok(Nil)`: the bytes went to the socket
-/// - `Error(TransportError)`: the socket failed
-pub fn send(
-  connection: Connection,
-  bytes: BitArray,
-) -> Result(Nil, TransportError) {
+/// - `Error(SendTimedOut)`: the server read nothing for the send timeout
+/// - `Error(SendFailed(error))`: the socket failed
+pub fn send(connection: Connection, bytes: BitArray) -> Result(Nil, SendError) {
   case connection {
     PlainConnection(socket:) -> tcp_send(socket, bytes)
     TlsConnection(socket:) -> tls_send(socket, bytes)
@@ -592,16 +619,16 @@ pub fn send(
 ///
 /// - `Ok(bytes)`: one or more bytes
 /// - `Error(ReceiveTimedOut)`: no byte came in time
-/// - `Error(TransportError)`: the socket failed or closed
+/// - `Error(ReceiveFailed(error))`: the socket failed or closed
 pub fn receive(
   connection: Connection,
   timeout_milliseconds: Int,
-) -> Result(BitArray, TransportError) {
+) -> Result(BitArray, ReceiveError) {
   case connection {
     PlainConnection(socket:) -> tcp_receive(socket, timeout_milliseconds)
     TlsConnection(socket:) -> tls_receive(socket, timeout_milliseconds)
   }
-  |> map_error(socket_error)
+  |> map_error(receive_error)
 }
 
 /// Closes the connection. Closing a closed connection does nothing.
@@ -637,62 +664,66 @@ pub fn server_certificate(connection: Connection) -> Option(BitArray) {
   }
 }
 
-/// Turns the reason of a failed TCP connect into a typed error.
+/// Turns the reason of a failed step of the connect into a typed error:
+/// the TCP connect, the send of the SSLRequest, or the wait for its
+/// answer.
 ///
 /// ## Parameters
 ///
-/// - `reason`: the failure of `gen_tcp:connect`
+/// - `reason`: the failure of `gen_tcp`
 /// - `host`: the host of the connect, for a failed DNS lookup
 ///
 /// ## Returns
 ///
-/// The typed error.
+/// The typed error. A timeout is `ConnectTimedOut`, because the connect
+/// timeout bounds each of these steps.
 pub fn connect_error(reason: SocketFailure, host: String) -> TransportError {
-  case reason {
-    ReasonAtom(atom) ->
-      connect_error_of_name(atom.to_string(atom), reason, host)
-    TlsAlert(..) | OtherReason(..) -> socket_error(reason)
-  }
-}
-
-fn connect_error_of_name(
-  name: String,
-  reason: SocketFailure,
-  host: String,
-) -> TransportError {
-  case name {
+  case reason_name(reason) {
     "nxdomain" -> DnsLookupFailed(host)
     "timeout" -> ConnectTimedOut
-    _ -> socket_error(reason)
+    "econnrefused" -> ConnectRefused
+    // A call on a socket that is closed already gives einval or enotconn
+    // on some systems, and closed on others.
+    "closed" | "enotconn" | "einval" -> ConnectClosed
+    "econnreset" -> ConnectReset
+    name -> ConnectUnlisted(name)
   }
 }
 
-/// Turns the reason of a failed socket call into a typed error.
+/// The name of a reason: the atom, the TLS alert, or the printed form of
+/// a reason of another shape.
+fn reason_name(reason: SocketFailure) -> String {
+  case reason {
+    ReasonAtom(name) | TlsAlert(name) -> atom.to_string(name)
+    OtherReason(text) -> text
+  }
+}
+
+/// Turns the reason of a failed call on an open socket into a typed
+/// error.
 ///
 /// ## Parameters
 ///
-/// - `reason`: the failure of `gen_tcp` or `ssl`
+/// - `reason`: the failure of `gen_tcp`, `inet` or `ssl`
 ///
 /// ## Returns
 ///
-/// The typed error. A TLS alert is `TlsFailed` with the alert's name, and
-/// a reason with no variant of its own is `Unlisted`.
-pub fn socket_error(reason: SocketFailure) -> TransportError {
+/// The typed error. A TLS alert is `TlsAlertRaised` with the alert's
+/// name, and a reason with no variant of its own is `Unlisted`.
+pub fn socket_error(reason: SocketFailure) -> SocketError {
   case reason {
     ReasonAtom(atom) -> socket_error_of_name(atom.to_string(atom))
-    TlsAlert(alert) -> TlsFailed(OtherTlsFailure(atom.to_string(alert)))
+    TlsAlert(alert) -> TlsAlertRaised(atom.to_string(alert))
     OtherReason(text) -> Unlisted(text)
   }
 }
 
-fn socket_error_of_name(name: String) -> TransportError {
+fn socket_error_of_name(name: String) -> SocketError {
   case name {
-    "econnrefused" -> ConnectRefused
     // A call on a socket that is closed already gives einval or enotconn
     // on some systems, and closed on others.
     "closed" | "enotconn" | "einval" -> SocketClosed
     "econnreset" -> ConnectionReset
-    "timeout" -> ReceiveTimedOut
     name -> Unlisted(name)
   }
 }
@@ -705,18 +736,22 @@ fn socket_error_of_name(name: String) -> TransportError {
 ///
 /// ## Returns
 ///
-/// `SendTimedOut` for a send timeout, else the error of `socket_error`.
-pub fn send_error(reason: SocketFailure) -> TransportError {
-  case reason {
-    ReasonAtom(atom) -> send_error_of_name(atom.to_string(atom), reason)
-    TlsAlert(..) | OtherReason(..) -> socket_error(reason)
+/// `SendTimedOut` for a send timeout, else `SendFailed` with the error of
+/// `socket_error`.
+pub fn send_error(reason: SocketFailure) -> SendError {
+  case reason_name(reason) {
+    "timeout" -> SendTimedOut
+    _other -> SendFailed(socket_error(reason))
   }
 }
 
-fn send_error_of_name(name: String, reason: SocketFailure) -> TransportError {
-  case name {
-    "timeout" -> SendTimedOut
-    _ -> socket_error(reason)
+/// Turns the reason of a failed receive into a typed error: `timeout` is
+/// `ReceiveTimedOut`, else `ReceiveFailed` with the error of
+/// `socket_error`.
+fn receive_error(reason: SocketFailure) -> ReceiveError {
+  case reason_name(reason) {
+    "timeout" -> ReceiveTimedOut
+    _other -> ReceiveFailed(socket_error(reason))
   }
 }
 
@@ -730,18 +765,11 @@ fn send_error_of_name(name: String, reason: SocketFailure) -> TransportError {
 ///
 /// The typed error.
 pub fn tls_error(reason: SocketFailure) -> TransportError {
-  case reason {
-    ReasonAtom(name) | TlsAlert(name) -> tls_error_of_name(atom.to_string(name))
-    OtherReason(text) -> TlsFailed(OtherTlsFailure(text))
-  }
-}
-
-fn tls_error_of_name(name: String) -> TransportError {
-  case name {
+  case reason_name(reason) {
     "hostname_check_failed" -> TlsFailed(HostNameMismatch)
     "unknown_ca" -> TlsFailed(UnknownAuthority)
     "cert_expired" -> TlsFailed(CertificateExpired)
-    "closed" -> SocketClosed
+    "closed" -> ConnectClosed
     "timeout" -> ConnectTimedOut
     name -> TlsFailed(OtherTlsFailure(name))
   }
@@ -759,8 +787,9 @@ fn tls_error_of_name(name: String) -> TransportError {
 /// ## Returns
 ///
 /// - `Ok(Nil)`: the next bytes, the close or the error comes as a message
-/// - `Error(TransportError)`: the socket is closed already
-pub fn receive_next(connection: Connection) -> Result(Nil, TransportError) {
+/// - `Error(SocketError)`: the socket failed, for example `SocketClosed`
+///   when it is closed already
+pub fn receive_next(connection: Connection) -> Result(Nil, SocketError) {
   case connection {
     PlainConnection(socket:) -> tcp_receive_next(socket)
     TlsConnection(socket:) -> tls_receive_next(socket)

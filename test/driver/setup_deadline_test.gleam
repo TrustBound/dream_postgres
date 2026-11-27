@@ -9,7 +9,7 @@ import dream_postgres/driver/deadline.{
   bounded_wait, from_now, has_passed, time_left,
 }
 import dream_postgres/driver/transport.{
-  NoCertificateCheck, PostgresNegotiation, ReceiveTimedOut, RequireTls,
+  ConnectTimedOut, NoCertificateCheck, PostgresNegotiation, RequireTls,
   SocketClosed, TransportConfig,
 }
 import dream_test/matchers.{
@@ -257,6 +257,37 @@ fn start_monitor_tests() -> TestSuite {
 
 fn transport_tests() -> TestSuite {
   unit.describe("a transport connect", [
+    unit.it("gives SetupTimedOut when the TLS answer outlasts the setup", fn() {
+      // Arrange
+      let tls = RequireTls(NoCertificateCheck, PostgresNegotiation)
+
+      // Act
+      let started = {
+        use port <- try(start_silent_server())
+        use config <- try(connection_config(port))
+        let transport =
+          TransportConfig(
+            ..config.transport,
+            tls:,
+            connect_timeout_milliseconds: 60_000,
+          )
+        Ok(connection.start(
+          ConnectionConfig(
+            ..config,
+            transport:,
+            setup_timeout_milliseconds: 100,
+          ),
+        ))
+      }
+
+      // Assert
+      started
+      |> should
+      |> be_ok
+      |> be_error
+      |> be_equal(SetupTimedOut)
+      |> or_fail_with("Expected SetupTimedOut at the end of the setup")
+    }),
     unit.it("ends the wait for the TLS answer at the deadline", fn() {
       // Arrange
       let tls = RequireTls(NoCertificateCheck, PostgresNegotiation)
@@ -277,8 +308,8 @@ fn transport_tests() -> TestSuite {
       // Assert
       connected
       |> should
-      |> be_equal(Ok(Error(ReceiveTimedOut)))
-      |> or_fail_with("Expected ReceiveTimedOut at the deadline")
+      |> be_equal(Ok(Error(ConnectTimedOut)))
+      |> or_fail_with("Expected ConnectTimedOut at the deadline")
     }),
   ])
 }

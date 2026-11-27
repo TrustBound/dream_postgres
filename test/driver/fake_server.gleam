@@ -40,6 +40,12 @@ pub fn client_closed(server: FakeServer) -> Result(Bool, String)
 @external(erlang, "driver_fake_server_ffi", "start_silent")
 pub fn start_silent_server() -> Result(Int, String)
 
+/// Starts a server that accepts a connection, sends `bytes` at once, and
+/// never reads from it, so the client's sends block once the buffers are
+/// full. Gives its port.
+@external(erlang, "driver_fake_server_ffi", "start_deaf")
+pub fn start_deaf_server(bytes: BitArray) -> Result(Int, String)
+
 /// A server that answers `S`, does a TLS handshake with this certificate
 /// and key, and waits for `send_bad_record`.
 pub type BadRecordServer

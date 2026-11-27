@@ -7,20 +7,22 @@ import dream_postgres/driver/message.{
   type BackendMessage, Decoded, Protocol30, StartupMessage,
 }
 import dream_postgres/driver/transport.{
-  type Connection, type TransportError, Unlisted, close, receive, send,
-  server_certificate,
+  type Connection, type TransportError, close, receive, send, server_certificate,
 }
-import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
+import dream_test/types.{
+  type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
+}
 import driver/servers.{database}
-import gleam/option.{None}
-import gleam/pair
-import gleam/result.{map, replace_error, try}
+import gleam/option.{None, Some}
+import gleam/result.{map_error, try}
+import gleam/string.{inspect}
 
 /// Takes the result of `connect`. On a connection, sends a StartupMessage
 /// for `dream_trust`, reads the first answer and closes the connection.
 /// Gives `Ok(#(message, encrypted))`: the first message of the server, and
 /// whether the connection has a server certificate, which is TLS. Gives
-/// the error of the connect, the send or the receive.
+/// the error of the connect. Fails when the send, the receive or the
+/// decode fails.
 ///
 /// ```gleam
 /// connect(config)
@@ -35,33 +37,51 @@ pub fn extract_startup_answer(
 ) -> MatchResult(Result(#(BackendMessage, Bool), TransportError)) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
-    MatchOk(connected) -> MatchOk(try(connected, answer_and_close))
+    MatchOk(connected) -> answer_of(connected)
+  }
+}
+
+fn answer_of(
+  connected: Result(Connection, TransportError),
+) -> MatchResult(Result(#(BackendMessage, Bool), TransportError)) {
+  case connected {
+    Ok(connection) -> answer_and_close(connection)
+    Error(error) -> MatchOk(Error(error))
   }
 }
 
 fn answer_and_close(
   connection: Connection,
-) -> Result(#(BackendMessage, Bool), TransportError) {
+) -> MatchResult(Result(#(BackendMessage, Bool), TransportError)) {
   let answer = first_answer(connection)
   let encrypted = server_certificate(connection) != None
   close(connection)
-  answer |> map(pair.new(_, encrypted))
+  case answer {
+    Ok(message) -> MatchOk(Ok(#(message, encrypted)))
+    Error(text) ->
+      MatchFailed(AssertionFailure(
+        operator: "extract_startup_answer",
+        message: "",
+        payload: Some(CustomMatcherFailure(
+          actual: text,
+          description: "Expected a first answer of the server",
+        )),
+      ))
+  }
 }
 
-fn first_answer(
-  connection: Connection,
-) -> Result(BackendMessage, TransportError) {
+fn first_answer(connection: Connection) -> Result(BackendMessage, String) {
   let startup =
     StartupMessage(Protocol30, "dream_trust", [#("database", database)])
-  use bytes <- try(encode(startup) |> replace_error(Unlisted("encode")))
-  use Nil <- try(send(connection, bytes))
-  use answer <- try(receive(connection, 5000))
+  use bytes <- try(encode(startup) |> map_error(inspect))
+  use Nil <- try(send(connection, bytes) |> map_error(inspect))
+  use answer <- try(receive(connection, 5000) |> map_error(inspect))
   first_message(answer)
 }
 
-fn first_message(bytes: BitArray) -> Result(BackendMessage, TransportError) {
+fn first_message(bytes: BitArray) -> Result(BackendMessage, String) {
   case decode_backend(bytes) {
     Ok(Decoded(message, _rest)) -> Ok(message)
-    _other -> Error(Unlisted("decode"))
+    other -> Error(inspect(other))
   }
 }

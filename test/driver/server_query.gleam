@@ -15,7 +15,7 @@ import dream_postgres/driver/query.{
   Wait,
 }
 import dream_postgres/driver/transport.{
-  type Connection, type TransportError, NoTls, receive, send,
+  type Connection, type ReceiveError, type SendError, NoTls, receive, send,
 }
 import dream_postgres/internal/cell.{type ServerReport}
 import driver/server_login.{type LoginFailure, TestLogin, open_logged_in}
@@ -27,7 +27,8 @@ import gleam/result.{map_error, try}
 /// Why a test query failed, at the layer where it failed.
 pub type QueryFailure {
   LoginFailed(failure: LoginFailure)
-  TransportFailed(error: TransportError)
+  SendRefused(error: SendError)
+  ReceiveRefused(error: ReceiveError)
   EncodeFailed(error: EncodeError)
   DecodeFailed(error: ProtocolError)
   StepRefused(error: UnexpectedMessage)
@@ -109,7 +110,7 @@ fn send_and_read(
   state: state,
   step: StepFunction(state, outcome),
 ) -> Result(#(outcome, Session), QueryFailure) {
-  use Nil <- try(send(session.connection, bytes) |> map_error(TransportFailed))
+  use Nil <- try(send(session.connection, bytes) |> map_error(SendRefused))
   read_messages(session, state, step)
 }
 
@@ -119,7 +120,7 @@ fn read_more(
   step: StepFunction(state, outcome),
 ) -> Result(#(outcome, Session), QueryFailure) {
   use more <- try(
-    receive(session.connection, 5000) |> map_error(TransportFailed),
+    receive(session.connection, 5000) |> map_error(ReceiveRefused),
   )
   read_messages(
     Session(..session, bytes: <<session.bytes:bits, more:bits>>),
@@ -133,7 +134,7 @@ fn send_messages(
   messages: List(FrontendMessage),
 ) -> Result(Nil, QueryFailure) {
   use bytes <- try(try_each_encoded(messages) |> map_error(EncodeFailed))
-  send(connection, bytes) |> map_error(TransportFailed)
+  send(connection, bytes) |> map_error(SendRefused)
 }
 
 fn try_each_encoded(

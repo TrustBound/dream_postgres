@@ -64,8 +64,10 @@ import dream_postgres/driver/transaction.{
   track_step, transaction_status as tracked_status,
 }
 import dream_postgres/driver/transport.{
-  type TransportConfig, type TransportError, BytesReceived, ConnectTimedOut,
-  NotThisSocket, ReceiveTimedOut, SocketClosed, SocketEnded,
+  type ReceiveError, type SendError, type SocketError, type TransportConfig,
+  type TransportError, BytesReceived, ConnectTimedOut, NotThisSocket,
+  ReceiveFailed, ReceiveTimedOut, SendFailed, SendTimedOut, SocketClosed,
+  SocketEnded,
 }
 import dream_postgres/internal/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
@@ -169,6 +171,12 @@ pub type ConnectionEvent {
 pub type ConnectError {
   /// The TCP connect or TLS failed.
   TransportRefused(error: TransportError)
+  /// The socket failed during the login, for example because the server
+  /// closed it.
+  LoginSocketFailed(error: SocketError)
+  /// A login message could not be sent, for example because the server
+  /// read nothing of it for the send timeout.
+  LoginSendFailed(error: SendError)
   /// The login settings require channel binding, and the connection has
   /// no TLS: its transport has `NoTls`, or `PreferTls` and a server that
   /// refused TLS. No login message went to the server.
@@ -220,7 +228,9 @@ pub type Violation {
 /// Why a connection was lost.
 pub type LossReason {
   /// The socket closed or failed.
-  SocketFailed(error: TransportError)
+  SocketFailed(error: SocketError)
+  /// The server read nothing for the send timeout, so the socket closed.
+  ServerStoppedReading
   /// The deadline of the running request passed and its cancel did not
   /// end it in time, so the process closed the connection. The request
   /// whose deadline passed gets `DeadlinePassed(cancelled: False)`. The
@@ -640,6 +650,8 @@ type State {
 /// Why a cancel did not reach the server.
 type CancelFailure {
   CancelUnreachable(error: TransportError)
+  CancelNotSent(error: SendError)
+  CancelNotAnswered(error: ReceiveError)
   CancelUnencodable(error: EncodeError)
 }
 
@@ -2155,11 +2167,27 @@ fn encode_all(
 fn sent(
   state: State,
   socket: transport.Connection,
-  sent: Result(Nil, TransportError),
+  sent: Result(Nil, SendError),
 ) -> State {
-  case sent {
+  lose_on_error(state, socket, sent |> map_error(send_loss))
+}
+
+/// A socket call that failed loses the connection.
+fn lose_on_error(
+  state: State,
+  socket: transport.Connection,
+  called: Result(Nil, LossReason),
+) -> State {
+  case called {
     Ok(Nil) -> state
-    Error(error) -> write_failed(state, socket, error)
+    Error(reason) -> write_failed(state, socket, reason)
+  }
+}
+
+fn send_loss(error: SendError) -> LossReason {
+  case error {
+    SendTimedOut -> ServerStoppedReading
+    SendFailed(error) -> SocketFailed(error)
   }
 }
 
@@ -2170,10 +2198,10 @@ fn sent(
 fn write_failed(
   state: State,
   socket: transport.Connection,
-  error: TransportError,
+  reason: LossReason,
 ) -> State {
   read_messages_with(state, transport.received_bytes(socket))
-  |> lose_if_connected(socket, ConnectionLost(SocketFailed(error)))
+  |> lose_if_connected(socket, ConnectionLost(reason))
 }
 
 fn lose_if_connected(
@@ -2254,7 +2282,10 @@ fn socket_event(
 fn receive_next(state: State) -> State {
   use <- guard(paused(state), state)
   case state.link {
-    Open(socket:, ..) -> sent(state, socket, transport.receive_next(socket))
+    Open(socket:, ..) ->
+      transport.receive_next(socket)
+      |> map_error(SocketFailed)
+      |> lose_on_error(state, socket, _)
     Lost(..) -> state
   }
 }
@@ -3088,14 +3119,14 @@ fn chunk_sent(
   waiting: State,
   socket: transport.Connection,
   reply_to: ReplyTo(Result(Nil, ChunkError)),
-  sent: Result(Nil, TransportError),
+  sent: Result(Nil, SendError),
 ) -> State {
   case sent {
     Ok(Nil) -> {
       reply(reply_to, Ok(Nil))
       state
     }
-    Error(error) -> write_failed(waiting, socket, error)
+    Error(error) -> write_failed(waiting, socket, send_loss(error))
   }
 }
 
@@ -3299,7 +3330,7 @@ fn setup_transport_error(
   setup_deadline: Deadline,
 ) -> ConnectError {
   case error, deadline.has_passed(setup_deadline) {
-    ConnectTimedOut, True | ReceiveTimedOut, True -> SetupTimedOut
+    ConnectTimedOut, True -> SetupTimedOut
     _, _ -> TransportRefused(error)
   }
 }
@@ -3320,7 +3351,7 @@ fn log_in(
   use Nil <- try(send_login_message(socket, first))
   use session <- try(login_messages(socket, state, <<>>, setup_deadline))
   transport.receive_next(socket)
-  |> map_error(TransportRefused)
+  |> map_error(LoginSocketFailed)
   |> result.replace(session)
 }
 
@@ -3371,7 +3402,7 @@ fn more_login_bytes(
 ) -> Result(Session, ConnectError) {
   use more <- try(
     transport.receive(socket, deadline.time_left(setup_deadline))
-    |> map_error(setup_transport_error(_, setup_deadline)),
+    |> map_error(login_receive_error),
   )
   login_messages(socket, state, <<bytes:bits, more:bits>>, setup_deadline)
 }
@@ -3381,7 +3412,16 @@ fn send_login_message(
   message: FrontendMessage,
 ) -> Result(Nil, ConnectError) {
   use bytes <- try(encode(message) |> map_error(LoginUnencodable))
-  transport.send(socket, bytes) |> map_error(TransportRefused)
+  transport.send(socket, bytes) |> map_error(LoginSendFailed)
+}
+
+/// The receive waits for the time left of the setup, so its timeout is
+/// the end of the setup.
+fn login_receive_error(error: ReceiveError) -> ConnectError {
+  case error {
+    ReceiveTimedOut -> SetupTimedOut
+    ReceiveFailed(error) -> LoginSocketFailed(error)
+  }
 }
 
 // Deadlines and cancel -------------------------------------------------------
@@ -3576,9 +3616,9 @@ fn send_cancel(
   let sent = transport.send(socket, request)
   let closed = transport.receive(socket, deadline.time_left(cancel_deadline))
   transport.close(socket)
-  use Nil <- try(sent |> map_error(CancelUnreachable))
+  use Nil <- try(sent |> map_error(CancelNotSent))
   case closed {
-    Ok(_bytes) | Error(SocketClosed) -> Ok(Nil)
-    Error(error) -> Error(CancelUnreachable(error))
+    Ok(_bytes) | Error(ReceiveFailed(SocketClosed)) -> Ok(Nil)
+    Error(error) -> Error(CancelNotAnswered(error))
   }
 }

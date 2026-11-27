@@ -13,9 +13,10 @@ import dream_postgres/driver/connection.{
 }
 import dream_postgres/driver/pool.{PoolStatus}
 import dream_postgres/driver/transport.{
-  AuthorityFile, AuthorityFileUnreadable, CheckAuthorityAndHost, ConnectionReset,
-  DnsLookupFailed, InvalidPort, NoCertificateCheck, PostgresNegotiation,
-  RequireTls, ServerRefusedTls, SocketClosed, TlsFailed, address,
+  AuthorityFile, AuthorityFileUnreadable, CheckAuthorityAndHost, ConnectClosed,
+  ConnectionReset, DnsLookupFailed, InvalidPort, NoCertificateCheck,
+  PostgresNegotiation, RequireTls, ServerRefusedTls, SocketClosed, TlsFailed,
+  address,
 }
 import dream_postgres/internal/cell.{
   type Cell, Binary, BinaryFormat, Null, Text, TextFormat,
@@ -1783,7 +1784,7 @@ fn authority_tests() -> List(ContextNode(Nil)) {
 fn closing_tests() -> List(ContextNode(Nil)) {
   [
     it(
-      "gives SocketClosed and closes the socket when the server closes",
+      "gives ConnectClosed and closes the socket when the server closes",
       fn(_nothing) {
         // Act
         let connected = {
@@ -1799,8 +1800,8 @@ fn closing_tests() -> List(ContextNode(Nil)) {
         |> should
         |> be_ok
         |> be_error
-        |> be_equal(SocketClosed)
-        |> or_fail_with("Expected SocketClosed")
+        |> be_equal(ConnectClosed)
+        |> or_fail_with("Expected ConnectClosed")
       },
     ),
     it(

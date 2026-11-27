@@ -1,7 +1,7 @@
 //// Receives bytes on a transport connection, and gives the result.
 
 import dream_postgres/driver/transport.{
-  type Connection, type TransportError, receive,
+  type Connection, type ReceiveError, receive,
 }
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
@@ -19,7 +19,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 pub fn extract_receive_result(
   result: MatchResult(Connection),
   timeout timeout: Int,
-) -> MatchResult(Result(BitArray, TransportError)) {
+) -> MatchResult(Result(BitArray, ReceiveError)) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(connection) -> MatchOk(receive(connection, timeout))

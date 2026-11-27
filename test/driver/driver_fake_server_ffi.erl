@@ -1,5 +1,5 @@
 -module(driver_fake_server_ffi).
--export([start/1, client_closed/1, start_silent/0,
+-export([start/1, client_closed/1, start_silent/0, start_deaf/1,
          start_tls_then_bad_record/2, send_bad_record/1]).
 
 %% A fake PostgreSQL server for the transport tests: it does one thing a
@@ -53,6 +53,23 @@ start_silent() ->
         gen_tcp:close(Listen)
     end,
     case open(self(), make_ref(), Silent) of
+        {ok, {Port, _Reference}} -> {ok, Port};
+        {error, Reason} -> {error, Reason}
+    end.
+
+%% start_deaf(Bytes) gives {ok, Port} of a server that accepts one
+%% connection, sends Bytes at once, and never reads a byte, so the
+%% client's sends fill the buffers and block. It closes the connection
+%% after ten seconds.
+start_deaf(Bytes) ->
+    Deaf = fun(Listen) ->
+        then(gen_tcp:accept(Listen, ?WAIT), fun(Socket) ->
+            gen_tcp:send(Socket, Bytes),
+            receive after 10000 -> gen_tcp:close(Socket) end
+        end),
+        gen_tcp:close(Listen)
+    end,
+    case open(self(), make_ref(), Deaf) of
         {ok, {Port, _Reference}} -> {ok, Port};
         {error, Reason} -> {error, Reason}
     end.
