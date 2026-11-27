@@ -144,6 +144,13 @@ pub type HoldError {
   PoolStopped
 }
 
+/// Why a request that only reads from the pool failed: no pool process
+/// runs. The pool is gone, or no pool runs under the name now, for example
+/// while its supervisor starts it again.
+pub type PoolNotRunning {
+  PoolNotRunning
+}
+
 /// The state of a pool at one moment.
 pub type PoolStatus {
   PoolStatus(
@@ -611,6 +618,7 @@ fn check_out(
   deadline_milliseconds: Int,
 ) -> Result(Lease, HoldError) {
   ask(pool, CheckOut(process.self(), deadline_milliseconds, _))
+  |> result.map_error(stopped_hold)
   |> result.flatten
 }
 
@@ -628,7 +636,13 @@ fn check_out(
 ///   lookups of the codecs
 /// - `Error(PoolStopped)`: the pool is gone
 pub fn catalog(pool: Pool(attachment)) -> Result(Catalog, HoldError) {
-  ask(pool, CatalogRequest)
+  ask(pool, CatalogRequest) |> result.map_error(stopped_hold)
+}
+
+/// A pool that does not run refuses a hold, or a catalog, with
+/// `PoolStopped`.
+fn stopped_hold(_not_running: PoolNotRunning) -> HoldError {
+  PoolStopped
 }
 
 /// The value that the pool's user attached to the pool in its settings.
@@ -643,9 +657,11 @@ pub fn catalog(pool: Pool(attachment)) -> Result(Catalog, HoldError) {
 /// ## Returns
 ///
 /// - `Ok(attachment)`: the value of the pool's settings
-/// - `Error(PoolStopped)`: the pool is gone, or no pool runs under the
-///   name now, as a hold through the handle gives
-pub fn attachment(pool: Pool(attachment)) -> Result(attachment, HoldError) {
+/// - `Error(PoolNotRunning)`: the pool is gone, or no pool runs under the
+///   name now
+pub fn attachment(
+  pool: Pool(attachment),
+) -> Result(attachment, PoolNotRunning) {
   ask(pool, AttachmentRequest)
 }
 
@@ -659,8 +675,9 @@ pub fn attachment(pool: Pool(attachment)) -> Result(attachment, HoldError) {
 /// ## Returns
 ///
 /// - `Ok(PoolStatus)`: the counts and the last connect error
-/// - `Error(PoolStopped)`: the pool is gone
-pub fn status(pool: Pool(attachment)) -> Result(PoolStatus, HoldError) {
+/// - `Error(PoolNotRunning)`: the pool is gone, or no pool runs under the
+///   name now
+pub fn status(pool: Pool(attachment)) -> Result(PoolStatus, PoolNotRunning) {
   ask(pool, StatusRequest)
 }
 
@@ -672,7 +689,7 @@ pub fn status(pool: Pool(attachment)) -> Result(PoolStatus, HoldError) {
 fn ask(
   pool: Pool(attachment),
   make: fn(Subject(reply)) -> PoolMessage(attachment),
-) -> Result(reply, HoldError) {
+) -> Result(reply, PoolNotRunning) {
   use manager <- try(manager_pid(pool))
   let reply_to = process.new_subject()
   let monitor = process.monitor(manager)
@@ -687,12 +704,12 @@ fn ask(
 }
 
 /// The manager process of the pool, or of its name now.
-fn manager_pid(pool: Pool(attachment)) -> Result(Pid, HoldError) {
-  process.subject_owner(pool.subject) |> result.replace_error(PoolStopped)
+fn manager_pid(pool: Pool(attachment)) -> Result(Pid, PoolNotRunning) {
+  process.subject_owner(pool.subject) |> result.replace_error(PoolNotRunning)
 }
 
-fn pool_down(_down: Down) -> Result(reply, HoldError) {
-  Error(PoolStopped)
+fn pool_down(_down: Down) -> Result(reply, PoolNotRunning) {
+  Error(PoolNotRunning)
 }
 
 // The process -----------------------------------------------------------------
