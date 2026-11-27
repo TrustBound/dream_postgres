@@ -80,7 +80,7 @@ pub opaque type Member {
 }
 
 type Message {
-  Connect(attempt: Int)
+  Connect(attempt: Int, previous_wait_milliseconds: Int)
   Reset(connection: Connection)
   CheckHealth(connection: Connection)
   EventReceived(event: ConnectionEvent)
@@ -152,7 +152,7 @@ fn initialise(
   let events = process.new_subject()
   let member = Member(subject:, pid: process.self())
   process.send(reports, MemberStarted(slot, member))
-  process.send(subject, Connect(0))
+  process.send(subject, Connect(0, 0))
   let selector =
     process.new_selector()
     |> process.select(subject)
@@ -219,7 +219,8 @@ fn handle_message(
   message: Message,
 ) -> actor.Next(State, Message) {
   case message {
-    Connect(attempt:) -> actor.continue(connect(state, attempt))
+    Connect(attempt:, previous_wait_milliseconds:) ->
+      actor.continue(connect(state, attempt, previous_wait_milliseconds))
     Reset(connection:) -> actor.continue(reset_connection(state, connection))
     CheckHealth(connection:) ->
       actor.continue(check_connection(state, connection))
@@ -234,7 +235,11 @@ fn handle_message(
 
 /// Starts a connection process. A failed start is tried again after the
 /// backoff of the connection settings.
-fn connect(state: State, attempt: Int) -> State {
+fn connect(
+  state: State,
+  attempt: Int,
+  previous_wait_milliseconds: Int,
+) -> State {
   let settings =
     ConnectionConfig(..state.config.connection, events: Some(state.events))
   case connection.start(settings) {
@@ -244,9 +249,13 @@ fn connect(state: State, attempt: Int) -> State {
     }
     Error(error) -> {
       report(state, MemberConnectFailed(state.slot, error))
-      let delay =
-        connection.backoff_delay(state.config.connection.reconnect, attempt)
-      process.send_after(state.subject, delay, Connect(attempt + 1))
+      let wait =
+        connection.backoff_wait(
+          state.config.connection.reconnect,
+          attempt,
+          previous_wait_milliseconds,
+        )
+      process.send_after(state.subject, wait, Connect(attempt + 1, wait))
       State(..state, connection: None)
     }
   }
@@ -293,7 +302,7 @@ fn replace(state: State, broken: Connection) -> State {
   connection.stop(broken)
   drop_stale_events(state)
   report(state, MemberReplacing(state.slot))
-  connect(state, 0)
+  connect(state, 0, 0)
 }
 
 /// Takes the events that the stopped connection sent before it stopped out
@@ -340,7 +349,7 @@ fn exit_received(
     False, _crashed -> {
       drop_stale_events(state)
       report(state, MemberReplacing(state.slot))
-      actor.continue(connect(state, 0))
+      actor.continue(connect(state, 0, 0))
     }
   }
 }

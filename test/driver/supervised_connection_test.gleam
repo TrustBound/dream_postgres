@@ -25,6 +25,7 @@ import driver/reconnect_server.{
 }
 import driver/server_connection.{connection_config, next_event, stop_connection}
 import driver/servers.{first_driver_server}
+import fixtures/backoff_strategies.{capped_delay}
 import fixtures/copy_callbacks.{send_nothing}
 import gleam/erlang/process
 import gleam/option.{Some}
@@ -163,7 +164,7 @@ fn start_before_server() -> Result(LateServer, String) {
   let config =
     ConnectionConfig(
       ..config,
-      reconnect: Backoff(10, 100),
+      reconnect: Backoff(10, 100, capped_delay),
       events: Some(events),
     )
   use started <- try(supervised(config).start() |> map_error(inspect))

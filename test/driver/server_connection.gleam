@@ -33,6 +33,7 @@ import dream_postgres/internal/cell.{type Cell, CommandResult, Text}
 import dream_test/context.{type Context}
 import driver/proxy.{type Proxy, inject, start_proxy, stop_proxy}
 import driver/servers.{type Server}
+import fixtures/backoff_strategies.{capped_delay}
 import gleam/bit_array
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int.{to_string}
@@ -57,7 +58,7 @@ pub fn user_config(
     login:,
     setup_timeout_milliseconds: 5000,
     cancel_timeout_milliseconds: 2000,
-    reconnect: Backoff(10, 60_000),
+    reconnect: Backoff(10, 60_000, capped_delay),
     events: None,
     notifications: None,
     statements: CacheStatements(default_limit),
@@ -177,7 +178,7 @@ pub fn watched_config(
 ) -> ConnectionConfig {
   ConnectionConfig(
     ..config,
-    reconnect: Backoff(first_delay, 60_000),
+    reconnect: Backoff(first_delay, 60_000, capped_delay),
     events: Some(events),
   )
 }

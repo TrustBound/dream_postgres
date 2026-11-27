@@ -29,6 +29,7 @@ import driver/server_connection.{
   pid_of, query_text, run_control_script, start_connection, user_config,
 }
 import driver/servers.{type Server}
+import fixtures/backoff_strategies.{capped_delay}
 import gleam/bool
 import gleam/erlang/process.{
   type Down, type ExitMessage, type ExitReason, type Name, type Pid,
@@ -104,7 +105,7 @@ pub fn slow_reconnect_config(
     ..config,
     connection: ConnectionConfig(
       ..config.connection,
-      reconnect: Backoff(60_000, 60_000),
+      reconnect: Backoff(60_000, 60_000, capped_delay),
     ),
   )
 }

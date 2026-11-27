@@ -27,6 +27,7 @@ import driver/server_connection.{
   stop_after_error,
 }
 import driver/servers.{type Server}
+import fixtures/backoff_strategies.{capped_delay}
 import gleam/bit_array
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int.{parse, to_string}
@@ -56,7 +57,11 @@ pub fn start_listener(
   application_name: String,
   first_delay: Int,
 ) -> Result(Listener, String) {
-  listener_config(port, application_name, Backoff(first_delay, 60_000))
+  listener_config(
+    port,
+    application_name,
+    Backoff(first_delay, 60_000, capped_delay),
+  )
   |> try(start_configured_listener)
 }
 
@@ -393,7 +398,7 @@ pub fn start_gated_listener(server: Server) -> Result(GatedListener, String) {
 }
 
 fn gated_listener_config(port: Int) -> Result(ListenerConfig, String) {
-  listener_config(port, "svc827_gate", Backoff(10, 50))
+  listener_config(port, "svc827_gate", Backoff(10, 50, capped_delay))
 }
 
 fn start_gated_with(
@@ -501,7 +506,11 @@ pub fn start_proxied_listener(
 }
 
 fn short_listener_config(port: Int) -> Result(ListenerConfig, String) {
-  use config <- try(listener_config(port, "svc895_proxied", Backoff(10, 50)))
+  use config <- try(listener_config(
+    port,
+    "svc895_proxied",
+    Backoff(10, 50, capped_delay),
+  ))
   Ok(ListenerConfig(
     connection: ConnectionConfig(
       ..config.connection,

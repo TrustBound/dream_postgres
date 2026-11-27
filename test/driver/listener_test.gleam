@@ -54,6 +54,7 @@ import driver/server_listener.{
   suspend_listener_connection, wait_for_first_message, wait_for_statement,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
+import fixtures/backoff_strategies.{capped_delay}
 import fixtures/server_report.{server_report}
 import gleam/erlang/process
 import gleam/int.{to_string}
@@ -671,12 +672,12 @@ fn build_start_inputs() -> Result(StartInputs, String) {
   use refused <- try(listener_config(
     free_port(),
     "svc827_refused",
-    Backoff(10, 60_000),
+    Backoff(10, 60_000, capped_delay),
   ))
   use served <- try(listener_config(
     first_driver_server.port,
     "svc827_supervised",
-    Backoff(10, 60_000),
+    Backoff(10, 60_000, capped_delay),
   ))
   Ok(StartInputs(refused:, served:))
 }
@@ -738,7 +739,11 @@ type LateListener {
 
 fn start_listener_before_server() -> Result(LateListener, String) {
   let port = free_port()
-  use config <- try(listener_config(port, "svc827_late", Backoff(10, 100)))
+  use config <- try(listener_config(
+    port,
+    "svc827_late",
+    Backoff(10, 100, capped_delay),
+  ))
   use started <- try(supervised(config).start() |> map_error(inspect))
   watch_late_listener(started.data, port)
   |> map_error(fn(error) {
@@ -1091,7 +1096,7 @@ fn killed_start_tests() -> TestSuite {
         use config <- try(listener_config(
           port,
           "svc827_killed",
-          Backoff(10, 60_000),
+          Backoff(10, 60_000, capped_delay),
         ))
         let answers = process.new_subject()
         let starter =

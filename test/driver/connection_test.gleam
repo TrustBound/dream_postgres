@@ -77,6 +77,7 @@ import driver/server_connection.{
   watched_config,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
+import fixtures/backoff_strategies.{capped_delay}
 import fixtures/copy_callbacks.{send_nothing}
 import fixtures/driver_tls.{verify_full}
 import gleam/bit_array
@@ -1818,7 +1819,11 @@ fn start_gated_deadline(server: Server) -> Result(GatedDeadline, String) {
   use #(port, gate) <- try(start_cancel_gate(server.port))
   {
     use config <- try(connection_config(port))
-    let gated = ConnectionConfig(..config, reconnect: Backoff(60_000, 60_000))
+    let gated =
+      ConnectionConfig(
+        ..config,
+        reconnect: Backoff(60_000, 60_000, capped_delay),
+      )
     use connection <- try(start_configured(cancel_timeout_config(gated, 5000)))
     {
       let first =
@@ -2104,7 +2109,7 @@ fn start_keyless_connection() -> Result(Connection, String) {
   start_configured(
     ConnectionConfig(
       ..config,
-      reconnect: Backoff(60_000, 60_000),
+      reconnect: Backoff(60_000, 60_000, capped_delay),
       cancel_timeout_milliseconds: 200,
     ),
   )

@@ -91,11 +91,30 @@ import gleam/result.{map_error, try}
 
 // Types -----------------------------------------------------------------------
 
-/// How long the process waits before it connects again after a loss: the
-/// first delay, then twice that after each failed attempt, up to the
-/// longest delay.
+/// How long the process waits before it connects again after a loss. The
+/// capped delay is the first delay, twice that after each failed attempt,
+/// up to the longest delay. The strategy turns each step into the wait,
+/// which the driver keeps between 0 and the longest delay.
 pub type Backoff {
-  Backoff(first_delay_milliseconds: Int, longest_delay_milliseconds: Int)
+  Backoff(
+    first_delay_milliseconds: Int,
+    longest_delay_milliseconds: Int,
+    /// The wait for each step. `full_jitter` is the default.
+    strategy: fn(BackoffStep) -> Int,
+  )
+}
+
+/// What a backoff strategy gets for each wait.
+pub type BackoffStep {
+  BackoffStep(
+    /// The number of failed attempts so far, 0 for the first wait.
+    attempt: Int,
+    /// The first delay, doubled for each failed attempt, up to the longest
+    /// delay.
+    capped_delay_milliseconds: Int,
+    /// The wait before the previous attempt, 0 for the first wait.
+    previous_wait_milliseconds: Int,
+  )
 }
 
 /// Everything a connection process needs.
@@ -501,7 +520,7 @@ type Message {
   SnapshotRequest(reply: ReplyTo(Snapshot))
   StopRequest(reply: ReplyTo(Nil))
   SocketMessage(message: Dynamic)
-  ReconnectNow(attempt: Int)
+  ReconnectNow(attempt: Int, previous_wait_milliseconds: Int)
   ExitSignal(exit: ExitMessage)
   /// A chunk of the COPY `id` from its caller. The process answers each
   /// chunk: when it went to the socket, or with the end of the COPY.
@@ -520,7 +539,7 @@ type Message {
   OpenRequest(reply: ReplyTo(Result(Nil, ConnectError)))
   /// A supervised process tries to connect and log in for the first time.
   /// A failed attempt sends it again after the reconnect backoff.
-  OpenAttempt(attempt: Int)
+  OpenAttempt(attempt: Int, previous_wait_milliseconds: Int)
 }
 
 /// What the caller of a COPY tells the process while its COPY runs. No
@@ -901,7 +920,7 @@ fn start_child(
   config: ConnectionConfig,
 ) -> Result(actor.Started(Connection), actor.StartError) {
   actor.new_with_initialiser(config.setup_timeout_milliseconds, fn(subject) {
-    process.send(subject, OpenAttempt(0))
+    process.send(subject, OpenAttempt(0, 0))
     initialise(subject, config)
   })
   |> actor.on_message(handle_message)
@@ -936,7 +955,11 @@ fn initialise(
 /// A first open of a supervised process. A failed one leaves the process
 /// up, refusing requests as not connected, and tries again after the
 /// reconnect backoff.
-fn attempt_first_open(state: State, attempt: Int) -> State {
+fn attempt_first_open(
+  state: State,
+  attempt: Int,
+  previous_wait_milliseconds: Int,
+) -> State {
   case open_session(state.config) {
     Ok(session) -> {
       let state = connected_state(state, session)
@@ -945,8 +968,13 @@ fn attempt_first_open(state: State, attempt: Int) -> State {
     }
     Error(error) -> {
       tell(state, ConnectFailed(error))
-      let delay = backoff_delay(state.config.reconnect, attempt)
-      process.send_after(state.subject, delay, OpenAttempt(attempt + 1))
+      let wait =
+        backoff_wait(
+          state.config.reconnect,
+          attempt,
+          previous_wait_milliseconds,
+        )
+      process.send_after(state.subject, wait, OpenAttempt(attempt + 1, wait))
       State(..state, link: Lost(RefusedNotConnected(error)))
     }
   }
@@ -2018,13 +2046,19 @@ fn handle_message(
     ExitSignal(_exit) -> stop_process(state, None)
     SocketMessage(socket_message) ->
       actor.continue(socket_message_received(state, socket_message))
-    ReconnectNow(attempt:) -> actor.continue(reconnect(state, attempt))
+    ReconnectNow(attempt:, previous_wait_milliseconds:) ->
+      actor.continue(reconnect(state, attempt, previous_wait_milliseconds))
     SendChunk(id:, chunk:, reply: reply_to) ->
       actor.continue(chunk_received(state, id, chunk, reply_to))
     CopyNotice(id:, notice:) -> actor.continue(copy_notice(state, id, notice))
     CallerDown(down:) -> actor.continue(caller_down(state, down))
     OpenRequest(reply_to) -> open_first(state, reply_to)
-    OpenAttempt(attempt:) -> actor.continue(attempt_first_open(state, attempt))
+    OpenAttempt(attempt:, previous_wait_milliseconds:) ->
+      actor.continue(attempt_first_open(
+        state,
+        attempt,
+        previous_wait_milliseconds,
+      ))
   }
 }
 
@@ -3536,7 +3570,7 @@ fn end_link(
   option.map(state.running, refuse_running(_, running_error))
   list.each(reverse(state.waiting), refuse_ticket(_, refusal))
   tell(state, Disconnected(end))
-  schedule_reconnect(state, 0)
+  schedule_reconnect(state, 0, 0)
   State(
     ..end_current(state),
     link: Lost(refusal),
@@ -3557,32 +3591,68 @@ fn tell(state: State, event: ConnectionEvent) -> Nil {
   Nil
 }
 
-fn schedule_reconnect(state: State, attempt: Int) -> Nil {
-  let delay = backoff_delay(state.config.reconnect, attempt)
-  process.send_after(state.subject, delay, ReconnectNow(attempt))
+fn schedule_reconnect(
+  state: State,
+  attempt: Int,
+  previous_wait_milliseconds: Int,
+) -> Nil {
+  let wait =
+    backoff_wait(state.config.reconnect, attempt, previous_wait_milliseconds)
+  process.send_after(state.subject, wait, ReconnectNow(attempt, wait))
   Nil
 }
 
-/// The delay before a reconnect: the first delay, doubled for each failed
-/// attempt, up to the longest.
+/// The wait before a reconnect: the strategy's wait for the step, kept
+/// between 0 and the longest delay.
 ///
 /// ## Parameters
 ///
 /// - `backoff`: the backoff settings
 /// - `attempt`: the number of failed attempts so far, 0 for the first
+/// - `previous_wait_milliseconds`: the wait before the previous attempt,
+///   0 for the first
 ///
 /// ## Returns
 ///
-/// The delay in milliseconds.
-pub fn backoff_delay(backoff: Backoff, attempt: Int) -> Int {
+/// The wait in milliseconds.
+pub fn backoff_wait(
+  backoff: Backoff,
+  attempt: Int,
+  previous_wait_milliseconds: Int,
+) -> Int {
   let doubled =
     int.bitwise_shift_left(backoff.first_delay_milliseconds, min(attempt, 30))
-  min(doubled, backoff.longest_delay_milliseconds)
+  let capped_delay_milliseconds =
+    min(doubled, backoff.longest_delay_milliseconds)
+  BackoffStep(attempt:, capped_delay_milliseconds:, previous_wait_milliseconds:)
+  |> backoff.strategy
+  |> int.clamp(min: 0, max: backoff.longest_delay_milliseconds)
+}
+
+/// The default strategy: a random wait between 0 and the capped delay,
+/// both included. This is "Full Jitter" of the AWS Architecture Blog,
+/// "Exponential Backoff And Jitter":
+/// `sleep = random_between(0, min(cap, base * 2 ** attempt))`. It spreads
+/// the reconnects of many connections after one outage.
+///
+/// ## Parameters
+///
+/// - `step`: the step of the wait
+///
+/// ## Returns
+///
+/// The wait in milliseconds.
+pub fn full_jitter(step: BackoffStep) -> Int {
+  int.random(step.capped_delay_milliseconds + 1)
 }
 
 /// Each `ReconnectNow` comes from one loss or one failed attempt, while
 /// the link is lost, so the process connects only when it has no socket.
-fn reconnect(state: State, attempt: Int) -> State {
+fn reconnect(
+  state: State,
+  attempt: Int,
+  previous_wait_milliseconds: Int,
+) -> State {
   case open_session(state.config) {
     Ok(session) -> {
       tell(state, Reconnected)
@@ -3590,7 +3660,7 @@ fn reconnect(state: State, attempt: Int) -> State {
     }
     Error(connect_error) -> {
       tell(state, ReconnectFailed(connect_error))
-      schedule_reconnect(state, attempt + 1)
+      schedule_reconnect(state, attempt + 1, previous_wait_milliseconds)
       state
     }
   }

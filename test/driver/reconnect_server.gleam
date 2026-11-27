@@ -11,6 +11,7 @@ import dream_test/context.{type Context}
 import driver/server_connection.{
   connection_config, next_event, start_watched, stop_connection,
 }
+import fixtures/backoff_strategies.{capped_delay}
 import gleam/erlang/process.{type Subject}
 import gleam/option.{Some}
 import gleam/result.{map_error, try}
@@ -115,7 +116,7 @@ fn reconnect_badly(
     ConnectionConfig(
       ..config,
       setup_timeout_milliseconds: setup_timeout,
-      reconnect: Backoff(10, 60_000),
+      reconnect: Backoff(10, 60_000, capped_delay),
       events: Some(events),
     ),
     events,

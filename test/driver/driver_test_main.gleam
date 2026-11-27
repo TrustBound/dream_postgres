@@ -7,6 +7,7 @@ import dream_test/reporters/bdd
 import dream_test/reporters/progress
 import dream_test/runner
 import dream_test/suite.{type TestSuite}
+import driver/backoff_test
 import driver/bit_array_test
 import driver/catalog_table_test
 import driver/catalog_test
@@ -69,6 +70,7 @@ pub fn suites() -> List(TestSuite) {
     connection_events_test.tests(),
     supervised_connection_test.tests(),
     trace_test.tests(),
+    backoff_test.tests(),
   ]
 }
 
