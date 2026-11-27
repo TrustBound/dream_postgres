@@ -11,14 +11,16 @@
 //// arrives, and the listener sends it on to each subscriber of its channel,
 //// in the order the server sent them.
 ////
-//// When the connection is lost, each subscriber gets `ListeningLost` at
-//// once, and the connection process connects again. The new session
-//// listens on nothing, so the listener sends `LISTEN` again for each
-//// channel. The server keeps no notification for a session that is gone,
-//// so each subscriber then gets `ListenedAgain`: the notifications between
-//// the loss and that message may be missed. A subscribe while the
-//// connection is lost is kept the same way: the subscriber gets
-//// `ListeningLost` at once, and `ListenedAgain` after the reconnect.
+//// A subscriber hears whether its session listens. When the connection is
+//// lost, each subscriber gets `NotListening` at once, and the connection
+//// process connects again. The new session listens on nothing, so the
+//// listener sends `LISTEN` again for each channel, and each subscriber
+//// gets `Listening`, or `ListenFailed` when that `LISTEN` failed. The
+//// server keeps no notification for a session that is gone, so the
+//// notifications between `NotListening` and `Listening` may be missed. A
+//// subscribe while the connection is not up, lost or not connected yet
+//// under a supervisor, is kept the same way: the subscriber gets
+//// `NotListening` at once, and `Listening` once the session is up.
 ////
 //// A call to the listener has no timeout: the listener answers each one
 //// after at most its own `LISTEN` or `UNLISTEN`, and a listener that is gone
@@ -29,9 +31,9 @@
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type DriverError, type Notification, ConnectionConfig,
-  ConnectionLost, Disconnected, ProtocolViolation, ReconnectFailed, Reconnected,
-  ServerEndedConnection,
+  type ConnectionEvent, type DriverError, type Notification, Connected,
+  ConnectionConfig, ConnectionLost, Disconnected, NotConnected,
+  ProtocolViolation, ReconnectFailed, Reconnected, ServerEndedConnection,
 }
 import gleam/bit_array.{byte_size}
 import gleam/dict.{type Dict}
@@ -62,14 +64,20 @@ pub type ListenerConfig {
 pub type ListenerMessage {
   /// A notification on the channel of the subscription.
   NotificationArrived(notification: Notification)
-  /// The connection is lost, so the session does not listen on the channel
-  /// of the subscription. `ListenedAgain` follows after the reconnect.
-  ListeningLost
-  /// The listener connected again and sent `LISTEN` again for the channel.
-  /// Notifications on the channel between the loss and this message may be
-  /// missed. With an error, the session does not listen on the channel, and
-  /// the listener tries again after the next reconnect.
-  ListenedAgain(channel: String, result: Result(Nil, DriverError))
+  /// The session does not listen on the channel of the subscription: the
+  /// connection is not up yet, or it is lost. `Listening` or
+  /// `ListenFailed` follows once the listener sent `LISTEN` on a session
+  /// that is up.
+  NotListening
+  /// The listener sent `LISTEN` for the channel on a session that is up:
+  /// the first one, or a new one after a loss. Notifications on the
+  /// channel between the last `NotListening` and this message may be
+  /// missed.
+  Listening(channel: String)
+  /// The `LISTEN` for the channel failed on a session that is up, so the
+  /// session does not listen on it. The listener tries again after the
+  /// next reconnect.
+  ListenFailed(channel: String, error: DriverError)
 }
 
 /// Why a subscribe or an unsubscribe failed.
@@ -81,9 +89,9 @@ pub type ListenerError {
   /// has.
   SubscriberHasNoProcess
   /// The server refused the `LISTEN`, or it could not be written, so the
-  /// subscription is not kept. A loss of the connection is not a failure:
-  /// the subscription is kept and gets `ListeningLost`.
-  ListenFailed(error: DriverError)
+  /// subscription is not kept. A connection that is not up is not a
+  /// failure: the subscription is kept and gets `NotListening`.
+  SubscribeFailed(error: DriverError)
   /// The listener process is gone.
   ListenerProcessDown
 }
@@ -123,6 +131,12 @@ type Message {
   SubscriberDown(monitor: Monitor)
 }
 
+/// What the starter of `start` waits for.
+type Opening {
+  Opened(result: Result(Nil, ConnectError))
+  ListenerDown(reason: process.ExitReason)
+}
+
 /// A subscriber of one channel. `listening` says whether the session
 /// listens on the channel: it is `False` from a loss until the `LISTEN`
 /// after the reconnect.
@@ -136,7 +150,7 @@ type Subscriber {
 
 /// What a subscribe does.
 type Admission {
-  /// Adds the subscriber. With `listening` `False`, it gets `ListeningLost`.
+  /// Adds the subscriber. With `listening` `False`, it gets `NotListening`.
   Admit(listening: Bool)
   /// Refuses the subscriber with the error of its `LISTEN`.
   Refuse(error: DriverError)
@@ -145,6 +159,9 @@ type Admission {
 type State {
   State(
     connection: Connection,
+    /// The starter of `start`, until the first attempt of the connection
+    /// ended. A supervised listener has none.
+    starter: Option(Subject(Result(Nil, ConnectError))),
     deadline_milliseconds: Int,
     /// Each subscription, by the monitor of its subscriber's process.
     subscriptions: Dict(Monitor, Subscriber),
@@ -178,24 +195,41 @@ fn reply(to: ReplyTo(reply), value: reply) -> Nil
 /// - `Error(StartError)`: the connect, the login or the start failed. No
 ///   process stays.
 pub fn start(config: ListenerConfig) -> Result(Listener, StartError) {
-  let failure = process.new_subject()
-  start_process(config, Some(failure))
-  |> result.map(started_listener)
-  |> map_error(start_error(_, failure))
+  let opened = process.new_subject()
+  use started <- try(
+    start_process(config, Some(opened)) |> map_error(ListenerNotStarted),
+  )
+  wait_until_opened(started, opened)
 }
 
-fn started_listener(started: actor.Started(Listener)) -> Listener {
-  started.data
+/// Waits for the end of the first attempt of the connection, or for the
+/// end of the listener, with no timer: the connection ends its attempt by
+/// its own setup deadline. After a failed attempt it also waits for the
+/// end of the listener, which stops at once, so no process stays.
+fn wait_until_opened(
+  started: actor.Started(Listener),
+  opened: Subject(Result(Nil, ConnectError)),
+) -> Result(Listener, StartError) {
+  let monitor = process.monitor(started.pid)
+  let opening =
+    process.new_selector()
+    |> process.select_map(opened, Opened)
+    |> process.select_specific_monitor(monitor, listener_down)
+  case process.selector_receive_forever(opening) {
+    Opened(Ok(Nil)) -> {
+      process.demonitor_process(monitor)
+      Ok(started.data)
+    }
+    Opened(Error(error)) -> {
+      process.selector_receive_forever(opening)
+      Error(ConnectFailed(error))
+    }
+    ListenerDown(reason) -> Error(ListenerNotStarted(actor.InitExited(reason)))
+  }
 }
 
-/// The connect error that the start sent, if the connect failed.
-fn start_error(
-  error: actor.StartError,
-  failure: Subject(ConnectError),
-) -> StartError {
-  process.receive(failure, 0)
-  |> result.map(ConnectFailed)
-  |> result.unwrap(ListenerNotStarted(error))
+fn listener_down(down: Down) -> Opening {
+  ListenerDown(down.reason)
 }
 
 /// The listener as a child of a gleam_otp supervisor.
@@ -206,19 +240,23 @@ fn start_error(
 ///
 /// ## Returns
 ///
-/// A worker child that starts the listener with `config`.
+/// A worker child that starts the listener with `config`. The start does
+/// not wait for the server: the connection connects after it and tries
+/// again after its backoff, so a server that is down never fails the
+/// supervisor. Until the connection is up, each subscriber gets
+/// `NotListening`.
 pub fn supervised(config: ListenerConfig) -> ChildSpecification(Listener) {
   supervision.worker(fn() { start_process(config, None) })
 }
 
-/// The listener's own start takes the connection's setup time and one
-/// second more.
+/// The start of the listener does no I/O: its connection process starts
+/// supervised, and connects after it.
 fn start_process(
   config: ListenerConfig,
-  failure: Option(Subject(ConnectError)),
+  starter: Option(Subject(Result(Nil, ConnectError))),
 ) -> Result(actor.Started(Listener), actor.StartError) {
-  let timeout = config.connection.setup_timeout_milliseconds + 1000
-  actor.new_with_initialiser(timeout, initialise(_, config, failure))
+  let timeout = config.connection.setup_timeout_milliseconds
+  actor.new_with_initialiser(timeout, initialise(_, config, starter))
   |> actor.on_message(handle_message)
   |> actor.start
 }
@@ -226,7 +264,7 @@ fn start_process(
 fn initialise(
   subject: Subject(Message),
   config: ListenerConfig,
-  failure: Option(Subject(ConnectError)),
+  starter: Option(Subject(Result(Nil, ConnectError))),
 ) -> Result(actor.Initialised(State, Message, Listener), String) {
   let notifications = process.new_subject()
   let events = process.new_subject()
@@ -236,26 +274,23 @@ fn initialise(
       events: Some(events),
       notifications: Some(notifications),
     )
-  case connection.start(connection_config) {
-    Ok(started) ->
-      Ok(initialised(subject, config, started, notifications, events))
-    Error(error) -> {
-      option.map(failure, process.send(_, error))
-      Error("connect failed")
-    }
-  }
+  connection.supervised(connection_config).start()
+  |> result.map(initialised(subject, config, _, starter, notifications, events))
+  |> replace_error("the connection process did not start")
 }
 
 fn initialised(
   subject: Subject(Message),
   config: ListenerConfig,
-  started: Connection,
+  started: actor.Started(Connection),
+  starter: Option(Subject(Result(Nil, ConnectError))),
   notifications: Subject(Notification),
   events: Subject(ConnectionEvent),
 ) -> actor.Initialised(State, Message, Listener) {
   let state =
     State(
-      connection: started,
+      connection: started.data,
+      starter:,
       deadline_milliseconds: config.deadline_milliseconds,
       subscriptions: dict.new(),
     )
@@ -298,13 +333,13 @@ pub fn stop(listener: Listener) -> Nil {
 ///
 /// - `listener`: the listener
 /// - `channel`: the exact channel name, at most 63 bytes
-/// - `subscriber`: where each notification, `ListeningLost` and
-///   `ListenedAgain` goes
+/// - `subscriber`: where each notification, `NotListening`, `Listening`
+///   and `ListenFailed` goes
 ///
 /// ## Returns
 ///
 /// - `Ok(Subscription)`: the session listens on the channel, or the
-///   connection is lost and the subscriber got `ListeningLost`
+///   connection is not up and the subscriber got `NotListening`
 /// - `Error(ListenerError)`: the name is too long, the subject has no
 ///   process, the server refused the `LISTEN`, or the listener is gone
 pub fn subscribe(
@@ -386,8 +421,7 @@ fn handle_message(
       deliver(state, notification)
       actor.continue(state)
     }
-    ConnectionEventReceived(event) ->
-      actor.continue(connection_event(state, event))
+    ConnectionEventReceived(event) -> connection_event(state, event)
     SubscriberDown(monitor) -> actor.continue(remove_subscriber(state, monitor))
   }
 }
@@ -403,7 +437,7 @@ fn add_subscriber(
   let #(state, answer) = case admission(state, channel) {
     Admit(listening:) ->
       added(state, Subscriber(channel, subject, listening), owner)
-    Refuse(error) -> #(state, Error(ListenFailed(error)))
+    Refuse(error) -> #(state, Error(SubscribeFailed(error)))
   }
   reply(reply_to, answer)
   state
@@ -418,12 +452,13 @@ fn admission(state: State, channel: String) -> Admission {
   }
 }
 
-/// A `LISTEN` that failed because the connection is lost is kept: the
-/// connection process connects again, and the listener listens then.
+/// A `LISTEN` that failed because the connection is not up is kept: the
+/// connection process connects, and the listener listens then.
 fn listen_admission(listened: Result(Nil, DriverError)) -> Admission {
   case listened {
     Ok(Nil) -> Admit(True)
     Error(ConnectionLost(_))
+    | Error(NotConnected(_))
     | Error(ServerEndedConnection(_))
     | Error(ProtocolViolation(_)) -> Admit(False)
     Error(error) -> Refuse(error)
@@ -439,7 +474,7 @@ fn added(
   let subscriptions = dict.insert(state.subscriptions, monitor, subscriber)
   case subscriber.listening {
     True -> Nil
-    False -> process.send(subscriber.subject, ListeningLost)
+    False -> process.send(subscriber.subject, NotListening)
   }
   #(State(..state, subscriptions:), Ok(Subscription(monitor)))
 }
@@ -494,20 +529,36 @@ fn deliver(state: State, notification: Notification) -> Nil {
   |> each(process.send(_, NotificationArrived(notification)))
 }
 
-/// A loss tells each subscriber that listens. After a reconnect, the
-/// listener sends `LISTEN` again for each channel and tells its subscribers
-/// the result. A failed reconnect needs nothing: the connection process
-/// tries again by itself.
-fn connection_event(state: State, event: ConnectionEvent) -> State {
-  case event {
-    Disconnected(_error) -> lost(state)
-    Reconnected -> list.fold(channels(state), state, listen_again)
-    ReconnectFailed(_error) -> state
+/// A loss tells each subscriber that listens. Once the session is up, the
+/// first one or a new one after a loss, the listener sends `LISTEN` for
+/// each channel and tells its subscribers the result. A failed attempt
+/// needs nothing: the connection process tries again by itself. The first
+/// attempt of a listener from `start` also answers its starter, and a
+/// failed one stops the listener.
+fn connection_event(
+  state: State,
+  event: ConnectionEvent,
+) -> actor.Next(State, Message) {
+  case event, state.starter {
+    Connected, Some(starter) -> {
+      process.send(starter, Ok(Nil))
+      actor.continue(State(..state, starter: None))
+    }
+    Connected, None | Reconnected, _ ->
+      actor.continue(list.fold(channels(state), state, listen_on_session))
+    connection.ConnectFailed(error), Some(starter) -> {
+      process.send(starter, Error(error))
+      connection.stop(state.connection)
+      actor.stop()
+    }
+    connection.ConnectFailed(_error), None | ReconnectFailed(_error), _ ->
+      actor.continue(state)
+    Disconnected(_error), _ -> actor.continue(lost(state))
   }
 }
 
-/// Only the subscribers that listen get `ListeningLost`: one that came
-/// while the connection was lost got it already.
+/// Only the subscribers that listen get `NotListening`: one that came
+/// while the connection was not up got it already.
 fn lost(state: State) -> State {
   dict.values(state.subscriptions)
   |> filter(is_listening)
@@ -519,17 +570,17 @@ fn lost(state: State) -> State {
 }
 
 fn tell_lost(subscriber: Subscriber) -> Nil {
-  process.send(subscriber.subject, ListeningLost)
+  process.send(subscriber.subject, NotListening)
 }
 
 fn not_listening(_monitor: Monitor, subscriber: Subscriber) -> Subscriber {
   Subscriber(..subscriber, listening: False)
 }
 
-fn listen_again(state: State, channel: String) -> State {
+fn listen_on_session(state: State, channel: String) -> State {
   let result = listen(state, channel)
   subscribers_of(state, channel)
-  |> each(process.send(_, ListenedAgain(channel, result)))
+  |> each(process.send(_, listen_result_message(channel, result)))
   let listening = result.is_ok(result)
   State(
     ..state,
@@ -540,6 +591,16 @@ fn listen_again(state: State, channel: String) -> State {
       },
     ),
   )
+}
+
+fn listen_result_message(
+  channel: String,
+  result: Result(Nil, DriverError),
+) -> ListenerMessage {
+  case result {
+    Ok(Nil) -> Listening(channel)
+    Error(error) -> ListenFailed(channel, error)
+  }
 }
 
 /// The subscribers of `channel` listen when its `LISTEN` worked.

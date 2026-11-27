@@ -27,6 +27,7 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/deadline.{type Deadline, bounded_wait}
 import dream_postgres/driver/decode.{decode_ssl_answer}
 import dream_postgres/driver/encode.{ssl_request}
 import dream_postgres/driver/message.{
@@ -106,7 +107,8 @@ pub type TransportConfig {
     address: Address,
     tls: Tls,
     /// The longest time for the TCP connect, the TLS answer and the TLS
-    /// handshake, each.
+    /// handshake, each. The deadline that `connect` gets can cut each of
+    /// them shorter.
     connect_timeout_milliseconds: Int,
     /// The longest time that one send may wait while the server reads
     /// nothing. After it, the send fails with `SendTimedOut` and the
@@ -332,31 +334,52 @@ pub fn port(address: Address) -> Int {
 ///
 /// ## Parameters
 ///
-/// - `config`: the address, the TLS settings and the timeout
+/// - `config`: the address, the TLS settings and the timeouts
+/// - `deadline`: the end of the setup that this connect is part of. Each
+///   blocking step (the TCP connect, the answer to the SSLRequest, the TLS
+///   handshake, and the plain connects of `PreferTls`) waits for the
+///   connect timeout, or for the time left until the deadline when that is
+///   shorter.
 ///
 /// ## Returns
 ///
 /// - `Ok(Connection)`: an open connection, ready for the StartupMessage
 /// - `Error(TransportError)`: the step that failed. No socket stays open.
-pub fn connect(config: TransportConfig) -> Result(Connection, TransportError) {
-  use socket <- try(open_tcp(config))
+pub fn connect(
+  config: TransportConfig,
+  deadline: Deadline,
+) -> Result(Connection, TransportError) {
+  let opening = Opening(config:, deadline:)
+  use socket <- try(open_tcp(opening))
   case config.tls {
     NoTls -> Ok(PlainConnection(socket))
-    PreferTls -> prefer_tls(socket, config)
+    PreferTls -> prefer_tls(socket, opening)
     RequireTls(check:, negotiation: PostgresNegotiation) ->
-      require_tls(socket, check, config)
+      require_tls(socket, check, opening)
     RequireTls(check:, negotiation: DirectNegotiation) ->
-      start_tls(socket, check, config)
+      start_tls(socket, check, opening)
   }
 }
 
-fn open_tcp(config: TransportConfig) -> Result(TcpSocket, TransportError) {
-  let Address(host:, port:) = config.address
+/// The settings of one `connect`, and the deadline that each of its
+/// blocking steps waits for at most.
+type Opening {
+  Opening(config: TransportConfig, deadline: Deadline)
+}
+
+/// How long one blocking step of the connect may wait: the connect
+/// timeout, or the time left until the deadline when that is shorter.
+fn step_timeout(opening: Opening) -> Int {
+  bounded_wait(opening.deadline, opening.config.connect_timeout_milliseconds)
+}
+
+fn open_tcp(opening: Opening) -> Result(TcpSocket, TransportError) {
+  let Address(host:, port:) = opening.config.address
   tcp_connect(
     host,
     port,
-    config.connect_timeout_milliseconds,
-    config.send_timeout_milliseconds,
+    step_timeout(opening),
+    opening.config.send_timeout_milliseconds,
   )
   |> map_error(connect_error(_, host))
 }
@@ -369,41 +392,41 @@ fn open_tcp(config: TransportConfig) -> Result(TcpSocket, TransportError) {
 /// on purpose.
 fn prefer_tls(
   socket: TcpSocket,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(Connection, TransportError) {
-  case request_tls(socket, config) {
-    Ok(TlsAccepted) -> prefer_handshake(socket, config)
+  case request_tls(socket, opening) {
+    Ok(TlsAccepted) -> prefer_handshake(socket, opening)
     Ok(TlsRefused) -> Ok(PlainConnection(socket))
-    Ok(TlsAnsweredWithError) -> reconnect_plain(socket, config)
+    Ok(TlsAnsweredWithError) -> reconnect_plain(socket, opening)
     Error(error) -> close_with_error(socket, error)
   }
 }
 
 fn prefer_handshake(
   socket: TcpSocket,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(Connection, TransportError) {
-  case start_tls(socket, NoCertificateCheck, config) {
+  case start_tls(socket, NoCertificateCheck, opening) {
     Ok(connection) -> Ok(connection)
-    Error(_handshake_failed) -> open_tcp(config) |> map(PlainConnection)
+    Error(_handshake_failed) -> open_tcp(opening) |> map(PlainConnection)
   }
 }
 
 fn reconnect_plain(
   socket: TcpSocket,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(Connection, TransportError) {
   tcp_close(socket)
-  open_tcp(config) |> map(PlainConnection)
+  open_tcp(opening) |> map(PlainConnection)
 }
 
 fn require_tls(
   socket: TcpSocket,
   check: CertificateCheck,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(Connection, TransportError) {
-  case request_tls(socket, config) {
-    Ok(TlsAccepted) -> start_tls(socket, check, config)
+  case request_tls(socket, opening) {
+    Ok(TlsAccepted) -> start_tls(socket, check, opening)
     Ok(TlsRefused) -> close_with_error(socket, ServerRefusedTls)
     Ok(TlsAnsweredWithError) ->
       close_with_error(socket, TlsRequestAnsweredWithError)
@@ -415,19 +438,19 @@ fn require_tls(
 /// are an error: they came before TLS.
 fn request_tls(
   socket: TcpSocket,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(TlsAnswer, TransportError) {
   use Nil <- try(tcp_send(socket, ssl_request()) |> map_error(socket_error))
-  read_tls_answer(socket, <<>>, config)
+  read_tls_answer(socket, <<>>, opening)
 }
 
 fn read_tls_answer(
   socket: TcpSocket,
   bytes: BitArray,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(TlsAnswer, TransportError) {
   case decode_ssl_answer(bytes) {
-    NeedMoreBytes -> receive_tls_answer(socket, bytes, config)
+    NeedMoreBytes -> receive_tls_answer(socket, bytes, opening)
     Decoded(EncryptionAccepted, <<>>) -> Ok(TlsAccepted)
     Decoded(EncryptionAccepted, _rest) -> Error(BytesBeforeTls)
     Decoded(EncryptionRefused, _rest) -> Ok(TlsRefused)
@@ -440,23 +463,23 @@ fn read_tls_answer(
 fn receive_tls_answer(
   socket: TcpSocket,
   bytes: BitArray,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(TlsAnswer, TransportError) {
   use more <- try(
-    tcp_receive(socket, config.connect_timeout_milliseconds)
+    tcp_receive(socket, step_timeout(opening))
     |> map_error(socket_error),
   )
-  read_tls_answer(socket, <<bytes:bits, more:bits>>, config)
+  read_tls_answer(socket, <<bytes:bits, more:bits>>, opening)
 }
 
 fn start_tls(
   socket: TcpSocket,
   check: CertificateCheck,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(Connection, TransportError) {
   case tls_settings(check) {
     Ok(#(peer_check, authorities)) ->
-      handshake(socket, peer_check, authorities, config)
+      handshake(socket, peer_check, authorities, opening)
     Error(error) -> close_with_error(socket, error)
   }
 }
@@ -465,10 +488,10 @@ fn handshake(
   socket: TcpSocket,
   peer_check: PeerCheck,
   authorities: AuthorityList,
-  config: TransportConfig,
+  opening: Opening,
 ) -> Result(Connection, TransportError) {
-  let Address(host:, ..) = config.address
-  let timeout = config.connect_timeout_milliseconds
+  let Address(host:, ..) = opening.config.address
+  let timeout = step_timeout(opening)
   case tls_connect(socket, peer_check, authorities, host, timeout) {
     Ok(tls_socket) -> Ok(TlsConnection(tls_socket))
     Error(reason) -> close_with_error(socket, tls_error(reason))
