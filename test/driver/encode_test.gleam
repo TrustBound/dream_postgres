@@ -16,7 +16,7 @@ import dream_postgres/driver/message.{
 import dream_postgres/internal/cell.{
   Binary, BinaryFormat, Null, Text, TextFormat,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import gleam/list.{map, repeat}
@@ -43,33 +43,31 @@ type ErrorCase {
 }
 
 fn bytes_test(test_case: MessageCase) {
-  it(test_case.name, fn() { check_bytes(test_case) })
-}
+  it(test_case.name, fn() {
+    // Act
+    let bytes = encode(test_case.message)
 
-fn check_bytes(test_case: MessageCase) {
-  // Act
-  let bytes = encode(test_case.message)
-
-  // Assert
-  bytes
-  |> should
-  |> be_equal(Ok(test_case.bytes))
-  |> or_fail_with("Expected the bytes of " <> test_case.name)
+    // Assert
+    bytes
+    |> should
+    |> be_ok
+    |> be_equal(test_case.bytes)
+    |> or_fail_with("Expected the bytes of " <> test_case.name)
+  })
 }
 
 fn error_test(test_case: ErrorCase) {
-  it(test_case.name, fn() { check_error(test_case) })
-}
+  it(test_case.name, fn() {
+    // Act
+    let bytes = encode(test_case.message)
 
-fn check_error(test_case: ErrorCase) {
-  // Act
-  let bytes = encode(test_case.message)
-
-  // Assert
-  bytes
-  |> should
-  |> be_equal(Error(test_case.error))
-  |> or_fail_with("Expected an error for " <> test_case.name)
+    // Assert
+    bytes
+    |> should
+    |> be_error
+    |> be_equal(test_case.error)
+    |> or_fail_with("Expected an error for " <> test_case.name)
+  })
 }
 
 fn message_cases() -> List(MessageCase) {
@@ -346,7 +344,8 @@ fn length_field_tests() {
       // Assert
       bytes
       |> should
-      |> be_equal(Ok(<<127, 255, 255, 255>>))
+      |> be_ok
+      |> be_equal(<<127, 255, 255, 255>>)
       |> or_fail_with("Expected the bytes 127, 255, 255, 255")
     }),
     it("refuses one more than the largest length", fn() {
@@ -356,7 +355,8 @@ fn length_field_tests() {
       // Assert
       bytes
       |> should
-      |> be_equal(Error(MessageTooLong(2_147_483_648)))
+      |> be_error
+      |> be_equal(MessageTooLong(2_147_483_648))
       |> or_fail_with("Expected MessageTooLong(2147483648)")
     }),
   ]

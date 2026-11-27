@@ -7,14 +7,14 @@ import dream_postgres/driver/decode.{
   decode_backend, decode_gss_encryption_answer, decode_ssl_answer,
 }
 import dream_postgres/driver/message.{
-  type BackendMessage, type DecodeStep, type ProtocolError,
-  AuthenticationCleartextPassword, AuthenticationGss, AuthenticationGssContinue,
-  AuthenticationKerberosV5, AuthenticationMd5Password, AuthenticationOk,
-  AuthenticationSasl, AuthenticationSaslContinue, AuthenticationSaslFinal,
-  AuthenticationSspi, BackendKeyData, BindComplete, CloseComplete,
-  CommandComplete, CopyBothResponse, CopyDataFromServer, CopyDoneFromServer,
-  CopyInResponse, CopyOutResponse, DataRow, Decoded, EmptyQueryResponse,
-  EncryptionAccepted, EncryptionErrorResponse, EncryptionRefused, ErrorResponse,
+  type BackendMessage, type ProtocolError, AuthenticationCleartextPassword,
+  AuthenticationGss, AuthenticationGssContinue, AuthenticationKerberosV5,
+  AuthenticationMd5Password, AuthenticationOk, AuthenticationSasl,
+  AuthenticationSaslContinue, AuthenticationSaslFinal, AuthenticationSspi,
+  BackendKeyData, BindComplete, CloseComplete, CommandComplete, CopyBothResponse,
+  CopyDataFromServer, CopyDoneFromServer, CopyInResponse, CopyOutResponse,
+  DataRow, Decoded, EmptyQueryResponse, EncryptionAccepted,
+  EncryptionErrorResponse, EncryptionRefused, ErrorResponse,
   FunctionCallResponse, InvalidMessageBody, InvalidMessageLength,
   InvalidReportNumber, InvalidSecretKeyLength, InvalidUtf8, MissingReportField,
   NeedMoreBytes, NegotiateProtocolVersion, NoData, NoticeResponse,
@@ -27,13 +27,13 @@ import dream_postgres/internal/cell.{
   BinaryFormat, ColumnDescription, Idle, InFailedTransaction, InTransaction,
   ParameterDescription, ServerReport, TextFormat,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import gleam/bit_array.{byte_size, concat, slice}
-import gleam/int.{range}
-import gleam/list.{filter, flatten, map, prepend}
+import gleam/bit_array.{byte_size, concat}
+import gleam/list.{flatten, map}
 import gleam/option.{None, Some}
+import matchers/extract_wrong_cut_answers.{extract_wrong_cut_answers}
 
 /// The tests of the decoder.
 pub fn tests() -> TestSuite {
@@ -61,59 +61,30 @@ type ErrorCase {
 }
 
 fn message_test(test_case: MessageCase) {
-  it(test_case.name, fn() { check_message(test_case) })
-}
+  it(test_case.name, fn() {
+    // Act
+    let step = decode_backend(test_case.bytes)
 
-fn check_message(test_case: MessageCase) {
-  // Act
-  let step = decode_backend(test_case.bytes)
-
-  // Assert
-  step
-  |> should
-  |> be_equal(Ok(Decoded(test_case.message, <<>>)))
-  |> or_fail_with("Expected the message of " <> test_case.name)
+    // Assert
+    step
+    |> should
+    |> be_ok
+    |> be_equal(Decoded(test_case.message, <<>>))
+    |> or_fail_with("Expected the message of " <> test_case.name)
+  })
 }
 
 fn every_cut_test(test_case: MessageCase) {
-  it(test_case.name, fn() { check_every_cut(test_case) })
-}
-
-/// Cuts the bytes after 0, 1, ... up to all but the last byte, and keeps
-/// each cut whose answer is not NeedMoreBytes. None must be left.
-fn check_every_cut(test_case: MessageCase) {
-  // Arrange
-  let cuts =
-    range(from: 0, to: byte_size(test_case.bytes), with: [], run: prepend)
-
-  // Act
-  let wrong_answers =
-    cuts
-    |> map(cut_answer(test_case.bytes, _))
-    |> filter(is_not_need_more_bytes)
-
-  // Assert
-  wrong_answers
-  |> should
-  |> be_equal([])
-  |> or_fail_with("Expected NeedMoreBytes for every cut of " <> test_case.name)
-}
-
-fn cut_answer(
-  bytes: BitArray,
-  length: Int,
-) -> #(Int, Result(DecodeStep(BackendMessage), ProtocolError)) {
-  let cut = case slice(bytes, 0, length) {
-    Ok(cut) -> cut
-    Error(Nil) -> <<>>
-  }
-  #(length, decode_backend(cut))
-}
-
-fn is_not_need_more_bytes(
-  answer: #(Int, Result(DecodeStep(BackendMessage), ProtocolError)),
-) -> Bool {
-  answer.1 != Ok(NeedMoreBytes)
+  it(test_case.name, fn() {
+    // Act and Assert
+    test_case.bytes
+    |> should
+    |> extract_wrong_cut_answers
+    |> be_equal([])
+    |> or_fail_with(
+      "Expected NeedMoreBytes for every cut of " <> test_case.name,
+    )
+  })
 }
 
 fn rest_test() {
@@ -127,24 +98,24 @@ fn rest_test() {
     // Assert
     step
     |> should
-    |> be_equal(Ok(Decoded(ParseComplete, <<"2", 4:32, "Z">>)))
+    |> be_ok
+    |> be_equal(Decoded(ParseComplete, <<"2", 4:32, "Z">>))
     |> or_fail_with("Expected ParseComplete and the bytes after it")
   })
 }
 
 fn error_test(test_case: ErrorCase) {
-  it(test_case.name, fn() { check_error(test_case) })
-}
+  it(test_case.name, fn() {
+    // Act
+    let step = decode_backend(test_case.bytes)
 
-fn check_error(test_case: ErrorCase) {
-  // Act
-  let step = decode_backend(test_case.bytes)
-
-  // Assert
-  step
-  |> should
-  |> be_equal(Error(test_case.error))
-  |> or_fail_with("Expected an error for " <> test_case.name)
+    // Assert
+    step
+    |> should
+    |> be_error
+    |> be_equal(test_case.error)
+    |> or_fail_with("Expected an error for " <> test_case.name)
+  })
 }
 
 fn message_cases() -> List(MessageCase) {
@@ -706,7 +677,8 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionAccepted, <<>>)))
+      |> be_ok
+      |> be_equal(Decoded(EncryptionAccepted, <<>>))
       |> or_fail_with("Expected EncryptionAccepted")
     }),
     it("keeps the bytes after an S, which a client must refuse", fn() {
@@ -716,7 +688,8 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionAccepted, <<1, 2>>)))
+      |> be_ok
+      |> be_equal(Decoded(EncryptionAccepted, <<1, 2>>))
       |> or_fail_with("Expected EncryptionAccepted and the bytes 1 and 2")
     }),
     it("reads N as refused", fn() {
@@ -726,7 +699,8 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionRefused, <<>>)))
+      |> be_ok
+      |> be_equal(Decoded(EncryptionRefused, <<>>))
       |> or_fail_with("Expected EncryptionRefused")
     }),
     it("reads E as an ErrorResponse and keeps no text", fn() {
@@ -736,7 +710,8 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionErrorResponse, <<0, 0, 0, 9>>)))
+      |> be_ok
+      |> be_equal(Decoded(EncryptionErrorResponse, <<0, 0, 0, 9>>))
       |> or_fail_with("Expected EncryptionErrorResponse")
     }),
     it("needs more bytes when no byte came yet", fn() {
@@ -746,7 +721,8 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(NeedMoreBytes))
+      |> be_ok
+      |> be_equal(NeedMoreBytes)
       |> or_fail_with("Expected NeedMoreBytes")
     }),
     it("refuses G as the answer to an SSLRequest", fn() {
@@ -756,7 +732,8 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Error(UnknownEncryptionAnswer(71)))
+      |> be_error
+      |> be_equal(UnknownEncryptionAnswer(71))
       |> or_fail_with("Expected UnknownEncryptionAnswer(71)")
     }),
     it("reads G to a GSSENCRequest as accepted", fn() {
@@ -766,7 +743,8 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionAccepted, <<>>)))
+      |> be_ok
+      |> be_equal(Decoded(EncryptionAccepted, <<>>))
       |> or_fail_with("Expected EncryptionAccepted")
     }),
     it("refuses S as the answer to a GSSENCRequest", fn() {
@@ -776,7 +754,8 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Error(UnknownEncryptionAnswer(83)))
+      |> be_error
+      |> be_equal(UnknownEncryptionAnswer(83))
       |> or_fail_with("Expected UnknownEncryptionAnswer(83)")
     }),
   ]
