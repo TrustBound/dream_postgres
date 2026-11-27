@@ -25,6 +25,7 @@
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/crypto.{random_bytes}
+import dream_postgres/driver/deadline.{type Deadline}
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
 import dream_postgres/driver/login.{
@@ -51,8 +52,8 @@ import dream_postgres/driver/transaction.{
   track_step, transaction_status as tracked_status,
 }
 import dream_postgres/driver/transport.{
-  type TransportConfig, type TransportError, BytesReceived, NotThisSocket,
-  SocketClosed, SocketEnded, SocketFailed,
+  type TransportConfig, type TransportError, BytesReceived, ConnectTimedOut,
+  NotThisSocket, ReceiveTimedOut, SocketClosed, SocketEnded, SocketFailed,
 }
 import dream_postgres/internal/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
@@ -83,7 +84,14 @@ pub type ConnectionConfig {
   ConnectionConfig(
     transport: TransportConfig,
     login: LoginConfig,
-    /// The longest time for the TCP connect, TLS and the login together.
+    /// The longest time for one setup: the TCP connect, TLS and the login
+    /// together, from the start of the process and again for each
+    /// reconnect. Each blocking step waits for its own timeout or for the
+    /// time left in the setup, whichever is shorter: the transport's
+    /// `connect_timeout_milliseconds` bounds each TCP connect, TLS answer
+    /// and TLS handshake, and the up to three connects of `PreferTls` all
+    /// fit inside the one setup. A setup that runs out of time fails with
+    /// `SetupTimedOut`.
     setup_timeout_milliseconds: Int,
     reconnect: Backoff,
     /// Where the process tells of each loss and each reconnect, for
@@ -110,7 +118,23 @@ pub type StatementCaching {
 }
 
 /// What the process tells its subscriber about the connection.
+///
+/// | Event | When the process sends it |
+/// |---|---|
+/// | `Connected` | Once, after its first login. A process from `start` sends it before `start` returns. |
+/// | `ConnectFailed(error)` | After each failed first attempt of a process from `supervised`, until its first login. |
+/// | `Disconnected(error)` | When the connection of a process that logged in is lost. |
+/// | `ReconnectFailed(error)` | After each failed attempt to connect again after a loss. |
+/// | `Reconnected` | When the process logged in again after a loss. |
+///
+/// Each process speaks only for itself: a process that replaces another
+/// starts again with `Connected`.
 pub type ConnectionEvent {
+  /// The process connected and logged in for the first time.
+  Connected
+  /// An attempt of a supervised process to connect for the first time
+  /// failed. The next one follows after the reconnect backoff.
+  ConnectFailed(error: ConnectError)
   /// The connection is lost. The process connects again after the backoff.
   Disconnected(error: DriverError)
   /// An attempt to connect again failed. The next one follows after the
@@ -202,6 +226,9 @@ pub type DriverError {
   /// statement did not run: check it against `description` and run it
   /// again.
   StatementChanged(description: StatementDescription)
+  /// A supervised process has not connected yet. `error` is why its last
+  /// attempt failed. It tries again after the reconnect backoff.
+  NotConnected(error: ConnectError)
 }
 
 /// A connection process.
@@ -234,6 +261,12 @@ type Message {
   SocketMessage(message: Dynamic)
   ReconnectNow(error: DriverError, attempt: Int)
   ExitSignal(exit: ExitMessage)
+  /// Connects and logs in for the first time: the starter's only
+  /// request. The process answers by the end of its own setup deadline.
+  OpenRequest(reply: ReplyTo(Result(Nil, ConnectError)))
+  /// A supervised process tries to connect and log in for the first time.
+  /// A failed attempt sends it again after the reconnect backoff.
+  OpenAttempt(attempt: Int)
 }
 
 /// A request that goes to the server.
@@ -301,7 +334,7 @@ type Finisher(outcome) =
 
 type Link {
   /// Connected and logged in. `bytes` are read but not decoded yet.
-  Connected(socket: transport.Connection, bytes: BitArray)
+  Open(socket: transport.Connection, bytes: BitArray)
   /// Lost. Requests fail with `error` until the process connects again.
   Lost(error: DriverError)
 }
@@ -336,6 +369,14 @@ fn call_process(
   timeout: Int,
 ) -> Result(reply, CallFailure)
 
+/// Waits for the answer of the process, or for its end, with no timer.
+/// Only for a request that the process answers by a deadline of its own.
+@external(erlang, "dream_postgres_connection_ffi", "call_until_answer")
+fn call_process_until_answer(
+  pid: Pid,
+  send_request: fn(ReplyTo(reply)) -> Nil,
+) -> Result(reply, CallFailure)
+
 @external(erlang, "dream_postgres_connection_ffi", "reply")
 fn reply(to: ReplyTo(reply), value: reply) -> Nil
 
@@ -361,18 +402,54 @@ fn started_connection(started: actor.Started(Connection)) -> Connection {
   started.data
 }
 
+/// Starts the process, then asks it to connect and log in. The start of
+/// the process does no I/O, and the process answers the open by the end of
+/// its own setup deadline, with the session or `SetupTimedOut`. So the
+/// starter waits for that answer with a monitor and no timer of its own:
+/// no second timer can end a start that the process completed.
 fn start_process(
   config: ConnectionConfig,
 ) -> Result(actor.Started(Connection), ConnectError) {
-  let failure = process.new_subject()
-  actor.new_with_initialiser(config.setup_timeout_milliseconds, initialise(
-    _,
-    config,
-    failure,
-  ))
-  |> actor.on_message(handle_message)
-  |> actor.start
-  |> map_error(start_error(_, failure))
+  use started <- try(
+    actor.new_with_initialiser(config.setup_timeout_milliseconds, initialise(
+      _,
+      config,
+    ))
+    |> actor.on_message(handle_message)
+    |> actor.start
+    |> map_error(start_failure),
+  )
+  open_process(started.data) |> result.replace(started)
+}
+
+fn open_process(connection: Connection) -> Result(Nil, ConnectError) {
+  case
+    call_process_until_answer(connection.pid, send_request(
+      connection,
+      OpenRequest,
+      _,
+    ))
+  {
+    Ok(opened) -> opened
+    Error(_process_down) -> Error(SetupExited)
+  }
+}
+
+/// The error of a process that did not start, before it did any I/O.
+///
+/// ## Parameters
+///
+/// - `error`: the start error of gleam_otp
+///
+/// ## Returns
+///
+/// `SetupTimedOut` when the VM did not run the new process within the
+/// setup timeout, and `SetupExited` when it exited while it started.
+pub fn start_failure(error: actor.StartError) -> ConnectError {
+  case error {
+    actor.InitTimeout -> SetupTimedOut
+    actor.InitFailed(_) | actor.InitExited(_) -> SetupExited
+  }
 }
 
 /// The process as a child of a gleam_otp supervisor.
@@ -383,8 +460,17 @@ fn start_process(
 ///
 /// ## Returns
 ///
-/// A worker child that starts the process with `config`. The supervisor's
-/// shutdown makes the process send Terminate before it stops.
+/// A worker child that starts the process with `config`. The start does
+/// not wait for the server: the process connects after it, and a failed
+/// attempt is tried again after the reconnect backoff, so a server that is
+/// down never fails the supervisor. Until the first login, requests fail
+/// with `NotConnected` and the subscriber gets `ConnectFailed` for each
+/// failed attempt. The supervisor's shutdown makes the process send
+/// Terminate before it stops.
+///
+/// db_connection does the same: its `init` returns at once and connects
+/// in the next event, and a failed connect is logged and tried again after
+/// its backoff (db_connection 2.8.1, `DBConnection.Connection`).
 pub fn supervised(config: ConnectionConfig) -> ChildSpecification(Connection) {
   supervision.worker(fn() { start_child(config) })
 }
@@ -392,34 +478,21 @@ pub fn supervised(config: ConnectionConfig) -> ChildSpecification(Connection) {
 fn start_child(
   config: ConnectionConfig,
 ) -> Result(actor.Started(Connection), actor.StartError) {
-  start_process(config) |> map_error(child_start_error)
+  actor.new_with_initialiser(config.setup_timeout_milliseconds, fn(subject) {
+    process.send(subject, OpenAttempt(0))
+    initialise(subject, config)
+  })
+  |> actor.on_message(handle_message)
+  |> actor.start
 }
 
-fn child_start_error(_error: ConnectError) -> actor.StartError {
-  actor.InitFailed("connect failed")
-}
-
+/// Sets up the process with no I/O: the open comes as its first request.
 fn initialise(
   subject: Subject(Message),
   config: ConnectionConfig,
-  failure: Subject(ConnectError),
 ) -> Result(actor.Initialised(State, Message, Connection), String) {
   process.trap_exits(True)
-  case open_session(config) {
-    Ok(session) -> Ok(initialised(subject, config, session))
-    Error(error) -> {
-      process.send(failure, error)
-      Error("connect failed")
-    }
-  }
-}
-
-fn initialised(
-  subject: Subject(Message),
-  config: ConnectionConfig,
-  session: Session,
-) -> actor.Initialised(State, Message, Connection) {
-  let state = connected_state(new_state(config, subject), session)
+  let state = new_state(config, subject)
   let selector =
     process.new_selector()
     |> process.select(subject)
@@ -428,6 +501,46 @@ fn initialised(
   actor.initialised(state)
   |> actor.selecting(selector)
   |> actor.returning(Connection(subject:, pid: process.self()))
+  |> Ok
+}
+
+/// A first open of a supervised process. A failed one leaves the process
+/// up, refusing requests with `NotConnected`, and tries again after the
+/// reconnect backoff.
+fn attempt_first_open(state: State, attempt: Int) -> State {
+  case open_session(state.config) {
+    Ok(session) -> {
+      let state = connected_state(state, session)
+      tell(state, Connected)
+      state
+    }
+    Error(error) -> {
+      tell(state, ConnectFailed(error))
+      let delay = backoff_delay(state.config.reconnect, attempt)
+      process.send_after(state.subject, delay, OpenAttempt(attempt + 1))
+      State(..state, link: Lost(NotConnected(error)))
+    }
+  }
+}
+
+/// The first open of the process. A process that cannot connect answers
+/// with the error and stops.
+fn open_first(
+  state: State,
+  reply_to: ReplyTo(Result(Nil, ConnectError)),
+) -> actor.Next(State, Message) {
+  case open_session(state.config) {
+    Ok(session) -> {
+      let state = connected_state(state, session)
+      tell(state, Connected)
+      reply(reply_to, Ok(Nil))
+      actor.continue(state)
+    }
+    Error(error) -> {
+      reply(reply_to, Error(error))
+      actor.stop()
+    }
+  }
 }
 
 fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
@@ -455,23 +568,12 @@ fn connected_state(state: State, session: Session) -> State {
   let notices = reverse(session.outcome.notices) |> list.map(Notice)
   State(
     ..state,
-    link: Connected(session.socket, session.bytes),
+    link: Open(session.socket, session.bytes),
     parameters: session.outcome.parameters,
     tracker: track(new_tracker(), session.outcome.transaction_status, None),
     cache: new_cache(state.config),
     pending: append(notices, state.pending),
   )
-}
-
-fn start_error(
-  error: actor.StartError,
-  failure: Subject(ConnectError),
-) -> ConnectError {
-  case error {
-    actor.InitFailed(_) | actor.InitExited(_) ->
-      process.receive(failure, 0) |> result.unwrap(SetupExited)
-    actor.InitTimeout -> SetupTimedOut
-  }
 }
 
 /// Stops the process: it sends Terminate to the server and closes the
@@ -708,6 +810,8 @@ fn handle_message(
       actor.continue(socket_message_received(state, socket_message))
     ReconnectNow(error:, attempt:) ->
       actor.continue(reconnect(state, error, attempt))
+    OpenRequest(reply_to) -> open_first(state, reply_to)
+    OpenAttempt(attempt:) -> actor.continue(attempt_first_open(state, attempt))
   }
 }
 
@@ -726,7 +830,7 @@ fn stop_process(
   reply_to: Option(ReplyTo(Nil)),
 ) -> actor.Next(State, Message) {
   case state.link {
-    Connected(socket:, ..) -> terminate(socket)
+    Open(socket:, ..) -> terminate(socket)
     Lost(..) -> Nil
   }
   option.map(reply_to, reply(_, Nil))
@@ -744,7 +848,7 @@ fn terminate(socket: transport.Connection) -> Nil {
 /// A request runs at once when no other runs, and waits otherwise.
 fn accept_request(state: State, request: Request) -> State {
   case state.running, state.link {
-    None, Connected(socket:, ..) -> begin(state, socket, request)
+    None, Open(socket:, ..) -> begin(state, socket, request)
     Some(_running), _ -> State(..state, waiting: [request, ..state.waiting])
     None, Lost(error:) -> {
       refuse(request, error)
@@ -957,7 +1061,7 @@ fn next_request(state: State) -> State {
 
 fn socket_message_received(state: State, socket_message: Dynamic) -> State {
   case state.link {
-    Connected(socket:, bytes:) ->
+    Open(socket:, bytes:) ->
       socket_event(
         state,
         socket,
@@ -976,7 +1080,7 @@ fn socket_event(
 ) -> State {
   case event {
     BytesReceived(more) ->
-      State(..state, link: Connected(socket, <<bytes:bits, more:bits>>))
+      State(..state, link: Open(socket, <<bytes:bits, more:bits>>))
       |> read_messages
       |> receive_next
     SocketEnded -> lose(state, socket, ConnectionLost(SocketClosed))
@@ -987,8 +1091,7 @@ fn socket_event(
 
 fn receive_next(state: State) -> State {
   case state.link {
-    Connected(socket:, ..) ->
-      sent(state, socket, transport.receive_next(socket))
+    Open(socket:, ..) -> sent(state, socket, transport.receive_next(socket))
     Lost(..) -> state
   }
 }
@@ -996,7 +1099,7 @@ fn receive_next(state: State) -> State {
 /// Decodes and handles each whole message of the buffer.
 fn read_messages(state: State) -> State {
   case state.link {
-    Connected(socket:, bytes:) -> read_message(state, socket, bytes)
+    Open(socket:, bytes:) -> read_message(state, socket, bytes)
     Lost(..) -> state
   }
 }
@@ -1008,7 +1111,7 @@ fn read_message(
 ) -> State {
   case decode_backend(bytes) {
     Ok(Decoded(message, rest)) ->
-      State(..state, link: Connected(socket, rest))
+      State(..state, link: Open(socket, rest))
       |> handle_server_message(socket, message)
       |> read_messages
     Ok(NeedMoreBytes) -> state
@@ -1534,10 +1637,12 @@ fn reconnect(state: State, error: DriverError, attempt: Int) -> State {
 /// Connects and logs in, with the socket in passive mode. After it, the
 /// socket sends its next message to this process.
 fn open_session(config: ConnectionConfig) -> Result(Session, ConnectError) {
+  let setup_deadline = deadline.from_now(config.setup_timeout_milliseconds)
   use socket <- try(
-    transport.connect(config.transport) |> map_error(TransportRefused),
+    transport.connect(config.transport, setup_deadline)
+    |> map_error(setup_transport_error(_, setup_deadline)),
   )
-  case log_in(socket, config) {
+  case log_in(socket, config, setup_deadline) {
     Ok(session) -> Ok(session)
     Error(error) -> {
       transport.close(socket)
@@ -1546,9 +1651,23 @@ fn open_session(config: ConnectionConfig) -> Result(Session, ConnectError) {
   }
 }
 
+/// A step that timed out once the setup deadline had passed ran out of the
+/// setup time. Any other failure is the transport's own, for example the
+/// connect timeout of one TCP connect while setup time was left.
+fn setup_transport_error(
+  error: TransportError,
+  setup_deadline: Deadline,
+) -> ConnectError {
+  case error, deadline.has_passed(setup_deadline) {
+    ConnectTimedOut, True | ReceiveTimedOut, True -> SetupTimedOut
+    _, _ -> TransportRefused(error)
+  }
+}
+
 fn log_in(
   socket: transport.Connection,
   config: ConnectionConfig,
+  setup_deadline: Deadline,
 ) -> Result(Session, ConnectError) {
   use #(state, first) <- try(
     login.start(
@@ -1559,7 +1678,7 @@ fn log_in(
     |> map_error(LoginRefused),
   )
   use Nil <- try(send_login_message(socket, first))
-  use session <- try(login_messages(socket, state, <<>>, config))
+  use session <- try(login_messages(socket, state, <<>>, setup_deadline))
   transport.receive_next(socket)
   |> map_error(TransportRefused)
   |> result.replace(session)
@@ -1569,14 +1688,14 @@ fn login_messages(
   socket: transport.Connection,
   state: LoginState,
   bytes: BitArray,
-  config: ConnectionConfig,
+  setup_deadline: Deadline,
 ) -> Result(Session, ConnectError) {
   case decode_backend(bytes) {
     Ok(Decoded(message, rest)) ->
       login.step(state, message)
       |> map_error(LoginRefused)
-      |> try(login_step(socket, _, rest, config))
-    Ok(NeedMoreBytes) -> more_login_bytes(socket, state, bytes, config)
+      |> try(login_step(socket, _, rest, setup_deadline))
+    Ok(NeedMoreBytes) -> more_login_bytes(socket, state, bytes, setup_deadline)
     Error(error) -> Error(LoginUndecodable(error))
   }
 }
@@ -1585,15 +1704,16 @@ fn login_step(
   socket: transport.Connection,
   step: login.LoginStep,
   rest: BitArray,
-  config: ConnectionConfig,
+  setup_deadline: Deadline,
 ) -> Result(Session, ConnectError) {
   case step {
     LoggedIn(outcome) -> Ok(Session(socket:, bytes: rest, outcome:))
     Continue(state:, reply: Some(message)) -> {
       use Nil <- try(send_login_message(socket, message))
-      login_messages(socket, state, rest, config)
+      login_messages(socket, state, rest, setup_deadline)
     }
-    Continue(state:, reply: None) -> login_messages(socket, state, rest, config)
+    Continue(state:, reply: None) ->
+      login_messages(socket, state, rest, setup_deadline)
   }
 }
 
@@ -1601,13 +1721,13 @@ fn more_login_bytes(
   socket: transport.Connection,
   state: LoginState,
   bytes: BitArray,
-  config: ConnectionConfig,
+  setup_deadline: Deadline,
 ) -> Result(Session, ConnectError) {
   use more <- try(
-    transport.receive(socket, config.setup_timeout_milliseconds)
-    |> map_error(TransportRefused),
+    transport.receive(socket, deadline.time_left(setup_deadline))
+    |> map_error(setup_transport_error(_, setup_deadline)),
   )
-  login_messages(socket, state, <<bytes:bits, more:bits>>, config)
+  login_messages(socket, state, <<bytes:bits, more:bits>>, setup_deadline)
 }
 
 fn send_login_message(

@@ -12,19 +12,24 @@ import dream_postgres/driver/connection.{
   Backoff, InvalidRequest, Notification, TransportRefused,
 }
 import dream_postgres/driver/listener.{
-  type ListenerConfig, type ListenerMessage, ChannelTooLong, ConnectFailed,
-  ListenFailed, ListenedAgain, ListenerProcessDown, ListeningLost,
-  NotificationArrived, SubscriberHasNoProcess, start, stop, subscribe,
-  supervised, unsubscribe,
+  type Listener, type ListenerConfig, type ListenerMessage, ChannelTooLong,
+  ConnectFailed, ListenFailed, ListenerNotStarted, ListenerProcessDown,
+  Listening, NotListening, NotificationArrived, SubscribeFailed,
+  SubscriberHasNoProcess, start, stop, subscribe, supervised, unsubscribe,
 }
 import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{ConnectRefused}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
+import dream_test/unit
 import dream_test/unit_context.{after_each, before_each, describe, group, it}
 import driver/fake_server.{free_port}
 import driver/listener_gate.{break_gate, open_gate, wait_refused}
+import driver/reconnect_server.{
+  kill_linked_process, start_forwarder, start_watched_silent_server,
+  wait_for_connection,
+}
 import driver/server_connection.{
   caller_answer, start_caller, start_in_ended_owner,
 }
@@ -42,9 +47,10 @@ import driver/servers.{type Server, driver_servers, first_driver_server}
 import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/list.{map}
+import gleam/otp/actor
 import gleam/otp/static_supervisor
-import gleam/result.{flatten, try}
-import gleam/string.{repeat}
+import gleam/result.{flatten, map_error, replace_error, try}
+import gleam/string.{inspect, repeat}
 import matchers/extract_arrived_notification.{extract_arrived_notification}
 import matchers/extract_channel_and_payload.{extract_channel_and_payload}
 
@@ -60,6 +66,8 @@ pub fn tests() -> TestSuite {
     gate_tests(),
     subscription_tests(),
     start_tests(),
+    late_server_tests(),
+    killed_start_tests(),
   ])
 }
 
@@ -319,8 +327,8 @@ fn subscribe_tests() {
         answer
         |> should
         |> be_error
-        |> be_equal(ListenFailed(InvalidRequest(ZeroByteInString("query"))))
-        |> or_fail_with("Expected ListenFailed with the zero byte")
+        |> be_equal(SubscribeFailed(InvalidRequest(ZeroByteInString("query"))))
+        |> or_fail_with("Expected SubscribeFailed with the zero byte")
       },
     ),
   ]
@@ -404,8 +412,8 @@ fn lost_tests() {
           message
           |> should
           |> be_ok
-          |> be_equal(ListeningLost)
-          |> or_fail_with("Expected ListeningLost at once")
+          |> be_equal(NotListening)
+          |> or_fail_with("Expected NotListening at once")
         },
       ),
     ]),
@@ -430,8 +438,8 @@ fn lost_tests() {
           message
           |> should
           |> be_ok
-          |> be_equal(ListeningLost)
-          |> or_fail_with("Expected ListeningLost for the new subscriber")
+          |> be_equal(NotListening)
+          |> or_fail_with("Expected NotListening for the new subscriber")
         },
       ),
     ]),
@@ -443,8 +451,8 @@ fn lost_tests() {
 /// What the subscriber got after the control connection ended the
 /// listener's backend: the loss, the new LISTEN, and a notification sent
 /// after it.
-type ListenedAgainOutcome {
-  ListenedAgainOutcome(
+type ListeningAgainOutcome {
+  ListeningAgainOutcome(
     lost: Result(ListenerMessage, String),
     again: Result(ListenerMessage, String),
     back: Result(ListenerMessage, String),
@@ -453,7 +461,7 @@ type ListenedAgainOutcome {
 
 fn lose_and_listen_again(
   session: ListenerSession,
-) -> Result(ListenedAgainOutcome, String) {
+) -> Result(ListeningAgainOutcome, String) {
   use _subscription <- try(subscribe_to(
     session.listener,
     session.channel,
@@ -464,7 +472,7 @@ fn lose_and_listen_again(
   let again = receive_message(session.first)
   use _sent <- try(send_notification(session.control, session.channel, "back"))
   let back = receive_message(session.first)
-  Ok(ListenedAgainOutcome(lost:, again:, back:))
+  Ok(ListeningAgainOutcome(lost:, again:, back:))
 }
 
 fn reconnect_tests(server: Server) -> TestSuite {
@@ -473,28 +481,28 @@ fn reconnect_tests(server: Server) -> TestSuite {
     listener_act_setup(server, 10, lose_and_listen_again),
     [
       it(
-        "says ListeningLost when the backend ends",
-        fn(shared: ListenerOutcome(ListenedAgainOutcome)) {
+        "says NotListening when the backend ends",
+        fn(shared: ListenerOutcome(ListeningAgainOutcome)) {
           shared.outcome.lost
           |> should
           |> be_ok
-          |> be_equal(ListeningLost)
-          |> or_fail_with("Expected ListeningLost first")
+          |> be_equal(NotListening)
+          |> or_fail_with("Expected NotListening first")
         },
       ),
       it(
         "listens again after a reconnect and says so",
-        fn(shared: ListenerOutcome(ListenedAgainOutcome)) {
+        fn(shared: ListenerOutcome(ListeningAgainOutcome)) {
           shared.outcome.again
           |> should
           |> be_ok
-          |> be_equal(ListenedAgain(shared.session.channel, Ok(Nil)))
-          |> or_fail_with("Expected ListenedAgain after ListeningLost")
+          |> be_equal(Listening(shared.session.channel))
+          |> or_fail_with("Expected Listening after NotListening")
         },
       ),
       it(
         "gives notifications after a reconnect",
-        fn(shared: ListenerOutcome(ListenedAgainOutcome)) {
+        fn(shared: ListenerOutcome(ListeningAgainOutcome)) {
           shared.outcome.back
           |> should
           |> be_ok
@@ -549,7 +557,7 @@ fn gate_tests() -> TestSuite {
           shared.outcome.second_again
           |> should
           |> be_ok
-          |> be_equal(ListenedAgain("svc827_gate_two", Ok(Nil)))
+          |> be_equal(Listening("svc827_gate_two"))
           |> or_fail_with("Expected the second channel to listen again")
         },
       ),
@@ -559,18 +567,18 @@ fn gate_tests() -> TestSuite {
           shared.outcome.first_again
           |> should
           |> be_ok
-          |> be_equal(ListenedAgain("svc827_gate_one", Ok(Nil)))
+          |> be_equal(Listening("svc827_gate_one"))
           |> or_fail_with("Expected the first channel to listen again")
         },
       ),
       it(
-        "gives ListeningLost to a subscription made while lost",
+        "gives NotListening to a subscription made while lost",
         fn(shared: GatedOutcome(GateOutcome)) {
           shared.outcome.second_lost
           |> should
           |> be_ok
-          |> be_equal(ListeningLost)
-          |> or_fail_with("Expected ListeningLost for the second subscriber")
+          |> be_equal(NotListening)
+          |> or_fail_with("Expected NotListening for the second subscriber")
         },
       ),
     ],
@@ -697,4 +705,148 @@ fn start_tests() -> TestSuite {
       }),
     ],
   )
+}
+
+// A supervised listener whose server is down at first: one act, four tests --
+
+/// What two subscribers of a supervised listener got: one subscribed to a
+/// plain channel, one to a channel with a zero byte, whose `LISTEN` cannot
+/// be written. Both subscribed before the server listened.
+type LateListener {
+  LateListener(
+    listener: Listener,
+    plain_first: Result(ListenerMessage, String),
+    plain_after: Result(ListenerMessage, String),
+    zero_byte_first: Result(ListenerMessage, String),
+    zero_byte_after: Result(ListenerMessage, String),
+  )
+}
+
+fn start_listener_before_server() -> Result(LateListener, String) {
+  let port = free_port()
+  use config <- try(listener_config(port, "svc827_late", Backoff(10, 100)))
+  use started <- try(supervised(config).start() |> map_error(inspect))
+  watch_late_listener(started.data, port)
+  |> map_error(fn(error) {
+    stop(started.data)
+    error
+  })
+}
+
+fn watch_late_listener(
+  listener: Listener,
+  port: Int,
+) -> Result(LateListener, String) {
+  let plain = process.new_subject()
+  let zero_byte = process.new_subject()
+  use _plain_subscription <- try(subscribe_to(listener, "svc827_late", plain))
+  use _zero_byte_subscription <- try(subscribe_to(
+    listener,
+    "svc827_late\u{0000}zero",
+    zero_byte,
+  ))
+  let plain_first = receive_message(plain)
+  let zero_byte_first = receive_message(zero_byte)
+  use Nil <- try(start_forwarder(port, first_driver_server.port))
+  let plain_after = receive_message(plain)
+  let zero_byte_after = receive_message(zero_byte)
+  Ok(LateListener(
+    listener:,
+    plain_first:,
+    plain_after:,
+    zero_byte_first:,
+    zero_byte_after:,
+  ))
+}
+
+fn stop_late_listener(outcome: LateListener) -> Result(Nil, String) {
+  Ok(stop(outcome.listener))
+}
+
+fn late_server_tests() -> TestSuite {
+  describe(
+    "a supervised listener whose server is down at first",
+    context.setup(
+      setup: start_listener_before_server,
+      teardown: stop_late_listener,
+    ),
+    [
+      it(
+        "says NotListening to a subscriber before the server listens",
+        fn(outcome: LateListener) {
+          outcome.plain_first
+          |> should
+          |> be_ok
+          |> be_equal(NotListening)
+          |> or_fail_with("Expected NotListening at once")
+        },
+      ),
+      it("says Listening once the server listens", fn(outcome: LateListener) {
+        outcome.plain_after
+        |> should
+        |> be_ok
+        |> be_equal(Listening("svc827_late"))
+        |> or_fail_with("Expected Listening after the first login")
+      }),
+      it(
+        "keeps a subscription whose LISTEN was not written yet",
+        fn(outcome: LateListener) {
+          outcome.zero_byte_first
+          |> should
+          |> be_ok
+          |> be_equal(NotListening)
+          |> or_fail_with("Expected NotListening for the zero-byte channel")
+        },
+      ),
+      it(
+        "says ListenFailed when the LISTEN fails on the session",
+        fn(outcome: LateListener) {
+          outcome.zero_byte_after
+          |> should
+          |> be_ok
+          |> be_equal(ListenFailed(
+            "svc827_late\u{0000}zero",
+            InvalidRequest(ZeroByteInString("query")),
+          ))
+          |> or_fail_with("Expected ListenFailed with the zero byte")
+        },
+      ),
+    ],
+  )
+}
+
+// A start that the listener's end cuts short ------------------------------------
+
+fn killed_start_tests() -> TestSuite {
+  unit.describe("a start that the listener's end cuts short", [
+    unit.it("gives ListenerNotStarted with the exit of the listener", fn() {
+      // Act
+      let started = {
+        use #(port, server) <- try(start_watched_silent_server())
+        use config <- try(listener_config(
+          port,
+          "svc827_killed",
+          Backoff(10, 60_000),
+        ))
+        let answers = process.new_subject()
+        let starter =
+          process.spawn_unlinked(fn() {
+            process.trap_exits(True)
+            process.send(answers, start(config))
+          })
+        use Nil <- try(wait_for_connection(server))
+        use Nil <- try(kill_linked_process(starter))
+        process.receive(answers, 5000)
+        |> replace_error("no answer of the start")
+      }
+
+      // Assert
+      started
+      |> should
+      |> be_ok
+      |> be_error
+      |> be_equal(ListenerNotStarted(actor.InitExited(process.Killed)))
+      |> or_fail_with("Expected ListenerNotStarted with the kill")
+    }),
+  ])
 }
