@@ -156,6 +156,9 @@ pub type HoldError {
   ConnectFailed(error: ConnectError)
   /// The pool stops, or it is gone.
   PoolStopped
+  /// The pool has no database: it started with
+  /// `supervised_without_database`, so it has no connection to hold.
+  NoDatabase
 }
 
 /// Why a request that only reads from the pool failed: no pool process
@@ -235,6 +238,9 @@ type Settings(attachment) {
     /// The events sink, `None` from the time its map crashed.
     events: Option(Sink(PoolEvent)),
     attachment: attachment,
+    /// `False` for a pool from `supervised_without_database`, which has no
+    /// member and refuses each hold with `NoDatabase`.
+    has_database: Bool,
   )
 }
 
@@ -383,6 +389,47 @@ fn start_child(
   start_manager(config, size, Some(name)) |> result.map(started_child)
 }
 
+/// A pool under a name that has no database, as a child of a gleam_otp
+/// supervisor, for a program that runs with no database, for example
+/// with recorded answers in place of the server. It is a `supervised`
+/// pool of no member: it starts no connection and dials nothing, so the
+/// connection settings are not used. `from_name`, `attachment`, `status`
+/// and `catalog` work as for any pool: `status` shows no connection, and
+/// the catalog is empty. Each `hold` gives `NoDatabase` at once and never
+/// waits. The pool tells no member event, and `PoolStopping` when it
+/// stops. The supervisor starts it again and shuts it down as it does a
+/// pool of `supervised`.
+///
+/// ## Parameters
+///
+/// - `config`: the attachment, the events and the deadlines
+/// - `name`: the name of the manager process
+///
+/// ## Returns
+///
+/// A transient worker child, with the shutdown time of `supervised`. A
+/// health check interval below 1 fails the start with `InitFailed` and
+/// the `StartError` as text.
+pub fn supervised_without_database(
+  config: PoolConfig(attachment),
+  name: Name(PoolMessage(attachment)),
+) -> ChildSpecification(Pool(attachment)) {
+  supervision.worker(fn() { start_child_without_database(config, name) })
+  |> supervision.restart(Transient)
+  |> supervision.timeout(config.shutdown_deadline_milliseconds + 10_000)
+}
+
+fn start_child_without_database(
+  config: PoolConfig(attachment),
+  name: Name(PoolMessage(attachment)),
+) -> Result(actor.Started(Pool(attachment)), actor.StartError) {
+  use Nil <- try(
+    check_health_check_interval(config) |> map_error(setting_refused),
+  )
+  start_manager_with(config, 0, Some(name), False)
+  |> result.map(started_child)
+}
+
 fn setting_refused(error: StartError) -> actor.StartError {
   actor.InitFailed(string.inspect(error))
 }
@@ -414,6 +461,12 @@ fn check_settings(
   size: Int,
 ) -> Result(Nil, StartError) {
   use <- guard(size < 1, Error(InvalidSize(size)))
+  check_health_check_interval(config)
+}
+
+fn check_health_check_interval(
+  config: PoolConfig(attachment),
+) -> Result(Nil, StartError) {
   let interval = config.health_check_interval_milliseconds
   use <- guard(interval < 1, Error(InvalidHealthCheckInterval(interval)))
   Ok(Nil)
@@ -430,8 +483,20 @@ fn start_manager(
   size: Int,
   name: Option(Name(PoolMessage(attachment))),
 ) -> Result(actor.Started(Subject(PoolMessage(attachment))), actor.StartError) {
+  start_manager_with(config, size, name, True)
+}
+
+/// Starts the manager. A manager with no database has `size` 0: it starts
+/// no member and dials nothing.
+fn start_manager_with(
+  config: PoolConfig(attachment),
+  size: Int,
+  name: Option(Name(PoolMessage(attachment))),
+  has_database: Bool,
+) -> Result(actor.Started(Subject(PoolMessage(attachment))), actor.StartError) {
   let settings =
     Settings(
+      has_database:,
       size:,
       health_check_interval_milliseconds: config.health_check_interval_milliseconds,
       shutdown_deadline_milliseconds: config.shutdown_deadline_milliseconds,
@@ -611,6 +676,7 @@ pub fn stop(pool: Pool(attachment), deadline_milliseconds: Int) -> Nil {
 /// - `Error(ConnectFailed(error))`: no connection is connected, and the
 ///   last connect failed with `error`
 /// - `Error(PoolStopped)`: the pool stops, or it is gone
+/// - `Error(NoDatabase)`: the pool has no database
 pub fn hold(
   pool: Pool(attachment),
   deadline_milliseconds: Int,
@@ -796,7 +862,16 @@ fn check_out_request(
   let waiter = Waiter(id:, caller:, reply:, timer:)
   State(..state, waiters: append(state.waiters, [waiter]), next_id: id + 1)
   |> refuse_while_draining
+  |> refuse_without_database
   |> settle_checkout(id)
+}
+
+/// A pool with no database refuses each hold at once.
+fn refuse_without_database(state: State(attachment)) -> State(attachment) {
+  case state.settings.has_database {
+    True -> state
+    False -> refuse_waiters(state, NoDatabase)
+  }
 }
 
 /// A checkout that no free connection serves at once waits, and the

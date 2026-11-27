@@ -41,6 +41,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor.{type Started}
 import gleam/otp/static_supervisor.{type Supervisor}
+import gleam/otp/supervision.{type ChildSpecification}
 import gleam/result.{flatten, map_error, replace, try}
 import gleam/string.{inspect}
 
@@ -717,8 +718,44 @@ pub fn start_named_pool(
       events: Some(identity_sink(pool_events)),
       attachment: "the settings of a named pool",
     )
+  start_named_child(
+    pool.supervised(config, size, name),
+    name,
+    config,
+    pool_events,
+  )
+}
+
+/// Starts a supervisor of a pool with no database under a new name, in an
+/// owner process that is not linked to the test. Its connection settings
+/// name `port` on localhost, where nothing listens, so any dial would
+/// fail with a `MemberConnectFailed` event.
+pub fn start_pool_without_database(port: Int) -> Result(NamedPool, String) {
+  use config <- try(dream_pool_config(port))
+  let pool_events = process.new_subject()
+  let name = process.new_name("pool_test_without_database")
+  let config =
+    PoolConfig(
+      ..config,
+      events: Some(identity_sink(pool_events)),
+      attachment: "the settings of a pool with no database",
+    )
+  start_named_child(
+    pool.supervised_without_database(config, name),
+    name,
+    config,
+    pool_events,
+  )
+}
+
+fn start_named_child(
+  child: ChildSpecification(Pool(String)),
+  name: Name(PoolMessage(String)),
+  config: PoolConfig(String),
+  pool_events: Subject(PoolEvent),
+) -> Result(NamedPool, String) {
   let started = process.new_subject()
-  process.spawn_unlinked(fn() { supervise_pool(config, size, name, started) })
+  process.spawn_unlinked(fn() { supervise_pool(child, started) })
   use #(supervisor, owner) <- try(
     process.receive(started, 5000)
     |> map_error(fn(_timeout) { "the owner gave no supervisor in 5 seconds" })
@@ -735,16 +772,16 @@ pub fn start_named_pool(
 }
 
 fn supervise_pool(
-  config: PoolConfig(attachment),
-  size: Int,
-  name: Name(PoolMessage(attachment)),
+  child: ChildSpecification(Pool(attachment)),
   started: Subject(Result(#(Pid, Subject(Nil)), String)),
 ) -> Result(Nil, Nil) {
   process.trap_exits(True)
   let owner = process.new_subject()
   process.send(
     started,
-    start_supervised_pool(config, size, name)
+    static_supervisor.new(static_supervisor.OneForOne)
+      |> static_supervisor.add(child)
+      |> static_supervisor.start
       |> result.map(fn(supervisor) { #(supervisor.pid, owner) })
       |> map_error(fn(error) {
         "could not start the supervisor: " <> inspect(error)
@@ -1017,4 +1054,19 @@ pub fn wait_for_last_query(
     Ok(query), 0 -> Error("last query " <> query)
     _query, _ -> wait_for_last_query(control, pid, wanted, attempts - 1)
   }
+}
+
+/// Starts a pool with no database on `port`, where nothing listens, asks
+/// for its status, and takes any pool event that came by then, with no
+/// wait. Stops the pool.
+pub fn event_after_status_without_database(
+  port: Int,
+) -> Result(Result(PoolEvent, Nil), String) {
+  use named <- try(start_pool_without_database(port))
+  let event = {
+    use _status <- try(pool.status(named.handle) |> map_error(inspect))
+    Ok(process.receive(named.pool_events, 0))
+  }
+  use Nil <- try(stop_named_pool(named))
+  event
 }
