@@ -25,6 +25,7 @@
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/crypto.{random_bytes}
+import dream_postgres/driver/deadline.{type Deadline}
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
 import dream_postgres/driver/login.{
@@ -48,8 +49,8 @@ import dream_postgres/driver/transaction.{
   track_step, transaction_status as tracked_status,
 }
 import dream_postgres/driver/transport.{
-  type TransportConfig, type TransportError, BytesReceived, NotThisSocket,
-  SocketClosed, SocketEnded, SocketFailed,
+  type TransportConfig, type TransportError, BytesReceived, ConnectTimedOut,
+  NotThisSocket, ReceiveTimedOut, SocketClosed, SocketEnded, SocketFailed,
 }
 import dream_postgres/internal/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
@@ -80,7 +81,14 @@ pub type ConnectionConfig {
   ConnectionConfig(
     transport: TransportConfig,
     login: LoginConfig,
-    /// The longest time for the TCP connect, TLS and the login together.
+    /// The longest time for one setup: the TCP connect, TLS and the login
+    /// together, from the start of the process and again for each
+    /// reconnect. Each blocking step waits for its own timeout or for the
+    /// time left in the setup, whichever is shorter: the transport's
+    /// `connect_timeout_milliseconds` bounds each TCP connect, TLS answer
+    /// and TLS handshake, and the up to three connects of `PreferTls` all
+    /// fit inside the one setup. A setup that runs out of time fails with
+    /// `SetupTimedOut`.
     setup_timeout_milliseconds: Int,
     reconnect: Backoff,
     /// Where the process tells of each loss and each reconnect, for
@@ -1179,10 +1187,12 @@ fn reconnect(state: State, error: DriverError, attempt: Int) -> State {
 /// Connects and logs in, with the socket in passive mode. After it, the
 /// socket sends its next message to this process.
 fn open_session(config: ConnectionConfig) -> Result(Session, ConnectError) {
+  let setup_deadline = deadline.from_now(config.setup_timeout_milliseconds)
   use socket <- try(
-    transport.connect(config.transport) |> map_error(TransportRefused),
+    transport.connect(config.transport, setup_deadline)
+    |> map_error(setup_transport_error(_, setup_deadline)),
   )
-  case log_in(socket, config) {
+  case log_in(socket, config, setup_deadline) {
     Ok(session) -> Ok(session)
     Error(error) -> {
       transport.close(socket)
@@ -1191,9 +1201,23 @@ fn open_session(config: ConnectionConfig) -> Result(Session, ConnectError) {
   }
 }
 
+/// A step that timed out once the setup deadline had passed ran out of the
+/// setup time. Any other failure is the transport's own, for example the
+/// connect timeout of one TCP connect while setup time was left.
+fn setup_transport_error(
+  error: TransportError,
+  setup_deadline: Deadline,
+) -> ConnectError {
+  case error, deadline.has_passed(setup_deadline) {
+    ConnectTimedOut, True | ReceiveTimedOut, True -> SetupTimedOut
+    _, _ -> TransportRefused(error)
+  }
+}
+
 fn log_in(
   socket: transport.Connection,
   config: ConnectionConfig,
+  setup_deadline: Deadline,
 ) -> Result(Session, ConnectError) {
   use #(state, first) <- try(
     login.start(
@@ -1204,7 +1228,7 @@ fn log_in(
     |> map_error(LoginRefused),
   )
   use Nil <- try(send_login_message(socket, first))
-  use session <- try(login_messages(socket, state, <<>>, config))
+  use session <- try(login_messages(socket, state, <<>>, setup_deadline))
   transport.receive_next(socket)
   |> map_error(TransportRefused)
   |> result.replace(session)
@@ -1214,14 +1238,14 @@ fn login_messages(
   socket: transport.Connection,
   state: LoginState,
   bytes: BitArray,
-  config: ConnectionConfig,
+  setup_deadline: Deadline,
 ) -> Result(Session, ConnectError) {
   case decode_backend(bytes) {
     Ok(Decoded(message, rest)) ->
       login.step(state, message)
       |> map_error(LoginRefused)
-      |> try(login_step(socket, _, rest, config))
-    Ok(NeedMoreBytes) -> more_login_bytes(socket, state, bytes, config)
+      |> try(login_step(socket, _, rest, setup_deadline))
+    Ok(NeedMoreBytes) -> more_login_bytes(socket, state, bytes, setup_deadline)
     Error(error) -> Error(LoginUndecodable(error))
   }
 }
@@ -1230,15 +1254,16 @@ fn login_step(
   socket: transport.Connection,
   step: login.LoginStep,
   rest: BitArray,
-  config: ConnectionConfig,
+  setup_deadline: Deadline,
 ) -> Result(Session, ConnectError) {
   case step {
     LoggedIn(outcome) -> Ok(Session(socket:, bytes: rest, outcome:))
     Continue(state:, reply: Some(message)) -> {
       use Nil <- try(send_login_message(socket, message))
-      login_messages(socket, state, rest, config)
+      login_messages(socket, state, rest, setup_deadline)
     }
-    Continue(state:, reply: None) -> login_messages(socket, state, rest, config)
+    Continue(state:, reply: None) ->
+      login_messages(socket, state, rest, setup_deadline)
   }
 }
 
@@ -1246,13 +1271,13 @@ fn more_login_bytes(
   socket: transport.Connection,
   state: LoginState,
   bytes: BitArray,
-  config: ConnectionConfig,
+  setup_deadline: Deadline,
 ) -> Result(Session, ConnectError) {
   use more <- try(
-    transport.receive(socket, config.setup_timeout_milliseconds)
-    |> map_error(TransportRefused),
+    transport.receive(socket, deadline.time_left(setup_deadline))
+    |> map_error(setup_transport_error(_, setup_deadline)),
   )
-  login_messages(socket, state, <<bytes:bits, more:bits>>, config)
+  login_messages(socket, state, <<bytes:bits, more:bits>>, setup_deadline)
 }
 
 fn send_login_message(
