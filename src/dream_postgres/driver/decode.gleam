@@ -9,6 +9,13 @@
 //// function again with all of them. A whole message that does not have the
 //// layout of its type is a `ProtocolError`.
 ////
+//// NegotiateProtocolVersion: the docs call its first field the newest
+//// minor version, but PostgreSQL 16.16, 17.12, 18.7 and 19.0 all send the
+//// whole version number (196608 for 3.0, 196610 for 3.2), as the
+//// recordings in `test/driver/recorded` show. The decoder reads the field
+//// as a 16-bit major and a 16-bit minor version. Do not change it to match
+//// the docs.
+////
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/message.{
