@@ -53,16 +53,16 @@ pub fn tests() -> TestSuite {
     }),
     it("makes room by the least recently used, whichever comes first", fn() {
       // Arrange
-      let cache =
+      let filled =
         new(3)
         |> insert("a", "s1", description)
         |> insert("b", "s2", description)
         |> insert("c", "s3", description)
-      let #(cache, _found) = lookup(cache, "a")
-      let #(cache, _found) = lookup(cache, "c")
+      let #(after_a, _found_a) = lookup(filled, "a")
+      let #(after_c, _found_c) = lookup(after_a, "c")
 
       // Act
-      let #(_cache, closing) = take_stale(make_room(cache))
+      let #(_cache, closing) = take_stale(make_room(after_c))
 
       // Assert
       closing
