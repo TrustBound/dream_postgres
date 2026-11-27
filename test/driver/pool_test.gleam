@@ -48,19 +48,19 @@ import driver/server_pool.{
   connection_events_until_disconnected, dream_pool_config, end_owner,
   exit_after_supervisor_kill, exit_holder_in_transaction, health_check_config,
   held_backend_pid, held_transaction_status, hold_connection, hold_pool_lock,
-  hold_until_back, kill_and_hold_again, kill_holder, kill_member,
-  kill_named_manager, leave_transaction_open, named_pool_setup, next_pool_event,
-  pool_act_setup, pool_events_until_free, pool_session_setup, pool_status,
+  kill_and_hold_again, kill_holder, kill_member, kill_named_manager,
+  leave_transaction_open, named_pool_setup, next_pool_event, pool_act_setup,
+  pool_events_until_free, pool_session_setup, pool_status,
   proxied_pool_act_setup, proxied_pool_setup, query_in_hold, release_holder,
   release_pool_lock, rollback_deadline_config, script_in_hold,
-  slow_reconnect_config, start_holder, start_idle_holder, start_owned_pool,
-  start_pool, start_supervised_pool, start_test_named_pool, start_test_pool,
-  start_test_pool_configured, start_test_proxied_pool,
-  start_test_proxied_pool_configured, stop_named_pool, stop_on_backend,
-  stop_pool_after_error, stop_pool_inside, stop_pool_session, stop_proxied_pool,
-  unchanged_config, user_pool_config, wait_for_disconnect,
-  wait_for_failed_reconnect, wait_for_last_query, wait_for_pool_event,
-  while_holding,
+  slow_reconnect_config, start_holder, start_idle_holder, start_named_pool,
+  start_owned_pool, start_pool, start_supervised_pool, start_test_named_pool,
+  start_test_pool, start_test_pool_configured, start_test_proxied_pool,
+  start_test_proxied_pool_configured, stop_named_pool,
+  stop_named_pool_after_error, stop_on_backend, stop_pool_after_error,
+  stop_pool_inside, stop_pool_session, stop_proxied_pool, unchanged_config,
+  user_pool_config, wait_for_disconnect, wait_for_failed_reconnect,
+  wait_for_last_query, wait_for_pool_event, while_holding,
 }
 import driver/servers.{
   type Server, driver_servers, first_driver_server, password,
@@ -93,6 +93,7 @@ pub fn tests() -> TestSuite {
     drain_tests(),
     replacement_tests(),
     hold_event_tests(),
+    restarted_tests(),
   ])
 }
 
@@ -971,23 +972,80 @@ fn named_tests() -> TestSuite {
         |> or_fail_with("Expected no pool after the hold")
       },
     ),
-    it("keeps a handle of the name valid after a restart", fn(named: NamedPool) {
-      // Act
-      let backends = {
-        use first <- try(held_backend_pid(named.handle))
-        use _killed <- try(kill_named_manager(named.name))
-        use second <- try(hold_until_back(named.handle))
-        Ok(#(first, second))
-      }
-
-      // Assert
-      backends
-      |> should
-      |> be_ok
-      |> be_different_parts
-      |> or_fail_with("Expected a new connection through the same handle")
-    }),
   ])
+}
+
+// A pool under a name that its supervisor started again ------------------------
+
+/// A pool under a name whose manager was killed and started again by its
+/// supervisor, with the backends of a hold before and after, through the
+/// same handle.
+type RestartedPool {
+  RestartedPool(named: NamedPool, backends: Result(#(String, String), String))
+}
+
+fn start_restarted_pool() -> Result(RestartedPool, String) {
+  use named <- try(start_named_pool(first_driver_server, 1))
+  restart_named_pool(named)
+  |> map_error(stop_named_pool_after_error(named, _))
+}
+
+/// Holds once, waits for the reset after the hold, kills the manager, and
+/// holds again once the new pool's member is free. Each wait is a pool
+/// event, so no step polls.
+fn restart_named_pool(named: NamedPool) -> Result(RestartedPool, String) {
+  use Nil <- try(wait_for_pool_event(named.pool_events, MemberFree(0)))
+  use first <- try(held_backend_pid(named.handle))
+  use Nil <- try(wait_for_pool_event(named.pool_events, MemberFree(0)))
+  use Nil <- try(kill_named_manager(named.name))
+  use Nil <- try(wait_for_pool_event(named.pool_events, MemberFree(0)))
+  let backends =
+    held_backend_pid(named.handle)
+    |> result.map(fn(second) { #(first, second) })
+  Ok(RestartedPool(named:, backends:))
+}
+
+fn stop_restarted_pool(restarted: RestartedPool) -> Result(Nil, String) {
+  stop_named_pool(restarted.named)
+}
+
+fn restarted_tests() -> TestSuite {
+  describe(
+    "a pool under a name that its supervisor started again",
+    context.setup(setup: start_restarted_pool, teardown: stop_restarted_pool),
+    [
+      it(
+        "holds a new connection through the same handle",
+        fn(restarted: RestartedPool) {
+          restarted.backends
+          |> should
+          |> be_ok
+          |> be_different_parts
+          |> or_fail_with("Expected a new connection through the same handle")
+        },
+      ),
+      it(
+        "gives the catalog of the new pool through the same handle",
+        fn(restarted: RestartedPool) {
+          {
+            use types <- try(pool.catalog(restarted.named.handle))
+            pool.hold(restarted.named.handle, 5000, catalog.describe(
+              types,
+              _,
+              23,
+              5000,
+            ))
+          }
+          |> should
+          |> be_ok
+          |> be_ok
+          |> extract_type_name
+          |> be_equal("int4")
+          |> or_fail_with("Expected int4 through the handle after the restart")
+        },
+      ),
+    ],
+  )
 }
 
 // A lost server: one act for two tests ----------------------------------------

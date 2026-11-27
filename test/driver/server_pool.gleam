@@ -19,7 +19,7 @@ import dream_postgres/driver/connection.{
 }
 import dream_postgres/driver/pool.{
   type HoldError, type Pool, type PoolConfig, type PoolEvent, type PoolMessage,
-  type PoolStatus, MemberFree, PoolConfig, PoolStopped,
+  type PoolStatus, MemberFree, PoolConfig,
 }
 import dream_postgres/internal/cell.{type TransactionStatus}
 import dream_test/context.{type Context}
@@ -678,6 +678,8 @@ pub type NamedPool {
     config: PoolConfig,
     owner: Subject(Nil),
     supervisor: Pid,
+    /// The events of each pool that the supervisor starts under the name.
+    pool_events: Subject(PoolEvent),
   )
 }
 
@@ -688,6 +690,8 @@ pub fn start_named_pool(
   size: Int,
 ) -> Result(NamedPool, String) {
   use config <- try(dream_pool_config(server.port))
+  let pool_events = process.new_subject()
+  let config = PoolConfig(..config, events: Some(pool_events))
   let name = process.new_name("pool_test_named")
   let started = process.new_subject()
   process.spawn_unlinked(fn() { supervise_pool(config, size, name, started) })
@@ -702,6 +706,7 @@ pub fn start_named_pool(
     config:,
     owner:,
     supervisor:,
+    pool_events:,
   ))
 }
 
@@ -749,6 +754,15 @@ pub fn stop_named_pool(named: NamedPool) -> Result(Nil, String) {
   |> map_error(fn(_timeout) { "the supervisor did not stop in 20 seconds" })
 }
 
+/// Stops the named pool and gives `error`: for a setup that fails after it
+/// started the pool. A failed stop joins the error.
+pub fn stop_named_pool_after_error(named: NamedPool, error: String) -> String {
+  case stop_named_pool(named) {
+    Ok(Nil) -> error
+    Error(stop_error) -> error <> "; " <> stop_error
+  }
+}
+
 /// The context of a describe whose tests each get a pool under a name: one
 /// for the tree, which gives the context its first value.
 /// `start_test_named_pool` gives each test its own.
@@ -773,21 +787,6 @@ pub fn kill_named_manager(name: Name(PoolMessage)) -> Result(Nil, String) {
     process.named(name) |> map_error(fn(_nil) { "no process has the name" }),
   )
   kill_and_wait(pid)
-}
-
-/// Holds through the handle until the pool under its name answers again,
-/// and gives the backend process ID. No sleep.
-pub fn hold_until_back(handle: Pool) -> Result(String, String) {
-  ask_until_back(handle, 100_000)
-}
-
-fn ask_until_back(handle: Pool, attempts: Int) -> Result(String, String) {
-  case pool.hold(handle, 5000, backend_pid), attempts {
-    Ok(answer), _ -> answer
-    Error(PoolStopped), 0 -> Error("the pool did not come back")
-    Error(PoolStopped), _ -> ask_until_back(handle, attempts - 1)
-    Error(error), _ -> Error("could not hold a connection: " <> inspect(error))
-  }
 }
 
 // The processes inside a pool -------------------------------------------------
