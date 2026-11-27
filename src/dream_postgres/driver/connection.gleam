@@ -99,6 +99,9 @@ pub type ConnectionConfig {
 
 /// What the process tells its subscriber about the connection.
 pub type ConnectionEvent {
+  /// The process connected and logged in for the first time. It is the
+  /// first event of each process.
+  Connected
   /// The connection is lost. The process connects again after the backoff.
   Disconnected(error: DriverError)
   /// An attempt to connect again failed. The next one follows after the
@@ -216,6 +219,10 @@ type Message {
   SocketMessage(message: Dynamic)
   ReconnectNow(error: DriverError, attempt: Int)
   ExitSignal(exit: ExitMessage)
+  /// Tells the subscriber `Connected`. The process sends it to itself
+  /// before it opens its socket, so it comes before any message of the
+  /// socket, and only a process that started handles it.
+  AnnounceConnected
 }
 
 /// A request that goes to the server.
@@ -251,7 +258,7 @@ type Running {
 
 type Link {
   /// Connected and logged in. `bytes` are read but not decoded yet.
-  Connected(socket: transport.Connection, bytes: BitArray)
+  Open(socket: transport.Connection, bytes: BitArray)
   /// Lost. Requests fail with `error` until the process connects again.
   Lost(error: DriverError)
 }
@@ -353,6 +360,7 @@ fn initialise(
   failure: Subject(ConnectError),
 ) -> Result(actor.Initialised(State, Message, Connection), String) {
   process.trap_exits(True)
+  process.send(subject, AnnounceConnected)
   case open_session(config) {
     Ok(session) -> Ok(initialised(subject, config, session))
     Error(error) -> {
@@ -395,7 +403,7 @@ fn connected_state(state: State, session: Session) -> State {
   let notices = reverse(session.outcome.notices) |> list.map(Notice)
   State(
     ..state,
-    link: Connected(session.socket, session.bytes),
+    link: Open(session.socket, session.bytes),
     parameters: session.outcome.parameters,
     tracker: track(new_tracker(), session.outcome.transaction_status, None),
     pending: append(notices, state.pending),
@@ -629,6 +637,10 @@ fn handle_message(
       actor.continue(socket_message_received(state, socket_message))
     ReconnectNow(error:, attempt:) ->
       actor.continue(reconnect(state, error, attempt))
+    AnnounceConnected -> {
+      tell(state, Connected)
+      actor.continue(state)
+    }
   }
 }
 
@@ -647,7 +659,7 @@ fn stop_process(
   reply_to: Option(ReplyTo(Nil)),
 ) -> actor.Next(State, Message) {
   case state.link {
-    Connected(socket:, ..) -> terminate(socket)
+    Open(socket:, ..) -> terminate(socket)
     Lost(..) -> Nil
   }
   option.map(reply_to, reply(_, Nil))
@@ -665,7 +677,7 @@ fn terminate(socket: transport.Connection) -> Nil {
 /// A request runs at once when no other runs, and waits otherwise.
 fn accept_request(state: State, request: Request) -> State {
   case state.running, state.link {
-    None, Connected(socket:, ..) -> begin(state, socket, request)
+    None, Open(socket:, ..) -> begin(state, socket, request)
     Some(_running), _ -> State(..state, waiting: [request, ..state.waiting])
     None, Lost(error:) -> {
       refuse(request, error)
@@ -773,7 +785,7 @@ fn next_request(state: State) -> State {
 
 fn socket_message_received(state: State, socket_message: Dynamic) -> State {
   case state.link {
-    Connected(socket:, bytes:) ->
+    Open(socket:, bytes:) ->
       socket_event(
         state,
         socket,
@@ -792,7 +804,7 @@ fn socket_event(
 ) -> State {
   case event {
     BytesReceived(more) ->
-      State(..state, link: Connected(socket, <<bytes:bits, more:bits>>))
+      State(..state, link: Open(socket, <<bytes:bits, more:bits>>))
       |> read_messages
       |> receive_next
     SocketEnded -> lose(state, socket, ConnectionLost(SocketClosed))
@@ -803,8 +815,7 @@ fn socket_event(
 
 fn receive_next(state: State) -> State {
   case state.link {
-    Connected(socket:, ..) ->
-      sent(state, socket, transport.receive_next(socket))
+    Open(socket:, ..) -> sent(state, socket, transport.receive_next(socket))
     Lost(..) -> state
   }
 }
@@ -812,7 +823,7 @@ fn receive_next(state: State) -> State {
 /// Decodes and handles each whole message of the buffer.
 fn read_messages(state: State) -> State {
   case state.link {
-    Connected(socket:, bytes:) -> read_message(state, socket, bytes)
+    Open(socket:, bytes:) -> read_message(state, socket, bytes)
     Lost(..) -> state
   }
 }
@@ -824,7 +835,7 @@ fn read_message(
 ) -> State {
   case decode_backend(bytes) {
     Ok(Decoded(message, rest)) ->
-      State(..state, link: Connected(socket, rest))
+      State(..state, link: Open(socket, rest))
       |> handle_server_message(socket, message)
       |> read_messages
     Ok(NeedMoreBytes) -> state

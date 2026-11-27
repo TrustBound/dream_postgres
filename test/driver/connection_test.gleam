@@ -49,9 +49,9 @@ import driver/server_connection.{
   lock_request, lock_waiter_pid, next_event, next_event_after_refused_reconnects,
   proxied_act_setup, proxied_setup, release_advisory_lock, run_control_script,
   run_control_setup_script, run_failing_script, run_failing_statement,
-  run_setup_script, send_stray_message, start_caller, start_configured,
-  start_connection, start_in_ended_owner, start_test_configured,
-  start_test_connection, start_test_proxied, stop_after_error, stop_connection,
+  run_setup_script, send_stray_message, start_caller, start_connection,
+  start_in_ended_owner, start_test_configured, start_test_connection,
+  start_test_proxied, start_watched, stop_after_error, stop_connection,
   stop_proxied, terminate_backend, terminate_session, tls_config, user_config,
   wait_for_lock_waiter, wait_for_table_waiter, watched_config,
 }
@@ -1181,7 +1181,10 @@ fn start_refused_reconnect() -> Result(RefusedReconnect, String) {
   let events = process.new_subject()
   let port = first_driver_server.port
   use config <- try(user_config(port, "dream_reconnect", "dream"))
-  use connection <- try(start_configured(watched_config(config, events, 10)))
+  use connection <- try(start_watched(
+    watched_config(config, events, 10),
+    events,
+  ))
   use control <- try(
     start_connection(port) |> map_error(stop_after_error(connection, _)),
   )

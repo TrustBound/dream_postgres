@@ -9,6 +9,7 @@ import dream_test/runner
 import dream_test/suite.{type TestSuite}
 import driver/bit_array_test
 import driver/channel_binding_test
+import driver/connection_events_test
 import driver/connection_test
 import driver/decode_test
 import driver/encode_test
@@ -43,6 +44,7 @@ pub fn suites() -> List(TestSuite) {
     transport_test.tests(),
     connection_test.tests(),
     setup_deadline_test.tests(),
+    connection_events_test.tests(),
   ]
 }
 

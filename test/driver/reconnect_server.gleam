@@ -9,7 +9,7 @@ import dream_postgres/driver/connection.{
 }
 import dream_test/context.{type Context}
 import driver/server_connection.{
-  connection_config, next_event, start_configured, stop_connection,
+  connection_config, next_event, start_watched, stop_connection,
 }
 import gleam/erlang/process.{type Subject}
 import gleam/option.{Some}
@@ -68,13 +68,14 @@ fn reconnect_badly(
   use #(port, server) <- try(start_ffi(second))
   use config <- try(connection_config(port))
   let events = process.new_subject()
-  use connection <- try(start_configured(
+  use connection <- try(start_watched(
     ConnectionConfig(
       ..config,
       setup_timeout_milliseconds: setup_timeout,
       reconnect: Backoff(10, 60_000),
       events: Some(events),
     ),
+    events,
   ))
   watch_reconnect(connection, server, events)
   |> map_error(fn(error) {
