@@ -16,9 +16,11 @@
 //// A hold ends when the callback returns or the caller's process exits.
 //// The connection then goes to its member, which rolls back an open
 //// transaction, before the pool hands it out again. The members also run a
-//// health check on each idle connection at each interval. A connection that
-//// fails the rollback or the health check is replaced, and a connection
-//// that lost its session is not handed out until it is connected again.
+//// health check on each connection that was free and unused for a whole
+//// interval; a connection that was used in the interval proved itself. A
+//// connection that fails the rollback or the health check is replaced,
+//// and a connection that lost its session is not handed out until it is
+//// connected again.
 ////
 //// Each pool keeps all of its state in its own processes: two pools never
 //// share state, also when their settings are the same.
@@ -50,15 +52,16 @@ import gleam/result.{map_error, try}
 // Types -----------------------------------------------------------------------
 
 /// Everything a pool needs.
-pub type PoolConfig(extra) {
+pub type PoolConfig {
   PoolConfig(
     /// The settings of each connection process. The pool gives its own
     /// subject to each process; the `events` subject of these settings gets
     /// every event of every connection of the pool, and a `Disconnected`
     /// for each connection that the pool replaces.
     connection: ConnectionConfig,
-    /// How often the pool runs a health check on each idle connection.
-    /// It must be 1 or more.
+    /// How often the pool looks for connections to check. A connection is
+    /// checked when it was free and unused for a whole interval. It must be
+    /// 1 or more.
     health_check_interval_milliseconds: Int,
     /// The longest time that the query of a health check may take.
     health_check_deadline_milliseconds: Int,
@@ -69,9 +72,6 @@ pub type PoolConfig(extra) {
     /// How long the pool waits for the holds that run when its owner's
     /// process exits, before it closes the connections.
     shutdown_deadline_milliseconds: Int,
-    /// Any value that goes with the pool, for the code that uses it. The
-    /// pool does not read it.
-    extra: extra,
   )
 }
 
@@ -82,13 +82,13 @@ pub type StartError {
   /// The health check interval is below 1 millisecond.
   InvalidHealthCheckInterval(milliseconds: Int)
   /// The manager process did not start.
-  ManagerStartFailed(error: actor.StartError)
+  PoolProcessStartFailed(error: actor.StartError)
 }
 
-/// Why a checkout gave no connection.
-pub type CheckoutError {
+/// Why a hold got no connection.
+pub type HoldError {
   /// No connection was free before the deadline.
-  CheckoutTimedOut
+  HoldDeadlinePassed
   /// No connection is connected, and the last connect failed with this
   /// error.
   ConnectFailed(error: ConnectError)
@@ -115,12 +115,12 @@ pub type PoolStatus {
   )
 }
 
-/// A pool, with the extra value of its settings.
-pub opaque type Pool(extra) {
-  Pool(subject: Subject(Message), pid: Pid, catalog: Catalog, extra: extra)
+/// A pool.
+pub opaque type Pool {
+  Pool(subject: Subject(Message), pid: Pid, catalog: Catalog)
 }
 
-/// The manager process, before the extra value goes with it.
+/// The manager process, as its initialiser gives it.
 type Manager {
   Manager(subject: Subject(Message), pid: Pid, catalog: Catalog)
 }
@@ -134,7 +134,7 @@ type Message {
   CheckOut(
     caller: Pid,
     deadline_milliseconds: Int,
-    reply: Subject(Result(Lease, CheckoutError)),
+    reply: Subject(Result(Lease, HoldError)),
   )
   CheckIn(lease_id: Int)
   WaiterExpired(waiter_id: Int)
@@ -180,6 +180,10 @@ type Slot {
     /// Whether the connection has a session with the server now.
     connected: Bool,
     usage: Usage,
+    /// Whether the connection connected, was handed out or came back since
+    /// the last health check time. Such a connection proved itself, and
+    /// the next health check time skips it.
+    used_since_check: Bool,
   )
 }
 
@@ -193,7 +197,7 @@ type Waiter {
   Waiter(
     id: Int,
     caller: Pid,
-    reply: Subject(Result(Lease, CheckoutError)),
+    reply: Subject(Result(Lease, HoldError)),
     timer: Timer,
   )
 }
@@ -240,7 +244,7 @@ type State {
 ///
 /// ## Parameters
 ///
-/// - `config`: the connection settings, the deadlines and the extra value
+/// - `config`: the connection settings and the deadlines
 /// - `size`: the number of connections, 1 or more
 ///
 /// ## Returns
@@ -248,20 +252,17 @@ type State {
 /// - `Ok(Pool)`: the pool runs, and its members connect
 /// - `Error(StartError)`: a setting is not valid, or the manager did not
 ///   start
-pub fn start(
-  config: PoolConfig(extra),
-  size: Int,
-) -> Result(Pool(extra), StartError) {
+pub fn start(config: PoolConfig, size: Int) -> Result(Pool, StartError) {
   use <- guard(size < 1, Error(InvalidSize(size)))
   let interval = config.health_check_interval_milliseconds
   use <- guard(interval < 1, Error(InvalidHealthCheckInterval(interval)))
   use started <- try(start_manager(config, size))
   let Manager(subject:, pid:, catalog:) = started.data
-  Ok(Pool(subject:, pid:, catalog:, extra: config.extra))
+  Ok(Pool(subject:, pid:, catalog:))
 }
 
 fn start_manager(
-  config: PoolConfig(extra),
+  config: PoolConfig,
   size: Int,
 ) -> Result(actor.Started(Manager), StartError) {
   let settings =
@@ -279,7 +280,7 @@ fn start_manager(
   actor.new_with_initialiser(5000, initialise(_, settings, member_config))
   |> actor.on_message(handle_message)
   |> actor.start
-  |> map_error(ManagerStartFailed)
+  |> map_error(PoolProcessStartFailed)
 }
 
 /// Starts the pool's catalog, linked to the manager, and the supervisor of
@@ -387,7 +388,7 @@ fn monitor_fired(down: Down) -> Message {
 ///
 /// `Nil` when every connection is closed, also when the pool is gone
 /// already.
-pub fn stop(pool: Pool(extra), deadline_milliseconds: Int) -> Nil {
+pub fn stop(pool: Pool, deadline_milliseconds: Int) -> Nil {
   ask(pool, StopRequest(deadline_milliseconds, _)) |> result.unwrap(Nil)
 }
 
@@ -409,15 +410,15 @@ pub fn stop(pool: Pool(extra), deadline_milliseconds: Int) -> Nil {
 /// ## Returns
 ///
 /// - `Ok(value)`: the value of the callback
-/// - `Error(CheckoutTimedOut)`: no connection was free before the deadline
+/// - `Error(HoldDeadlinePassed)`: no connection was free before the deadline
 /// - `Error(ConnectFailed(error))`: no connection is connected, and the
 ///   last connect failed with `error`
 /// - `Error(PoolStopped)`: the pool stops, or it is gone
 pub fn hold(
-  pool: Pool(extra),
+  pool: Pool,
   deadline_milliseconds: Int,
   callback: fn(Connection) -> value,
-) -> Result(value, CheckoutError) {
+) -> Result(value, HoldError) {
   use lease <- result.map(check_out(pool, deadline_milliseconds))
   let value = callback(lease.connection)
   process.send(pool.subject, CheckIn(lease.id))
@@ -425,24 +426,11 @@ pub fn hold(
 }
 
 fn check_out(
-  pool: Pool(extra),
+  pool: Pool,
   deadline_milliseconds: Int,
-) -> Result(Lease, CheckoutError) {
+) -> Result(Lease, HoldError) {
   ask(pool, CheckOut(process.self(), deadline_milliseconds, _))
   |> result.flatten
-}
-
-/// The extra value of the pool's settings.
-///
-/// ## Parameters
-///
-/// - `pool`: the pool
-///
-/// ## Returns
-///
-/// The `extra` of the `PoolConfig` that started the pool.
-pub fn extra(pool: Pool(extra)) -> extra {
-  pool.extra
 }
 
 /// The type catalog of the pool. Each pool has its own catalog, which
@@ -455,7 +443,7 @@ pub fn extra(pool: Pool(extra)) -> extra {
 /// ## Returns
 ///
 /// The pool's catalog, for the lookups of the codecs.
-pub fn catalog(pool: Pool(extra)) -> Catalog {
+pub fn catalog(pool: Pool) -> Catalog {
   pool.catalog
 }
 
@@ -470,16 +458,16 @@ pub fn catalog(pool: Pool(extra)) -> Catalog {
 ///
 /// - `Ok(PoolStatus)`: the counts and the last connect error
 /// - `Error(PoolStopped)`: the pool is gone
-pub fn status(pool: Pool(extra)) -> Result(PoolStatus, CheckoutError) {
+pub fn status(pool: Pool) -> Result(PoolStatus, HoldError) {
   ask(pool, StatusRequest)
 }
 
 /// Sends a request to the manager and waits for its answer. The manager
 /// answers each request; a manager that is gone gives `PoolStopped`.
 fn ask(
-  pool: Pool(extra),
+  pool: Pool,
   make: fn(Subject(reply)) -> Message,
-) -> Result(reply, CheckoutError) {
+) -> Result(reply, HoldError) {
   let reply_to = process.new_subject()
   let monitor = process.monitor(pool.pid)
   process.send(pool.subject, make(reply_to))
@@ -492,7 +480,7 @@ fn ask(
   answer
 }
 
-fn pool_down(_down: Down) -> Result(reply, CheckoutError) {
+fn pool_down(_down: Down) -> Result(reply, HoldError) {
   Error(PoolStopped)
 }
 
@@ -545,7 +533,7 @@ fn check_out_request(
   state: State,
   caller: Pid,
   deadline_milliseconds: Int,
-  reply: Subject(Result(Lease, CheckoutError)),
+  reply: Subject(Result(Lease, HoldError)),
 ) -> State {
   let id = state.next_id
   let timer =
@@ -565,7 +553,7 @@ fn refuse_while_draining(state: State) -> State {
 
 fn expire(state: State, waiter_id: Int) -> State {
   let #(expired, others) = partition(state.waiters, waiter_has_id(_, waiter_id))
-  each(expired, refuse_waiter(_, CheckoutTimedOut))
+  each(expired, refuse_waiter(_, HoldDeadlinePassed))
   State(..state, waiters: others)
 }
 
@@ -573,12 +561,12 @@ fn waiter_has_id(waiter: Waiter, id: Int) -> Bool {
   waiter.id == id
 }
 
-fn refuse_waiters(state: State, error: CheckoutError) -> State {
+fn refuse_waiters(state: State, error: HoldError) -> State {
   each(state.waiters, refuse_waiter(_, error))
   State(..state, waiters: [])
 }
 
-fn refuse_waiter(waiter: Waiter, error: CheckoutError) -> Nil {
+fn refuse_waiter(waiter: Waiter, error: HoldError) -> Nil {
   process.cancel_timer(waiter.timer)
   process.send(waiter.reply, Error(error))
 }
@@ -647,7 +635,7 @@ fn hand_out(
   let lease_id = state.next_id
   let holder = Holder(slot: slot_id, monitor: process.monitor(waiter.caller))
   process.send(waiter.reply, Ok(Lease(lease_id, connection)))
-  let held = Slot(..slot, usage: HeldBy(lease_id))
+  let held = Slot(..slot, usage: HeldBy(lease_id), used_since_check: True)
   State(
     ..state,
     slots: dict.insert(state.slots, slot_id, held),
@@ -699,7 +687,7 @@ fn returned(slot: Slot, lease_id: Int) -> Slot {
       if holding == lease_id
     -> {
       pool_member.reset(slot.process.member, connection)
-      Slot(..slot, usage: Maintained)
+      Slot(..slot, usage: Maintained, used_since_check: True)
     }
     _replaced -> slot
   }
@@ -756,12 +744,19 @@ fn member_started(state: State, slot_id: Int, member: Member) -> State {
       connection: None,
       connected: False,
       usage: Free,
+      used_since_check: False,
     )
   State(..state, slots: dict.insert(state.slots, slot_id, slot))
 }
 
 fn connected(slot: Slot, connection: Connection) -> Slot {
-  Slot(..slot, connection: Some(connection), connected: True, usage: Free)
+  Slot(
+    ..slot,
+    connection: Some(connection),
+    connected: True,
+    usage: Free,
+    used_since_check: True,
+  )
 }
 
 fn with_usage(slot: Slot, usage: Usage) -> Slot {
@@ -790,8 +785,10 @@ fn with_slots(state: State, slots: Dict(Int, Slot)) -> State {
   State(..state, slots:)
 }
 
-/// Gives each free, connected connection to its member for a health
-/// check, and sets the timer for the next one.
+/// Gives each connection that was free and unused for a whole interval to
+/// its member for a health check, and sets the timer for the next one. A
+/// connection that was used in the interval proved itself: it waits for
+/// the next interval.
 fn check_health(state: State) -> State {
   process.send_after(
     state.subject,
@@ -802,12 +799,12 @@ fn check_health(state: State) -> State {
 }
 
 fn health_checked(_slot_id: Int, slot: Slot) -> Slot {
-  case free_connection(slot) {
-    Ok(connection) -> {
+  case free_connection(slot), slot.used_since_check {
+    Ok(connection), False -> {
       pool_member.check_health(slot.process.member, connection)
       Slot(..slot, usage: Maintained)
     }
-    Error(Nil) -> slot
+    _busy_or_used, _ -> Slot(..slot, used_since_check: False)
   }
 }
 

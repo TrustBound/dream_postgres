@@ -17,9 +17,9 @@ import dream_postgres/driver/login.{
 }
 import dream_postgres/driver/message.{Protocol30}
 import dream_postgres/driver/pool.{
-  type CheckoutError, type Pool, type PoolConfig, type PoolStatus,
-  type StartError, CheckoutTimedOut, ConnectFailed, InvalidHealthCheckInterval,
-  InvalidSize, PoolConfig, PoolStatus, PoolStopped,
+  type HoldError, type Pool, type PoolConfig, type PoolStatus, type StartError,
+  ConnectFailed, HoldDeadlinePassed, InvalidHealthCheckInterval, InvalidSize,
+  PoolConfig, PoolStatus, PoolStopped,
 }
 import dream_postgres/driver/statement_cache
 import dream_postgres/driver/transport.{ConnectRefused, NoTls, TransportConfig}
@@ -65,10 +65,10 @@ fn client_end(watch: ClientEndWatch) -> BitArray
 fn stop_proxy(proxy: Proxy) -> Nil
 
 @external(erlang, "pool_test_ffi", "supervisor_of")
-fn supervisor_of(pool: Pool(extra)) -> Pid
+fn supervisor_of(pool: Pool) -> Pid
 
 @external(erlang, "pool_test_ffi", "members_of")
-fn members_of(pool: Pool(extra)) -> List(Pid)
+fn members_of(pool: Pool) -> List(Pid)
 
 @external(erlang, "driver_connection_test_ffi", "pid_of")
 fn connection_pid(connection: Connection) -> Pid
@@ -81,7 +81,7 @@ type ClientEndWatch
 
 /// Why a test could not get to its assertion.
 type Failure {
-  Checkout(error: CheckoutError)
+  Checkout(error: HoldError)
   Driver(error: DriverError)
   Start(error: StartError)
   Unexpected(what: String)
@@ -136,32 +136,31 @@ fn connection_config(
 
 /// The settings of a pool as `dream` on `port`, with no health check in
 /// the time of a test.
-fn dream_config(port: Int) -> Result(PoolConfig(Nil), Failure) {
+fn dream_config(port: Int) -> Result(PoolConfig, Failure) {
   use settings <- try(connection_config(
     port,
     "dream",
     login.password(servers.password),
     None,
   ))
-  Ok(pool_config(settings, Nil))
+  Ok(pool_config(settings))
 }
 
-fn pool_config(settings: ConnectionConfig, extra: extra) -> PoolConfig(extra) {
+fn pool_config(settings: ConnectionConfig) -> PoolConfig {
   PoolConfig(
     connection: settings,
     health_check_interval_milliseconds: 60_000,
     health_check_deadline_milliseconds: 5000,
     rollback_deadline_milliseconds: 5000,
     shutdown_deadline_milliseconds: 5000,
-    extra:,
   )
 }
 
 fn with_health_check(
-  config: PoolConfig(extra),
+  config: PoolConfig,
   interval: Int,
   deadline: Int,
-) -> PoolConfig(extra) {
+) -> PoolConfig {
   PoolConfig(
     ..config,
     health_check_interval_milliseconds: interval,
@@ -170,9 +169,9 @@ fn with_health_check(
 }
 
 fn with_events(
-  config: PoolConfig(extra),
+  config: PoolConfig,
   events: Subject(ConnectionEvent),
-) -> PoolConfig(extra) {
+) -> PoolConfig {
   PoolConfig(
     ..config,
     connection: ConnectionConfig(..config.connection, events: Some(events)),
@@ -181,9 +180,9 @@ fn with_events(
 
 /// Starts a pool, gives it to `body`, and stops it.
 fn with_pool(
-  config: PoolConfig(extra),
+  config: PoolConfig,
   size: Int,
-  body: fn(Pool(extra)) -> Result(value, Failure),
+  body: fn(Pool) -> Result(value, Failure),
 ) -> Result(value, Failure) {
   use started <- try(pool.start(config, size) |> result.map_error(Start))
   let value = body(started)
@@ -193,7 +192,7 @@ fn with_pool(
 
 /// Holds a connection of the pool for `body`.
 fn held(
-  pool: Pool(extra),
+  pool: Pool,
   body: fn(Connection) -> Result(value, Failure),
 ) -> Result(value, Failure) {
   pool.hold(pool, 5000, body)
@@ -226,7 +225,7 @@ fn backend_pid(connection: Connection) -> Result(String, Failure) {
   script(connection, "SELECT pg_backend_pid()::text") |> try(single_text)
 }
 
-fn held_backend_pid(pool: Pool(extra)) -> Result(String, Failure) {
+fn held_backend_pid(pool: Pool) -> Result(String, Failure) {
   held(pool, backend_pid)
 }
 
@@ -291,10 +290,10 @@ fn event_kind(event: ConnectionEvent) -> String {
 /// A caller in its own process that holds a connection until the test
 /// releases it.
 type Holder {
-  Holder(release: Subject(Nil), answer: Subject(Result(Nil, CheckoutError)))
+  Holder(release: Subject(Nil), answer: Subject(Result(Nil, HoldError)))
 }
 
-fn start_holder(pool: Pool(extra)) -> Result(Holder, Failure) {
+fn start_holder(pool: Pool) -> Result(Holder, Failure) {
   let ready = process.new_subject()
   let answer = process.new_subject()
   process.spawn(fn() { hold_until_released(pool, ready, answer) })
@@ -306,9 +305,9 @@ fn start_holder(pool: Pool(extra)) -> Result(Holder, Failure) {
 }
 
 fn hold_until_released(
-  pool: Pool(extra),
+  pool: Pool,
   ready: Subject(Subject(Nil)),
-  answer: Subject(Result(Nil, CheckoutError)),
+  answer: Subject(Result(Nil, HoldError)),
 ) -> Nil {
   let release = process.new_subject()
   process.send(
@@ -335,7 +334,7 @@ fn release(holder: Holder) -> Result(Nil, Failure) {
 
 /// A caller in its own process that runs one script on a held connection.
 fn start_script_caller(
-  pool: Pool(extra),
+  pool: Pool,
   sql: String,
 ) -> Subject(Result(List(Outcome), Failure)) {
   let answer = process.new_subject()
@@ -344,7 +343,7 @@ fn start_script_caller(
 }
 
 fn hold_and_run(
-  pool: Pool(extra),
+  pool: Pool,
   sql: String,
   answer: Subject(Result(List(Outcome), Failure)),
 ) -> Nil {
@@ -384,7 +383,7 @@ fn wait_for_lock_waiter(
 
 /// Asks for the status until `count_of` gives `wanted`: no sleep.
 fn wait_for_status(
-  pool: Pool(extra),
+  pool: Pool,
   count_of: fn(PoolStatus) -> Int,
   wanted: Int,
   attempts: Int,
@@ -446,7 +445,7 @@ fn check_size(server: Server) {
   // Assert
   counts
   |> should
-  |> be_equal(Ok(#(3, Error(CheckoutTimedOut))))
+  |> be_equal(Ok(#(3, Error(HoldDeadlinePassed))))
   |> or_fail_with("Expected three backends and a timed out fourth hold")
 }
 
@@ -565,7 +564,7 @@ fn check_catalog(server: Server) {
 }
 
 fn describe_int4(
-  pool: Pool(extra),
+  pool: Pool,
   connection: Connection,
 ) -> Result(String, Failure) {
   catalog.describe(pool.catalog(pool), connection, 23, 5000)
@@ -580,9 +579,9 @@ fn type_name(description: TypeDescription) -> String {
 /// Holds a connection, begins a transaction, says so, and waits until it
 /// is killed.
 fn begin_and_wait(
-  pool: Pool(extra),
+  pool: Pool,
   began: Subject(Result(TransactionStatus, Failure)),
-) -> Result(Nil, CheckoutError) {
+) -> Result(Nil, HoldError) {
   use connection <- pool.hold(pool, 5000)
   process.send(began, begin_status(connection))
   process.receive_forever(process.new_subject())
@@ -627,14 +626,14 @@ fn start_tests() {
       |> be_equal(Ok(Error(InvalidHealthCheckInterval(0))))
       |> or_fail_with("Expected InvalidHealthCheckInterval(0)")
     }),
-    it("gives the extra value of each pool, and its own settings", fn() {
+    it("keeps the settings and the catalog of each pool apart", fn() {
       check_two_pools()
     }),
     it("gives its status", fn() { check_status() }),
   ]
 }
 
-/// Two pools with other users and other extra values: each connection
+/// Two pools with other users: each connection
 /// logs in with the user of its own pool, and each pool has its own
 /// catalog.
 fn check_two_pools() {
@@ -649,25 +648,19 @@ fn check_two_pools() {
   let users = {
     use first_settings <- try(first_settings)
     use second_settings <- try(second_settings)
-    use first <- with_pool(pool_config(first_settings, "first"), 1)
-    use second <- with_pool(pool_config(second_settings, "second"), 1)
+    use first <- with_pool(pool_config(first_settings), 1)
+    use second <- with_pool(pool_config(second_settings), 1)
     use first_user <- try(held(first, current_user))
     use second_user <- try(held(second, current_user))
     let separate_catalogs = pool.catalog(first) != pool.catalog(second)
-    Ok(#(
-      first_user,
-      pool.extra(first),
-      second_user,
-      pool.extra(second),
-      separate_catalogs,
-    ))
+    Ok(#(first_user, second_user, separate_catalogs))
   }
 
   // Assert
   users
   |> should
-  |> be_equal(Ok(#("dream", "first", "dream_trust", "second", True)))
-  |> or_fail_with("Expected each pool's user, extra value and catalog")
+  |> be_equal(Ok(#("dream", "dream_trust", True)))
+  |> or_fail_with("Expected each pool's user and its own catalog")
 }
 
 fn current_user(connection: Connection) -> Result(String, Failure) {
@@ -707,7 +700,7 @@ fn check_status() {
 
 fn checkout_tests() {
   [
-    it("gives CheckoutTimedOut when no connection is free in time", fn() {
+    it("gives HoldDeadlinePassed when no connection is free in time", fn() {
       // Arrange
       let config = dream_config(first_server().port)
 
@@ -724,8 +717,8 @@ fn checkout_tests() {
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(CheckoutTimedOut)))
-      |> or_fail_with("Expected CheckoutTimedOut")
+      |> be_equal(Ok(Error(HoldDeadlinePassed)))
+      |> or_fail_with("Expected HoldDeadlinePassed")
     }),
     it("gives a waiting checkout the connection that comes back", fn() {
       check_queue()
@@ -772,7 +765,7 @@ fn connect_error_tests() {
       // Act
       let answer = {
         use settings <- try(settings)
-        use pool <- with_pool(pool_config(settings, Nil), 1)
+        use pool <- with_pool(pool_config(settings), 1)
         Ok(pool.hold(pool, 5000, backend_pid) |> result.map_error(login_code))
       }
 
@@ -808,7 +801,7 @@ fn connect_error_tests() {
   ]
 }
 
-fn login_code(error: CheckoutError) -> String {
+fn login_code(error: HoldError) -> String {
   case error {
     ConnectFailed(LoginRefused(ServerRejectedLogin(report))) -> report.code
     _ -> "not a login refusal"
@@ -864,6 +857,9 @@ fn replace_tests() {
     }),
     it("runs a health check on an idle connection", fn() {
       check_health_check()
+    }),
+    it("skips the health check of a connection used in the interval", fn() {
+      check_recent_use_skipped()
     }),
     it(
       "replaces an idle connection whose health check passes its deadline",
@@ -1019,6 +1015,53 @@ fn check_health_check() {
   |> or_fail_with("Expected the health check query")
 }
 
+/// A hold runs a query, and the control connection waits for the first
+/// health check after it. The interval in which the hold ran gives no
+/// health check, so the first one starts a whole interval or more after
+/// the query.
+fn check_recent_use_skipped() {
+  // Arrange
+  let config =
+    dream_config(first_server().port)
+    |> result.map(with_health_check(_, 100, 5000))
+
+  // Act
+  let waited_an_interval = {
+    use config <- try(config)
+    use pool <- with_pool(config, 1)
+    use #(pid, used_at) <- try(held(pool, backend_pid_and_time))
+    use control <- with_control(first_server().port)
+    use _query <- try(wait_for_last_query(control, pid, "SELECT 1", 100_000))
+    script(
+      control,
+      "SELECT (query_start - '"
+        <> used_at
+        <> "'::timestamptz >= interval '100 milliseconds')::text"
+        <> " FROM pg_stat_activity WHERE pid = "
+        <> pid,
+    )
+    |> try(single_text)
+  }
+
+  // Assert
+  waited_an_interval
+  |> should
+  |> be_equal(Ok("true"))
+  |> or_fail_with("Expected the first health check a whole interval later")
+}
+
+/// The backend of the connection, and the server's time after a query on
+/// it.
+fn backend_pid_and_time(
+  connection: Connection,
+) -> Result(#(String, String), Failure) {
+  use pid <- try(backend_pid(connection))
+  use time <- try(
+    script(connection, "SELECT clock_timestamp()::text") |> try(single_text),
+  )
+  Ok(#(pid, time))
+}
+
 fn wait_for_last_query(
   control: Connection,
   pid: String,
@@ -1093,7 +1136,7 @@ fn check_stale_events() {
 }
 
 /// A connection that connects again only after the test.
-fn slow_reconnect(config: PoolConfig(extra)) -> PoolConfig(extra) {
+fn slow_reconnect(config: PoolConfig) -> PoolConfig {
   PoolConfig(
     ..config,
     connection: ConnectionConfig(
@@ -1134,7 +1177,7 @@ fn check_rollback_deadline() {
   |> or_fail_with("Expected a new backend outside any transaction")
 }
 
-fn short_rollback(config: PoolConfig(extra)) -> PoolConfig(extra) {
+fn short_rollback(config: PoolConfig) -> PoolConfig {
   PoolConfig(..config, rollback_deadline_milliseconds: 50)
 }
 
@@ -1228,19 +1271,19 @@ fn check_drain() {
   |> or_fail_with("Expected the hold to finish before the pool closed")
 }
 
-fn start_stopper(pool: Pool(extra), deadline: Int) -> Subject(Nil) {
+fn start_stopper(pool: Pool, deadline: Int) -> Subject(Nil) {
   let stopped = process.new_subject()
   process.spawn(fn() { stop_and_tell(pool, deadline, stopped) })
   stopped
 }
 
-fn stop_and_tell(pool: Pool(extra), deadline: Int, stopped: Subject(Nil)) {
+fn stop_and_tell(pool: Pool, deadline: Int, stopped: Subject(Nil)) {
   pool.stop(pool, deadline)
   process.send(stopped, Nil)
 }
 
 /// Checks out until the pool refuses with PoolStopped: no sleep.
-fn wait_for_refusal(pool: Pool(extra), attempts: Int) -> Result(Nil, Failure) {
+fn wait_for_refusal(pool: Pool, attempts: Int) -> Result(Nil, Failure) {
   case pool.hold(pool, 0, backend_pid), attempts {
     Error(PoolStopped), _ -> Ok(Nil)
     _, 0 -> Error(Unexpected("the pool did not stop"))
@@ -1305,8 +1348,8 @@ fn check_owner_exit() {
 }
 
 fn own_pool(
-  config: PoolConfig(Nil),
-  started: Subject(Result(#(Pool(Nil), Subject(Nil)), Failure)),
+  config: PoolConfig,
+  started: Subject(Result(#(Pool, Subject(Nil)), Failure)),
 ) -> Nil {
   let go = process.new_subject()
   let pool = pool.start(config, 1) |> result.map_error(Start)
@@ -1314,7 +1357,7 @@ fn own_pool(
   process.receive_forever(go)
 }
 
-fn with_go(pool: Pool(Nil), go: Subject(Nil)) -> #(Pool(Nil), Subject(Nil)) {
+fn with_go(pool: Pool, go: Subject(Nil)) -> #(Pool, Subject(Nil)) {
   #(pool, go)
 }
 
@@ -1342,7 +1385,7 @@ fn check_supervisor_exit() {
 }
 
 fn kill_supervisor(
-  config: PoolConfig(Nil),
+  config: PoolConfig,
   exits: Subject(Result(ExitReason, Failure)),
 ) -> Nil {
   process.trap_exits(True)
