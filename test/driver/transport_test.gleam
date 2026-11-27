@@ -23,8 +23,8 @@ import dream_test/matchers.{
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/fake_server.{
-  type FakeBehavior, Answer, NotTls, Reset, Tls, TlsThenNotTls, free_port,
-  start_fake_server,
+  type FakeBehavior, Answer, NotTls, Reset, Tls, free_port, next_message,
+  send_bad_record, start_fake_server, start_tls_then_bad_record,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import driver/test_files.{read_pem_certificate}
@@ -653,31 +653,33 @@ fn socket_tests() {
     }),
     it("gives the TLS alert of a record that is not valid TLS", fn() {
       // Act
-      let connected = {
-        use #(port, _server) <- result.map(
-          start_fake_server(TlsThenNotTls(
-            "test/fixtures/ssl/server.crt",
-            "test/fixtures/ssl/server.key",
-          )),
-        )
-        try(
+      let event = {
+        use #(port, server) <- try(start_tls_then_bad_record(
+          "test/fixtures/ssl/server.crt",
+          "test/fixtures/ssl/server.key",
+        ))
+        use connection <- try(
           transport_config(
             "localhost",
             port,
             RequireTls(NoCertificateCheck, PostgresNegotiation),
-          ),
-          connect_with_minute_deadline,
+          )
+          |> try(connect_with_minute_deadline)
+          |> map_error(inspect),
         )
+        use Nil <- try(transport.receive_next(connection) |> map_error(inspect))
+        use Nil <- try(send_bad_record(server))
+        use message <- try(next_message())
+        Ok(transport.socket_event(connection, message))
       }
 
       // Assert
-      connected
+      event
       |> should
       |> be_ok
-      |> be_ok
-      |> extract_receive_result(timeout: 5000)
-      |> be_error
-      |> be_equal(TlsFailed(OtherTlsFailure("bad_record_mac")))
+      |> be_equal(
+        transport.SocketFailed(TlsFailed(OtherTlsFailure("bad_record_mac"))),
+      )
       |> or_fail_with("Expected the TLS alert as a typed error")
     }),
     it("gives SocketClosed for a receive on a closed TLS connection", fn() {
@@ -717,6 +719,26 @@ fn reason_tests() {
       |> should
       |> be_equal(atom.create("revoked"))
       |> or_fail_with("Expected the name revoked")
+    }),
+    it("reads a TLS alert of the ssl application by its name", fn() {
+      // Arrange
+      let reason =
+        dynamic.array([
+          atom.to_dynamic(atom.create("tls_alert")),
+          dynamic.array([
+            atom.to_dynamic(atom.create("bad_record_mac")),
+            dynamic.string("TLS client: Bad Record MAC"),
+          ]),
+        ])
+
+      // Act
+      let failure = socket_failure(reason)
+
+      // Assert
+      failure
+      |> should
+      |> be_equal(TlsAlert(atom.create("bad_record_mac")))
+      |> or_fail_with("Expected the alert's name")
     }),
     it("keeps the printed form of a reason of another shape", fn() {
       // Arrange
