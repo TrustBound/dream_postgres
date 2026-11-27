@@ -22,6 +22,7 @@ import dream_test/matchers.{
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/servers.{type Server, driver_servers, first_driver_server}
+import fixtures/driver_tls.{certificate_authority, verify_full}
 import gleam/erlang/atom.{type Atom}
 import gleam/int.{to_string}
 import gleam/list.{map}
@@ -58,8 +59,6 @@ type FakeBehavior {
   NotTls
   Tls(String, String)
 }
-
-const certificate_authority = "test/fixtures/ssl/ca.crt"
 
 /// The tests of the transport.
 pub fn tests() -> TestSuite {
@@ -287,13 +286,6 @@ fn server_tests(server: Server) {
       |> or_fail_with("Expected the DER bytes of server.crt")
     }),
   ])
-}
-
-fn verify_full() -> Tls {
-  RequireTls(
-    CheckAuthorityAndHost(AuthorityFile(certificate_authority)),
-    PostgresNegotiation,
-  )
 }
 
 fn direct_tls() -> Tls {
