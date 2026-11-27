@@ -1045,7 +1045,8 @@ pub fn statement(sql: String) -> Statement {
 
 /// Names a statement for its span. The name is recorded as
 /// `db.query.summary`, and it becomes the span's name (OTel semantic
-/// conventions, docs/db/database-spans.md: "The **span name** SHOULD be
+/// conventions at commit 7c8eb86d04, docs/db/database-spans.md line 56:
+/// "The **span name** SHOULD be
 /// `{db.query.summary}` if a summary is available."). So it must be
 /// low-cardinality and hold no value: one name for one kind of statement,
 /// for example `post.create`. The name plays no part in the statement
@@ -1132,7 +1133,8 @@ fn copy_ending(result: Result(value, CopyError(reason))) -> SpanEnd {
 }
 
 /// `error.type` is the server's SQLSTATE when there is one, else the
-/// error's name (OTel database-spans: `error.type` "SHOULD match the
+/// error's name (OTel semantic conventions at commit 7c8eb86d04,
+/// docs/db/database-spans.md note 9: `error.type` "SHOULD match the
 /// `db.response.status_code` returned by the database or the client
 /// library, or the canonical name of exception that occurred").
 fn failed_ending(name: String, report: Option(ServerReport)) -> SpanEnd {
@@ -1352,7 +1354,8 @@ pub fn run_script(
   deadline_milliseconds: Int,
 ) -> Result(List(Outcome), ScriptError) {
   // A script is not parameterized, so its text may hold values: it is not
-  // recorded (database-spans.md: "Non-parameterized query text SHOULD NOT
+  // recorded (OTel semantic conventions at commit 7c8eb86d04,
+  // docs/db/database-spans.md note 15: "Non-parameterized query text SHOULD NOT
   // be collected by default unless there is sanitization").
   use <- traced(connection, statement, None, _, script_ending)
   run_script_without_span(connection, statement.sql, deadline_milliseconds)

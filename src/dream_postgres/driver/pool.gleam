@@ -34,7 +34,8 @@
 //// A hold makes no span of its own: each statement on the held connection
 //// has its span, and the OTel semantic conventions give a pool's signals
 //// as metrics (`db.client.connection.count`, `.pending_requests`,
-//// `.timeouts`, `.wait_time`, `.use_time`; docs/db/database-metrics.md,
+//// `.timeouts`, `.wait_time`, `.use_time`; docs/db/database-metrics.md at
+//// commit 7c8eb86d04,
 //// in development status), not as spans. The pool events and `status` give
 //// the numbers that those metrics read.
 ////

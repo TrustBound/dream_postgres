@@ -4,8 +4,9 @@
 //// no OpenTelemetry SDK running, each call is a no-op of the API.
 ////
 //// The attributes follow the OTel semantic conventions for PostgreSQL
-//// (open-telemetry/semantic-conventions, docs/db/postgresql.md and
-//// docs/db/database-spans.md). No parameter value is ever recorded.
+//// (open-telemetry/semantic-conventions at commit 7c8eb86d04,
+//// docs/db/postgresql.md and docs/db/database-spans.md). No parameter
+//// value is ever recorded.
 ////
 //// A span records a call that the app made through `prepare`, `run`,
 //// `run_script`, `copy_from` or `copy_to`. The statements that the driver
@@ -68,7 +69,8 @@ const default_port = 5432
 /// The span, which `end` must end.
 pub fn start(target: SpanTarget, query: SpanQuery) -> Span {
   // The span name is the summary when the caller gave one, else the
-  // namespace target (database-spans.md lines 56-63 and 69-74).
+  // namespace target (semantic conventions at commit 7c8eb86d04,
+  // docs/db/database-spans.md lines 56-63 and 69-74).
   let name = option.unwrap(query.summary, target.database)
   let strings =
     [
@@ -129,7 +131,8 @@ fn is_word(part: String) -> Bool {
 }
 
 /// `server.port` is conditionally required: when the port is not the
-/// default (postgresql.md, note 5 on `server.port`).
+/// default (semantic conventions at commit 7c8eb86d04, docs/db/postgresql.md,
+/// note 5 on `server.port`).
 fn port_attributes(port: Int) -> List(#(String, Int)) {
   case port == default_port {
     True -> []

@@ -8,8 +8,9 @@
 %% nothing.
 
 %% Starts a span of kind CLIENT in the caller's process, with the caller's
-%% current span as its parent. OTel semantic conventions, database spans:
-%% "**Span kind** SHOULD be `CLIENT`." (docs/db/postgresql.md line 31).
+%% current span as its parent. OTel semantic conventions at commit
+%% 7c8eb86d04: "**Span kind** SHOULD be `CLIENT`." (docs/db/postgresql.md
+%% line 31).
 start_client_span(Name, StringAttributes, IntAttributes) ->
     Tracer = opentelemetry:get_application_tracer(?MODULE),
     Attributes = maps:from_list(StringAttributes ++ IntAttributes),
