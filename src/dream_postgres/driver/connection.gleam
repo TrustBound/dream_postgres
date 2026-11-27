@@ -1343,6 +1343,11 @@ fn run_script_without_span(
 
 /// The transaction status after the last request.
 ///
+/// The caller waits at most the reply margin of the connection: its cancel
+/// timeout plus its setup timeout. The process reads its own state, so it
+/// answers at once, except while it reconnects: a reconnect blocks it for
+/// at most the setup timeout.
+///
 /// ## Parameters
 ///
 /// - `connection`: the connection
@@ -1351,7 +1356,8 @@ fn run_script_without_span(
 ///
 /// - `Ok(TransactionStatus)`: idle, in a transaction, or in a failed one
 /// - `Error(ProcessGone)`: the process is gone
-/// - `Error(NoAnswerInTime)`: the process did not answer in time
+/// - `Error(NoAnswerInTime)`: the process did not answer within the reply
+///   margin
 pub fn transaction_status(
   connection: Connection,
 ) -> Result(TransactionStatus, ConnectionStateError) {
@@ -1388,6 +1394,11 @@ fn snapshot_status(snapshot: Snapshot) -> TransactionStatus {
 
 /// The report of the statement that failed the transaction.
 ///
+/// The caller waits at most the reply margin of the connection: its cancel
+/// timeout plus its setup timeout. The process reads its own state, so it
+/// answers at once, except while it reconnects: a reconnect blocks it for
+/// at most the setup timeout.
+///
 /// ## Parameters
 ///
 /// - `connection`: the connection
@@ -1399,7 +1410,8 @@ fn snapshot_status(snapshot: Snapshot) -> TransactionStatus {
 /// - `Ok(None)`: in any other status. It clears when the status is idle
 ///   again.
 /// - `Error(ProcessGone)`: the process is gone
-/// - `Error(NoAnswerInTime)`: the process did not answer in time
+/// - `Error(NoAnswerInTime)`: the process did not answer within the reply
+///   margin
 pub fn aborted_by(
   connection: Connection,
 ) -> Result(Option(ServerReport), ConnectionStateError) {
@@ -1413,6 +1425,11 @@ fn snapshot_aborted_by(snapshot: Snapshot) -> Option(ServerReport) {
 /// A run-time parameter that the server reported, for example
 /// `server_version` or `TimeZone`, with its latest value.
 ///
+/// The caller waits at most the reply margin of the connection: its cancel
+/// timeout plus its setup timeout. The process reads its own state, so it
+/// answers at once, except while it reconnects: a reconnect blocks it for
+/// at most the setup timeout.
+///
 /// ## Parameters
 ///
 /// - `connection`: the connection
@@ -1423,7 +1440,8 @@ fn snapshot_aborted_by(snapshot: Snapshot) -> Option(ServerReport) {
 /// - `Ok(Some(value))`: the latest value
 /// - `Ok(None)`: the server reported no parameter of that name
 /// - `Error(ProcessGone)`: the process is gone
-/// - `Error(NoAnswerInTime)`: the process did not answer in time
+/// - `Error(NoAnswerInTime)`: the process did not answer within the reply
+///   margin
 pub fn server_parameter(
   connection: Connection,
   name: String,
