@@ -11,25 +11,34 @@
 //// arrives, and the listener sends it on to each subscriber of its channel,
 //// in the order the server sent them.
 ////
-//// When the connection is lost, the connection process connects again.
-//// The new session listens on nothing, so the listener sends `LISTEN` again
-//// for each channel. The server keeps no notification for a session that
-//// is gone, so each subscriber then gets `ListenedAgain`: the notifications
-//// between the loss and that message may be missed.
+//// When the connection is lost, each subscriber gets `ListeningLost` at
+//// once, and the connection process connects again. The new session
+//// listens on nothing, so the listener sends `LISTEN` again for each
+//// channel. The server keeps no notification for a session that is gone,
+//// so each subscriber then gets `ListenedAgain`: the notifications between
+//// the loss and that message may be missed. A subscribe while the
+//// connection is lost is kept the same way: the subscriber gets
+//// `ListeningLost` at once, and `ListenedAgain` after the reconnect.
+////
+//// A call to the listener has no timeout: the listener answers each one
+//// after at most its own `LISTEN` or `UNLISTEN`, and a listener that is gone
+//// gives `ListenerProcessDown`. So a subscription never exists without the
+//// handle that ends it.
 ////
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
   type ConnectionEvent, type DriverError, type Notification, ConnectionConfig,
-  Disconnected, ReconnectFailed, Reconnected,
+  ConnectionLost, Disconnected, ProtocolViolation, ReconnectFailed, Reconnected,
+  ServerEndedConnection,
 }
 import gleam/bit_array.{byte_size}
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{
   type Down, type Monitor, type Pid, type Subject, subject_owner,
 }
-import gleam/list.{each, filter_map, unique}
+import gleam/list.{any, each, filter, unique}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
@@ -53,6 +62,9 @@ pub type ListenerConfig {
 pub type ListenerMessage {
   /// A notification on the channel of the subscription.
   NotificationArrived(notification: Notification)
+  /// The connection is lost, so the session does not listen on the channel
+  /// of the subscription. `ListenedAgain` follows after the reconnect.
+  ListeningLost
   /// The listener connected again and sent `LISTEN` again for the channel.
   /// Notifications on the channel between the loss and this message may be
   /// missed. With an error, the session does not listen on the channel, and
@@ -68,10 +80,10 @@ pub type ListenerError {
   /// The subscriber subject has no process: it has a name that no process
   /// has.
   SubscriberHasNoProcess
-  /// The `LISTEN` failed, so the subscription is not kept.
+  /// The server refused the `LISTEN`, or it could not be written, so the
+  /// subscription is not kept. A loss of the connection is not a failure:
+  /// the subscription is kept and gets `ListeningLost`.
   ListenFailed(error: DriverError)
-  /// The listener did not answer in time.
-  ListenerTimedOut
   /// The listener process is gone.
   ListenerProcessDown
 }
@@ -94,14 +106,8 @@ pub opaque type Subscription {
   Subscription(monitor: Monitor)
 }
 
-/// A reply target: an alias of the caller (see the FFI module of the
-/// connection).
+/// A reply target: an alias of the caller (see the FFI module).
 type ReplyTo(reply)
-
-type CallFailure {
-  CallProcessDown
-  CallDeadlinePassed
-}
 
 type Message {
   SubscribeRequest(
@@ -117,9 +123,23 @@ type Message {
   SubscriberDown(monitor: Monitor)
 }
 
-/// A subscriber of one channel.
+/// A subscriber of one channel. `listening` says whether the session
+/// listens on the channel: it is `False` from a loss until the `LISTEN`
+/// after the reconnect.
 type Subscriber {
-  Subscriber(channel: String, subject: Subject(ListenerMessage))
+  Subscriber(
+    channel: String,
+    subject: Subject(ListenerMessage),
+    listening: Bool,
+  )
+}
+
+/// What a subscribe does.
+type Admission {
+  /// Adds the subscriber. With `listening` `False`, it gets `ListeningLost`.
+  Admit(listening: Bool)
+  /// Refuses the subscriber with the error of its `LISTEN`.
+  Refuse(error: DriverError)
 }
 
 type State {
@@ -134,14 +154,13 @@ type State {
 /// The longest channel name, in bytes: PostgreSQL's NAMEDATALEN less one.
 const longest_channel_bytes = 63
 
-@external(erlang, "dream_postgres_connection_ffi", "call")
+@external(erlang, "dream_postgres_listener_ffi", "call")
 fn call_process(
   pid: Pid,
   send_request: fn(ReplyTo(reply)) -> Nil,
-  timeout: Int,
-) -> Result(reply, CallFailure)
+) -> Result(reply, Nil)
 
-@external(erlang, "dream_postgres_connection_ffi", "reply")
+@external(erlang, "dream_postgres_listener_ffi", "reply")
 fn reply(to: ReplyTo(reply), value: reply) -> Nil
 
 // Starting and stopping -------------------------------------------------------
@@ -266,7 +285,7 @@ fn down_message(down: Down) -> Message {
 /// `Nil`, also when the listener is gone already. Its subscribers get no
 /// message.
 pub fn stop(listener: Listener) -> Nil {
-  call(listener, StopRequest, 5000) |> result.unwrap(Nil)
+  call(listener, StopRequest) |> result.unwrap(Nil)
 }
 
 // Subscribing -----------------------------------------------------------------
@@ -279,31 +298,25 @@ pub fn stop(listener: Listener) -> Nil {
 ///
 /// - `listener`: the listener
 /// - `channel`: the exact channel name, at most 63 bytes
-/// - `subscriber`: where each notification and `ListenedAgain` goes
-/// - `timeout_milliseconds`: the longest time to wait for the listener
+/// - `subscriber`: where each notification, `ListeningLost` and
+///   `ListenedAgain` goes
 ///
 /// ## Returns
 ///
-/// - `Ok(Subscription)`: the session listens on the channel
+/// - `Ok(Subscription)`: the session listens on the channel, or the
+///   connection is lost and the subscriber got `ListeningLost`
 /// - `Error(ListenerError)`: the name is too long, the subject has no
-///   process, the `LISTEN` failed, or the listener did not answer. After
-///   `ListenerTimedOut` the listener can still make the subscription, which
-///   then ends only when the subscriber's process stops.
+///   process, the server refused the `LISTEN`, or the listener is gone
 pub fn subscribe(
   listener: Listener,
   channel: String,
   subscriber: Subject(ListenerMessage),
-  timeout_milliseconds: Int,
 ) -> Result(Subscription, ListenerError) {
   use Nil <- try(check_channel(channel))
   use owner <- try(
     subject_owner(subscriber) |> replace_error(SubscriberHasNoProcess),
   )
-  call(
-    listener,
-    SubscribeRequest(channel, subscriber, owner, _),
-    timeout_milliseconds,
-  )
+  call(listener, SubscribeRequest(channel, subscriber, owner, _))
   |> result.flatten
 }
 
@@ -321,27 +334,25 @@ fn check_channel(channel: String) -> Result(Nil, ListenerError) {
 ///
 /// - `listener`: the listener
 /// - `subscription`: the subscription to end
-/// - `timeout_milliseconds`: the longest time to wait for the listener
 ///
 /// ## Returns
 ///
 /// - `Ok(Nil)`: the subscription is ended, also when it was ended already
-/// - `Error(ListenerError)`: the listener did not answer, or is gone
+/// - `Error(ListenerProcessDown)`: the listener is gone
 pub fn unsubscribe(
   listener: Listener,
   subscription: Subscription,
-  timeout_milliseconds: Int,
 ) -> Result(Nil, ListenerError) {
-  call(listener, UnsubscribeRequest(subscription, _), timeout_milliseconds)
+  call(listener, UnsubscribeRequest(subscription, _))
 }
 
+/// Waits for the answer until it comes or the listener is gone.
 fn call(
   listener: Listener,
   make: fn(ReplyTo(reply)) -> Message,
-  timeout: Int,
 ) -> Result(reply, ListenerError) {
-  call_process(listener.pid, send_request(listener, make, _), timeout)
-  |> map_error(call_error)
+  call_process(listener.pid, send_request(listener, make, _))
+  |> replace_error(ListenerProcessDown)
 }
 
 fn send_request(
@@ -350,13 +361,6 @@ fn send_request(
   reply_to: ReplyTo(reply),
 ) -> Nil {
   process.send(listener.subject, make(reply_to))
-}
-
-fn call_error(failure: CallFailure) -> ListenerError {
-  case failure {
-    CallProcessDown -> ListenerProcessDown
-    CallDeadlinePassed -> ListenerTimedOut
-  }
 }
 
 // The process -----------------------------------------------------------------
@@ -388,7 +392,7 @@ fn handle_message(
   }
 }
 
-/// Adds a subscriber. Only the first one of a channel needs a `LISTEN`.
+/// Adds a subscriber, or refuses it.
 fn add_subscriber(
   state: State,
   channel: String,
@@ -396,16 +400,34 @@ fn add_subscriber(
   owner: Pid,
   reply_to: ReplyTo(Result(Subscription, ListenerError)),
 ) -> State {
-  let listening = case has_subscribers(state, channel) {
-    True -> Ok(Nil)
-    False -> listen(state, channel)
-  }
-  let #(state, answer) = case listening {
-    Ok(Nil) -> added(state, Subscriber(channel, subject), owner)
-    Error(error) -> #(state, Error(ListenFailed(error)))
+  let #(state, answer) = case admission(state, channel) {
+    Admit(listening:) ->
+      added(state, Subscriber(channel, subject, listening), owner)
+    Refuse(error) -> #(state, Error(ListenFailed(error)))
   }
   reply(reply_to, answer)
   state
+}
+
+/// Only the first subscriber of a channel needs a `LISTEN`. A later one
+/// listens when the others do.
+fn admission(state: State, channel: String) -> Admission {
+  case subscribers_on(state, channel) {
+    [] -> listen(state, channel) |> listen_admission
+    subscribers -> Admit(any(subscribers, is_listening))
+  }
+}
+
+/// A `LISTEN` that failed because the connection is lost is kept: the
+/// connection process connects again, and the listener listens then.
+fn listen_admission(listened: Result(Nil, DriverError)) -> Admission {
+  case listened {
+    Ok(Nil) -> Admit(True)
+    Error(ConnectionLost(_))
+    | Error(ServerEndedConnection(_))
+    | Error(ProtocolViolation(_)) -> Admit(False)
+    Error(error) -> Refuse(error)
+  }
 }
 
 fn added(
@@ -415,6 +437,10 @@ fn added(
 ) -> #(State, Result(Subscription, ListenerError)) {
   let monitor = process.monitor(owner)
   let subscriptions = dict.insert(state.subscriptions, monitor, subscriber)
+  case subscriber.listening {
+    True -> Nil
+    False -> process.send(subscriber.subject, ListeningLost)
+  }
   #(State(..state, subscriptions:), Ok(Subscription(monitor)))
 }
 
@@ -468,23 +494,68 @@ fn deliver(state: State, notification: Notification) -> Nil {
   |> each(process.send(_, NotificationArrived(notification)))
 }
 
-/// After a reconnect, sends `LISTEN` again for each channel and tells its
-/// subscribers the result. The other events need nothing: the connection
-/// process connects again by itself.
+/// A loss tells each subscriber that listens. After a reconnect, the
+/// listener sends `LISTEN` again for each channel and tells its subscribers
+/// the result. A failed reconnect needs nothing: the connection process
+/// tries again by itself.
 fn connection_event(state: State, event: ConnectionEvent) -> State {
   case event {
-    Reconnected -> {
-      channels(state) |> each(listen_again(state, _))
-      state
-    }
-    Disconnected(_error) | ReconnectFailed(_error) -> state
+    Disconnected(_error) -> lost(state)
+    Reconnected -> list.fold(channels(state), state, listen_again)
+    ReconnectFailed(_error) -> state
   }
 }
 
-fn listen_again(state: State, channel: String) -> Nil {
+/// Only the subscribers that listen get `ListeningLost`: one that came
+/// while the connection was lost got it already.
+fn lost(state: State) -> State {
+  dict.values(state.subscriptions)
+  |> filter(is_listening)
+  |> each(tell_lost)
+  State(
+    ..state,
+    subscriptions: dict.map_values(state.subscriptions, not_listening),
+  )
+}
+
+fn tell_lost(subscriber: Subscriber) -> Nil {
+  process.send(subscriber.subject, ListeningLost)
+}
+
+fn not_listening(_monitor: Monitor, subscriber: Subscriber) -> Subscriber {
+  Subscriber(..subscriber, listening: False)
+}
+
+fn listen_again(state: State, channel: String) -> State {
   let result = listen(state, channel)
   subscribers_of(state, channel)
   |> each(process.send(_, ListenedAgain(channel, result)))
+  let listening = result.is_ok(result)
+  State(
+    ..state,
+    subscriptions: dict.map_values(
+      state.subscriptions,
+      fn(_monitor, subscriber) {
+        listening_after(subscriber, channel, listening)
+      },
+    ),
+  )
+}
+
+/// The subscribers of `channel` listen when its `LISTEN` worked.
+fn listening_after(
+  subscriber: Subscriber,
+  channel: String,
+  listening: Bool,
+) -> Subscriber {
+  case subscriber.channel == channel {
+    True -> Subscriber(..subscriber, listening:)
+    False -> subscriber
+  }
+}
+
+fn is_listening(subscriber: Subscriber) -> Bool {
+  subscriber.listening
 }
 
 fn channels(state: State) -> List(String) {
@@ -496,22 +567,24 @@ fn channel_of(subscriber: Subscriber) -> String {
 }
 
 fn has_subscribers(state: State, channel: String) -> Bool {
-  subscribers_of(state, channel) != []
+  subscribers_on(state, channel) != []
 }
 
 fn subscribers_of(
   state: State,
   channel: String,
 ) -> List(Subject(ListenerMessage)) {
-  dict.values(state.subscriptions) |> filter_map(subject_on(_, channel))
+  subscribers_on(state, channel) |> list.map(subject_of)
 }
 
-fn subject_on(
-  subscriber: Subscriber,
-  channel: String,
-) -> Result(Subject(ListenerMessage), Nil) {
-  case subscriber.channel == channel {
-    True -> Ok(subscriber.subject)
-    False -> Error(Nil)
-  }
+fn subject_of(subscriber: Subscriber) -> Subject(ListenerMessage) {
+  subscriber.subject
+}
+
+fn subscribers_on(state: State, channel: String) -> List(Subscriber) {
+  dict.values(state.subscriptions) |> filter(on_channel(_, channel))
+}
+
+fn on_channel(subscriber: Subscriber, channel: String) -> Bool {
+  subscriber.channel == channel
 }
