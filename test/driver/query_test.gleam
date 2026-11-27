@@ -3,42 +3,45 @@
 //// one message at a time, with no server. Some flows come as bytes through
 //// `decode_backend`.
 
-import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/message.{
   type BackendMessage, type ResultColumn, Bind, BindComplete, Close,
   CloseComplete, CommandComplete, CopyBothResponse, CopyDataFromServer,
-  CopyDoneFromServer, CopyInResponse, CopyOutResponse, DataRow, Decoded,
-  Describe, EmptyQueryResponse, ErrorResponse, Execute, NoData, NoticeResponse,
+  CopyDoneFromServer, CopyInResponse, CopyOutResponse, DataRow, Describe,
+  EmptyQueryResponse, ErrorResponse, Execute, NoData, NoticeResponse,
   NotificationResponse, ParameterDescriptions, ParameterStatus, Parse,
   ParseComplete, Portal, PortalSuspended, Query, ReadyForQuery, ResultColumn,
   RowDescription, Statement, Sync,
 }
 import dream_postgres/driver/query.{
-  type Failure, type Outcome, type Step, type UnexpectedMessage,
-  AwaitingBindComplete, AwaitingCloseComplete, AwaitingCopyComplete,
-  AwaitingParameterDescription, AwaitingParseComplete, AwaitingPortalColumns,
-  AwaitingReadyForQuery, AwaitingReadyForQueryAfterError,
+  type UnexpectedMessage, AwaitingBindComplete, AwaitingCloseComplete,
+  AwaitingCopyComplete, AwaitingParameterDescription, AwaitingParseComplete,
+  AwaitingPortalColumns, AwaitingReadyForQuery, AwaitingReadyForQueryAfterError,
   AwaitingStatementColumns, AwaitingStatementResult, ConnectionEnded,
   CopyNotSupported, Finished, Notice, Notification, Outcome, ParameterChanged,
-  ReadingCopyOut, ReadingExecuteRows, ReadingScriptRows, ScriptFailure, Send,
-  ServerError, StatementResult, UnexpectedMessage, Wait, failure_report,
-  start_prepare, start_prepare_and_run, start_prepare_closing, start_run,
-  start_simple_query, step_prepare, step_prepare_and_run, step_run,
-  step_simple_query,
+  ReadingCopyOut, ReadingExecuteRows, ReadingScriptRows, ScriptFailure,
+  ServerError, StatementResult, UnexpectedMessage, failure_report, start_prepare,
+  start_prepare_and_run, start_prepare_closing, start_run, start_simple_query,
+  step_prepare, step_prepare_and_run, step_run, step_simple_query,
 }
 import dream_postgres/internal/cell.{
   type ColumnDescription, type Format, type ServerReport, Binary, BinaryFormat,
   ColumnDescription, CommandResult, Idle, InFailedTransaction, InTransaction,
-  Null, ParameterDescription, ServerReport, StatementDescription, Text,
-  TextFormat,
+  Null, ParameterDescription, StatementDescription, Text, TextFormat,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{
+  be_equal, be_error, be_none, be_ok, be_some, or_fail_with, should,
+}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
+import fixtures/server_report.{server_report}
 import gleam/bit_array.{byte_size, concat}
 import gleam/list.{map}
-import gleam/option.{type Option, None, Some}
-import gleam/result
+import gleam/option.{None, Some}
+import matchers/be_wait.{be_wait}
+import matchers/extract_backend_messages.{extract_backend_messages}
+import matchers/extract_last_step.{extract_last_step}
+import matchers/extract_query_feed.{extract_query_feed}
+import matchers/extract_sent_messages.{extract_sent_messages}
 
 /// The tests of the query steps.
 pub fn tests() -> TestSuite {
@@ -51,60 +54,8 @@ pub fn tests() -> TestSuite {
     group("COPY", copy_tests()),
     group("asynchronous messages", asynchronous_tests()),
     group("the row count of a command tag", map(count_cases(), count_test)),
-    group(
-      "messages that a phase does not allow",
-      map(unexpected_cases(), unexpected_test),
-    ),
+    group("messages that a phase does not allow", unexpected_tests()),
   ])
-}
-
-// The feeding of messages ---------------------------------------------------
-
-/// The bytes that the steps asked to send, in order, and what the last
-/// step gave.
-type Fed(state, outcome) {
-  Fed(sent: BitArray, last: Result(Step(state, outcome), UnexpectedMessage))
-}
-
-/// Gives each message to the step, one at a time, while the step waits.
-fn feed(
-  state: state,
-  messages: List(BackendMessage),
-  step: fn(state, BackendMessage) ->
-    Result(Step(state, outcome), UnexpectedMessage),
-) -> Fed(state, outcome) {
-  feed_from(Fed(sent: <<>>, last: Ok(Wait(state))), messages, step)
-}
-
-fn feed_from(
-  fed: Fed(state, outcome),
-  messages: List(BackendMessage),
-  step: fn(state, BackendMessage) ->
-    Result(Step(state, outcome), UnexpectedMessage),
-) -> Fed(state, outcome) {
-  case fed.last, messages {
-    Ok(Wait(state)), [message, ..rest]
-    | Ok(Send(state:, ..)), [message, ..rest]
-    -> feed_from(record(fed.sent, step(state, message)), rest, step)
-    _, _ -> fed
-  }
-}
-
-fn record(
-  sent: BitArray,
-  last: Result(Step(state, outcome), UnexpectedMessage),
-) -> Fed(state, outcome) {
-  case last {
-    Ok(Send(bytes:, ..)) -> Fed(sent: <<sent:bits, bytes:bits>>, last:)
-    _ -> Fed(sent:, last:)
-  }
-}
-
-fn is_wait(step: Result(Step(state, outcome), UnexpectedMessage)) -> Bool {
-  case step {
-    Ok(Wait(_)) -> True
-    _ -> False
-  }
 }
 
 // The values of the tests ---------------------------------------------------
@@ -128,36 +79,16 @@ fn result_column(
   ResultColumn(column: column(name, type_id, number), type_size: 4, format:)
 }
 
-fn report(severity: String, code: String, text: String) -> ServerReport {
-  ServerReport(
-    severity:,
-    localized_severity: severity,
-    code:,
-    message: text,
-    detail: None,
-    hint: None,
-    position: None,
-    internal_position: None,
-    internal_query: None,
-    context: None,
-    schema: None,
-    table: None,
-    column: None,
-    data_type: None,
-    constraint: None,
-    file: None,
-    line: None,
-    routine: None,
-    other_fields: [],
+fn unique_violation() -> ServerReport {
+  server_report(
+    "ERROR",
+    "23505",
+    "duplicate key value violates unique constraint",
   )
 }
 
-fn unique_violation() -> ServerReport {
-  report("ERROR", "23505", "duplicate key value violates unique constraint")
-}
-
 fn copy_failed() -> ServerReport {
-  report(
+  server_report(
     "ERROR",
     "57014",
     "COPY from stdin failed: COPY is not supported by this step",
@@ -165,7 +96,7 @@ fn copy_failed() -> ServerReport {
 }
 
 fn notice() -> ServerReport {
-  report("NOTICE", "00000", "table t does not exist, skipping")
+  server_report("NOTICE", "00000", "table t does not exist, skipping")
 }
 
 // Prepare -------------------------------------------------------------------
@@ -191,7 +122,7 @@ fn prepare_tests() {
     it("reads each CloseComplete before the ParseComplete", fn() {
       // Arrange
       let start = start_prepare_closing(["s1", "s2"], "s3", "SELECT 1", [])
-      let answers = [
+      let messages = [
         CloseComplete,
         CloseComplete,
         ParseComplete,
@@ -200,13 +131,21 @@ fn prepare_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, answers, step_prepare)
-
-      // Assert
-      finished_result(fed.last)
+      // Act and Assert
+      messages
       |> should
-      |> be_equal(Some(Ok(StatementDescription([], []))))
+      |> extract_query_feed(start.state, step_prepare)
+      |> extract_last_step
+      |> be_ok
+      |> be_equal(
+        Finished(
+          Outcome(
+            result: Ok(StatementDescription([], [])),
+            status: Idle,
+            asynchronous_messages: [],
+          ),
+        ),
+      )
       |> or_fail_with("Expected the description after both CloseComplete")
     }),
     it("refuses a ParseComplete where a CloseComplete must come", fn() {
@@ -218,11 +157,9 @@ fn prepare_tests() {
 
       // Assert
       step
-      |> result.replace(Nil)
       |> should
-      |> be_equal(
-        Error(UnexpectedMessage(ParseComplete, AwaitingCloseComplete, [])),
-      )
+      |> be_error
+      |> be_equal(UnexpectedMessage(ParseComplete, AwaitingCloseComplete, []))
       |> or_fail_with("Expected an unexpected message in AwaitingCloseComplete")
     }),
     it("sends Parse, Describe of the statement, and Sync", fn() {
@@ -249,9 +186,10 @@ fn prepare_tests() {
       let step = step_prepare(start.state, ParseComplete)
 
       // Assert
-      is_wait(step)
+      step
       |> should
-      |> be_equal(True)
+      |> be_ok
+      |> be_wait
       |> or_fail_with("Expected Wait after ParseComplete")
     }),
     it("describes each parameter and each column", fn() {
@@ -270,28 +208,26 @@ fn prepare_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(
-                StatementDescription(
-                  parameters: [
-                    ParameterDescription(23),
-                    ParameterDescription(25),
-                  ],
-                  columns: [column("id", 23, 1), column("name", 25, 2)],
-                ),
+        Finished(
+          Outcome(
+            result: Ok(
+              StatementDescription(
+                parameters: [
+                  ParameterDescription(23),
+                  ParameterDescription(25),
+                ],
+                columns: [column("id", 23, 1), column("name", 25, 2)],
               ),
-              status: Idle,
-              asynchronous_messages: [],
             ),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -307,25 +243,23 @@ fn prepare_tests() {
         ReadyForQuery(InTransaction),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(
-                StatementDescription(
-                  parameters: [ParameterDescription(23)],
-                  columns: [],
-                ),
+        Finished(
+          Outcome(
+            result: Ok(
+              StatementDescription(
+                parameters: [ParameterDescription(23)],
+                columns: [],
               ),
-              status: InTransaction,
-              asynchronous_messages: [],
             ),
+            status: InTransaction,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -341,12 +275,11 @@ fn prepare_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare)
-
-      // Assert
-      fed.sent
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare)
+      |> extract_sent_messages
       |> be_equal(<<>>)
       |> or_fail_with("Expected no messages to send")
     }),
@@ -390,27 +323,25 @@ fn run_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(CommandResult(
-                rows: [
-                  [Binary(<<0, 0, 0, 1>>), Text(<<"ada">>)],
-                  [Binary(<<0, 0, 0, 2>>), Null],
-                ],
-                tag: "SELECT 2",
-                count: 2,
-              )),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Ok(CommandResult(
+              rows: [
+                [Binary(<<0, 0, 0, 1>>), Text(<<"ada">>)],
+                [Binary(<<0, 0, 0, 2>>), Null],
+              ],
+              tag: "SELECT 2",
+              count: 2,
+            )),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -426,24 +357,22 @@ fn run_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(CommandResult(
-                rows: [[Text(<<"1">>), Text(<<"ada">>)]],
-                tag: "SELECT 1",
-                count: 1,
-              )),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Ok(CommandResult(
+              rows: [[Text(<<"1">>), Text(<<"ada">>)]],
+              tag: "SELECT 1",
+              count: 1,
+            )),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -459,24 +388,22 @@ fn run_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(CommandResult(
-                rows: [[Binary(<<1>>), Binary(<<2>>)]],
-                tag: "SELECT 1",
-                count: 1,
-              )),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Ok(CommandResult(
+              rows: [[Binary(<<1>>), Binary(<<2>>)]],
+              tag: "SELECT 1",
+              count: 1,
+            )),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -487,20 +414,18 @@ fn run_tests() {
       let start = start_run("", [], [])
       let messages = [BindComplete, EmptyQueryResponse, ReadyForQuery(Idle)]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(CommandResult(rows: [], tag: "", count: 0)),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Ok(CommandResult(rows: [], tag: "", count: 0)),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -553,27 +478,25 @@ fn prepare_and_run_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare_and_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare_and_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(StatementResult(
-                columns: [column("id", 23, 1), column("name", 25, 2)],
-                result: CommandResult(
-                  rows: [[Binary(<<0, 0, 0, 1>>), Text(<<"ada">>)]],
-                  tag: "SELECT 1",
-                  count: 1,
-                ),
-              )),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Ok(StatementResult(
+              columns: [column("id", 23, 1), column("name", 25, 2)],
+              result: CommandResult(
+                rows: [[Binary(<<0, 0, 0, 1>>), Text(<<"ada">>)]],
+                tag: "SELECT 1",
+                count: 1,
+              ),
+            )),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -590,23 +513,21 @@ fn prepare_and_run_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare_and_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare_and_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(StatementResult(
-                columns: [],
-                result: CommandResult(rows: [], tag: "INSERT 0 1", count: 1),
-              )),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Ok(StatementResult(
+              columns: [],
+              result: CommandResult(rows: [], tag: "INSERT 0 1", count: 1),
+            )),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -645,37 +566,35 @@ fn simple_query_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok([
-                StatementResult(
-                  columns: [],
-                  result: CommandResult(rows: [], tag: "CREATE TABLE", count: 0),
+        Finished(
+          Outcome(
+            result: Ok([
+              StatementResult(
+                columns: [],
+                result: CommandResult(rows: [], tag: "CREATE TABLE", count: 0),
+              ),
+              StatementResult(
+                columns: [],
+                result: CommandResult(rows: [], tag: "INSERT 0 2", count: 2),
+              ),
+              StatementResult(
+                columns: [column("id", 23, 1)],
+                result: CommandResult(
+                  rows: [[Text(<<"1">>)], [Text(<<"2">>)]],
+                  tag: "SELECT 2",
+                  count: 2,
                 ),
-                StatementResult(
-                  columns: [],
-                  result: CommandResult(rows: [], tag: "INSERT 0 2", count: 2),
-                ),
-                StatementResult(
-                  columns: [column("id", 23, 1)],
-                  result: CommandResult(
-                    rows: [[Text(<<"1">>)], [Text(<<"2">>)]],
-                    tag: "SELECT 2",
-                    count: 2,
-                  ),
-                ),
-              ]),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+              ),
+            ]),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -686,17 +605,15 @@ fn simple_query_tests() {
       let start = start_simple_query("  ")
       let messages = [EmptyQueryResponse, ReadyForQuery(Idle)]
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(result: Ok([]), status: Idle, asynchronous_messages: []),
-          ),
+        Finished(
+          Outcome(result: Ok([]), status: Idle, asynchronous_messages: []),
         ),
       )
       |> or_fail_with("Expected no results")
@@ -711,29 +628,27 @@ fn simple_query_tests() {
         ReadyForQuery(InTransaction),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok([
-                StatementResult(
-                  columns: [column("id", 23, 1)],
-                  result: CommandResult(
-                    rows: [[Binary(<<0, 0, 0, 1>>)]],
-                    tag: "FETCH 1",
-                    count: 1,
-                  ),
+        Finished(
+          Outcome(
+            result: Ok([
+              StatementResult(
+                columns: [column("id", 23, 1)],
+                result: CommandResult(
+                  rows: [[Binary(<<0, 0, 0, 1>>)]],
+                  tag: "FETCH 1",
+                  count: 1,
                 ),
-              ]),
-              status: InTransaction,
-              asynchronous_messages: [],
-            ),
+              ),
+            ]),
+            status: InTransaction,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -742,36 +657,35 @@ fn simple_query_tests() {
     it("reads a script from the bytes of the server", fn() {
       // Arrange
       let start = start_simple_query("SELECT 1 AS n, NULL AS m")
-      let messages = decode_all(select_bytes())
+      let bytes = select_bytes()
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      bytes
       |> should
+      |> extract_backend_messages
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok([
-                StatementResult(
-                  columns: [
-                    ColumnDescription("n", 23, -1, 0, 0),
-                    ColumnDescription("m", 25, -1, 0, 0),
-                  ],
-                  result: CommandResult(
-                    rows: [[Text(<<"1">>), Null]],
-                    tag: "SELECT 1",
-                    count: 1,
-                  ),
+        Finished(
+          Outcome(
+            result: Ok([
+              StatementResult(
+                columns: [
+                  ColumnDescription("n", 23, -1, 0, 0),
+                  ColumnDescription("m", 25, -1, 0, 0),
+                ],
+                result: CommandResult(
+                  rows: [[Text(<<"1">>), Null]],
+                  tag: "SELECT 1",
+                  count: 1,
                 ),
-              ]),
-              status: Idle,
-              asynchronous_messages: [
-                ParameterChanged("application_name", "dream"),
-              ],
-            ),
+              ),
+            ]),
+            status: Idle,
+            asynchronous_messages: [
+              ParameterChanged("application_name", "dream"),
+            ],
           ),
         ),
       )
@@ -799,13 +713,6 @@ fn frame(type_byte: String, body: BitArray) -> BitArray {
   <<type_byte:utf8, { byte_size(body) + 4 }:32, body:bits>>
 }
 
-fn decode_all(bytes: BitArray) -> List(BackendMessage) {
-  case decode_backend(bytes) {
-    Ok(Decoded(message, rest)) -> [message, ..decode_all(rest)]
-    _ -> []
-  }
-}
-
 // Server errors -------------------------------------------------------------
 
 fn server_error_tests() {
@@ -813,26 +720,25 @@ fn server_error_tests() {
     it("reads to ReadyForQuery after an error in Parse", fn() {
       // Arrange
       let start = start_prepare("s1", "SELEC 1", [])
-      let syntax_error = report("ERROR", "42601", "syntax error at or near")
+      let syntax_error =
+        server_report("ERROR", "42601", "syntax error at or near")
       let messages = [
         ErrorResponse(syntax_error),
         ReadyForQuery(InFailedTransaction),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(ServerError(syntax_error)),
-              status: InFailedTransaction,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Error(ServerError(syntax_error)),
+            status: InFailedTransaction,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -849,20 +755,18 @@ fn server_error_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(ServerError(unique_violation())),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Error(ServerError(unique_violation())),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -877,20 +781,18 @@ fn server_error_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(ServerError(unique_violation())),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Error(ServerError(unique_violation())),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -900,7 +802,7 @@ fn server_error_tests() {
       // Arrange
       let start =
         start_simple_query("BEGIN; INSERT INTO t VALUES (1); SELECT 1/0")
-      let division = report("ERROR", "22012", "division by zero")
+      let division = server_report("ERROR", "22012", "division by zero")
       let messages = [
         CommandComplete("BEGIN"),
         CommandComplete("INSERT 0 1"),
@@ -909,32 +811,30 @@ fn server_error_tests() {
         ReadyForQuery(InFailedTransaction),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(ScriptFailure(
-                completed: [
-                  StatementResult(
-                    columns: [],
-                    result: CommandResult(rows: [], tag: "BEGIN", count: 0),
-                  ),
-                  StatementResult(
-                    columns: [],
-                    result: CommandResult(rows: [], tag: "INSERT 0 1", count: 1),
-                  ),
-                ],
-                failure: ServerError(division),
-              )),
-              status: InFailedTransaction,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Error(ScriptFailure(
+              completed: [
+                StatementResult(
+                  columns: [],
+                  result: CommandResult(rows: [], tag: "BEGIN", count: 0),
+                ),
+                StatementResult(
+                  columns: [],
+                  result: CommandResult(rows: [], tag: "INSERT 0 1", count: 1),
+                ),
+              ],
+              failure: ServerError(division),
+            )),
+            status: InFailedTransaction,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -944,38 +844,42 @@ fn server_error_tests() {
       // Arrange
       let start = start_run("s1", [], [])
       let shutdown =
-        report("FATAL", "57P01", "terminating connection due to administrator")
+        server_report(
+          "FATAL",
+          "57P01",
+          "terminating connection due to administrator",
+        )
       let messages = [
         BindComplete,
         NoticeResponse(notice()),
         ErrorResponse(shutdown),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
-      |> be_equal(Ok(ConnectionEnded(shutdown, [Notice(notice())])))
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
+      |> be_equal(ConnectionEnded(shutdown, [Notice(notice())]))
       |> or_fail_with("Expected the connection to end with the report")
     }),
     it("ends the step at a PANIC error, also after an error", fn() {
       // Arrange
       let start = start_simple_query("SELECT 1")
-      let panic_report = report("PANIC", "XX000", "could not write")
+      let panic_report = server_report("PANIC", "XX000", "could not write")
       let messages = [
         ErrorResponse(unique_violation()),
         ErrorResponse(panic_report),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
-      |> be_equal(Ok(ConnectionEnded(panic_report, [])))
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_last_step
+      |> be_ok
+      |> be_equal(ConnectionEnded(panic_report, []))
       |> or_fail_with("Expected the connection to end with the report")
     }),
     it("gives the report of a server error", fn() {
@@ -985,7 +889,8 @@ fn server_error_tests() {
       // Assert
       found
       |> should
-      |> be_equal(Some(unique_violation()))
+      |> be_some
+      |> be_equal(unique_violation())
       |> or_fail_with("Expected the report")
     }),
     it("gives no report for a COPY that ended without an error", fn() {
@@ -995,7 +900,7 @@ fn server_error_tests() {
       // Assert
       found
       |> should
-      |> be_equal(None)
+      |> be_none
       |> or_fail_with("Expected no report")
     }),
   ]
@@ -1015,12 +920,11 @@ fn copy_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.sent
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_sent_messages
       |> be_equal(<<
         "f", 39:32, "COPY is not supported by this step":utf8, 0, "S", 4:32,
       >>)
@@ -1036,20 +940,18 @@ fn copy_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(CopyNotSupported(Some(copy_failed()))),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Error(CopyNotSupported(Some(copy_failed()))),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -1071,20 +973,18 @@ fn copy_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare_and_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare_and_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(CopyNotSupported(None)),
-              status: Idle,
-              asynchronous_messages: [Notice(notice())],
-            ),
+        Finished(
+          Outcome(
+            result: Error(CopyNotSupported(None)),
+            status: Idle,
+            asynchronous_messages: [Notice(notice())],
           ),
         ),
       )
@@ -1100,20 +1000,18 @@ fn copy_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(CopyNotSupported(Some(unique_violation()))),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+        Finished(
+          Outcome(
+            result: Error(CopyNotSupported(Some(unique_violation()))),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -1124,12 +1022,11 @@ fn copy_tests() {
       let start = start_run("s1", [], [])
       let messages = [BindComplete, CopyBothResponse(BinaryFormat, [])]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.sent
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_sent_messages
       |> be_equal(<<"c", 4:32, "S", 4:32>>)
       |> or_fail_with("Expected CopyDone and Sync")
     }),
@@ -1142,12 +1039,11 @@ fn copy_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.sent
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_sent_messages
       |> be_equal(<<"f", 39:32, "COPY is not supported by this step":utf8, 0>>)
       |> or_fail_with("Expected CopyFail only")
     }),
@@ -1156,12 +1052,11 @@ fn copy_tests() {
       let start = start_simple_query("START_REPLICATION 0/0")
       let messages = [CopyBothResponse(BinaryFormat, [])]
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.sent
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_sent_messages
       |> be_equal(<<"c", 4:32>>)
       |> or_fail_with("Expected CopyDone only")
     }),
@@ -1179,32 +1074,30 @@ fn copy_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_simple_query)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_simple_query)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(ScriptFailure(
-                completed: [
-                  StatementResult(
-                    columns: [column("?column?", 23, 0)],
-                    result: CommandResult(
-                      rows: [[Text(<<"1">>)]],
-                      tag: "SELECT 1",
-                      count: 1,
-                    ),
+        Finished(
+          Outcome(
+            result: Error(ScriptFailure(
+              completed: [
+                StatementResult(
+                  columns: [column("?column?", 23, 0)],
+                  result: CommandResult(
+                    rows: [[Text(<<"1">>)]],
+                    tag: "SELECT 1",
+                    count: 1,
                   ),
-                ],
-                failure: CopyNotSupported(None),
-              )),
-              status: Idle,
-              asynchronous_messages: [],
-            ),
+                ),
+              ],
+              failure: CopyNotSupported(None),
+            )),
+            status: Idle,
+            asynchronous_messages: [],
           ),
         ),
       )
@@ -1231,25 +1124,23 @@ fn asynchronous_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_prepare)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_prepare)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Ok(StatementDescription(parameters: [], columns: [])),
-              status: Idle,
-              asynchronous_messages: [
-                ParameterChanged("TimeZone", "UTC"),
-                Notice(notice()),
-                Notification(42, "jobs", "start"),
-                ParameterChanged("is_superuser", "off"),
-              ],
-            ),
+        Finished(
+          Outcome(
+            result: Ok(StatementDescription(parameters: [], columns: [])),
+            status: Idle,
+            asynchronous_messages: [
+              ParameterChanged("TimeZone", "UTC"),
+              Notice(notice()),
+              Notification(42, "jobs", "start"),
+              ParameterChanged("is_superuser", "off"),
+            ],
           ),
         ),
       )
@@ -1264,20 +1155,18 @@ fn asynchronous_tests() {
         ReadyForQuery(Idle),
       ]
 
-      // Act
-      let fed = feed(start.state, messages, step_run)
-
-      // Assert
-      fed.last
+      // Act and Assert
+      messages
       |> should
+      |> extract_query_feed(start.state, step_run)
+      |> extract_last_step
+      |> be_ok
       |> be_equal(
-        Ok(
-          Finished(
-            Outcome(
-              result: Error(ServerError(unique_violation())),
-              status: Idle,
-              asynchronous_messages: [ParameterChanged("TimeZone", "UTC")],
-            ),
+        Finished(
+          Outcome(
+            result: Error(ServerError(unique_violation())),
+            status: Idle,
+            asynchronous_messages: [ParameterChanged("TimeZone", "UTC")],
           ),
         ),
       )
@@ -1310,27 +1199,21 @@ fn count_cases() -> List(CountCase) {
 
 fn count_test(test_case: CountCase) {
   it("gives " <> test_case.tag <> " the count of its tag", fn() {
-    check_count(test_case)
-  })
-}
+    // Arrange
+    let start = start_run("s1", [], [])
+    let messages = [
+      BindComplete,
+      CommandComplete(test_case.tag),
+      ReadyForQuery(Idle),
+    ]
 
-fn check_count(test_case: CountCase) {
-  // Arrange
-  let start = start_run("s1", [], [])
-  let messages = [
-    BindComplete,
-    CommandComplete(test_case.tag),
-    ReadyForQuery(Idle),
-  ]
-
-  // Act
-  let fed = feed(start.state, messages, step_run)
-
-  // Assert
-  fed.last
-  |> should
-  |> be_equal(
-    Ok(
+    // Act and Assert
+    messages
+    |> should
+    |> extract_query_feed(start.state, step_run)
+    |> extract_last_step
+    |> be_ok
+    |> be_equal(
       Finished(
         Outcome(
           result: Ok(CommandResult(
@@ -1342,200 +1225,229 @@ fn check_count(test_case: CountCase) {
           asynchronous_messages: [],
         ),
       ),
-    ),
-  )
-  |> or_fail_with("Expected the count of " <> test_case.tag)
+    )
+    |> or_fail_with("Expected the count of " <> test_case.tag)
+  })
 }
 
 // Unexpected messages -------------------------------------------------------
 
-/// The messages to give to one of the steps.
-type Input {
-  PrepareInput(messages: List(BackendMessage))
-  RunInput(result_formats: List(Format), messages: List(BackendMessage))
-  PrepareAndRunInput(messages: List(BackendMessage))
-  ScriptInput(messages: List(BackendMessage))
+fn prepare_unexpected_test(
+  name: String,
+  messages: List(BackendMessage),
+  error: UnexpectedMessage,
+) {
+  it(name, fn() {
+    // Arrange
+    let start = start_prepare("s1", "SELECT 1", [])
+
+    // Act and Assert
+    messages
+    |> should
+    |> extract_query_feed(start.state, step_prepare)
+    |> extract_last_step
+    |> be_error
+    |> be_equal(error)
+    |> or_fail_with("Expected the UnexpectedMessage of " <> name)
+  })
 }
 
-type UnexpectedCase {
-  UnexpectedCase(name: String, input: Input, error: UnexpectedMessage)
+fn run_unexpected_test(
+  name: String,
+  result_formats: List(Format),
+  messages: List(BackendMessage),
+  error: UnexpectedMessage,
+) {
+  it(name, fn() {
+    // Arrange
+    let start = start_run("s1", [], result_formats)
+
+    // Act and Assert
+    messages
+    |> should
+    |> extract_query_feed(start.state, step_run)
+    |> extract_last_step
+    |> be_error
+    |> be_equal(error)
+    |> or_fail_with("Expected the UnexpectedMessage of " <> name)
+  })
 }
 
-fn unexpected_test(test_case: UnexpectedCase) {
-  it(test_case.name, fn() { check_unexpected(test_case) })
+fn prepare_and_run_unexpected_test(
+  name: String,
+  messages: List(BackendMessage),
+  error: UnexpectedMessage,
+) {
+  it(name, fn() {
+    // Arrange
+    let start = start_prepare_and_run("SELECT 1", [], [], [])
+
+    // Act and Assert
+    messages
+    |> should
+    |> extract_query_feed(start.state, step_prepare_and_run)
+    |> extract_last_step
+    |> be_error
+    |> be_equal(error)
+    |> or_fail_with("Expected the UnexpectedMessage of " <> name)
+  })
 }
 
-fn check_unexpected(test_case: UnexpectedCase) {
-  // Act
-  let error = first_error(test_case.input)
+fn script_unexpected_test(
+  name: String,
+  messages: List(BackendMessage),
+  error: UnexpectedMessage,
+) {
+  it(name, fn() {
+    // Arrange
+    let start = start_simple_query("SELECT 1")
 
-  // Assert
-  error
-  |> should
-  |> be_equal(Some(test_case.error))
-  |> or_fail_with("Expected the UnexpectedMessage of " <> test_case.name)
+    // Act and Assert
+    messages
+    |> should
+    |> extract_query_feed(start.state, step_simple_query)
+    |> extract_last_step
+    |> be_error
+    |> be_equal(error)
+    |> or_fail_with("Expected the UnexpectedMessage of " <> name)
+  })
 }
 
-fn first_error(input: Input) -> Option(UnexpectedMessage) {
-  case input {
-    PrepareInput(messages:) ->
-      error_of(
-        feed(start_prepare("s1", "SELECT 1", []).state, messages, step_prepare).last,
-      )
-    RunInput(result_formats:, messages:) ->
-      error_of(
-        feed(start_run("s1", [], result_formats).state, messages, step_run).last,
-      )
-    PrepareAndRunInput(messages:) ->
-      error_of(
-        feed(
-          start_prepare_and_run("SELECT 1", [], [], []).state,
-          messages,
-          step_prepare_and_run,
-        ).last,
-      )
-    ScriptInput(messages:) ->
-      error_of(
-        feed(start_simple_query("SELECT 1").state, messages, step_simple_query).last,
-      )
-  }
-}
-
-fn error_of(
-  last: Result(Step(state, outcome), UnexpectedMessage),
-) -> Option(UnexpectedMessage) {
-  case last {
-    Error(error) -> Some(error)
-    Ok(_) -> None
-  }
-}
-
-fn unexpected_cases() -> List(UnexpectedCase) {
+fn unexpected_tests() {
   [
-    UnexpectedCase(
+    prepare_unexpected_test(
       "BindComplete before ParseComplete",
-      PrepareInput([BindComplete]),
+      [BindComplete],
       UnexpectedMessage(BindComplete, AwaitingParseComplete, []),
     ),
-    UnexpectedCase(
+    prepare_unexpected_test(
       "RowDescription before ParameterDescription",
-      PrepareInput([ParseComplete, RowDescription([])]),
+      [ParseComplete, RowDescription([])],
       UnexpectedMessage(RowDescription([]), AwaitingParameterDescription, []),
     ),
-    UnexpectedCase(
+    prepare_unexpected_test(
       "DataRow in the description of a statement",
-      PrepareInput([ParseComplete, ParameterDescriptions([]), DataRow([])]),
+      [ParseComplete, ParameterDescriptions([]), DataRow([])],
       UnexpectedMessage(DataRow([]), AwaitingStatementColumns, []),
     ),
-    UnexpectedCase(
+    prepare_unexpected_test(
       "ParseComplete after the last answer, with the asynchronous messages",
-      PrepareInput([
+      [
         ParseComplete,
         ParameterDescriptions([]),
         NoData,
         ParameterStatus("TimeZone", "UTC"),
         ParseComplete,
-      ]),
+      ],
       UnexpectedMessage(ParseComplete, AwaitingReadyForQuery, [
         ParameterChanged("TimeZone", "UTC"),
       ]),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "ParseComplete before BindComplete",
-      RunInput([], [ParseComplete]),
+      [],
+      [ParseComplete],
       UnexpectedMessage(ParseComplete, AwaitingBindComplete, []),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "PortalSuspended with no row limit",
-      RunInput([], [BindComplete, PortalSuspended]),
+      [],
+      [BindComplete, PortalSuspended],
       UnexpectedMessage(PortalSuspended, ReadingExecuteRows, []),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "a DataRow with more values than the formats of Bind",
-      RunInput([BinaryFormat, TextFormat], [
+      [BinaryFormat, TextFormat],
+      [
         BindComplete,
         DataRow([None, None, None]),
-      ]),
+      ],
       UnexpectedMessage(DataRow([None, None, None]), ReadingExecuteRows, []),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "a tag whose count is not a number",
-      RunInput([], [BindComplete, CommandComplete("SELECT x")]),
+      [],
+      [BindComplete, CommandComplete("SELECT x")],
       UnexpectedMessage(CommandComplete("SELECT x"), ReadingExecuteRows, []),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "a counted tag with no count",
-      RunInput([], [BindComplete, CommandComplete("SELECT")]),
+      [],
+      [BindComplete, CommandComplete("SELECT")],
       UnexpectedMessage(CommandComplete("SELECT"), ReadingExecuteRows, []),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "CloseComplete after an error",
-      RunInput([], [ErrorResponse(unique_violation()), CloseComplete]),
+      [],
+      [ErrorResponse(unique_violation()), CloseComplete],
       UnexpectedMessage(CloseComplete, AwaitingReadyForQueryAfterError, []),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "a second ErrorResponse",
-      RunInput([], [
+      [],
+      [
         ErrorResponse(unique_violation()),
         ErrorResponse(unique_violation()),
-      ]),
+      ],
       UnexpectedMessage(
         ErrorResponse(unique_violation()),
         AwaitingReadyForQueryAfterError,
         [],
       ),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "DataRow in a COPY TO STDOUT",
-      RunInput([], [BindComplete, CopyOutResponse(TextFormat, []), DataRow([])]),
+      [],
+      [BindComplete, CopyOutResponse(TextFormat, []), DataRow([])],
       UnexpectedMessage(DataRow([]), ReadingCopyOut, []),
     ),
-    UnexpectedCase(
+    run_unexpected_test(
       "DataRow at the end of a COPY",
-      RunInput([], [
+      [],
+      [
         BindComplete,
         CopyOutResponse(TextFormat, []),
         CopyDoneFromServer,
         DataRow([]),
-      ]),
+      ],
       UnexpectedMessage(DataRow([]), AwaitingCopyComplete, []),
     ),
-    UnexpectedCase(
+    prepare_and_run_unexpected_test(
       "BindComplete in the description of a portal",
-      PrepareAndRunInput([ParseComplete, BindComplete, BindComplete]),
+      [ParseComplete, BindComplete, BindComplete],
       UnexpectedMessage(BindComplete, AwaitingPortalColumns, []),
     ),
-    UnexpectedCase(
+    prepare_and_run_unexpected_test(
       "a DataRow with other values than the columns of the portal",
-      PrepareAndRunInput([
+      [
         ParseComplete,
         BindComplete,
         NoData,
         DataRow([Some(<<"1">>)]),
-      ]),
+      ],
       UnexpectedMessage(DataRow([Some(<<"1">>)]), ReadingExecuteRows, []),
     ),
-    UnexpectedCase(
+    script_unexpected_test(
       "DataRow before RowDescription in a script",
-      ScriptInput([DataRow([])]),
+      [DataRow([])],
       UnexpectedMessage(DataRow([]), AwaitingStatementResult, []),
     ),
-    UnexpectedCase(
+    script_unexpected_test(
       "ReadyForQuery inside the rows of a script",
-      ScriptInput([RowDescription([]), ReadyForQuery(Idle)]),
+      [RowDescription([]), ReadyForQuery(Idle)],
       UnexpectedMessage(ReadyForQuery(Idle), ReadingScriptRows, []),
     ),
-    UnexpectedCase(
+    script_unexpected_test(
       "a DataRow with more values than the columns of a script",
-      ScriptInput([
+      [
         RowDescription([result_column("n", 23, 1, TextFormat)]),
         DataRow([None, None]),
-      ]),
+      ],
       UnexpectedMessage(DataRow([None, None]), ReadingScriptRows, []),
     ),
-    UnexpectedCase(
+    script_unexpected_test(
       "a tag whose count is not a number in a script",
-      ScriptInput([CommandComplete("INSERT 0 many")]),
+      [CommandComplete("INSERT 0 many")],
       UnexpectedMessage(
         CommandComplete("INSERT 0 many"),
         AwaitingStatementResult,
@@ -1543,13 +1455,4 @@ fn unexpected_cases() -> List(UnexpectedCase) {
       ),
     ),
   ]
-}
-
-fn finished_result(
-  last: Result(Step(state, Outcome(value, Failure)), UnexpectedMessage),
-) -> Option(Result(value, Failure)) {
-  case last {
-    Ok(Finished(outcome)) -> Some(outcome.result)
-    _ -> None
-  }
 }
