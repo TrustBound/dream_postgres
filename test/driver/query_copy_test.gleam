@@ -15,7 +15,7 @@ import dream_postgres/driver/query.{
 import dream_postgres/internal/cell.{
   CommandResult, Idle, InFailedTransaction, Text, TextFormat,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_false, be_true, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import fixtures/copy_step_inputs.{
@@ -23,7 +23,7 @@ import fixtures/copy_step_inputs.{
   FromServer, Row, Sent, Started, Unexpected, Waited, abandoned_report,
   after_copy_in_start, after_copy_out_start, copy_done_and_sync,
   copy_fail_and_sync, copy_in_start, copy_refusal_and_sync, finished,
-  invalid_row, repeated_byte, report, sync,
+  invalid_row, repeated_byte, report, started_copy_in, sync,
 }
 import gleam/option.{Some}
 import matchers/fed_to_copy_step.{fed_to_copy_step}
@@ -125,16 +125,69 @@ fn copy_in_tests() {
       |> or_fail_with("Expected CopyFail and Sync instead of the start")
     }),
     it("keeps reading data after the deadline, until the app abandons it", fn() {
-      copy_step_inputs.deadline_on_copy_in()
+      // Arrange
+      let started = started_copy_in()
+
+      // Act
+      let #(state, _bytes) = query.stop_at_deadline(started)
+      let accepts = query.accepts_copy_data(state)
+
+      // Assert
+      accepts
       |> should
-      |> be_equal(#(<<>>, True))
-      |> or_fail_with("Expected no bytes, and the COPY still reading data")
+      |> be_true
+      |> or_fail_with("Expected the COPY still reading data")
+    }),
+    it("sends no bytes at the deadline of a COPY FROM STDIN", fn() {
+      // Arrange
+      let started = started_copy_in()
+
+      // Act
+      let #(_state, bytes) = query.stop_at_deadline(started)
+
+      // Assert
+      bytes
+      |> should
+      |> be_equal(<<>>)
+      |> or_fail_with("Expected no bytes")
+    }),
+    it("takes no data before the start of a COPY FROM STDIN", fn() {
+      // Act
+      let start = query.start_copy("COPY t FROM STDIN", CopyFrom)
+      let accepts = query.accepts_copy_data(start.state)
+
+      // Assert
+      accepts
+      |> should
+      |> be_false
+      |> or_fail_with("Expected no data before the start")
     }),
     it("takes data only while the COPY reads it", fn() {
-      copy_step_inputs.data_acceptance()
+      // Arrange
+      let started = started_copy_in()
+
+      // Act
+      let accepts = query.accepts_copy_data(started)
+
+      // Assert
+      accepts
       |> should
-      |> be_equal(#(False, True, False))
-      |> or_fail_with("Expected data only between the start and the end")
+      |> be_true
+      |> or_fail_with("Expected data between the start and the end")
+    }),
+    it("takes no data after the app finished the COPY", fn() {
+      // Arrange
+      let started = started_copy_in()
+
+      // Act
+      let #(finished_state, _bytes) = query.finish_copy(started)
+      let accepts = query.accepts_copy_data(finished_state)
+
+      // Assert
+      accepts
+      |> should
+      |> be_false
+      |> or_fail_with("Expected no data after the end")
     }),
     it("frames a chunk as CopyData", fn() {
       query.copy_data(<<"1\n":utf8>>)

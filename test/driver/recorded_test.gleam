@@ -12,22 +12,24 @@
 //// - `<version>_rows.bin`: the answer to
 ////   `SELECT c.relname, NULL::int4, ''::text, ctid FROM pg_class c WHERE relname = 'pg_class'`.
 
-import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/message.{
-  type BackendMessage, type ProtocolError, type ResultColumn, BackendKeyData,
-  DataRow, Decoded, ErrorResponse, NeedMoreBytes, NegotiateProtocolVersion,
-  ParameterStatus, ResultColumn, RowDescription,
+  type ResultColumn, NegotiateProtocolVersion, ResultColumn,
 }
 import dream_postgres/internal/cell.{ColumnDescription, TextFormat}
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import gleam/bit_array.{byte_size, slice}
-import gleam/int.{range, to_string}
-import gleam/list.{filter_map, first, map, prepend, reverse, take}
-import gleam/option.{type Option, None, Some}
-import gleam/result.{try}
-import gleam/string.{inspect}
+import gleam/int.{to_string}
+import gleam/list.{map}
+import gleam/option.{None, Some}
+import matchers/extract_backend_messages.{extract_backend_messages}
+import matchers/extract_cut_errors.{extract_cut_errors}
+import matchers/extract_data_rows.{extract_data_rows}
+import matchers/extract_error_codes.{extract_error_codes}
+import matchers/extract_first.{extract_first}
+import matchers/extract_parameter_values.{extract_parameter_values}
+import matchers/extract_row_descriptions.{extract_row_descriptions}
+import matchers/extract_secret_key_lengths.{extract_secret_key_lengths}
 
 @external(erlang, "driver_file_ffi", "read_recording")
 fn read_recording(name: String) -> Result(BitArray, String)
@@ -58,126 +60,102 @@ pub fn tests() -> TestSuite {
 fn version_tests(recording: Recording) {
   group("PostgreSQL " <> to_string(recording.version), [
     it("answers the unknown _pq_ parameter with NegotiateProtocolVersion", fn() {
-      check_negotiation(recording)
+      // Act
+      let bytes = read_recording(file_name(recording, "startup"))
+
+      // Assert
+      bytes
+      |> should
+      |> be_ok
+      |> extract_backend_messages
+      |> extract_first
+      |> be_equal(
+        NegotiateProtocolVersion(3, recording.minor_version, [
+          "_pq_.dream_test",
+        ]),
+      )
+      |> or_fail_with("Expected NegotiateProtocolVersion first")
     }),
     it("sends a secret key of the length of its protocol", fn() {
-      check_secret_key(recording)
+      // Act
+      let bytes = read_recording(file_name(recording, "startup"))
+
+      // Assert
+      bytes
+      |> should
+      |> be_ok
+      |> extract_backend_messages
+      |> extract_secret_key_lengths
+      |> be_equal([recording.secret_key_length])
+      |> or_fail_with("Expected one BackendKeyData with the key length")
     }),
-    it("reports its server_version", fn() { check_server_version(recording) }),
+    it("reports its server_version", fn() {
+      // Act
+      let bytes = read_recording(file_name(recording, "startup"))
+
+      // Assert
+      bytes
+      |> should
+      |> be_ok
+      |> extract_backend_messages
+      |> extract_parameter_values(named: "server_version")
+      |> be_equal([recording.server_version])
+      |> or_fail_with(
+        "Expected the server_version " <> recording.server_version,
+      )
+    }),
     it("never gives an error for a cut of the startup answer", fn() {
-      check_every_cut(recording)
+      // Act
+      let bytes = read_recording(file_name(recording, "startup"))
+
+      // Assert
+      bytes
+      |> should
+      |> be_ok
+      |> extract_cut_errors
+      |> be_equal([])
+      |> or_fail_with("Expected no error for any cut")
     }),
     it("sends the SQLSTATE of a division by zero", fn() {
-      check_error_code(recording)
+      // Act
+      let bytes = read_recording(file_name(recording, "error"))
+
+      // Assert
+      bytes
+      |> should
+      |> be_ok
+      |> extract_backend_messages
+      |> extract_error_codes
+      |> be_equal(["22012"])
+      |> or_fail_with("Expected the SQLSTATE 22012")
     }),
     it("describes a table column, a computed column and a system column", fn() {
-      check_columns(recording)
+      // Act
+      let bytes = read_recording(file_name(recording, "rows"))
+
+      // Assert
+      bytes
+      |> should
+      |> be_ok
+      |> extract_backend_messages
+      |> extract_row_descriptions
+      |> be_equal([expected_columns()])
+      |> or_fail_with("Expected the four described columns")
     }),
-    it("sends a value, a NULL and an empty value", fn() { check_row(recording) }),
+    it("sends a value, a NULL and an empty value", fn() {
+      // Act
+      let bytes = read_recording(file_name(recording, "rows"))
+
+      // Assert
+      bytes
+      |> should
+      |> be_ok
+      |> extract_backend_messages
+      |> extract_data_rows(columns: 3)
+      |> be_equal([[Some(<<"pg_class":utf8>>), None, Some(<<>>)]])
+      |> or_fail_with("Expected pg_class, NULL and an empty value")
+    }),
   ])
-}
-
-fn check_negotiation(recording: Recording) {
-  // Arrange
-  let file = name(recording, "startup")
-
-  // Act
-  let first_message = messages_of(file) |> try(first_of)
-
-  // Assert
-  first_message
-  |> should
-  |> be_equal(
-    Ok(
-      NegotiateProtocolVersion(3, recording.minor_version, ["_pq_.dream_test"]),
-    ),
-  )
-  |> or_fail_with("Expected NegotiateProtocolVersion first")
-}
-
-fn check_secret_key(recording: Recording) {
-  // Arrange
-  let file = name(recording, "startup")
-
-  // Act
-  let lengths =
-    messages_of(file) |> result.map(filter_map(_, secret_key_length))
-
-  // Assert
-  lengths
-  |> should
-  |> be_equal(Ok([recording.secret_key_length]))
-  |> or_fail_with("Expected one BackendKeyData with the key length")
-}
-
-fn check_server_version(recording: Recording) {
-  // Arrange
-  let file = name(recording, "startup")
-
-  // Act
-  let versions = messages_of(file) |> result.map(filter_map(_, server_version))
-
-  // Assert
-  versions
-  |> should
-  |> be_equal(Ok([recording.server_version]))
-  |> or_fail_with("Expected the server_version " <> recording.server_version)
-}
-
-fn check_every_cut(recording: Recording) {
-  // Arrange
-  let bytes = read_recording(name(recording, "startup"))
-
-  // Act
-  let errors = bytes |> result.map(cut_errors)
-
-  // Assert
-  errors
-  |> should
-  |> be_equal(Ok([]))
-  |> or_fail_with("Expected no error for any cut")
-}
-
-fn check_error_code(recording: Recording) {
-  // Arrange
-  let file = name(recording, "error")
-
-  // Act
-  let codes = messages_of(file) |> result.map(filter_map(_, error_code))
-
-  // Assert
-  codes
-  |> should
-  |> be_equal(Ok(["22012"]))
-  |> or_fail_with("Expected the SQLSTATE 22012")
-}
-
-fn check_columns(recording: Recording) {
-  // Arrange
-  let file = name(recording, "rows")
-
-  // Act
-  let columns = messages_of(file) |> result.map(filter_map(_, row_columns))
-
-  // Assert
-  columns
-  |> should
-  |> be_equal(Ok([expected_columns()]))
-  |> or_fail_with("Expected the four described columns")
-}
-
-fn check_row(recording: Recording) {
-  // Arrange
-  let file = name(recording, "rows")
-
-  // Act
-  let rows = messages_of(file) |> result.map(filter_map(_, first_three_values))
-
-  // Assert
-  rows
-  |> should
-  |> be_equal(Ok([[Some(<<"pg_class":utf8>>), None, Some(<<>>)]]))
-  |> or_fail_with("Expected pg_class, NULL and an empty value")
 }
 
 fn expected_columns() -> List(ResultColumn) {
@@ -209,94 +187,7 @@ fn column(
   )
 }
 
-fn name(recording: Recording, kind: String) -> String {
+/// The file name of one recording of the server.
+fn file_name(recording: Recording, kind: String) -> String {
   "pg" <> to_string(recording.version) <> "_" <> kind <> ".bin"
-}
-
-fn first_of(messages: List(BackendMessage)) -> Result(BackendMessage, String) {
-  first(messages) |> result.replace_error("no message")
-}
-
-fn secret_key_length(message: BackendMessage) -> Result(Int, Nil) {
-  case message {
-    BackendKeyData(secret_key:, ..) -> Ok(byte_size(secret_key))
-    _ -> Error(Nil)
-  }
-}
-
-fn server_version(message: BackendMessage) -> Result(String, Nil) {
-  case message {
-    ParameterStatus("server_version", value) -> Ok(value)
-    _ -> Error(Nil)
-  }
-}
-
-fn error_code(message: BackendMessage) -> Result(String, Nil) {
-  case message {
-    ErrorResponse(report) -> Ok(report.code)
-    _ -> Error(Nil)
-  }
-}
-
-fn row_columns(message: BackendMessage) -> Result(List(ResultColumn), Nil) {
-  case message {
-    RowDescription(columns) -> Ok(columns)
-    _ -> Error(Nil)
-  }
-}
-
-fn first_three_values(
-  message: BackendMessage,
-) -> Result(List(Option(BitArray)), Nil) {
-  case message {
-    DataRow(values) -> Ok(take(values, 3))
-    _ -> Error(Nil)
-  }
-}
-
-/// Every message of a recording, when the bytes end at a message end.
-fn messages_of(file: String) -> Result(List(BackendMessage), String) {
-  use bytes <- try(read_recording(file))
-  use #(messages, rest) <- try(
-    decode_all(bytes, []) |> result.map_error(describe_error),
-  )
-  case rest {
-    <<>> -> Ok(messages)
-    _ -> Error("bytes left after the last message")
-  }
-}
-
-fn describe_error(error: ProtocolError) -> String {
-  "protocol error: " <> inspect(error)
-}
-
-/// Decodes messages until the bytes end inside one, and gives the messages
-/// and the bytes that are left.
-fn decode_all(
-  bytes: BitArray,
-  collected: List(BackendMessage),
-) -> Result(#(List(BackendMessage), BitArray), ProtocolError) {
-  case decode_backend(bytes) {
-    Ok(Decoded(message, rest)) -> decode_all(rest, [message, ..collected])
-    Ok(NeedMoreBytes) -> Ok(#(reverse(collected), bytes))
-    Error(error) -> Error(error)
-  }
-}
-
-/// The errors of decoding each cut of the bytes. A cut can end inside a
-/// message, but it must never give an error.
-fn cut_errors(bytes: BitArray) -> List(#(Int, ProtocolError)) {
-  range(from: 0, to: byte_size(bytes), with: [], run: prepend)
-  |> filter_map(cut_error(bytes, _))
-}
-
-fn cut_error(
-  bytes: BitArray,
-  length: Int,
-) -> Result(#(Int, ProtocolError), Nil) {
-  let cut = slice(bytes, 0, length) |> result.unwrap(<<>>)
-  case decode_all(cut, []) {
-    Ok(_decoded) -> Error(Nil)
-    Error(error) -> Ok(#(length, error))
-  }
 }

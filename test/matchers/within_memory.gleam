@@ -4,7 +4,7 @@
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
-import fixtures/copy_scenarios.{type MemoryPeak}
+import fixtures/copy_callbacks.{type MemoryPeak}
 import gleam/int
 import gleam/option.{Some}
 
