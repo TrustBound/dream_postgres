@@ -135,6 +135,22 @@ pub fn caching_config(
   ConnectionConfig(..config, statements: caching)
 }
 
+/// The config with a setup timeout of `milliseconds`.
+pub fn setup_timeout_config(
+  config: ConnectionConfig,
+  milliseconds: Int,
+) -> ConnectionConfig {
+  ConnectionConfig(..config, setup_timeout_milliseconds: milliseconds)
+}
+
+/// The config with a cancel timeout of `milliseconds`.
+pub fn cancel_timeout_config(
+  config: ConnectionConfig,
+  milliseconds: Int,
+) -> ConnectionConfig {
+  ConnectionConfig(..config, cancel_timeout_milliseconds: milliseconds)
+}
+
 fn server_address(port: Int) -> Result(Address, String) {
   address("localhost", port)
   |> map_error(fn(error) { "could not build the address: " <> inspect(error) })
@@ -366,7 +382,7 @@ fn start_proxied_configured(
   first_delay: Int,
   configure: fn(ConnectionConfig) -> ConnectionConfig,
 ) -> Result(ProxiedConnection, String) {
-  let #(port, proxy) = start_proxy(server.port)
+  use #(port, proxy) <- try(start_proxy(server.port))
   start_through_proxy(server, first_delay, configure, port, proxy)
   |> map_error(fn(error) {
     stop_proxy(proxy)
@@ -831,7 +847,7 @@ pub fn pid_of(connection: Connection) -> Pid
 /// The memory of a process, with the binaries it references, and the
 /// length of its mailbox.
 @external(erlang, "driver_copy_test_ffi", "memory_of")
-pub fn memory_of(pid: Pid) -> #(Int, Int)
+pub fn memory_of(pid: Pid) -> Result(#(Int, Int), String)
 
 /// Sends a process a DOWN message of a monitor that it never made.
 @external(erlang, "driver_copy_test_ffi", "send_stray_down")
@@ -852,49 +868,24 @@ pub fn fatal_error_bytes() -> BitArray {
 /// Waits until a message with one of the tags waits in the mailbox of
 /// `pid`, for example `request`, `copy_call` or `tcp`. It looks again each
 /// time, at most `attempts` times: no sleep.
+@external(erlang, "driver_copy_test_ffi", "wait_for_message")
 pub fn wait_for_message(
   pid: Pid,
   tags: List(String),
   attempts: Int,
-) -> Result(Nil, String) {
-  has_waited(
-    message_came(pid, tags, attempts),
-    "no message " <> inspect(tags) <> " came",
-  )
-}
+) -> Result(Nil, String)
 
 /// Waits until at least `length` messages wait in the mailbox of `pid`.
+@external(erlang, "driver_copy_test_ffi", "wait_for_mailbox_length")
 pub fn wait_for_mailbox_length(
   pid: Pid,
   length: Int,
   attempts: Int,
-) -> Result(Nil, String) {
-  has_waited(
-    mailbox_reached(pid, length, attempts),
-    "the mailbox did not reach " <> to_string(length) <> " messages",
-  )
-}
+) -> Result(Nil, String)
 
 /// Waits until the reset of the peer reached the TCP socket of `pid`.
-pub fn wait_for_reset(pid: Pid, attempts: Int) -> Result(Nil, String) {
-  has_waited(reset_came(pid, attempts), "the reset did not reach the socket")
-}
-
-fn has_waited(came: Bool, error: String) -> Result(Nil, String) {
-  case came {
-    True -> Ok(Nil)
-    False -> Error(error)
-  }
-}
-
-@external(erlang, "driver_copy_test_ffi", "wait_for_message")
-fn message_came(pid: Pid, tags: List(String), attempts: Int) -> Bool
-
-@external(erlang, "driver_copy_test_ffi", "wait_for_mailbox_length")
-fn mailbox_reached(pid: Pid, length: Int, attempts: Int) -> Bool
-
 @external(erlang, "driver_copy_test_ffi", "wait_for_reset")
-fn reset_came(pid: Pid, attempts: Int) -> Bool
+pub fn wait_for_reset(pid: Pid, attempts: Int) -> Result(Nil, String)
 
 /// Waits until the backend `pid` is idle. It asks the control connection
 /// again each time: no sleep.

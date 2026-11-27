@@ -18,19 +18,23 @@ pub type FakeBehavior {
   Tls(String, String)
 }
 
-/// Starts a fake server, and gives its port.
+/// Starts a fake server, and gives its port. Gives the reason when the
+/// server cannot listen.
 @external(erlang, "driver_fake_server_ffi", "start")
-pub fn start_fake_server(behavior: FakeBehavior) -> #(Int, FakeServer)
+pub fn start_fake_server(
+  behavior: FakeBehavior,
+) -> Result(#(Int, FakeServer), String)
 
 /// Waits for the fake server to finish with its first client, and says
-/// whether that client closed the connection.
+/// whether that client closed the connection. Gives the reason when a step
+/// of the server failed.
 @external(erlang, "driver_fake_server_ffi", "client_closed")
-pub fn client_closed(server: FakeServer) -> Bool
+pub fn client_closed(server: FakeServer) -> Result(Bool, String)
 
 /// Starts a server that accepts a connection and never answers, and gives
 /// its port.
 @external(erlang, "driver_fake_server_ffi", "start_silent")
-pub fn start_silent_server() -> Int
+pub fn start_silent_server() -> Result(Int, String)
 
 /// A port on localhost with no listener.
 @external(erlang, "port_ffi", "free_port")

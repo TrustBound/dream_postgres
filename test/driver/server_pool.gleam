@@ -240,7 +240,7 @@ pub fn start_proxied_pool(
   server: Server,
   configure: fn(PoolConfig) -> PoolConfig,
 ) -> Result(ProxiedPool, String) {
-  let #(port, proxy) = start_proxy(server.port)
+  use #(port, proxy) <- try(start_proxy(server.port))
   {
     use config <- try(dream_pool_config(port))
     use session <- try(start_pool_session(server, Ok(configure(config)), 1))

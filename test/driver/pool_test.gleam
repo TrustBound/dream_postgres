@@ -738,7 +738,7 @@ type StartInputs {
 }
 
 fn build_start_inputs() -> Result(StartInputs, String) {
-  let #(port, proxy) = start_proxy(first_driver_server.port)
+  use #(port, proxy) <- try(start_proxy(first_driver_server.port))
   {
     use config <- try(dream_pool_config(first_driver_server.port))
     use proxied_config <- try(dream_pool_config(port))

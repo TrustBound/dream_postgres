@@ -16,9 +16,10 @@ pub type GateEvent {
 }
 
 /// Starts a cancel gate to the server on `server_port`, and gives the port
-/// that the client connects to.
+/// that the client connects to. Gives the reason when the gate cannot
+/// listen.
 @external(erlang, "driver_cancel_gate_ffi", "start")
-pub fn start_cancel_gate(server_port: Int) -> #(Int, CancelGate)
+pub fn start_cancel_gate(server_port: Int) -> Result(#(Int, CancelGate), String)
 
 /// Starts to note what the gate sees.
 @external(erlang, "driver_cancel_gate_ffi", "record")
