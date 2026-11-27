@@ -706,7 +706,7 @@ fn start_tests() -> TestSuite {
         |> or_fail_with("Expected the supervisor to start the connection")
       }),
       it(
-        "fails the supervisor's start when it cannot connect",
+        "keeps the supervisor up when it cannot connect",
         fn(inputs: StartInputs) {
           // Arrange
           let supervisor =
@@ -721,8 +721,8 @@ fn start_tests() -> TestSuite {
           started
           |> should
           |> be_ok
-          |> be_error
-          |> or_fail_with("Expected the supervisor's start to fail")
+          |> be_ok
+          |> or_fail_with("Expected the supervisor to start, with no server")
         },
       ),
     ],

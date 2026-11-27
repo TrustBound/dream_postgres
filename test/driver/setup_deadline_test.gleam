@@ -200,7 +200,8 @@ fn start_monitor_tests() -> TestSuite {
     unit.it("leaves no monitor after a start that failed", fn() {
       // Act
       let monitors = {
-        use config <- try(connection_config(start_silent_server()))
+        use port <- try(start_silent_server())
+        use config <- try(connection_config(port))
         let config = ConnectionConfig(..config, setup_timeout_milliseconds: 100)
         let answers = process.new_subject()
         process.spawn_unlinked(fn() {

@@ -98,10 +98,23 @@ pub type ConnectionConfig {
 }
 
 /// What the process tells its subscriber about the connection.
+///
+/// | Event | When the process sends it |
+/// |---|---|
+/// | `Connected` | Once, after its first login. A process from `start` sends it before `start` returns. |
+/// | `ConnectFailed(error)` | After each failed first attempt of a process from `supervised`, until its first login. |
+/// | `Disconnected(error)` | When the connection of a process that logged in is lost. |
+/// | `ReconnectFailed(error)` | After each failed attempt to connect again after a loss. |
+/// | `Reconnected` | When the process logged in again after a loss. |
+///
+/// Each process speaks only for itself: a process that replaces another
+/// starts again with `Connected`.
 pub type ConnectionEvent {
-  /// The process connected and logged in for the first time. It is the
-  /// first event of each process.
+  /// The process connected and logged in for the first time.
   Connected
+  /// An attempt of a supervised process to connect for the first time
+  /// failed. The next one follows after the reconnect backoff.
+  ConnectFailed(error: ConnectError)
   /// The connection is lost. The process connects again after the backoff.
   Disconnected(error: DriverError)
   /// An attempt to connect again failed. The next one follows after the
@@ -187,6 +200,9 @@ pub type DriverError {
   InvalidRequest(error: EncodeError)
   /// The connection process is gone.
   ConnectionProcessDown
+  /// A supervised process has not connected yet. `error` is why its last
+  /// attempt failed. It tries again after the reconnect backoff.
+  NotConnected(error: ConnectError)
 }
 
 /// A connection process.
@@ -222,6 +238,9 @@ type Message {
   /// Connects and logs in for the first time: the starter's only
   /// request. The process answers by the end of its own setup deadline.
   OpenRequest(reply: ReplyTo(Result(Nil, ConnectError)))
+  /// A supervised process tries to connect and log in for the first time.
+  /// A failed attempt sends it again after the reconnect backoff.
+  OpenAttempt(attempt: Int)
 }
 
 /// A request that goes to the server.
@@ -381,8 +400,17 @@ pub fn start_failure(error: actor.StartError) -> ConnectError {
 ///
 /// ## Returns
 ///
-/// A worker child that starts the process with `config`. The supervisor's
-/// shutdown makes the process send Terminate before it stops.
+/// A worker child that starts the process with `config`. The start does
+/// not wait for the server: the process connects after it, and a failed
+/// attempt is tried again after the reconnect backoff, so a server that is
+/// down never fails the supervisor. Until the first login, requests fail
+/// with `NotConnected` and the subscriber gets `ConnectFailed` for each
+/// failed attempt. The supervisor's shutdown makes the process send
+/// Terminate before it stops.
+///
+/// db_connection does the same: its `init` returns at once and connects
+/// in the next event, and a failed connect is logged and tried again after
+/// its backoff (db_connection 2.8.1, `DBConnection.Connection`).
 pub fn supervised(config: ConnectionConfig) -> ChildSpecification(Connection) {
   supervision.worker(fn() { start_child(config) })
 }
@@ -390,11 +418,12 @@ pub fn supervised(config: ConnectionConfig) -> ChildSpecification(Connection) {
 fn start_child(
   config: ConnectionConfig,
 ) -> Result(actor.Started(Connection), actor.StartError) {
-  start_process(config) |> map_error(child_start_error)
-}
-
-fn child_start_error(_error: ConnectError) -> actor.StartError {
-  actor.InitFailed("connect failed")
+  actor.new_with_initialiser(config.setup_timeout_milliseconds, fn(subject) {
+    process.send(subject, OpenAttempt(0))
+    initialise(subject, config)
+  })
+  |> actor.on_message(handle_message)
+  |> actor.start
 }
 
 /// Sets up the process with no I/O: the open comes as its first request.
@@ -413,6 +442,25 @@ fn initialise(
   |> actor.selecting(selector)
   |> actor.returning(Connection(subject:, pid: process.self()))
   |> Ok
+}
+
+/// A first open of a supervised process. A failed one leaves the process
+/// up, refusing requests with `NotConnected`, and tries again after the
+/// reconnect backoff.
+fn attempt_first_open(state: State, attempt: Int) -> State {
+  case open_session(state.config) {
+    Ok(session) -> {
+      let state = connected_state(state, session)
+      tell(state, Connected)
+      state
+    }
+    Error(error) -> {
+      tell(state, ConnectFailed(error))
+      let delay = backoff_delay(state.config.reconnect, attempt)
+      process.send_after(state.subject, delay, OpenAttempt(attempt + 1))
+      State(..state, link: Lost(NotConnected(error)))
+    }
+  }
 }
 
 /// The first open of the process. A process that cannot connect answers
@@ -676,6 +724,7 @@ fn handle_message(
     ReconnectNow(error:, attempt:) ->
       actor.continue(reconnect(state, error, attempt))
     OpenRequest(reply_to) -> open_first(state, reply_to)
+    OpenAttempt(attempt:) -> actor.continue(attempt_first_open(state, attempt))
   }
 }
 

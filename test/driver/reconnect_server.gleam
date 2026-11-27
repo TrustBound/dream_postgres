@@ -5,7 +5,7 @@
 
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionEvent, type DriverError, Backoff,
-  ConnectionConfig,
+  ConnectFailed, ConnectionConfig,
 }
 import dream_test/context.{type Context}
 import driver/server_connection.{
@@ -62,6 +62,21 @@ pub fn monitor_count(pid: process.Pid) -> Result(Int, String)
 /// How many monitors other processes hold on `pid`.
 @external(erlang, "driver_reconnect_server_ffi", "monitored_by_count")
 pub fn monitored_by_count(pid: process.Pid) -> Result(Int, String)
+
+/// Listens on `port` and passes the bytes of one client to `server_port`
+/// on localhost and back.
+@external(erlang, "driver_reconnect_server_ffi", "start_forwarder")
+pub fn start_forwarder(port: Int, server_port: Int) -> Result(Nil, String)
+
+/// The next event that is not a `ConnectFailed`.
+pub fn next_event_after_failed_connects(
+  events: Subject(ConnectionEvent),
+) -> Result(ConnectionEvent, Nil) {
+  case next_event(events) {
+    Ok(ConnectFailed(_error)) -> next_event_after_failed_connects(events)
+    other -> other
+  }
+}
 
 /// What a reconnect against the fake server gave.
 pub type BadReconnect {

@@ -1,7 +1,7 @@
 -module(driver_reconnect_server_ffi).
 -export([start/1, wait_for_second_connection/1, start_silent/0,
          wait_for_connection/1, kill_linked_process/1, linked_process/1,
-         monitor_count/1, monitored_by_count/1]).
+         monitor_count/1, monitored_by_count/1, start_forwarder/2]).
 
 %% A fake PostgreSQL server for the tests of the setup deadline on a
 %% reconnect. start(SecondBehavior) listens on a free port of localhost and
@@ -198,4 +198,50 @@ monitored_by_count(Pid) ->
     case erlang:process_info(Pid, monitored_by) of
         {monitored_by, Monitors} -> {ok, length(Monitors)};
         undefined -> {error, <<"the process is gone">>}
+    end.
+
+%% Listens on Port, accepts one client, connects it to ServerPort on
+%% localhost, and passes bytes both ways until either side closes. Gives
+%% {ok, nil} once it listens, or {error, Reason}.
+start_forwarder(Port, ServerPort) ->
+    case gen_tcp:listen(Port, [binary, {active, false}, {reuseaddr, true}]) of
+        {ok, Listen} ->
+            Forwarder = spawn(fun() -> forward_one(ServerPort) end),
+            hand_listen(gen_tcp:controlling_process(Listen, Forwarder), Listen,
+                        Forwarder);
+        {error, Reason} ->
+            {error, reason_text(Reason)}
+    end.
+
+hand_listen(ok, Listen, Forwarder) ->
+    Forwarder ! {listen, Listen},
+    {ok, nil};
+hand_listen({error, Reason}, Listen, Forwarder) ->
+    exit(Forwarder, kill),
+    gen_tcp:close(Listen),
+    {error, reason_text(Reason)}.
+
+forward_one(ServerPort) ->
+    receive
+        {listen, Listen} ->
+            forward_accepted(gen_tcp:accept(Listen, ?WAIT), ServerPort),
+            gen_tcp:close(Listen)
+    end.
+
+forward_accepted({ok, Client}, ServerPort) ->
+    case gen_tcp:connect("localhost", ServerPort, [binary, {active, true}]) of
+        {ok, Server} ->
+            inet:setopts(Client, [{active, true}]),
+            relay(Client, Server);
+        {error, _Reason} ->
+            gen_tcp:close(Client)
+    end;
+forward_accepted({error, _Reason}, _ServerPort) ->
+    ok.
+
+relay(Client, Server) ->
+    receive
+        {tcp, Client, Bytes} -> gen_tcp:send(Server, Bytes), relay(Client, Server);
+        {tcp, Server, Bytes} -> gen_tcp:send(Client, Bytes), relay(Client, Server);
+        {tcp_closed, _Either} -> gen_tcp:close(Client), gen_tcp:close(Server)
     end.
