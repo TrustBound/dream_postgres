@@ -5,13 +5,15 @@
 %% Fake servers and process checks for the parity tests.
 %%
 %% start_login_refusing_server() listens on a free port of localhost and
-%% gives {Port, Reference}. It accepts one connection, reads the
-%% StartupMessage, answers with the ErrorResponse 28P01 and keeps its end
-%% open. start_closing_server() does the same, but reads the 8-byte
-%% SSLRequest and then shuts its sending side, as a server that closes
-%% the connection. Both then wait for the client to close its socket, and
-%% send {Reference, closed}, or {Reference, open} when 5 seconds pass
-%% first, as driver_fake_server_ffi does: its client_closed reads it.
+%% gives {ok, {Port, Reference}}, or {error, Reason} as a text when it
+%% cannot listen. It accepts one connection, reads the StartupMessage,
+%% answers with the ErrorResponse 28P01 and keeps its end open.
+%% start_closing_server() does the same, but reads the 8-byte SSLRequest
+%% and then shuts its sending side, as a server that closes the
+%% connection. Both then wait for the client to close its socket, and send
+%% {Reference, closed}, or {Reference, open} when 5 seconds pass first, or
+%% {Reference, {failed, Reason}} when a step failed, as
+%% driver_fake_server_ffi does: its client_closed reads it.
 
 -define(WAIT, 5000).
 
@@ -24,31 +26,58 @@ start_closing_server() ->
 start(Behave) ->
     Caller = self(),
     Reference = make_ref(),
-    Ready = make_ref(),
-    spawn(fun() -> listen(Caller, Reference, Ready, Behave) end),
+    spawn(fun() -> listen(Caller, Reference, Behave) end),
     receive
-        {Ready, Port} -> {Port, Reference}
+        {Reference, {ready, Port}} -> {ok, {Port, Reference}};
+        {Reference, {failed, Reason}} -> {error, Reason}
     end.
 
-listen(Caller, Reference, Ready, Behave) ->
-    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]),
-    {ok, Port} = inet:port(Listen),
-    Caller ! {Ready, Port},
-    {ok, Socket} = gen_tcp:accept(Listen, ?WAIT),
-    Behave(Socket),
-    Caller ! {Reference, wait_for_close(Socket)},
-    gen_tcp:close(Listen).
+listen(Caller, Reference, Behave) ->
+    Options = [binary, {active, false}, {reuseaddr, true}],
+    case gen_tcp:listen(0, Options) of
+        {ok, Listen} ->
+            listening(Caller, Reference, Behave, Listen, inet:port(Listen));
+        {error, Reason} ->
+            Caller ! {Reference, failed(Reason)}
+    end.
+
+listening(Caller, Reference, Behave, Listen, {ok, Port}) ->
+    Caller ! {Reference, {ready, Port}},
+    Caller ! {Reference, serve(Listen, Behave)},
+    gen_tcp:close(Listen);
+listening(Caller, Reference, _Behave, Listen, {error, Reason}) ->
+    gen_tcp:close(Listen),
+    Caller ! {Reference, failed(Reason)}.
+
+serve(Listen, Behave) ->
+    then(gen_tcp:accept(Listen, ?WAIT), fun(Socket) ->
+        then(Behave(Socket), fun(_) -> wait_for_close(Socket) end)
+    end).
 
 refuse_login(Socket) ->
-    {ok, <<Size:32>>} = gen_tcp:recv(Socket, 4, ?WAIT),
-    {ok, _Startup} = gen_tcp:recv(Socket, Size - 4, ?WAIT),
-    Fields = <<"SFATAL", 0, "VFATAL", 0, "C28P01", 0,
-               "Mpassword authentication failed", 0, 0>>,
-    ok = gen_tcp:send(Socket, <<"E", (byte_size(Fields) + 4):32, Fields/binary>>).
+    then(gen_tcp:recv(Socket, 4, ?WAIT), fun(<<Size:32>>) ->
+        then(gen_tcp:recv(Socket, Size - 4, ?WAIT), fun(_Startup) ->
+            Fields = <<"SFATAL", 0, "VFATAL", 0, "C28P01", 0,
+                       "Mpassword authentication failed", 0, 0>>,
+            gen_tcp:send(Socket,
+                         <<"E", (byte_size(Fields) + 4):32, Fields/binary>>)
+        end)
+    end).
 
 close_after_tls_request(Socket) ->
-    {ok, _Request} = gen_tcp:recv(Socket, 8, ?WAIT),
-    ok = gen_tcp:shutdown(Socket, write).
+    then(gen_tcp:recv(Socket, 8, ?WAIT), fun(_Request) ->
+        gen_tcp:shutdown(Socket, write)
+    end).
+
+%% Runs Next with the value of a step that worked, or gives the failure of
+%% a step that failed.
+then(ok, Next) -> Next(ok);
+then({ok, Value}, Next) -> Next(Value);
+then({error, Reason}, _Next) -> failed(Reason);
+then({failed, Reason}, _Next) -> {failed, Reason}.
+
+failed(Reason) ->
+    {failed, unicode:characters_to_binary(io_lib:format("~p", [Reason]))}.
 
 wait_for_close(Socket) ->
     case gen_tcp:recv(Socket, 0, ?WAIT) of

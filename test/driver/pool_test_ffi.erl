@@ -8,8 +8,8 @@
 %% to its catalog and to the supervisor of its members, the only one of
 %% them that proc_lib started as a supervisor.
 %%
-%% Each function gives {ok, Value}, or {error, nil} when the pool has no
-%% such process.
+%% Each function gives {ok, Value}, or {error, Reason} as a text when the
+%% pool has no such process.
 
 supervisor_of(Pool) ->
     only_supervisor(supervisors_of(manager_of(Pool))).
@@ -19,8 +19,8 @@ members_of(Pool) ->
 
 members_of_supervisor({ok, Supervisor}) ->
     {ok, [Member || {_Id, Member, _Type, _Modules} <- supervisor:which_children(Supervisor)]};
-members_of_supervisor({error, nil}) ->
-    {error, nil}.
+members_of_supervisor({error, Reason}) ->
+    {error, Reason}.
 
 supervisors_of(Manager) when is_pid(Manager) ->
     links_of(erlang:process_info(Manager, links));
@@ -31,7 +31,8 @@ links_of({links, Links}) -> [Link || Link <- Links, is_supervisor(Link)];
 links_of(undefined) -> [].
 
 only_supervisor([Supervisor]) -> {ok, Supervisor};
-only_supervisor(_NoneOrMore) -> {error, nil}.
+only_supervisor(_NoneOrMore) ->
+    {error, <<"the pool has no supervisor of its members">>}.
 
 manager_of({pool, {subject, Manager, _Tag}}) -> Manager;
 manager_of({pool, {named_subject, Name}}) -> erlang:whereis(Name).

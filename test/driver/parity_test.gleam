@@ -1526,27 +1526,31 @@ fn socket_tests() -> List(ContextNode(Nil)) {
 fn login_refusal_tests() -> List(ContextNode(Nil)) {
   [
     it("closes the socket when the server refuses the login", fn(_nothing) {
-      // Arrange
-      let #(refusing_port, refusing_server) = start_login_refusing_server()
-
       // Act
-      let started = connection_config(refusing_port) |> result.map(start)
+      let started = {
+        use #(refusing_port, refusing_server) <- try(
+          start_login_refusing_server(),
+        )
+        use config <- result.map(connection_config(refusing_port))
+        #(start(config), refusing_server)
+      }
 
       // Assert
       started
       |> should
       |> be_ok
-      |> be_error
-      |> extract_client_closed(refusing_server)
+      |> extract_client_closed
       |> be_true
       |> or_fail_with("Expected a closed socket")
     }),
     it("gives the 28P01 of a server that refuses the login", fn(_nothing) {
-      // Arrange
-      let #(refusing_port, _refusing_server) = start_login_refusing_server()
-
       // Act
-      let started = connection_config(refusing_port) |> result.map(start)
+      let started = {
+        use #(refusing_port, _refusing_server) <- try(
+          start_login_refusing_server(),
+        )
+        connection_config(refusing_port) |> result.map(start)
+      }
 
       // Assert
       started
@@ -1560,11 +1564,13 @@ fn login_refusal_tests() -> List(ContextNode(Nil)) {
     it(
       "gives the severity FATAL of a server that refuses the login",
       fn(_nothing) {
-        // Arrange
-        let #(refusing_port, _refusing_server) = start_login_refusing_server()
-
         // Act
-        let started = connection_config(refusing_port) |> result.map(start)
+        let started = {
+          use #(refusing_port, _refusing_server) <- try(
+            start_login_refusing_server(),
+          )
+          connection_config(refusing_port) |> result.map(start)
+        }
 
         // Assert
         started
@@ -1583,36 +1589,38 @@ fn login_refusal_tests() -> List(ContextNode(Nil)) {
 fn authority_tests() -> List(ContextNode(Nil)) {
   [
     it("closes the socket when the CA file cannot be read", fn(_nothing) {
-      // Arrange
-      let #(fake_port, fake) = start_fake_server(Answer(<<"S">>))
-
       // Act
-      let connected =
-        transport_config("localhost", fake_port, missing_authority_tls)
-        |> try(connect)
+      let connected = {
+        use #(fake_port, fake) <- result.map(start_fake_server(Answer(<<"S">>)))
+        let config =
+          transport_config("localhost", fake_port, missing_authority_tls)
+        #(try(config, connect), fake)
+      }
 
       // Assert
       connected
       |> should
-      |> be_error
-      |> extract_client_closed(fake)
+      |> be_ok
+      |> extract_client_closed
       |> be_true
       |> or_fail_with("Expected a closed socket")
     }),
     it(
       "gives AuthorityFileUnreadable when the CA file cannot be read",
       fn(_nothing) {
-        // Arrange
-        let #(fake_port, _fake) = start_fake_server(Answer(<<"S">>))
-
         // Act
-        let connected =
+        let connected = {
+          use #(fake_port, _fake) <- result.map(
+            start_fake_server(Answer(<<"S">>)),
+          )
           transport_config("localhost", fake_port, missing_authority_tls)
           |> try(connect)
+        }
 
         // Assert
         connected
         |> should
+        |> be_ok
         |> be_error
         |> be_equal(
           TlsFailed(AuthorityFileUnreadable(missing_authority_file, "enoent")),
@@ -1628,17 +1636,19 @@ fn closing_tests() -> List(ContextNode(Nil)) {
     it(
       "gives SocketClosed and closes the socket when the server closes",
       fn(_nothing) {
-        // Arrange
-        let #(closing_port, _closing_server) = start_closing_server()
-
         // Act
-        let connected =
+        let connected = {
+          use #(closing_port, _closing_server) <- result.map(
+            start_closing_server(),
+          )
           transport_config("localhost", closing_port, closing_tls)
           |> try(connect)
+        }
 
         // Assert
         connected
         |> should
+        |> be_ok
         |> be_error
         |> be_equal(SocketClosed)
         |> or_fail_with("Expected SocketClosed")
@@ -1647,19 +1657,20 @@ fn closing_tests() -> List(ContextNode(Nil)) {
     it(
       "closes the socket when the server closes after the SSLRequest",
       fn(_nothing) {
-        // Arrange
-        let #(closing_port, closing_server) = start_closing_server()
-
         // Act
-        let connected =
-          transport_config("localhost", closing_port, closing_tls)
-          |> try(connect)
+        let connected = {
+          use #(closing_port, closing_server) <- result.map(
+            start_closing_server(),
+          )
+          let config = transport_config("localhost", closing_port, closing_tls)
+          #(try(config, connect), closing_server)
+        }
 
         // Assert
         connected
         |> should
-        |> be_error
-        |> extract_client_closed(closing_server)
+        |> be_ok
+        |> extract_client_closed
         |> be_true
         |> or_fail_with("Expected a closed socket")
       },

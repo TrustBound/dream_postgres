@@ -240,7 +240,7 @@ pub fn start_proxied_pool(
   server: Server,
   configure: fn(PoolConfig) -> PoolConfig,
 ) -> Result(ProxiedPool, String) {
-  let #(port, proxy) = start_proxy(server.port)
+  use #(port, proxy) <- try(start_proxy(server.port))
   {
     use config <- try(dream_pool_config(port))
     use session <- try(start_pool_session(server, Ok(configure(config)), 1))
@@ -782,23 +782,16 @@ fn ask_until_back(handle: Pool, attempts: Int) -> Result(String, String) {
 // The processes inside a pool -------------------------------------------------
 
 /// The supervisor of the members of the pool.
-pub fn supervisor_of(pool: Pool) -> Result(Pid, String) {
-  pool_supervisor(pool)
-  |> map_error(fn(_nil) { "the pool has no supervisor of its members" })
-}
-
 @external(erlang, "pool_test_ffi", "supervisor_of")
-fn pool_supervisor(pool: Pool) -> Result(Pid, Nil)
+pub fn supervisor_of(pool: Pool) -> Result(Pid, String)
 
 @external(erlang, "pool_test_ffi", "members_of")
-fn pool_members(pool: Pool) -> Result(List(Pid), Nil)
+fn pool_members(pool: Pool) -> Result(List(Pid), String)
 
 /// Kills the first member process of the pool, and waits until it is
 /// down.
 pub fn kill_member(pool: Pool) -> Result(Nil, String) {
-  use members <- try(
-    pool_members(pool) |> map_error(fn(_nil) { "the pool has no members" }),
-  )
+  use members <- try(pool_members(pool))
   use member <- try(
     list.first(members) |> map_error(fn(_nil) { "the pool has no members" }),
   )

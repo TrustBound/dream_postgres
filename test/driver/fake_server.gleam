@@ -18,19 +18,23 @@ pub type FakeBehavior {
   Tls(String, String)
 }
 
-/// Starts a fake server, and gives its port.
+/// Starts a fake server, and gives its port. Gives the reason when the
+/// server cannot listen.
 @external(erlang, "driver_fake_server_ffi", "start")
-pub fn start_fake_server(behavior: FakeBehavior) -> #(Int, FakeServer)
+pub fn start_fake_server(
+  behavior: FakeBehavior,
+) -> Result(#(Int, FakeServer), String)
 
 /// Waits for the fake server to finish with its first client, and says
-/// whether that client closed the connection.
+/// whether that client closed the connection. Gives the reason when a step
+/// of the server failed.
 @external(erlang, "driver_fake_server_ffi", "client_closed")
-pub fn client_closed(server: FakeServer) -> Bool
+pub fn client_closed(server: FakeServer) -> Result(Bool, String)
 
 /// Starts a server that accepts a connection and never answers, and gives
 /// its port.
 @external(erlang, "driver_fake_server_ffi", "start_silent")
-pub fn start_silent_server() -> Int
+pub fn start_silent_server() -> Result(Int, String)
 
 /// A port on localhost with no listener.
 @external(erlang, "port_ffi", "free_port")
@@ -41,10 +45,10 @@ pub fn free_port() -> Int
 /// ErrorResponse 28P01. `client_closed` then tells whether the client
 /// closed its socket.
 @external(erlang, "driver_parity_ffi", "start_login_refusing_server")
-pub fn start_login_refusing_server() -> #(Int, FakeServer)
+pub fn start_login_refusing_server() -> Result(#(Int, FakeServer), String)
 
 /// Starts a fake server on a free port of localhost that reads the
 /// SSLRequest of its one client and then closes its sending side.
 /// `client_closed` then tells whether the client closed its socket.
 @external(erlang, "driver_parity_ffi", "start_closing_server")
-pub fn start_closing_server() -> #(Int, FakeServer)
+pub fn start_closing_server() -> Result(#(Int, FakeServer), String)

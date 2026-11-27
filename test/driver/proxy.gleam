@@ -14,9 +14,9 @@ pub type ClientEndWatch
 pub type KeptBytes
 
 /// Starts a proxy to the server on `server_port`, and gives the port that
-/// the client connects to.
+/// the client connects to. Gives the reason when the proxy cannot listen.
 @external(erlang, "driver_proxy_ffi", "start")
-pub fn start_proxy(server_port: Int) -> #(Int, Proxy)
+pub fn start_proxy(server_port: Int) -> Result(#(Int, Proxy), String)
 
 /// Sends `bytes` to the client as if the server sent them.
 @external(erlang, "driver_proxy_ffi", "inject")

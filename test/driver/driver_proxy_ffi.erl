@@ -8,7 +8,8 @@
 %% does what a broken network or server does.
 %%
 %% start(ServerPort) listens on a free port of localhost and gives
-%% {Port, Proxy}. The proxy accepts one client, connects to the server, and
+%% {ok, {Port, Proxy}}, or {error, Reason} as a text when it cannot
+%% listen. The proxy accepts one client, connects to the server, and
 %% passes bytes until a command:
 %%
 %% - inject(Proxy, Bytes): sends Bytes to the client, as if the server sent
@@ -26,8 +27,7 @@
 %%   and sends nothing of it to the server, as a network that drops the
 %%   client's packets. It gives a reference for next_kept, which waits at
 %%   most 5 seconds for the next bytes that the proxy kept, and gives
-%%   {ok, Bytes} or {error, Text}. A new client is
-%%   never frozen.
+%%   {ok, Bytes} or {error, Text}. A new client is never frozen.
 %%
 %% Each command waits until the proxy did it.
 %%
@@ -44,7 +44,8 @@ start(ServerPort) ->
     Ready = make_ref(),
     Proxy = spawn(fun() -> listen(Caller, Ready, ServerPort) end),
     receive
-        {Ready, Port} -> {Port, Proxy}
+        {Ready, {ok, Port}} -> {ok, {Port, Proxy}};
+        {Ready, {error, Reason}} -> {error, describe(Reason)}
     end.
 
 inject(Proxy, Bytes) -> command(Proxy, {inject, Bytes}).
@@ -87,36 +88,56 @@ command(Proxy, Command) ->
     end.
 
 listen(Caller, Ready, ServerPort) ->
-    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]),
-    {ok, Port} = inet:port(Listen),
-    Caller ! {Ready, Port},
-    accept(Listen, ServerPort, none).
+    Options = [binary, {active, false}, {reuseaddr, true}],
+    case gen_tcp:listen(0, Options) of
+        {ok, Listen} ->
+            listening(Caller, Ready, ServerPort, Listen, inet:port(Listen));
+        {error, Reason} ->
+            Caller ! {Ready, {error, Reason}}
+    end.
+
+listening(Caller, Ready, ServerPort, Listen, {ok, Port}) ->
+    Caller ! {Ready, {ok, Port}},
+    accept(Listen, ServerPort, none);
+listening(Caller, Ready, _ServerPort, Listen, {error, Reason}) ->
+    gen_tcp:close(Listen),
+    Caller ! {Ready, {error, Reason}}.
 
 %% One client after the other: a client that connects again after a loss
-%% gets a new session with the server.
+%% gets a new session with the server. A failed accept ends the proxy
+%% (also after stop_listening). A client whose server connection fails is
+%% closed, so it sees a lost connection.
 accept(Listen, ServerPort, Watch) ->
-    accepted(gen_tcp:accept(Listen), Listen, ServerPort, Watch).
+    case gen_tcp:accept(Listen) of
+        {ok, Client} -> connect_server(Listen, ServerPort, Watch, Client);
+        {error, _Reason} -> gen_tcp:close(Listen)
+    end.
 
-%% After stop_listening the listening socket is closed, and the proxy ends.
-accepted({error, _Closed}, _Listen, _ServerPort, _Watch) ->
-    ok;
-accepted({ok, Client}, Listen, ServerPort, Watch) ->
-    {ok, Server} = gen_tcp:connect("localhost", ServerPort, [binary, {active, once}]),
-    ok = inet:setopts(Client, [{active, once}]),
-    put(listen_socket, Listen),
-    erase(frozen),
-    NextWatch = loop(Client, Server, <<>>, Watch),
-    accept(Listen, ServerPort, NextWatch).
+%% stop_listening closes the listening socket by its name in the process
+%% dictionary; the next accept then fails, and the proxy ends. A new
+%% client is never frozen.
+connect_server(Listen, ServerPort, Watch, Client) ->
+    case gen_tcp:connect("localhost", ServerPort, [binary, {active, once}]) of
+        {ok, Server} ->
+            put(listen_socket, Listen),
+            erase(frozen),
+            NextWatch = read_client(Client, Server, <<>>, Watch),
+            accept(Listen, ServerPort, NextWatch);
+        {error, _Reason} ->
+            gen_tcp:close(Client),
+            accept(Listen, ServerPort, Watch)
+    end.
 
 loop(Client, Server, Last, Watch) ->
     receive
         {tcp, Client, Bytes} ->
-            client_bytes(get(answer_next_request), Client, Server, Bytes),
-            loop(Client, Server, Bytes, Watch);
+            client_bytes(get(answer_next_request), Client, Server, Bytes, Watch);
         {tcp, Server, Bytes} ->
             gen_tcp:send(Client, Bytes),
-            ok = inet:setopts(Server, [{active, once}]),
-            loop(Client, Server, Last, Watch);
+            case inet:setopts(Server, [{active, once}]) of
+                ok -> loop(Client, Server, Last, Watch);
+                {error, _Reason} -> server_closed(Client, Watch)
+            end;
         {command, From, Reference, Command} ->
             Next = run(Command, Client),
             From ! {Reference, done},
@@ -124,21 +145,49 @@ loop(Client, Server, Last, Watch) ->
         {watch, From, Reference} ->
             loop(Client, Server, Last, {From, Reference});
         {tcp_closed, Client} ->
-            report_end(Watch, Last),
-            gen_tcp:close(Server),
-            none;
+            client_closed(Server, Last, Watch);
         {tcp_closed, Server} ->
-            gen_tcp:close(Client),
-            Watch
+            server_closed(Client, Watch)
     end.
 
-client_bytes(undefined, Client, Server, Bytes) ->
-    ok = pass_or_keep(get(frozen), Server, Bytes),
-    ok = inet:setopts(Client, [{active, once}]);
-client_bytes(Answer, Client, _Server, _Bytes) ->
+%% Passes the client's bytes to the server, or keeps them after freeze,
+%% or, after answer_next_request, answers them and reads nothing more
+%% from the client. A failed send ends the session as a close of the
+%% other side does.
+client_bytes(undefined, Client, Server, Bytes, Watch) ->
+    case pass_or_keep(get(frozen), Server, Bytes) of
+        ok -> read_client(Client, Server, Bytes, Watch);
+        {error, _Reason} -> server_closed(Client, Watch)
+    end;
+client_bytes(Answer, Client, Server, Bytes, Watch) ->
     erase(answer_next_request),
-    ok = gen_tcp:send(Client, Answer),
-    inet:setopts(Client, [{recbuf, 1024}]).
+    case gen_tcp:send(Client, Answer) of
+        ok ->
+            inet:setopts(Client, [{recbuf, 1024}]),
+            loop(Client, Server, Bytes, Watch);
+        {error, _Reason} ->
+            client_closed(Server, Bytes, Watch)
+    end.
+
+%% Asks for the next bytes of the client. A client socket that is closed
+%% already ends the session as a close of the client does.
+read_client(Client, Server, Last, Watch) ->
+    case inet:setopts(Client, [{active, once}]) of
+        ok -> loop(Client, Server, Last, Watch);
+        {error, _Reason} -> client_closed(Server, Last, Watch)
+    end.
+
+client_closed(Server, Last, Watch) ->
+    report_end(Watch, Last),
+    gen_tcp:close(Server),
+    none.
+
+server_closed(Client, Watch) ->
+    gen_tcp:close(Client),
+    Watch.
+
+describe(Reason) ->
+    unicode:characters_to_binary(io_lib:format("~p", [Reason])).
 
 %% After a close or a reset the session is over, and the proxy waits for
 %% the next client.

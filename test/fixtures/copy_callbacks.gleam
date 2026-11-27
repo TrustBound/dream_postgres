@@ -304,12 +304,13 @@ fn await_idle(idle: Subject(Result(Nil, String))) -> Result(Nil, DriverError) {
 // Memory ----------------------------------------------------------------------
 
 /// Sends 1,000 chunks of 1,000 rows, about 16,000,000 bytes, samples the
-/// memory after every 10 chunks, and sends the peak to `peaks`.
+/// memory after every 10 chunks, and sends the peak to `peaks`. A failed
+/// send or sample gives its reason as text.
 pub fn load_chunks_sampling(
   sender: CopySender,
   connection_pid: Pid,
   peaks: Subject(MemoryPeak),
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, String) {
   let chunk = bit_array.from_string(string.repeat("12345\tsome text\n", 1000))
   let start = MemoryPeak(0, 0, 0)
   use peak <- try(load_chunks(sender, chunk, 1000, connection_pid, start))
@@ -323,21 +324,23 @@ fn load_chunks(
   left: Int,
   connection_pid: Pid,
   peak: MemoryPeak,
-) -> Result(MemoryPeak, DriverError) {
+) -> Result(MemoryPeak, String) {
   use <- bool.guard(left == 0, Ok(peak))
-  use Nil <- try(send_chunk(sender, chunk))
-  let sampled = sample_every(peak, left, 10, connection_pid)
+  use Nil <- try(send_chunk(sender, chunk) |> result.map_error(string.inspect))
+  use sampled <- try(sample_every(peak, left, 10, connection_pid))
   load_chunks(sender, chunk, left - 1, connection_pid, sampled)
 }
 
-/// Counts the rows, and samples the memory after every 10,000 rows.
+/// Counts the rows, and samples the memory after every 10,000 rows. A
+/// failed sample gives its reason as text.
 pub fn count_and_sample(
   counted: #(Int, MemoryPeak),
   _row: BitArray,
   connection_pid: Pid,
-) -> Result(#(Int, MemoryPeak), Nil) {
+) -> Result(#(Int, MemoryPeak), String) {
   let #(count, peak) = counted
-  Ok(#(count + 1, sample_every(peak, count, 10_000, connection_pid)))
+  use sampled <- result.map(sample_every(peak, count, 10_000, connection_pid))
+  #(count + 1, sampled)
 }
 
 fn sample_every(
@@ -345,21 +348,24 @@ fn sample_every(
   number: Int,
   interval: Int,
   connection_pid: Pid,
-) -> MemoryPeak {
+) -> Result(MemoryPeak, String) {
   case number % interval {
     0 -> sample_memory(peak, connection_pid)
-    _ -> peak
+    _ -> Ok(peak)
   }
 }
 
-fn sample_memory(peak: MemoryPeak, connection_pid: Pid) -> MemoryPeak {
-  let #(connection_bytes, queue) = memory_of(connection_pid)
-  let #(caller_bytes, _caller_queue) = memory_of(process.self())
-  MemoryPeak(
+fn sample_memory(
+  peak: MemoryPeak,
+  connection_pid: Pid,
+) -> Result(MemoryPeak, String) {
+  use #(connection_bytes, queue) <- try(memory_of(connection_pid))
+  use #(caller_bytes, _caller_queue) <- try(memory_of(process.self()))
+  Ok(MemoryPeak(
     connection: int.max(peak.connection, connection_bytes),
     queue: int.max(peak.queue, queue),
     caller: int.max(peak.caller, caller_bytes),
-  )
+  ))
 }
 
 // Callers that never end by themselves ----------------------------------------
