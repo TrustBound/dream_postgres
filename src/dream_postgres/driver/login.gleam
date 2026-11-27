@@ -81,9 +81,13 @@ pub const shortest_client_nonce = 18
 ///    channel binding, leaves 1024 - 4 - 19 - 4 - 24 - 5 = 968 characters
 ///    for the nonce.
 /// 2. The SASLResponse: its client-final-message holds the server nonce,
-///    which is the client nonce and the server's part. A PostgreSQL server
-///    adds the base64 of `SCRAM_RAW_NONCE_LEN` (18) random bytes, 24
-///    characters (`src/backend/libpq/auth-scram.c`). So the client nonce
+///    which is the client nonce and the server's part. That part comes
+///    from the server, not from the driver: a PostgreSQL server adds the
+///    base64 of `SCRAM_RAW_NONCE_LEN` (18, `src/include/common/scram-common.h`
+///    line 37) random bytes, 24 characters (`src/backend/libpq/auth-scram.c`,
+///    `build_server_first_message`, lines 1228-1236 on REL_16_STABLE and
+///    1232-1240 on master). So this limit depends on the server: a server
+///    that adds a longer part leaves less room for the client nonce. The client nonce
 ///    has the `scram.longest_server_nonce()` (848) characters less 24: 824
 ///    characters.
 ///
