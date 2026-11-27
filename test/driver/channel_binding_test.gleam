@@ -25,12 +25,10 @@ import dream_postgres/driver/channel_binding.{
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
+import driver/test_files.{read_certificate}
 import gleam/list.{map}
 import matchers/extract_base16.{extract_base16}
 import matchers/extract_server_end_point_hash.{extract_server_end_point_hash}
-
-@external(erlang, "driver_file_ffi", "read_certificate")
-fn read_certificate(name: String) -> Result(BitArray, String)
 
 /// The tests of the channel binding data.
 pub fn tests() -> TestSuite {

@@ -10,18 +10,13 @@
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
+import driver/raw_socket.{first_message, ssl_answer}
 import driver/servers.{type Server, database, driver_servers}
 import gleam/bit_array.{byte_size}
 import gleam/int.{to_string}
 import gleam/list.{map}
 import matchers/extract_authentication_code.{extract_authentication_code}
 import matchers/extract_message_type.{extract_message_type}
-
-@external(erlang, "driver_socket_ffi", "ssl_answer")
-fn ssl_answer(port: Int, request: BitArray) -> Result(BitArray, String)
-
-@external(erlang, "driver_socket_ffi", "first_message")
-fn first_message(port: Int, request: BitArray) -> Result(BitArray, String)
 
 /// The tests of every driver server.
 pub fn tests() -> TestSuite {
