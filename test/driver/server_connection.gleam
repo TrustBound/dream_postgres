@@ -241,7 +241,7 @@ pub fn start_proxied(
   server: Server,
   first_delay: Int,
 ) -> Result(ProxiedConnection, String) {
-  let #(port, proxy) = start_proxy(server.port)
+  use #(port, proxy) <- try(start_proxy(server.port))
   start_through_proxy(server, first_delay, port, proxy)
   |> map_error(fn(error) {
     stop_proxy(proxy)

@@ -58,7 +58,7 @@ import driver/server_connection.{
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/driver_tls.{verify_full}
 import gleam/bit_array
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/list.{map}
 import gleam/otp/static_supervisor
@@ -571,42 +571,35 @@ type StartInputs {
 }
 
 fn build_start_inputs() -> Result(StartInputs, String) {
-  let #(proxy_port, proxy) = start_proxy(first_driver_server.port)
+  use #(proxy_port, proxy) <- try(start_proxy(first_driver_server.port))
   {
+    let first_port = first_driver_server.port
     use #(fake_port, _fake_server) <- try(
       start_fake_server(Answer(<<"x", 4:32>>)),
     )
-    build_configs(proxy, proxy_port, fake_port)
+    use wrong_password <- try(user_config(first_port, "dream", "wrong"))
+    use no_listener <- try(connection_config(free_port()))
+    use silent_port <- try(start_silent_server())
+    use silent <- try(connection_config(silent_port))
+    use undecodable_login <- try(connection_config(fake_port))
+    use first_server <- try(connection_config(first_port))
+    use through_proxy <- try(connection_config(proxy_port))
+    let silent_server =
+      ConnectionConfig(..silent, setup_timeout_milliseconds: 100)
+    Ok(StartInputs(
+      wrong_password:,
+      no_listener:,
+      silent_server:,
+      undecodable_login:,
+      first_server:,
+      through_proxy:,
+      proxy:,
+    ))
   }
   |> map_error(fn(error) {
     stop_proxy(proxy)
     error
   })
-}
-
-fn build_configs(
-  proxy: Proxy,
-  proxy_port: Int,
-  fake_port: Int,
-) -> Result(StartInputs, String) {
-  let first_port = first_driver_server.port
-  use wrong_password <- try(user_config(first_port, "dream", "wrong"))
-  use no_listener <- try(connection_config(free_port()))
-  use silent <- try(connection_config(start_silent_server()))
-  use undecodable_login <- try(connection_config(fake_port))
-  use first_server <- try(connection_config(first_port))
-  use through_proxy <- try(connection_config(proxy_port))
-  let silent_server =
-    ConnectionConfig(..silent, setup_timeout_milliseconds: 100)
-  Ok(StartInputs(
-    wrong_password:,
-    no_listener:,
-    silent_server:,
-    undecodable_login:,
-    first_server:,
-    through_proxy:,
-    proxy:,
-  ))
 }
 
 fn stop_start_inputs(inputs: StartInputs) -> Result(Nil, String) {
@@ -935,9 +928,18 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
 /// outcome carries the notice and the notification, and the parameter has
 /// its new value.
 fn idle_message_tests() -> ContextNode(ProxiedConnection) {
+  let idle_messages =
+    bit_array.concat([
+      frame("N", <<
+        "S", "NOTICE":utf8, 0, "V", "NOTICE":utf8, 0, "C", "00000":utf8, 0, "M",
+        "an idle notice":utf8, 0, 0,
+      >>),
+      frame("A", <<4321:32, "idle_jobs":utf8, 0, "idle":utf8, 0>>),
+      frame("S", <<"application_name":utf8, 0, "injected":utf8, 0>>),
+    ])
   group("after messages between requests", [
     before_each(inject_and_wait_for_parameter(
-      idle_messages(),
+      idle_messages,
       "application_name",
       "injected",
     )),
@@ -974,32 +976,8 @@ fn idle_message_tests() -> ContextNode(ProxiedConnection) {
   ])
 }
 
-/// A NoticeResponse, a NotificationResponse and a ParameterStatus, as the
-/// server sends them between requests.
-fn idle_messages() -> BitArray {
-  bit_array.concat([
-    notice("an idle notice"),
-    notification(4321, "idle_jobs", "idle"),
-    parameter_status("application_name", "injected"),
-  ])
-}
-
-fn notification(process_id: Int, channel: String, payload: String) -> BitArray {
-  let body = <<process_id:32, channel:utf8, 0, payload:utf8, 0>>
-  <<"A", { bit_array.byte_size(body) + 4 }:32, body:bits>>
-}
-
-fn parameter_status(name: String, value: String) -> BitArray {
-  let body = <<name:utf8, 0, value:utf8, 0>>
-  <<"S", { bit_array.byte_size(body) + 4 }:32, body:bits>>
-}
-
-fn notice(text: String) -> BitArray {
-  let body = <<
-    "S", "NOTICE":utf8, 0, "V", "NOTICE":utf8, 0, "C", "00000":utf8, 0, "M",
-    text:utf8, 0, 0,
-  >>
-  <<"N", { bit_array.byte_size(body) + 4 }:32, body:bits>>
+fn frame(type_byte: String, body: BitArray) -> BitArray {
+  <<type_byte:utf8, { bit_array.byte_size(body) + 4 }:32, body:bits>>
 }
 
 /// Each test waits on the advisory lock of its own proxied connection, which
@@ -1207,34 +1185,22 @@ fn start_refused_reconnect() -> Result(RefusedReconnect, String) {
   use control <- try(
     start_connection(port) |> map_error(stop_after_error(connection, _)),
   )
-  refuse_reconnect(connection, control, events)
-  |> map_error(restore_after_error(connection, control, _))
-}
-
-fn refuse_reconnect(
-  connection: Connection,
-  control: Connection,
-  events: Subject(ConnectionEvent),
-) -> Result(RefusedReconnect, String) {
-  use pid <- try(backend_pid(connection))
-  use _changed <- try(run_control_script(control, change_password))
-  use _terminated <- try(terminate_backend(control, pid))
-  let lost = next_event(events)
-  let refused = next_event(events)
-  use _restored <- try(run_control_script(control, restore_password))
-  let back = next_event_after_refused_reconnects(events)
-  Ok(RefusedReconnect(connection:, control:, lost:, refused:, back:))
-}
-
-fn restore_after_error(
-  connection: Connection,
-  control: Connection,
-  error: String,
-) -> String {
-  let restored = run_control_script(control, restore_password)
-  stop(connection)
-  stop(control)
-  error <> "; restoring the password gave " <> inspect(restored)
+  {
+    use pid <- try(backend_pid(connection))
+    use _changed <- try(run_control_script(control, change_password))
+    use _terminated <- try(terminate_backend(control, pid))
+    let lost = next_event(events)
+    let refused = next_event(events)
+    use _restored <- try(run_control_script(control, restore_password))
+    let back = next_event_after_refused_reconnects(events)
+    Ok(RefusedReconnect(connection:, control:, lost:, refused:, back:))
+  }
+  |> map_error(fn(error) {
+    let restored = run_control_script(control, restore_password)
+    stop(connection)
+    stop(control)
+    error <> "; restoring the password gave " <> inspect(restored)
+  })
 }
 
 fn stop_refused_reconnect(scenario: RefusedReconnect) -> Result(Nil, String) {

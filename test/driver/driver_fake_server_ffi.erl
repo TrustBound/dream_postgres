@@ -23,13 +23,36 @@
 %% start gives {ok, {Port, Reference}}, or {error, Reason} when the server
 %% cannot listen. client_closed gives {ok, true} or {ok, false}, or
 %% {error, Reason} when a step of the server failed. Reason is a text.
+%%
+%% start_silent() gives {ok, Port} of a server that accepts one connection
+%% and never sends a byte, until the client closes, or {error, Reason}.
 
 -define(WAIT, 5000).
 
 start(Behavior) ->
     Caller = self(),
     Reference = make_ref(),
-    spawn(fun() -> listen(Caller, Reference, Behavior) end),
+    open(Caller, Reference, fun(Listen) ->
+        Caller ! {Reference, serve(Listen, Behavior)},
+        second_connection(Listen)
+    end).
+
+start_silent() ->
+    Silent = fun(Listen) ->
+        then(gen_tcp:accept(Listen, ?WAIT), fun(Socket) ->
+            wait_for_close(gen_tcp, Socket)
+        end),
+        gen_tcp:close(Listen)
+    end,
+    case open(self(), make_ref(), Silent) of
+        {ok, {Port, _Reference}} -> {ok, Port};
+        {error, Reason} -> {error, Reason}
+    end.
+
+%% Starts a process that listens on a free port and then runs Serve with
+%% the listen socket. Gives {ok, {Port, Reference}} once it listens.
+open(Caller, Reference, Serve) ->
+    spawn(fun() -> listen(Caller, Reference, Serve) end),
     receive
         {Reference, {ready, Port}} -> {ok, {Port, Reference}};
         {Reference, {failed, Reason}} -> {error, Reason}
@@ -42,20 +65,19 @@ client_closed(Reference) ->
         {Reference, {failed, Reason}} -> {error, Reason}
     end.
 
-listen(Caller, Reference, Behavior) ->
+listen(Caller, Reference, Serve) ->
     Options = [binary, {active, false}, {reuseaddr, true}],
     case gen_tcp:listen(0, Options) of
         {ok, Listen} ->
-            listening(Caller, Reference, Behavior, Listen, inet:port(Listen));
+            listening(Caller, Reference, Serve, Listen, inet:port(Listen));
         {error, Reason} ->
             Caller ! {Reference, failed(Reason)}
     end.
 
-listening(Caller, Reference, Behavior, Listen, {ok, Port}) ->
+listening(Caller, Reference, Serve, Listen, {ok, Port}) ->
     Caller ! {Reference, {ready, Port}},
-    Caller ! {Reference, serve(Listen, Behavior)},
-    second_connection(Listen);
-listening(Caller, Reference, _Behavior, Listen, {error, Reason}) ->
+    Serve(Listen);
+listening(Caller, Reference, _Serve, Listen, {error, Reason}) ->
     gen_tcp:close(Listen),
     Caller ! {Reference, failed(Reason)}.
 
@@ -117,20 +139,3 @@ second_connection(Listen) ->
         {error, _Reason} -> ok
     end,
     gen_tcp:close(Listen).
-
-%% A server that accepts one connection and never sends a byte, until the
-%% client closes. It gives its port.
-start_silent() ->
-    Caller = self(),
-    Ready = make_ref(),
-    spawn(fun() ->
-        {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]),
-        {ok, Port} = inet:port(Listen),
-        Caller ! {Ready, Port},
-        {ok, Socket} = gen_tcp:accept(Listen, ?WAIT),
-        wait_for_close(gen_tcp, Socket),
-        gen_tcp:close(Listen)
-    end),
-    receive
-        {Ready, Port} -> Port
-    end.

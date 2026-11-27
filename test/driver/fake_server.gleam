@@ -34,7 +34,7 @@ pub fn client_closed(server: FakeServer) -> Result(Bool, String)
 /// Starts a server that accepts a connection and never answers, and gives
 /// its port.
 @external(erlang, "driver_fake_server_ffi", "start_silent")
-pub fn start_silent_server() -> Int
+pub fn start_silent_server() -> Result(Int, String)
 
 /// A port on localhost with no listener.
 @external(erlang, "port_ffi", "free_port")
