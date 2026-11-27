@@ -11,16 +11,16 @@
 import dream_postgres/driver/channel_binding.{UnsupportedSignatureAlgorithm}
 import dream_postgres/driver/login.{
   type ChannelBindingSetting, type ConfigError, type LoginConfig,
-  type LoginError, type LoginOutcome, type Password, CancelKey,
-  CertificateHashFailed, ChannelBindingNotOffered,
-  ChannelBindingOfferedWithoutTls, ChannelBindingRequiresTls, CleartextLogin,
-  ClientNonceTooShort, DisableChannelBinding, DuplicateParameter,
-  EmptyParameterName, EmptyUser, GssLogin, InvalidConfig, KerberosV5Login,
-  LoginOutcome, Md5Login, PasswordRequired, PreferChannelBinding,
-  RequireChannelBinding, SaslLogin, ScramFailed, ScramLogin, ServerRejectedLogin,
-  SspiLogin, TrustLogin, UnexpectedMessage, UnsupportedClientEncoding,
-  UnsupportedLoginMethod, UnsupportedProtocolVersion, ZeroByteInParameter,
-  ZeroByteInPassword, new, no_password, password, password_function,
+  type LoginError, type LoginOutcome, CancelKey, CertificateHashFailed,
+  ChannelBindingNotOffered, ChannelBindingOfferedWithoutTls,
+  ChannelBindingRequiresTls, CleartextLogin, ClientNonceTooShort,
+  DisableChannelBinding, DuplicateParameter, EmptyParameterName, EmptyUser,
+  GssLogin, InvalidConfig, KerberosV5Login, LoginOutcome, Md5Login,
+  PasswordRequired, PreferChannelBinding, RequireChannelBinding, SaslLogin,
+  ScramFailed, ScramLogin, ServerRejectedLogin, SspiLogin, TrustLogin,
+  UnexpectedMessage, UnsupportedClientEncoding, UnsupportedLoginMethod,
+  UnsupportedProtocolVersion, ZeroByteInParameter, ZeroByteInPassword, new,
+  no_password, password, password_function,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, type ProtocolVersion,
@@ -180,19 +180,15 @@ fn build(settings: Settings) -> Result(LoginConfig, ConfigError) {
   new(
     user: settings.user,
     database: settings.database,
-    password: login_password(settings.password),
+    password: case settings.password {
+      TextPassword(text:) -> password(text)
+      FunctionPassword(read:) -> password_function(read)
+      NoPasswordGiven -> no_password()
+    },
     parameters: settings.parameters,
     channel_binding: settings.channel_binding,
     protocol_version: settings.protocol_version,
   )
-}
-
-fn login_password(setting: PasswordSetting) -> Password {
-  case setting {
-    TextPassword(text:) -> password(text)
-    FunctionPassword(read:) -> password_function(read)
-    NoPasswordGiven -> no_password()
-  }
 }
 
 fn config_with(
@@ -383,14 +379,6 @@ fn config_test(test_case: ConfigCase) {
   })
 }
 
-fn stored_password() -> String {
-  get_stored_password("password")
-}
-
-fn zero_byte_password() -> String {
-  "pen\u{0000}cil"
-}
-
 fn config_error_cases() -> List(ConfigCase) {
   [
     ConfigCase(
@@ -414,7 +402,7 @@ fn config_error_cases() -> List(ConfigCase) {
     ConfigCase(
       "a zero byte from the password function",
       config_with(
-        FunctionPassword(zero_byte_password),
+        FunctionPassword(fn() { "pen\u{0000}cil" }),
         PreferChannelBinding,
         Protocol30,
       ),
@@ -979,7 +967,7 @@ fn password_read_again_test() {
     let _previous = put_stored_password("password", "pencil")
     let config =
       build(config_with(
-        FunctionPassword(stored_password),
+        FunctionPassword(fn() { get_stored_password("password") }),
         PreferChannelBinding,
         Protocol30,
       ))
