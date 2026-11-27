@@ -9,7 +9,7 @@ import gleam/option.{Some}
 import gleam/string.{inspect}
 
 /// Gives the notification of `NotificationArrived`. Fails for
-/// `ListeningLost` and `ListenedAgain`.
+/// `NotListening`, `Listening` and `ListenFailed`.
 ///
 /// ```gleam
 /// process.receive(subscriber, 5000)

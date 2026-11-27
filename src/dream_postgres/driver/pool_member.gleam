@@ -21,8 +21,8 @@
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type DriverError, ConnectionConfig, Disconnected,
-  ReconnectFailed, Reconnected,
+  type ConnectionEvent, type DriverError, ConnectFailed, Connected,
+  ConnectionConfig, Disconnected, ReconnectFailed, Reconnected,
 }
 import dream_postgres/internal/cell.{Idle}
 import gleam/erlang/process.{
@@ -38,8 +38,8 @@ import gleam/otp/supervision.{type ChildSpecification, Transient}
 pub type MemberConfig {
   MemberConfig(
     /// The settings of the connection process. Its `events` subject gets
-    /// every event of the member's connection, and a `Disconnected` when
-    /// the member replaces its connection.
+    /// every event of each connection process of the member: a replacement
+    /// starts with its own `Connected`.
     connection: ConnectionConfig,
     /// The longest time that the query of a health check may take.
     health_check_deadline_milliseconds: Int,
@@ -60,9 +60,9 @@ pub type MemberReport {
   /// The connection that the pool gave to a rollback or a health check is
   /// idle again, outside any transaction.
   MemberReady(slot: Int)
-  /// The connection lost its session with the server. Its process
-  /// connects again.
-  SessionLost(slot: Int)
+  /// The connection lost its session with the server, for `error`. Its
+  /// process connects again.
+  SessionLost(slot: Int, error: DriverError)
   /// The connection connected and logged in again after a loss.
   SessionBack(slot: Int)
   /// A start of a connection process, or a reconnect of the connection,
@@ -226,7 +226,7 @@ fn handle_message(
     CheckHealth(connection:) ->
       actor.continue(check_connection(state, connection))
     EventReceived(event:) -> {
-      report(state, report_of_event(state.slot, event))
+      option.map(report_of_event(state.slot, event), report(state, _))
       tell(state, event)
       actor.continue(state)
     }
@@ -270,7 +270,7 @@ fn roll_back(state: State, held: Connection) -> State {
   let deadline = state.config.rollback_deadline_milliseconds
   case connection.run_script(held, "ROLLBACK", deadline) {
     Ok(_outcomes) -> ready(state)
-    Error(error) -> replace(state, held, error)
+    Error(_error) -> replace(state, held)
   }
 }
 
@@ -278,7 +278,7 @@ fn check_connection(state: State, idle: Connection) -> State {
   let deadline = state.config.health_check_deadline_milliseconds
   case connection.run_script(idle, health_check_sql, deadline) {
     Ok(_outcomes) -> ready(state)
-    Error(error) -> replace(state, idle, error)
+    Error(_error) -> replace(state, idle)
   }
 }
 
@@ -287,13 +287,14 @@ fn ready(state: State) -> State {
   state
 }
 
-/// Stops the connection and starts a new one. The subscriber of the
-/// connection's events hears why, as a `Disconnected`.
-fn replace(state: State, broken: Connection, error: DriverError) -> State {
+/// Stops the connection and starts a new one. Each process speaks only for
+/// itself: the subscriber of the connection's events hears the events of
+/// the stopped process, then the `Connected` of the new one, and the
+/// pool hears `MemberReplacing`.
+fn replace(state: State, broken: Connection) -> State {
   connection.stop(broken)
   drop_stale_events(state)
   report(state, MemberReplacing(state.slot))
-  tell(state, Disconnected(error))
   connect(state, 0)
 }
 
@@ -312,11 +313,15 @@ fn drop_stale_events(state: State) -> Nil {
   }
 }
 
-fn report_of_event(slot: Int, event: ConnectionEvent) -> MemberReport {
+/// The report of a connection event. The member reports a new connection
+/// itself, as `MemberConnected`, once its start worked, and a member's
+/// connection starts with `start`, which never sends `ConnectFailed`.
+fn report_of_event(slot: Int, event: ConnectionEvent) -> Option(MemberReport) {
   case event {
-    Disconnected(..) -> SessionLost(slot)
-    ReconnectFailed(error:) -> MemberConnectFailed(slot, error)
-    Reconnected -> SessionBack(slot)
+    Disconnected(error:) -> Some(SessionLost(slot, error))
+    ReconnectFailed(error:) -> Some(MemberConnectFailed(slot, error))
+    Reconnected -> Some(SessionBack(slot))
+    Connected | ConnectFailed(_error) -> None
   }
 }
 

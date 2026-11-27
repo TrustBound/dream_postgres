@@ -1,5 +1,5 @@
 -module(dream_postgres_driver_ffi).
--export([certificate_hash_identifier/1]).
+-export([certificate_hash_identifier/1, monotonic_milliseconds/0]).
 
 -include_lib("public_key/include/public_key.hrl").
 
@@ -27,3 +27,8 @@ hash_identifier(#'SignatureAlgorithm'{
     Hash;
 hash_identifier(#'SignatureAlgorithm'{algorithm = Algorithm}) ->
     Algorithm.
+
+%% The time of the monotonic clock of the VM, in milliseconds. A change of
+%% the system time does not move it.
+monotonic_milliseconds() ->
+    erlang:monotonic_time(millisecond).

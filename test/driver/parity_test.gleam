@@ -15,7 +15,7 @@ import dream_postgres/driver/pool.{PoolStatus}
 import dream_postgres/driver/transport.{
   AuthorityFile, AuthorityFileUnreadable, CheckAuthorityAndHost, ConnectionReset,
   DnsLookupFailed, InvalidPort, NoCertificateCheck, PostgresNegotiation,
-  RequireTls, ServerRefusedTls, SocketClosed, TlsFailed, address, connect,
+  RequireTls, ServerRefusedTls, SocketClosed, TlsFailed, address,
 }
 import dream_postgres/internal/cell.{
   type Cell, Binary, BinaryFormat, Null, Text, TextFormat,
@@ -46,12 +46,13 @@ import driver/server_pool.{
   type PoolSession, type ProxiedPool, held_backend_pid, hold_connection,
   pool_session_setup, pool_status, proxied_pool_setup, start_test_pool,
   start_test_proxied_pool, stop_pool_session, stop_proxied_pool,
-  wait_for_available_count, while_holding,
+  wait_for_member_free, wait_for_member_free_count, while_holding,
 }
 import driver/servers.{
   type Server, driver_servers, first_driver_server, server_without_tls,
 }
 import fixtures/driver_tls.{transport_config}
+import fixtures/transport_connect.{connect_with_minute_deadline}
 import gleam/bit_array
 import gleam/int.{to_string}
 import gleam/list.{append, map, try_map}
@@ -1275,13 +1276,14 @@ fn pool_server_tests(server: Server) -> ContextNode(PoolSession) {
           fn(session: PoolSession) {
             // Act
             let status = {
+              use Nil <- try(wait_for_member_free_count(session.pool_events, 2))
               use _answers <- try(
                 while_holding(session.pool, 2, fn(held) {
                   try_map(held, query_text(_, "SELECT 1"))
                 })
                 |> result.flatten,
               )
-              use _back <- try(wait_for_available_count(session.pool, 2))
+              use Nil <- try(wait_for_member_free_count(session.pool_events, 2))
               pool_status(session.pool)
             }
 
@@ -1330,7 +1332,9 @@ fn proxied_pool_server_tests(server: Server) -> ContextNode(ProxiedPool) {
         fn(proxied: ProxiedPool) {
           // Act
           let backends = {
+            use Nil <- try(wait_for_member_free(proxied.pool_events, 0))
             use first <- try(held_backend_pid(proxied.pool))
+            use Nil <- try(wait_for_member_free(proxied.pool_events, 0))
             close_client(proxied.proxy)
             use _back <- try(wait_for_reconnect(proxied.events))
             use second <- try(held_backend_pid(proxied.pool))
@@ -1594,7 +1598,7 @@ fn authority_tests() -> List(ContextNode(Nil)) {
         use #(fake_port, fake) <- result.map(start_fake_server(Answer(<<"S">>)))
         let config =
           transport_config("localhost", fake_port, missing_authority_tls)
-        #(try(config, connect), fake)
+        #(try(config, connect_with_minute_deadline), fake)
       }
 
       // Assert
@@ -1614,7 +1618,7 @@ fn authority_tests() -> List(ContextNode(Nil)) {
             start_fake_server(Answer(<<"S">>)),
           )
           transport_config("localhost", fake_port, missing_authority_tls)
-          |> try(connect)
+          |> try(connect_with_minute_deadline)
         }
 
         // Assert
@@ -1642,7 +1646,7 @@ fn closing_tests() -> List(ContextNode(Nil)) {
             start_closing_server(),
           )
           transport_config("localhost", closing_port, closing_tls)
-          |> try(connect)
+          |> try(connect_with_minute_deadline)
         }
 
         // Assert
@@ -1663,7 +1667,7 @@ fn closing_tests() -> List(ContextNode(Nil)) {
             start_closing_server(),
           )
           let config = transport_config("localhost", closing_port, closing_tls)
-          #(try(config, connect), closing_server)
+          #(try(config, connect_with_minute_deadline), closing_server)
         }
 
         // Assert

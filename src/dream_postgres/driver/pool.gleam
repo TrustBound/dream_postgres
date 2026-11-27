@@ -35,12 +35,11 @@
 
 import dream_postgres/driver/catalog.{type Catalog}
 import dream_postgres/driver/connection.{
-  type ConnectError, type Connection, type ConnectionConfig,
+  type ConnectError, type Connection, type ConnectionConfig, type DriverError,
 }
 import dream_postgres/driver/pool_member.{
-  type Member, type MemberReport, MemberConfig, MemberConnectFailed,
-  MemberConnected, MemberReady, MemberReplacing, MemberStarted, SessionBack,
-  SessionLost,
+  type Member, type MemberReport, MemberConfig, MemberReady, MemberStarted,
+  SessionBack, SessionLost,
 }
 import gleam/bool.{guard}
 import gleam/dict.{type Dict}
@@ -64,11 +63,14 @@ import gleam/string
 /// Everything a pool needs.
 pub type PoolConfig {
   PoolConfig(
-    /// The settings of each connection process. The pool gives its own
-    /// subject to each process; the `events` subject of these settings gets
-    /// every event of every connection of the pool, and a `Disconnected`
-    /// for each connection that the pool replaces.
+    /// The settings of each connection process. The `events` subject of
+    /// these settings gets every event of every connection process of the
+    /// pool: a connection that replaces another starts with its own
+    /// `Connected`.
     connection: ConnectionConfig,
+    /// Where the pool tells what each member does, in the order it changed
+    /// its state: a hold sent after an event sees the state of that event.
+    events: Option(Subject(PoolEvent)),
     /// How often the pool looks for connections to check. A connection is
     /// checked when it was free and unused for a whole interval. It must be
     /// 1 or more.
@@ -83,6 +85,26 @@ pub type PoolConfig {
     /// process exits, before it closes the connections.
     shutdown_deadline_milliseconds: Int,
   )
+}
+
+/// What the pool tells its subscriber about its members. Each event names
+/// the member's slot: its place in the pool.
+pub type PoolEvent {
+  /// A new connection process of the member connected and logged in.
+  MemberConnected(slot: Int)
+  /// The member's connection lost its session, for `error`. Its process
+  /// connects again.
+  MemberDisconnected(slot: Int, error: DriverError)
+  /// The member's connection connected and logged in again after a loss.
+  MemberReconnected(slot: Int)
+  /// A start or a reconnect of the member's connection failed.
+  MemberConnectFailed(slot: Int, error: ConnectError)
+  /// The member stopped its connection process, after a failed rollback or
+  /// health check, or the process exited. A new one starts.
+  MemberReplacing(slot: Int)
+  /// The member's connection is free for the next hold: connected, idle
+  /// outside any transaction, and held by no one.
+  MemberFree(slot: Int)
 }
 
 /// Why a pool did not start.
@@ -172,6 +194,7 @@ type Settings {
     size: Int,
     health_check_interval_milliseconds: Int,
     shutdown_deadline_milliseconds: Int,
+    events: Option(Subject(PoolEvent)),
   )
 }
 
@@ -364,6 +387,7 @@ fn start_manager(
       size:,
       health_check_interval_milliseconds: config.health_check_interval_milliseconds,
       shutdown_deadline_milliseconds: config.shutdown_deadline_milliseconds,
+      events: config.events,
     )
   let member_config =
     MemberConfig(
@@ -846,20 +870,60 @@ fn member_has_other_monitor(slot: Slot, monitor: Monitor) -> Bool {
 
 // Members ---------------------------------------------------------------------
 
+/// Changes the state for the report, then tells the subscriber the event
+/// of the report, and `MemberFree` when the report freed the member's
+/// connection.
 fn after_report(state: State, report: MemberReport) -> State {
+  let changed = state_after_report(state, report)
+  let slot_id = report_slot(report)
+  option.map(event_of_report(report), tell(changed, _))
+  case slot_is_free(state, slot_id), slot_is_free(changed, slot_id) {
+    False, True -> tell(changed, MemberFree(slot_id))
+    _before, _after -> Nil
+  }
+  changed
+}
+
+fn tell(state: State, event: PoolEvent) -> Nil {
+  option.map(state.settings.events, process.send(_, event))
+  Nil
+}
+
+fn slot_is_free(state: State, slot_id: Int) -> Bool {
+  dict.get(state.slots, slot_id) |> result.map(is_free) |> result.unwrap(False)
+}
+
+fn report_slot(report: MemberReport) -> Int {
+  report.slot
+}
+
+fn event_of_report(report: MemberReport) -> Option(PoolEvent) {
+  case report {
+    pool_member.MemberConnected(slot:, ..) -> Some(MemberConnected(slot))
+    SessionLost(slot:, error:) -> Some(MemberDisconnected(slot, error))
+    SessionBack(slot:) -> Some(MemberReconnected(slot))
+    pool_member.MemberConnectFailed(slot:, error:) ->
+      Some(MemberConnectFailed(slot, error))
+    pool_member.MemberReplacing(slot:) -> Some(MemberReplacing(slot))
+    MemberStarted(..) | MemberReady(..) -> None
+  }
+}
+
+fn state_after_report(state: State, report: MemberReport) -> State {
   case report {
     MemberStarted(slot:, member:) -> member_started(state, slot, member)
-    MemberConnected(slot:, connection:) ->
+    pool_member.MemberConnected(slot:, connection:) ->
       State(..state, last_connect_error: None)
       |> update_slot(slot, connected(_, connection))
     MemberReady(slot:) -> update_slot(state, slot, with_usage(_, Free))
-    SessionLost(slot:) -> update_slot(state, slot, with_connected(_, False))
+    SessionLost(slot:, ..) -> update_slot(state, slot, with_connected(_, False))
     SessionBack(slot:) ->
       State(..state, last_connect_error: None)
       |> update_slot(slot, with_connected(_, True))
-    MemberConnectFailed(error:, ..) ->
+    pool_member.MemberConnectFailed(error:, ..) ->
       State(..state, last_connect_error: Some(error))
-    MemberReplacing(slot:) -> update_slot(state, slot, without_connection)
+    pool_member.MemberReplacing(slot:) ->
+      update_slot(state, slot, without_connection)
   }
 }
 

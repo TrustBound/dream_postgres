@@ -12,14 +12,17 @@
 
 import dream_postgres/driver/catalog.{CatalogProcessDown}
 import dream_postgres/driver/connection.{
-  type DriverError, type Outcome, ConnectionProcessDown, TransportRefused,
+  type ConnectionEvent, type DriverError, type Outcome, Connected,
+  ConnectionLost, ConnectionProcessDown, Disconnected, SocketFailed,
+  TransportRefused,
 }
 import dream_postgres/driver/pool.{
-  type HoldError, type Pool, type PoolConfig, type PoolStatus, ConnectFailed,
-  HoldDeadlinePassed, InvalidHealthCheckInterval, InvalidSize, PoolStatus,
+  type HoldError, type Pool, type PoolConfig, type PoolEvent, type PoolStatus,
+  ConnectFailed, HoldDeadlinePassed, InvalidHealthCheckInterval, InvalidSize,
+  MemberConnected, MemberDisconnected, MemberFree, MemberReplacing, PoolStatus,
   PoolStopped,
 }
-import dream_postgres/driver/transport.{ConnectRefused}
+import dream_postgres/driver/transport.{ConnectRefused, SocketClosed}
 import dream_postgres/internal/cell.{type TransactionStatus, Idle, InTransaction}
 import dream_test/context
 import dream_test/matchers.{
@@ -40,16 +43,18 @@ import driver/server_connection.{
 }
 import driver/server_pool.{
   type NamedPool, type PoolSession, type ProxiedPool, backend_pid_and_time,
-  begin_on_backend, begin_transaction, dream_pool_config, end_owner,
+  begin_on_backend, begin_transaction, connection_events_until_connected,
+  connection_events_until_disconnected, dream_pool_config, end_owner,
   exit_after_supervisor_kill, exit_holder_in_transaction, health_check_config,
   held_backend_pid, held_transaction_status, hold_connection, hold_pool_lock,
   hold_until_back, kill_and_hold_again, kill_holder, kill_member,
   kill_named_manager, leave_transaction_open, named_pool_setup, pool_act_setup,
-  pool_session_setup, pool_status, proxied_pool_act_setup, proxied_pool_setup,
-  query_in_hold, release_holder, release_pool_lock, rollback_deadline_config,
-  script_in_hold, slow_reconnect_config, start_holder, start_idle_holder,
-  start_owned_pool, start_pool, start_supervised_pool, start_test_named_pool,
-  start_test_pool, start_test_pool_configured, start_test_proxied_pool,
+  pool_events_until_free, pool_session_setup, pool_status,
+  proxied_pool_act_setup, proxied_pool_setup, query_in_hold, release_holder,
+  release_pool_lock, rollback_deadline_config, script_in_hold,
+  slow_reconnect_config, start_holder, start_idle_holder, start_owned_pool,
+  start_pool, start_supervised_pool, start_test_named_pool, start_test_pool,
+  start_test_pool_configured, start_test_proxied_pool,
   start_test_proxied_pool_configured, stop_named_pool, stop_on_backend,
   stop_pool_after_error, stop_pool_inside, stop_pool_session, stop_proxied_pool,
   unchanged_config, user_pool_config, wait_for_disconnect,
@@ -65,6 +70,7 @@ import gleam/int.{to_string}
 import gleam/list.{map, try_map}
 import gleam/option.{None}
 import gleam/result.{map_error, try}
+import gleam/string.{inspect}
 import matchers/be_different_parts.{be_different_parts}
 import matchers/be_equal_parts.{be_equal_parts}
 import matchers/extract_connect_failure.{extract_connect_failure}
@@ -84,6 +90,7 @@ pub fn tests() -> TestSuite {
     lost_server_tests(),
     late_rollback_tests(),
     drain_tests(),
+    replacement_tests(),
   ])
 }
 
@@ -1145,4 +1152,111 @@ fn drain_tests() -> TestSuite {
       },
     ),
   ])
+}
+
+// The events of a member: one act for the start and a replacement ------------
+
+/// What the subscribers of a pool of one connection through a proxy saw.
+/// Its connection connects again only after the test. The proxy closes the
+/// socket while a caller holds the connection, so the member's reset after
+/// the hold finds the connection lost and replaces it.
+type Replacement {
+  Replacement(
+    start_events: Result(List(PoolEvent), String),
+    replace_events: Result(List(PoolEvent), String),
+    connection_events: Result(List(ConnectionEvent), String),
+    backends: Result(#(String, String), String),
+  )
+}
+
+/// The backend of the held connection, and the connection events up to
+/// its `Disconnected`, after the proxy closed its socket.
+type LostInHold {
+  LostInHold(backend: String, events: List(ConnectionEvent))
+}
+
+fn replace_lost_connection(
+  proxied: ProxiedPool,
+) -> Result(Replacement, String) {
+  let start_events = pool_events_until_free(proxied.pool_events, 0)
+  use _first_connected <- try(connection_events_until_connected(proxied.events))
+  use lost <- try(
+    pool.hold(proxied.pool, 5000, fn(connection) {
+      use backend <- try(backend_pid(connection))
+      close_client(proxied.proxy)
+      connection_events_until_disconnected(proxied.events)
+      |> result.map(LostInHold(backend, _))
+    })
+    |> map_error(inspect)
+    |> result.flatten,
+  )
+  let replace_events = pool_events_until_free(proxied.pool_events, 0)
+  let connection_events =
+    connection_events_until_connected(proxied.events)
+    |> result.map(list.append(lost.events, _))
+  let backends =
+    held_backend_pid(proxied.pool)
+    |> result.map(fn(second) { #(lost.backend, second) })
+  Ok(Replacement(start_events:, replace_events:, connection_events:, backends:))
+}
+
+fn replacement_tests() -> TestSuite {
+  describe(
+    "a member that replaces its lost connection",
+    proxied_pool_act_setup(
+      first_driver_server,
+      slow_reconnect_config,
+      replace_lost_connection,
+    ),
+    [
+      it(
+        "tells MemberConnected, then MemberFree, when it starts",
+        fn(shared: ActOutcome(ProxiedPool, Replacement)) {
+          shared.outcome.start_events
+          |> should
+          |> be_ok
+          |> be_equal([MemberConnected(0), MemberFree(0)])
+          |> or_fail_with("Expected MemberConnected, then MemberFree")
+        },
+      ),
+      it(
+        "tells the loss, the replacement, the new connection and MemberFree",
+        fn(shared: ActOutcome(ProxiedPool, Replacement)) {
+          shared.outcome.replace_events
+          |> should
+          |> be_ok
+          |> be_equal([
+            MemberDisconnected(0, ConnectionLost(SocketFailed(SocketClosed))),
+            MemberReplacing(0),
+            MemberConnected(0),
+            MemberFree(0),
+          ])
+          |> or_fail_with("Expected the four pool events of a replacement")
+        },
+      ),
+      it(
+        "gives the old process's Disconnected, then the new one's Connected",
+        fn(shared: ActOutcome(ProxiedPool, Replacement)) {
+          shared.outcome.connection_events
+          |> should
+          |> be_ok
+          |> be_equal([
+            Disconnected(ConnectionLost(SocketFailed(SocketClosed))),
+            Connected,
+          ])
+          |> or_fail_with("Expected each process to speak for itself")
+        },
+      ),
+      it(
+        "hands out the new connection",
+        fn(shared: ActOutcome(ProxiedPool, Replacement)) {
+          shared.outcome.backends
+          |> should
+          |> be_ok
+          |> be_different_parts
+          |> or_fail_with("Expected a new backend after the replacement")
+        },
+      ),
+    ],
+  )
 }
