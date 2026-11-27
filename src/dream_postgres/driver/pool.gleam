@@ -634,13 +634,13 @@ fn check_out(
 ///
 /// - `Ok(Catalog)`: the catalog of the manager that runs now, for the
 ///   lookups of the codecs
-/// - `Error(PoolStopped)`: the pool is gone
-pub fn catalog(pool: Pool(attachment)) -> Result(Catalog, HoldError) {
-  ask(pool, CatalogRequest) |> result.map_error(stopped_hold)
+/// - `Error(PoolNotRunning)`: the pool is gone, or no pool runs under the
+///   name now
+pub fn catalog(pool: Pool(attachment)) -> Result(Catalog, PoolNotRunning) {
+  ask(pool, CatalogRequest)
 }
 
-/// A pool that does not run refuses a hold, or a catalog, with
-/// `PoolStopped`.
+/// A pool that does not run refuses a hold with `PoolStopped`.
 fn stopped_hold(_not_running: PoolNotRunning) -> HoldError {
   PoolStopped
 }

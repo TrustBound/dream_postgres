@@ -252,8 +252,9 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
         fn(session: PoolSession) {
           // Act
           let described = {
-            use types <- try(pool.catalog(session.pool))
+            use types <- try(pool.catalog(session.pool) |> map_error(inspect))
             pool.hold(session.pool, 5000, catalog.describe(types, _, 23, 5000))
+            |> map_error(inspect)
           }
 
           // Assert
@@ -269,7 +270,7 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
       it("stops its catalog with the pool", fn(session: PoolSession) {
         // Act
         let after_stop = {
-          use types <- try(pool.catalog(session.pool))
+          use types <- try(pool.catalog(session.pool) |> map_error(inspect))
           pool.stop(session.pool, 1000)
           Ok(catalog.describe(types, session.control, 23, 5000))
         }
@@ -291,8 +292,8 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
         answer
         |> should
         |> be_error
-        |> be_equal(PoolStopped)
-        |> or_fail_with("Expected PoolStopped for the catalog")
+        |> be_equal(PoolNotRunning)
+        |> or_fail_with("Expected PoolNotRunning for the catalog")
       }),
     ]),
   ])
@@ -1081,13 +1082,16 @@ fn restarted_tests() -> TestSuite {
         "gives the catalog of the new pool through the same handle",
         fn(restarted: RestartedPool) {
           {
-            use types <- try(pool.catalog(restarted.named.handle))
+            use types <- try(
+              pool.catalog(restarted.named.handle) |> map_error(inspect),
+            )
             pool.hold(restarted.named.handle, 5000, catalog.describe(
               types,
               _,
               23,
               5000,
             ))
+            |> map_error(inspect)
           }
           |> should
           |> be_ok
