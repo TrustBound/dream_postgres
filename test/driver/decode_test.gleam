@@ -19,9 +19,9 @@ import dream_postgres/driver/message.{
   InvalidReportNumber, InvalidSecretKeyLength, InvalidUtf8, MissingReportField,
   NeedMoreBytes, NegotiateProtocolVersion, NoData, NoticeResponse,
   NotificationResponse, ParameterDescriptions, ParameterStatus, ParseComplete,
-  PortalSuspended, ReadyForQuery, ResultColumn, RowDescription,
-  UnknownAuthenticationRequest, UnknownEncryptionAnswer, UnknownFormatCode,
-  UnknownMessageType, UnknownTransactionStatus,
+  PortalSuspended, ReadyForQuery, ResultColumn, RowDescription, UnknownAnswer,
+  UnknownAuthenticationRequest, UnknownFormatCode, UnknownMessageType,
+  UnknownTransactionStatus,
 }
 import dream_postgres/internal/cell.{
   BinaryFormat, ColumnDescription, Idle, InFailedTransaction, InTransaction,
@@ -706,7 +706,7 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionAccepted, <<>>)))
+      |> be_equal(Decoded(EncryptionAccepted, <<>>))
       |> or_fail_with("Expected EncryptionAccepted")
     }),
     it("keeps the bytes after an S, which a client must refuse", fn() {
@@ -716,7 +716,7 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionAccepted, <<1, 2>>)))
+      |> be_equal(Decoded(EncryptionAccepted, <<1, 2>>))
       |> or_fail_with("Expected EncryptionAccepted and the bytes 1 and 2")
     }),
     it("reads N as refused", fn() {
@@ -726,7 +726,7 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionRefused, <<>>)))
+      |> be_equal(Decoded(EncryptionRefused, <<>>))
       |> or_fail_with("Expected EncryptionRefused")
     }),
     it("reads E as an ErrorResponse and keeps no text", fn() {
@@ -736,7 +736,7 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionErrorResponse, <<0, 0, 0, 9>>)))
+      |> be_equal(Decoded(EncryptionErrorResponse, <<0, 0, 0, 9>>))
       |> or_fail_with("Expected EncryptionErrorResponse")
     }),
     it("needs more bytes when no byte came yet", fn() {
@@ -746,18 +746,18 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(NeedMoreBytes))
+      |> be_equal(NeedMoreBytes)
       |> or_fail_with("Expected NeedMoreBytes")
     }),
-    it("refuses G as the answer to an SSLRequest", fn() {
+    it("reads G to an SSLRequest as an unknown answer", fn() {
       // Act
       let step = decode_ssl_answer(<<"G">>)
 
       // Assert
       step
       |> should
-      |> be_equal(Error(UnknownEncryptionAnswer(71)))
-      |> or_fail_with("Expected UnknownEncryptionAnswer(71)")
+      |> be_equal(Decoded(UnknownAnswer(71), <<>>))
+      |> or_fail_with("Expected UnknownAnswer(71)")
     }),
     it("reads G to a GSSENCRequest as accepted", fn() {
       // Act
@@ -766,18 +766,18 @@ fn answer_tests() {
       // Assert
       step
       |> should
-      |> be_equal(Ok(Decoded(EncryptionAccepted, <<>>)))
+      |> be_equal(Decoded(EncryptionAccepted, <<>>))
       |> or_fail_with("Expected EncryptionAccepted")
     }),
-    it("refuses S as the answer to a GSSENCRequest", fn() {
+    it("reads S to a GSSENCRequest as an unknown answer", fn() {
       // Act
       let step = decode_gss_encryption_answer(<<"S">>)
 
       // Assert
       step
       |> should
-      |> be_equal(Error(UnknownEncryptionAnswer(83)))
-      |> or_fail_with("Expected UnknownEncryptionAnswer(83)")
+      |> be_equal(Decoded(UnknownAnswer(83), <<>>))
+      |> or_fail_with("Expected UnknownAnswer(83)")
     }),
   ]
 }

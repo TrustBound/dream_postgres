@@ -3,14 +3,15 @@
 //// documentation ("Message Formats"), and each value that a layout cannot
 //// hold.
 
-import dream_postgres/driver/encode.{encode}
+import dream_postgres/driver/encode.{encode, length_field}
 import dream_postgres/driver/message.{
   type EncodeError, type FrontendMessage, Bind, CancelRequest, Close, CopyData,
-  CopyDone, CopyFail, Describe, DuplicateStartupParameter, Execute, Flush,
-  FunctionCall, GssEncryptionRequest, GssResponse, NumberOutOfRange, Parse,
-  PasswordMessage, Portal, Protocol30, Protocol32, Query, SaslInitialResponse,
-  SaslResponse, SecretKeyLengthOutOfRange, SslRequest, StartupMessage, Statement,
-  Sync, Terminate, TooManyItems, ZeroByteInString,
+  CopyDone, CopyFail, Describe, DuplicateStartupParameter,
+  EmptyStartupParameterName, Execute, Flush, FunctionCall, GssEncryptionRequest,
+  GssResponse, MessageTooLong, NumberOutOfRange, Parse, PasswordMessage, Portal,
+  Protocol30, Protocol32, Query, SaslInitialResponse, SaslResponse,
+  SecretKeyLengthOutOfRange, SslRequest, StartupMessage, Statement, Sync,
+  Terminate, TooManyItems, ZeroByteInString,
 }
 import dream_postgres/internal/cell.{
   Binary, BinaryFormat, Null, Text, TextFormat,
@@ -29,6 +30,7 @@ pub fn tests() -> TestSuite {
       map(message_cases(), bytes_test),
     ),
     group("values that a layout cannot hold", map(error_cases(), error_test)),
+    group("the 32-bit length field", length_field_tests()),
   ])
 }
 
@@ -260,6 +262,11 @@ fn error_cases() -> List(ErrorCase) {
       ZeroByteInString("startup parameter value"),
     ),
     ErrorCase(
+      "a startup parameter with an empty name",
+      StartupMessage(Protocol30, "ada", [#("", "x")]),
+      EmptyStartupParameterName,
+    ),
+    ErrorCase(
       "a startup parameter named user",
       StartupMessage(Protocol30, "ada", [#("user", "bob")]),
       DuplicateStartupParameter("user"),
@@ -332,5 +339,30 @@ fn error_cases() -> List(ErrorCase) {
       SaslInitialResponse("SCRAM\u{0000}", None),
       ZeroByteInString("mechanism"),
     ),
+  ]
+}
+
+fn length_field_tests() {
+  [
+    it("writes the largest length, 2147483647", fn() {
+      // Act
+      let bytes = length_field(2_147_483_647)
+
+      // Assert
+      bytes
+      |> should
+      |> be_equal(Ok(<<127, 255, 255, 255>>))
+      |> or_fail_with("Expected the bytes 127, 255, 255, 255")
+    }),
+    it("refuses one more than the largest length", fn() {
+      // Act
+      let bytes = length_field(2_147_483_648)
+
+      // Assert
+      bytes
+      |> should
+      |> be_equal(Error(MessageTooLong(2_147_483_648)))
+      |> or_fail_with("Expected MessageTooLong(2147483648)")
+    }),
   ]
 }

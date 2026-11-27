@@ -1,0 +1,1149 @@
+//// Tests for `dream_postgres/driver/login`: the checks of the settings, the
+//// StartupMessage, and the login state machine for each method, with the
+//// messages of a server written out by hand. No test needs a server.
+////
+//// The SCRAM values come from a separate Python implementation
+//// (`hashlib.pbkdf2_hmac` and `hmac`), which gives the example of RFC 7677
+//// exactly, with the password `pencil`, the client nonce of the bytes 0 to
+//// 17 and the server nonce suffix `server-nonce`. The MD5 value is
+//// `"md5" + md5(md5("pencil" + "ada").hexdigest() + "\x01\x02\x03\x04")`.
+
+import dream_postgres/driver/channel_binding.{UnsupportedSignatureAlgorithm}
+import dream_postgres/driver/login.{
+  type ChannelBindingSetting, type ConfigError, type LoginConfig,
+  type LoginError, type LoginOutcome, type LoginState, type LoginStep,
+  type Password, CancelKey, CertificateHashFailed, ChannelBindingNotOffered,
+  ChannelBindingOfferedWithoutTls, ChannelBindingRequiresTls, CleartextLogin,
+  ClientNonceTooShort, Continue, DisableChannelBinding, DuplicateParameter,
+  EmptyParameterName, EmptyUser, GssLogin, InvalidConfig, KerberosV5Login,
+  LoggedIn, LoginOutcome, Md5Login, PasswordRequired, PreferChannelBinding,
+  RequireChannelBinding, SaslLogin, ScramFailed, ScramLogin, ServerRejectedLogin,
+  SspiLogin, TrustLogin, UnexpectedMessage, UnsupportedClientEncoding,
+  UnsupportedLoginMethod, UnsupportedProtocolVersion, ZeroByteInParameter,
+  ZeroByteInPassword, new, no_password, password, password_function, start, step,
+}
+import dream_postgres/driver/message.{
+  type BackendMessage, type FrontendMessage, type ProtocolVersion,
+  AuthenticationCleartextPassword, AuthenticationGss, AuthenticationKerberosV5,
+  AuthenticationMd5Password, AuthenticationOk, AuthenticationSasl,
+  AuthenticationSaslContinue, AuthenticationSaslFinal, AuthenticationSspi,
+  BackendKeyData, ErrorResponse, NegotiateProtocolVersion, NoticeResponse,
+  ParameterStatus, PasswordMessage, Protocol30, Protocol32, ReadyForQuery,
+  SaslInitialResponse, SaslResponse, StartupMessage,
+}
+import dream_postgres/driver/scram.{
+  InvalidServerFirstMessage, ServerSignatureMismatch,
+}
+import dream_postgres/internal/cell.{Idle, ServerReport}
+import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/suite.{type TestSuite}
+import dream_test/unit.{describe, group, it}
+import gleam/dict
+import gleam/dynamic.{type Dynamic}
+import gleam/list.{map, reverse}
+import gleam/option.{type Option, None, Some}
+import gleam/result.{map_error, try}
+import gleam/string.{contains, inspect}
+
+@external(erlang, "driver_file_ffi", "read_certificate")
+fn read_certificate(name: String) -> Result(BitArray, String)
+
+@external(erlang, "erlang", "put")
+fn put_stored_password(key: String, value: String) -> Dynamic
+
+@external(erlang, "erlang", "get")
+fn get_stored_password(key: String) -> String
+
+/// The tests of the login.
+pub fn tests() -> TestSuite {
+  describe("dream_postgres/driver/login", [
+    group("the StartupMessage", map(startup_cases(), startup_test)),
+    group("settings that new refuses", map(config_error_cases(), config_test)),
+    group("start", map(start_error_cases(), start_error_test)),
+    group("logins that work", map(login_cases(), login_test)),
+    group("logins that fail", map(failure_cases(), login_test)),
+    group("channel binding", map(channel_binding_cases(), login_test)),
+    group("protocol version", map(protocol_cases(), login_test)),
+    group("messages that a step does not expect", {
+      map(unexpected_cases(), login_test)
+    }),
+    group("the password function", [
+      it("is checked again when the server asks", check_password_read_again),
+    ]),
+    group("the password never prints", map(state_cases(), state_test)),
+  ])
+}
+
+// Values ----------------------------------------------------------------------
+
+/// The client nonce: the bytes 0 to 17, `AAECAwQFBgcICQoLDA0ODxAR` in base64.
+const nonce = <<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17>>
+
+const server_first =
+  "r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"
+
+const wrong_password_report =
+  ServerReport(
+    severity: "FATAL",
+    localized_severity: "FATAL",
+    code: "28P01",
+    message: "password authentication failed for user \"ada\"",
+    detail: Some("Connection matched file \"pg_hba.conf\" line 7"),
+    hint: Some("hint"),
+    position: Some(1),
+    internal_position: Some(2),
+    internal_query: Some("internal query"),
+    context: Some("context"),
+    schema: Some("schema"),
+    table: Some("table"),
+    column: Some("column"),
+    data_type: Some("data type"),
+    constraint: Some("constraint"),
+    file: Some("auth.c"),
+    line: Some(323),
+    routine: Some("auth_failed"),
+    other_fields: [#(0x5A, "other")],
+  )
+
+const first_notice =
+  ServerReport(
+    severity: "NOTICE",
+    localized_severity: "NOTICE",
+    code: "00000",
+    message: "first",
+    detail: None,
+    hint: None,
+    position: None,
+    internal_position: None,
+    internal_query: None,
+    context: None,
+    schema: None,
+    table: None,
+    column: None,
+    data_type: None,
+    constraint: None,
+    file: None,
+    line: None,
+    routine: None,
+    other_fields: [],
+  )
+
+const second_notice =
+  ServerReport(
+    severity: "WARNING",
+    localized_severity: "WARNUNG",
+    code: "01000",
+    message: "second",
+    detail: None,
+    hint: None,
+    position: None,
+    internal_position: None,
+    internal_query: None,
+    context: None,
+    schema: None,
+    table: None,
+    column: None,
+    data_type: None,
+    constraint: None,
+    file: None,
+    line: None,
+    routine: None,
+    other_fields: [],
+  )
+
+/// The settings of a test login. A test body gives them to `new`, so that
+/// the coverage of the test run sees each check.
+type Settings {
+  Settings(
+    user: String,
+    database: String,
+    password: PasswordSetting,
+    parameters: List(#(String, String)),
+    channel_binding: ChannelBindingSetting,
+    protocol_version: ProtocolVersion,
+  )
+}
+
+/// The password of a test login.
+type PasswordSetting {
+  TextPassword(text: String)
+  FunctionPassword(read: fn() -> String)
+  NoPasswordGiven
+}
+
+fn build(settings: Settings) -> Result(LoginConfig, ConfigError) {
+  new(
+    user: settings.user,
+    database: settings.database,
+    password: login_password(settings.password),
+    parameters: settings.parameters,
+    channel_binding: settings.channel_binding,
+    protocol_version: settings.protocol_version,
+  )
+}
+
+fn login_password(setting: PasswordSetting) -> Password {
+  case setting {
+    TextPassword(text:) -> password(text)
+    FunctionPassword(read:) -> password_function(read)
+    NoPasswordGiven -> no_password()
+  }
+}
+
+fn config_with(
+  password: PasswordSetting,
+  channel_binding: ChannelBindingSetting,
+  protocol_version: ProtocolVersion,
+) -> Settings {
+  Settings(
+    user: "ada",
+    database: "shop",
+    password:,
+    parameters: [],
+    channel_binding:,
+    protocol_version:,
+  )
+}
+
+fn pencil(channel_binding: ChannelBindingSetting) -> Settings {
+  config_with(TextPassword("pencil"), channel_binding, Protocol30)
+}
+
+fn sasl_first(flag: String) -> FrontendMessage {
+  let mechanism = case flag {
+    "p=tls-server-end-point" -> "SCRAM-SHA-256-PLUS"
+    _ -> "SCRAM-SHA-256"
+  }
+  SaslInitialResponse(
+    mechanism,
+    Some(<<flag:utf8, ",,n=,r=AAECAwQFBgcICQoLDA0ODxAR">>),
+  )
+}
+
+fn sasl_final(binding: String, proof: String) -> FrontendMessage {
+  SaslResponse(<<
+    "c=":utf8,
+    binding:utf8,
+    ",r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,p=":utf8,
+    proof:utf8,
+  >>)
+}
+
+const proof_without_binding = "TiYDpRjdsbRebN57WRJ0zaT3zsO7iKC3PFBX+WsscT0="
+
+const signature_without_binding =
+  "v=AvBMH0OLqQw46G6e1bvWRKc3j4kiF9BIHq4zhXgikQU="
+
+const proof_with_flag_y = "msyn1LY0Oxyf+gll/EK7CSRK3qevfV2WO+EnTVvsmtY="
+
+const signature_with_flag_y = "v=XWerSOwJj3Jipqf9+ifSFHLsATHu/Paues7tk7jd0vc="
+
+const end_point_binding =
+  "cD10bHMtc2VydmVyLWVuZC1wb2ludCwsGWtpJLD+PZUvUNHkl3nPH9RfsMH6IB1iMsapkzkqGNU="
+
+const proof_with_end_point = "Fx0VuA3kaR3WQ4pqLtQ5uy0fXOuvt6uaMPY0dBUxApk="
+
+const signature_with_end_point = "v=5RkvOJ60zJ/bG+wNLVBrZJn0Ezt116/vOqCHGUeseBs="
+
+fn ready_messages() -> List(BackendMessage) {
+  [
+    AuthenticationOk,
+    ParameterStatus("server_version", "17.0"),
+    ParameterStatus("client_encoding", "UTF8"),
+    BackendKeyData(42, <<1, 2, 3, 4>>),
+    ReadyForQuery(Idle),
+  ]
+}
+
+fn ready_outcome() -> LoginOutcome {
+  LoginOutcome(
+    parameters: dict.from_list([
+      #("server_version", "17.0"),
+      #("client_encoding", "UTF8"),
+    ]),
+    cancel_key: Some(CancelKey(42, <<1, 2, 3, 4>>)),
+    protocol_version: Protocol30,
+    unrecognized_options: [],
+    notices: [],
+    transaction_status: Idle,
+  )
+}
+
+fn scram_messages(signature: String) -> List(BackendMessage) {
+  [
+    AuthenticationSaslContinue(<<server_first:utf8>>),
+    AuthenticationSaslFinal(<<signature:utf8>>),
+    ..ready_messages()
+  ]
+}
+
+// Running a login -------------------------------------------------------------
+
+/// What a login gave: each reply in order, and the outcome if it ended.
+type LoginRun {
+  LoginRun(replies: List(FrontendMessage), outcome: Option(LoginOutcome))
+}
+
+/// Why a login run did not give a `LoginRun`.
+type RunFailure {
+  ConfigFailed(error: ConfigError)
+  LoginFailed(error: LoginError)
+  MissingCertificate(reason: String)
+  LoginEnded
+}
+
+fn certificate(file: Option(String)) -> Result(Option(BitArray), RunFailure) {
+  case file {
+    Some(name) ->
+      read_certificate(name)
+      |> result.map(Some)
+      |> map_error(MissingCertificate)
+    None -> Ok(None)
+  }
+}
+
+fn started(
+  config: Result(LoginConfig, ConfigError),
+  certificate_file: Option(String),
+) -> Result(#(LoginState, FrontendMessage), RunFailure) {
+  use config <- try(config |> map_error(ConfigFailed))
+  use server_certificate <- try(certificate(certificate_file))
+  start(config, nonce, server_certificate) |> map_error(LoginFailed)
+}
+
+fn run(
+  settings: Settings,
+  certificate_file: Option(String),
+  messages: List(BackendMessage),
+) -> Result(LoginRun, RunFailure) {
+  run_config(build(settings), certificate_file, messages)
+}
+
+fn run_config(
+  config: Result(LoginConfig, ConfigError),
+  certificate_file: Option(String),
+  messages: List(BackendMessage),
+) -> Result(LoginRun, RunFailure) {
+  use #(state, _startup) <- try(started(config, certificate_file))
+  run_messages(state, messages, []) |> map_error(LoginFailed)
+}
+
+fn run_messages(
+  state: LoginState,
+  messages: List(BackendMessage),
+  replies: List(FrontendMessage),
+) -> Result(LoginRun, LoginError) {
+  case messages {
+    [] -> Ok(LoginRun(reverse(replies), None))
+    [message, ..rest] -> {
+      use login_step <- try(step(state, message))
+      next_step(login_step, rest, replies)
+    }
+  }
+}
+
+fn next_step(
+  login_step: LoginStep,
+  rest: List(BackendMessage),
+  replies: List(FrontendMessage),
+) -> Result(LoginRun, LoginError) {
+  case login_step {
+    Continue(state:, reply:) ->
+      run_messages(state, rest, add_reply(replies, reply))
+    LoggedIn(outcome:) -> Ok(LoginRun(reverse(replies), Some(outcome)))
+  }
+}
+
+fn add_reply(
+  replies: List(FrontendMessage),
+  reply: Option(FrontendMessage),
+) -> List(FrontendMessage) {
+  case reply {
+    Some(message) -> [message, ..replies]
+    None -> replies
+  }
+}
+
+// The StartupMessage ----------------------------------------------------------
+
+type StartupCase {
+  StartupCase(name: String, settings: Settings, expected: FrontendMessage)
+}
+
+fn startup_test(test_case: StartupCase) {
+  it(test_case.name, fn() { check_startup(test_case) })
+}
+
+fn check_startup(test_case: StartupCase) {
+  // Act
+  let message =
+    started(build(test_case.settings), None) |> result.map(startup_of)
+
+  // Assert
+  message
+  |> should
+  |> be_equal(Ok(test_case.expected))
+  |> or_fail_with("Expected the StartupMessage of " <> test_case.name)
+}
+
+fn startup_of(started: #(LoginState, FrontendMessage)) -> FrontendMessage {
+  started.1
+}
+
+fn with_parameters(parameters: List(#(String, String))) -> Settings {
+  Settings(..pencil(PreferChannelBinding), parameters:)
+}
+
+fn startup_cases() -> List(StartupCase) {
+  [
+    StartupCase(
+      "the default application_name and client_encoding",
+      with_parameters([]),
+      StartupMessage(Protocol30, "ada", [
+        #("database", "shop"),
+        #("application_name", "dream_postgres"),
+        #("client_encoding", "UTF8"),
+      ]),
+    ),
+    StartupCase(
+      "the caller's application_name in any case replaces the default",
+      with_parameters([
+        #("Application_Name", "billing"),
+        #("options", "-c search_path=app"),
+      ]),
+      StartupMessage(Protocol30, "ada", [
+        #("database", "shop"),
+        #("options", "-c search_path=app"),
+        #("Application_Name", "billing"),
+        #("client_encoding", "UTF8"),
+      ]),
+    ),
+    StartupCase(
+      "a client_encoding that names UTF-8 is sent as UTF8",
+      with_parameters([#("client_encoding", "utf-8")]),
+      StartupMessage(Protocol30, "ada", [
+        #("database", "shop"),
+        #("application_name", "dream_postgres"),
+        #("client_encoding", "UTF8"),
+      ]),
+    ),
+    StartupCase(
+      "the client_encoding unicode is UTF-8",
+      with_parameters([#("CLIENT_ENCODING", "Unicode")]),
+      StartupMessage(Protocol30, "ada", [
+        #("database", "shop"),
+        #("application_name", "dream_postgres"),
+        #("client_encoding", "UTF8"),
+      ]),
+    ),
+    StartupCase(
+      "protocol 3.2",
+      config_with(TextPassword("pencil"), PreferChannelBinding, Protocol32),
+      StartupMessage(Protocol32, "ada", [
+        #("database", "shop"),
+        #("application_name", "dream_postgres"),
+        #("client_encoding", "UTF8"),
+      ]),
+    ),
+  ]
+}
+
+// Settings that new refuses ---------------------------------------------------
+
+type ConfigCase {
+  ConfigCase(name: String, settings: Settings, error: ConfigError)
+}
+
+fn config_test(test_case: ConfigCase) {
+  it(test_case.name, fn() { check_config(test_case) })
+}
+
+fn check_config(test_case: ConfigCase) {
+  // Act
+  let config = build(test_case.settings) |> result.map(inspect)
+
+  // Assert
+  config
+  |> should
+  |> be_equal(Error(test_case.error))
+  |> or_fail_with("Expected an error for " <> test_case.name)
+}
+
+fn stored_password() -> String {
+  get_stored_password("password")
+}
+
+fn zero_byte_password() -> String {
+  "pen\u{0000}cil"
+}
+
+fn config_error_cases() -> List(ConfigCase) {
+  [
+    ConfigCase(
+      "an empty user",
+      Settings(
+        ..config_with(NoPasswordGiven, PreferChannelBinding, Protocol30),
+        user: "",
+        database: "shop",
+      ),
+      EmptyUser,
+    ),
+    ConfigCase(
+      "a zero byte in the password",
+      config_with(
+        TextPassword("pen\u{0000}cil"),
+        PreferChannelBinding,
+        Protocol30,
+      ),
+      ZeroByteInPassword,
+    ),
+    ConfigCase(
+      "a zero byte from the password function",
+      config_with(
+        FunctionPassword(zero_byte_password),
+        PreferChannelBinding,
+        Protocol30,
+      ),
+      ZeroByteInPassword,
+    ),
+    ConfigCase(
+      "a zero byte in the user",
+      Settings(
+        ..config_with(NoPasswordGiven, PreferChannelBinding, Protocol30),
+        user: "a\u{0000}da",
+        database: "shop",
+      ),
+      ZeroByteInParameter("user"),
+    ),
+    ConfigCase(
+      "a zero byte in the database",
+      Settings(
+        ..config_with(NoPasswordGiven, PreferChannelBinding, Protocol30),
+        user: "ada",
+        database: "sh\u{0000}op",
+      ),
+      ZeroByteInParameter("database"),
+    ),
+    ConfigCase(
+      "a zero byte in a parameter value",
+      with_parameters([#("options", "-c a=\u{0000}")]),
+      ZeroByteInParameter("options"),
+    ),
+    ConfigCase(
+      "a zero byte in a parameter name",
+      with_parameters([#("opt\u{0000}ions", "-c a=1")]),
+      ZeroByteInParameter("opt\u{0000}ions"),
+    ),
+    ConfigCase(
+      "an empty parameter name",
+      with_parameters([#("", "value")]),
+      EmptyParameterName,
+    ),
+    ConfigCase(
+      "a parameter given two times, in two cases",
+      with_parameters([#("options", "-c a=1"), #("OPTIONS", "-c b=2")]),
+      DuplicateParameter("OPTIONS"),
+    ),
+    ConfigCase(
+      "a user parameter",
+      with_parameters([#("User", "bob")]),
+      DuplicateParameter("User"),
+    ),
+    ConfigCase(
+      "a database parameter",
+      with_parameters([#("database", "other")]),
+      DuplicateParameter("database"),
+    ),
+    ConfigCase(
+      "a client_encoding other than UTF-8",
+      with_parameters([#("client_encoding", "LATIN1")]),
+      UnsupportedClientEncoding("LATIN1"),
+    ),
+  ]
+}
+
+// start -----------------------------------------------------------------------
+
+type StartErrorCase {
+  StartErrorCase(
+    name: String,
+    channel_binding: ChannelBindingSetting,
+    client_nonce: BitArray,
+    error: LoginError,
+  )
+}
+
+fn start_error_test(test_case: StartErrorCase) {
+  it(test_case.name, fn() { check_start_error(test_case) })
+}
+
+fn check_start_error(test_case: StartErrorCase) {
+  // Arrange
+  let config =
+    build(pencil(test_case.channel_binding)) |> map_error(ConfigFailed)
+
+  // Act
+  let started = {
+    use config <- try(config)
+    start(config, test_case.client_nonce, None)
+    |> result.map(startup_of)
+    |> map_error(LoginFailed)
+  }
+
+  // Assert
+  started
+  |> should
+  |> be_equal(Error(LoginFailed(test_case.error)))
+  |> or_fail_with("Expected an error for " <> test_case.name)
+}
+
+fn start_error_cases() -> List(StartErrorCase) {
+  [
+    StartErrorCase(
+      "a client nonce of 17 bytes",
+      PreferChannelBinding,
+      <<0:136>>,
+      ClientNonceTooShort(17),
+    ),
+    StartErrorCase(
+      "channel binding required on a connection with no TLS",
+      RequireChannelBinding,
+      nonce,
+      ChannelBindingRequiresTls,
+    ),
+  ]
+}
+
+// Logins ----------------------------------------------------------------------
+
+type LoginCase {
+  LoginCase(
+    name: String,
+    settings: Settings,
+    certificate_file: Option(String),
+    messages: List(BackendMessage),
+    expected: Result(LoginRun, RunFailure),
+  )
+}
+
+fn login_test(test_case: LoginCase) {
+  it(test_case.name, fn() { check_login(test_case) })
+}
+
+fn check_login(test_case: LoginCase) {
+  // Act
+  let login_run =
+    run(test_case.settings, test_case.certificate_file, test_case.messages)
+
+  // Assert
+  login_run
+  |> should
+  |> be_equal(test_case.expected)
+  |> or_fail_with("Expected the login result of " <> test_case.name)
+}
+
+fn login_cases() -> List(LoginCase) {
+  [
+    LoginCase(
+      "no password, with each parameter, the key and the notices in order",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol30),
+      None,
+      [
+        NoticeResponse(first_notice),
+        AuthenticationOk,
+        ParameterStatus("server_version", "17.0"),
+        NoticeResponse(second_notice),
+        ParameterStatus("client_encoding", "UTF8"),
+        BackendKeyData(42, <<1, 2, 3, 4>>),
+        ReadyForQuery(Idle),
+      ],
+      Ok(LoginRun(
+        [],
+        Some(
+          LoginOutcome(..ready_outcome(), notices: [first_notice, second_notice]),
+        ),
+      )),
+    ),
+    LoginCase(
+      "a cleartext password",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationCleartextPassword, ..ready_messages()],
+      Ok(LoginRun([PasswordMessage("pencil")], Some(ready_outcome()))),
+    ),
+    LoginCase(
+      "an MD5 password",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationMd5Password(<<1, 2, 3, 4>>), ..ready_messages()],
+      Ok(LoginRun(
+        [PasswordMessage("md5d1b13b8314d3b5545feef5ce8ab91e15")],
+        Some(ready_outcome()),
+      )),
+    ),
+    LoginCase(
+      "SCRAM-SHA-256 with no TLS",
+      pencil(PreferChannelBinding),
+      None,
+      [
+        AuthenticationSasl(["SCRAM-SHA-256"]),
+        ..scram_messages(signature_without_binding)
+      ],
+      Ok(LoginRun(
+        [sasl_first("n"), sasl_final("biws", proof_without_binding)],
+        Some(ready_outcome()),
+      )),
+    ),
+    LoginCase(
+      "a login without a BackendKeyData",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol30),
+      None,
+      [AuthenticationOk, ReadyForQuery(Idle)],
+      Ok(LoginRun(
+        [],
+        Some(
+          LoginOutcome(
+            ..ready_outcome(),
+            parameters: dict.new(),
+            cancel_key: None,
+          ),
+        ),
+      )),
+    ),
+  ]
+}
+
+fn failure_cases() -> List(LoginCase) {
+  [
+    LoginCase(
+      "a wrong password gives the server's report",
+      pencil(PreferChannelBinding),
+      None,
+      [
+        AuthenticationSasl(["SCRAM-SHA-256"]),
+        AuthenticationSaslContinue(<<server_first:utf8>>),
+        ErrorResponse(wrong_password_report),
+      ],
+      Error(LoginFailed(ServerRejectedLogin(wrong_password_report))),
+    ),
+    LoginCase(
+      "a wrong server signature",
+      pencil(PreferChannelBinding),
+      None,
+      [
+        AuthenticationSasl(["SCRAM-SHA-256"]),
+        ..scram_messages(signature_with_flag_y)
+      ],
+      Error(LoginFailed(ScramFailed(ServerSignatureMismatch))),
+    ),
+    LoginCase(
+      "a server-first-message that is not valid",
+      pencil(PreferChannelBinding),
+      None,
+      [
+        AuthenticationSasl(["SCRAM-SHA-256"]),
+        AuthenticationSaslContinue(<<"x">>),
+      ],
+      Error(LoginFailed(ScramFailed(InvalidServerFirstMessage(<<"x">>)))),
+    ),
+    LoginCase(
+      "no password for a cleartext request",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol30),
+      None,
+      [AuthenticationCleartextPassword],
+      Error(LoginFailed(PasswordRequired(CleartextLogin))),
+    ),
+    LoginCase(
+      "an empty password for an MD5 request",
+      config_with(TextPassword(""), PreferChannelBinding, Protocol30),
+      None,
+      [AuthenticationMd5Password(<<1, 2, 3, 4>>)],
+      Error(LoginFailed(PasswordRequired(Md5Login))),
+    ),
+    LoginCase(
+      "no password for SCRAM",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol30),
+      None,
+      [
+        AuthenticationSasl(["SCRAM-SHA-256"]),
+        AuthenticationSaslContinue(<<server_first:utf8>>),
+      ],
+      Error(LoginFailed(PasswordRequired(ScramLogin("SCRAM-SHA-256")))),
+    ),
+    LoginCase(
+      "Kerberos V5",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationKerberosV5],
+      Error(LoginFailed(UnsupportedLoginMethod(KerberosV5Login))),
+    ),
+    LoginCase(
+      "GSSAPI",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationGss],
+      Error(LoginFailed(UnsupportedLoginMethod(GssLogin))),
+    ),
+    LoginCase(
+      "SSPI",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationSspi],
+      Error(LoginFailed(UnsupportedLoginMethod(SspiLogin))),
+    ),
+    LoginCase(
+      "a SASL mechanism list with no SCRAM",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationSasl(["OAUTHBEARER"])],
+      Error(LoginFailed(UnsupportedLoginMethod(SaslLogin(["OAUTHBEARER"])))),
+    ),
+  ]
+}
+
+fn channel_binding_cases() -> List(LoginCase) {
+  [
+    LoginCase(
+      "prefer, with TLS and SCRAM-SHA-256-PLUS, binds to the certificate",
+      pencil(PreferChannelBinding),
+      Some("rsa_sha256.der"),
+      [
+        AuthenticationSasl(["SCRAM-SHA-256-PLUS", "SCRAM-SHA-256"]),
+        ..scram_messages(signature_with_end_point)
+      ],
+      Ok(LoginRun(
+        [
+          sasl_first("p=tls-server-end-point"),
+          sasl_final(end_point_binding, proof_with_end_point),
+        ],
+        Some(ready_outcome()),
+      )),
+    ),
+    LoginCase(
+      "require, with TLS and SCRAM-SHA-256-PLUS, binds to the certificate",
+      pencil(RequireChannelBinding),
+      Some("rsa_sha256.der"),
+      [
+        AuthenticationSasl(["SCRAM-SHA-256", "SCRAM-SHA-256-PLUS"]),
+        ..scram_messages(signature_with_end_point)
+      ],
+      Ok(LoginRun(
+        [
+          sasl_first("p=tls-server-end-point"),
+          sasl_final(end_point_binding, proof_with_end_point),
+        ],
+        Some(ready_outcome()),
+      )),
+    ),
+    LoginCase(
+      "prefer, with TLS and SCRAM-SHA-256 only, sends the y flag",
+      pencil(PreferChannelBinding),
+      Some("rsa_sha256.der"),
+      [
+        AuthenticationSasl(["SCRAM-SHA-256"]),
+        ..scram_messages(signature_with_flag_y)
+      ],
+      Ok(LoginRun(
+        [sasl_first("y"), sasl_final("eSws", proof_with_flag_y)],
+        Some(ready_outcome()),
+      )),
+    ),
+    LoginCase(
+      "disable, with TLS and SCRAM-SHA-256-PLUS, sends the n flag",
+      pencil(DisableChannelBinding),
+      Some("rsa_sha256.der"),
+      [
+        AuthenticationSasl(["SCRAM-SHA-256-PLUS", "SCRAM-SHA-256"]),
+        ..scram_messages(signature_without_binding)
+      ],
+      Ok(LoginRun(
+        [sasl_first("n"), sasl_final("biws", proof_without_binding)],
+        Some(ready_outcome()),
+      )),
+    ),
+    LoginCase(
+      "disable, when the server offers SCRAM-SHA-256-PLUS only",
+      pencil(DisableChannelBinding),
+      Some("rsa_sha256.der"),
+      [AuthenticationSasl(["SCRAM-SHA-256-PLUS"])],
+      Error(
+        LoginFailed(UnsupportedLoginMethod(SaslLogin(["SCRAM-SHA-256-PLUS"]))),
+      ),
+    ),
+    LoginCase(
+      "SCRAM-SHA-256-PLUS offered with no TLS",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationSasl(["SCRAM-SHA-256-PLUS", "SCRAM-SHA-256"])],
+      Error(LoginFailed(ChannelBindingOfferedWithoutTls)),
+    ),
+    LoginCase(
+      "require, when the server offers SCRAM-SHA-256 only",
+      pencil(RequireChannelBinding),
+      Some("rsa_sha256.der"),
+      [AuthenticationSasl(["SCRAM-SHA-256"])],
+      Error(LoginFailed(ChannelBindingNotOffered(SaslLogin(["SCRAM-SHA-256"])))),
+    ),
+    LoginCase(
+      "require, when the server offers no SCRAM",
+      pencil(RequireChannelBinding),
+      Some("rsa_sha256.der"),
+      [AuthenticationSasl(["OAUTHBEARER"])],
+      Error(LoginFailed(UnsupportedLoginMethod(SaslLogin(["OAUTHBEARER"])))),
+    ),
+    LoginCase(
+      "require refuses a cleartext request",
+      pencil(RequireChannelBinding),
+      Some("rsa_sha256.der"),
+      [AuthenticationCleartextPassword],
+      Error(LoginFailed(ChannelBindingNotOffered(CleartextLogin))),
+    ),
+    LoginCase(
+      "require refuses a login with no password",
+      pencil(RequireChannelBinding),
+      Some("rsa_sha256.der"),
+      [AuthenticationOk],
+      Error(LoginFailed(ChannelBindingNotOffered(TrustLogin))),
+    ),
+    LoginCase(
+      "a certificate with no tls-server-end-point hash",
+      pencil(PreferChannelBinding),
+      Some("ed25519.der"),
+      [AuthenticationSasl(["SCRAM-SHA-256-PLUS", "SCRAM-SHA-256"])],
+      Error(
+        LoginFailed(
+          CertificateHashFailed(UnsupportedSignatureAlgorithm([1, 3, 101, 112])),
+        ),
+      ),
+    ),
+  ]
+}
+
+fn protocol_cases() -> List(LoginCase) {
+  [
+    LoginCase(
+      "a server that answers 3.0 to 3.2",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol32),
+      None,
+      [NegotiateProtocolVersion(3, 0, ["_pq_.dream_test"]), ..ready_messages()],
+      Ok(LoginRun(
+        [],
+        Some(
+          LoginOutcome(..ready_outcome(), unrecognized_options: [
+            "_pq_.dream_test",
+          ]),
+        ),
+      )),
+    ),
+    LoginCase(
+      "a server that keeps 3.2 and names an unknown option",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol32),
+      None,
+      [NegotiateProtocolVersion(3, 2, ["_pq_.dream_test"]), ..ready_messages()],
+      Ok(LoginRun(
+        [],
+        Some(
+          LoginOutcome(
+            ..ready_outcome(),
+            protocol_version: Protocol32,
+            unrecognized_options: ["_pq_.dream_test"],
+          ),
+        ),
+      )),
+    ),
+    LoginCase(
+      "a login that asks 3.2 and gets no NegotiateProtocolVersion",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol32),
+      None,
+      ready_messages(),
+      Ok(LoginRun(
+        [],
+        Some(LoginOutcome(..ready_outcome(), protocol_version: Protocol32)),
+      )),
+    ),
+    LoginCase(
+      "a server that answers 3.1",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol32),
+      None,
+      [NegotiateProtocolVersion(3, 1, [])],
+      Error(LoginFailed(UnsupportedProtocolVersion(3, 1))),
+    ),
+    LoginCase(
+      "a server that answers 3.2 to 3.0",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol30),
+      None,
+      [NegotiateProtocolVersion(3, 2, [])],
+      Error(LoginFailed(UnsupportedProtocolVersion(3, 2))),
+    ),
+    LoginCase(
+      "a server that answers major version 4",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol32),
+      None,
+      [NegotiateProtocolVersion(4, 0, [])],
+      Error(LoginFailed(UnsupportedProtocolVersion(4, 0))),
+    ),
+  ]
+}
+
+fn unexpected_cases() -> List(LoginCase) {
+  [
+    LoginCase(
+      "a second NegotiateProtocolVersion",
+      config_with(NoPasswordGiven, PreferChannelBinding, Protocol32),
+      None,
+      [
+        NegotiateProtocolVersion(3, 0, []),
+        NegotiateProtocolVersion(3, 0, []),
+      ],
+      Error(LoginFailed(UnexpectedMessage(NegotiateProtocolVersion(3, 0, [])))),
+    ),
+    LoginCase(
+      "a ReadyForQuery before the login request",
+      pencil(PreferChannelBinding),
+      None,
+      [ReadyForQuery(Idle)],
+      Error(LoginFailed(UnexpectedMessage(ReadyForQuery(Idle)))),
+    ),
+    LoginCase(
+      "an AuthenticationOk before the server-first-message",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationSasl(["SCRAM-SHA-256"]), AuthenticationOk],
+      Error(LoginFailed(UnexpectedMessage(AuthenticationOk))),
+    ),
+    LoginCase(
+      "an AuthenticationOk before the server-final-message",
+      pencil(PreferChannelBinding),
+      None,
+      [
+        AuthenticationSasl(["SCRAM-SHA-256"]),
+        AuthenticationSaslContinue(<<server_first:utf8>>),
+        AuthenticationOk,
+      ],
+      Error(LoginFailed(UnexpectedMessage(AuthenticationOk))),
+    ),
+    LoginCase(
+      "a ParameterStatus before the AuthenticationOk",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationCleartextPassword, ParameterStatus("a", "b")],
+      Error(LoginFailed(UnexpectedMessage(ParameterStatus("a", "b")))),
+    ),
+    LoginCase(
+      "a second AuthenticationOk",
+      pencil(PreferChannelBinding),
+      None,
+      [AuthenticationOk, AuthenticationOk],
+      Error(LoginFailed(UnexpectedMessage(AuthenticationOk))),
+    ),
+  ]
+}
+
+// The password function -------------------------------------------------------
+
+fn check_password_read_again() {
+  // Arrange
+  let _previous = put_stored_password("password", "pencil")
+  let config =
+    build(config_with(
+      FunctionPassword(stored_password),
+      PreferChannelBinding,
+      Protocol30,
+    ))
+  let _previous = put_stored_password("password", "pen\u{0000}cil")
+
+  // Act
+  let login_run = run_config(config, None, [AuthenticationCleartextPassword])
+
+  // Assert
+  login_run
+  |> should
+  |> be_equal(Error(LoginFailed(InvalidConfig(ZeroByteInPassword))))
+  |> or_fail_with("Expected the zero byte of the second read to fail")
+}
+
+// The password never prints ---------------------------------------------------
+
+type StateCase {
+  StateCase(name: String, messages: List(BackendMessage))
+}
+
+fn state_test(test_case: StateCase) {
+  it(test_case.name, fn() { check_state(test_case) })
+}
+
+/// The printed state after the messages, or the printed config when there
+/// are no messages.
+fn printed_state(messages: List(BackendMessage)) -> Result(String, RunFailure) {
+  use #(state, _startup) <- try(started(
+    build(pencil(PreferChannelBinding)),
+    None,
+  ))
+  case messages {
+    [] ->
+      build(pencil(PreferChannelBinding))
+      |> result.map(inspect)
+      |> map_error(ConfigFailed)
+    _ -> state_after(state, messages) |> result.map(inspect)
+  }
+}
+
+fn state_after(
+  state: LoginState,
+  messages: List(BackendMessage),
+) -> Result(LoginState, RunFailure) {
+  case messages {
+    [] -> Ok(state)
+    [message, ..rest] -> {
+      use login_step <- try(step(state, message) |> map_error(LoginFailed))
+      use next_state <- try(state_of(login_step))
+      state_after(next_state, rest)
+    }
+  }
+}
+
+fn state_of(login_step: LoginStep) -> Result(LoginState, RunFailure) {
+  case login_step {
+    Continue(state:, reply: _) -> Ok(state)
+    LoggedIn(outcome: _) -> Error(LoginEnded)
+  }
+}
+
+fn check_state(test_case: StateCase) {
+  // Act
+  let shows_password =
+    printed_state(test_case.messages) |> result.map(contains(_, "pencil"))
+
+  // Assert
+  shows_password
+  |> should
+  |> be_equal(Ok(False))
+  |> or_fail_with("Expected no password text in " <> test_case.name)
+}
+
+fn state_cases() -> List(StateCase) {
+  [
+    StateCase("the config", []),
+    StateCase("the state after start", [NoticeResponse(first_notice)]),
+    StateCase("the state after a cleartext request", [
+      AuthenticationCleartextPassword,
+    ]),
+    StateCase("the state after the SASL request", [
+      AuthenticationSasl(["SCRAM-SHA-256"]),
+    ]),
+    StateCase("the state after the server-first-message", [
+      AuthenticationSasl(["SCRAM-SHA-256"]),
+      AuthenticationSaslContinue(<<server_first:utf8>>),
+    ]),
+    StateCase("the state after the server-final-message", [
+      AuthenticationSasl(["SCRAM-SHA-256"]),
+      AuthenticationSaslContinue(<<server_first:utf8>>),
+      AuthenticationSaslFinal(<<signature_without_binding:utf8>>),
+    ]),
+    StateCase("the state after AuthenticationOk", [
+      AuthenticationCleartextPassword,
+      AuthenticationOk,
+      ParameterStatus("server_version", "17.0"),
+    ]),
+  ]
+}

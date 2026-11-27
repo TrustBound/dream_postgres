@@ -208,6 +208,8 @@ pub type EncryptionAnswer {
   /// authenticated, so the PostgreSQL docs say to close the connection and
   /// not to show the message (CVE-2024-10977). The answer keeps no text.
   EncryptionErrorResponse
+  /// Any other byte. A client must close the connection.
+  UnknownAnswer(answer_byte: Int)
 }
 
 /// The result of one step of reading the bytes from the server.
@@ -246,9 +248,6 @@ pub type ProtocolError {
   /// A report field that must be a decimal integer (`P`, `p` or `L`) but is
   /// not.
   InvalidReportNumber(type_byte: Int, field_code: Int, value: String)
-  /// An answer to an encryption request that is not `E`, `N`, or the
-  /// accept byte of the request (`S` or `G`).
-  UnknownEncryptionAnswer(answer_byte: Int)
 }
 
 /// Why a frontend message cannot be written.
@@ -266,4 +265,7 @@ pub type EncodeError {
   /// A startup parameter name given two times, or the name `user`, which
   /// the StartupMessage has as its own field.
   DuplicateStartupParameter(name: String)
+  /// A startup parameter with an empty name. Its zero byte would end the
+  /// parameter list early.
+  EmptyStartupParameterName
 }
