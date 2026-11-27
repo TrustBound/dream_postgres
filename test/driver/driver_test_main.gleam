@@ -20,6 +20,7 @@ import driver/recorded_test
 import driver/saslprep_test
 import driver/scram_test
 import driver/server_test
+import driver/statement_cache_test
 import driver/transaction_test
 import driver/transport_test
 
@@ -40,6 +41,7 @@ pub fn suites() -> List(TestSuite) {
     query_server_test.tests(),
     server_test.tests(),
     transport_test.tests(),
+    statement_cache_test.tests(),
     connection_test.tests(),
   ]
 }
