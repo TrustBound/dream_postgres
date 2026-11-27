@@ -122,6 +122,22 @@ pub fn caching_config(
   ConnectionConfig(..config, statements: caching)
 }
 
+/// The config with a setup timeout of `milliseconds`.
+pub fn setup_timeout_config(
+  config: ConnectionConfig,
+  milliseconds: Int,
+) -> ConnectionConfig {
+  ConnectionConfig(..config, setup_timeout_milliseconds: milliseconds)
+}
+
+/// The config with a cancel timeout of `milliseconds`.
+pub fn cancel_timeout_config(
+  config: ConnectionConfig,
+  milliseconds: Int,
+) -> ConnectionConfig {
+  ConnectionConfig(..config, cancel_timeout_milliseconds: milliseconds)
+}
+
 fn server_address(port: Int) -> Result(Address, String) {
   address("localhost", port)
   |> map_error(fn(error) { "could not build the address: " <> inspect(error) })
