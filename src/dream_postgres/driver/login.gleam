@@ -44,7 +44,7 @@ import gleam/bool.{guard}
 import gleam/dict.{type Dict}
 import gleam/list.{append, contains, filter, reverse, try_each, try_fold}
 import gleam/option.{type Option, None, Some}
-import gleam/result.{map, map_error, try, unwrap}
+import gleam/result.{map, map_error, replace_error, try, unwrap}
 import gleam/set.{type Set}
 import gleam/string.{lowercase, to_graphemes}
 
@@ -149,7 +149,7 @@ pub type LoginStartError {
   ChannelBindingRequiresTls
 }
 
-/// Why a login fails.
+/// Why `step` ends a login.
 pub type LoginError {
   /// The server sent an ErrorResponse, for example `28P01` for a wrong
   /// password, with every field that it sent.
@@ -161,8 +161,9 @@ pub type LoginError {
   /// The server asks for a password, and the settings have none, or an
   /// empty one.
   PasswordRequired(method: LoginMethod)
-  /// The password function gave a password that `new` would refuse.
-  InvalidConfig(error: ConfigError)
+  /// The password function gave a password with a zero byte, which would
+  /// end it early. No password went to the server.
+  PasswordHasZeroByte
   /// The setting is `RequireChannelBinding`, and the server asks for a
   /// login method that does not bind to the channel.
   ChannelBindingNotOffered(method: LoginMethod)
@@ -665,7 +666,7 @@ fn checked_password(
   method: LoginMethod,
 ) -> Result(String, LoginError) {
   use <- guard(text == "", Error(PasswordRequired(method)))
-  use _ <- try(check_password_text(text) |> map_error(InvalidConfig))
+  use _ <- try(check_password_text(text) |> replace_error(PasswordHasZeroByte))
   Ok(text)
 }
 

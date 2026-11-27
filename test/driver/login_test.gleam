@@ -15,8 +15,8 @@ import dream_postgres/driver/login.{
   CertificateHashFailed, ChannelBindingNotOffered,
   ChannelBindingOfferedWithoutTls, ChannelBindingRequiresTls, CleartextLogin,
   ClientNonceTooShort, DisableChannelBinding, DuplicateParameter,
-  EmptyParameterName, EmptyUser, GssLogin, InvalidConfig, KerberosV5Login,
-  LoginOutcome, Md5Login, PasswordRequired, PreferChannelBinding,
+  EmptyParameterName, EmptyUser, GssLogin, KerberosV5Login, LoginOutcome,
+  Md5Login, PasswordHasZeroByte, PasswordRequired, PreferChannelBinding,
   RequireChannelBinding, SaslLogin, ScramFailed, ScramLogin, ServerRejectedLogin,
   SspiLogin, TrustLogin, UnexpectedMessage, UnsupportedClientEncoding,
   UnsupportedLoginMethod, UnsupportedProtocolVersion, ZeroByteInParameter,
@@ -986,7 +986,7 @@ fn password_read_again_test() {
     |> extract_login_start(nonce:, certificate_file: None)
     |> extract_login_run([AuthenticationCleartextPassword])
     |> be_error
-    |> be_equal(InvalidConfig(ZeroByteInPassword))
+    |> be_equal(PasswordHasZeroByte)
     |> or_fail_with("Expected the zero byte of the second read to fail")
   })
 }
