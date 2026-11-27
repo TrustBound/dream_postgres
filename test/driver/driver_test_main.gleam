@@ -14,6 +14,7 @@ import driver/decode_test
 import driver/encode_test
 import driver/login_server_test
 import driver/login_test
+import driver/pool_test
 import driver/query_server_test
 import driver/query_test
 import driver/recorded_test
@@ -41,6 +42,7 @@ pub fn suites() -> List(TestSuite) {
     server_test.tests(),
     transport_test.tests(),
     connection_test.tests(),
+    pool_test.tests(),
   ]
 }
 
