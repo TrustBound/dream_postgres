@@ -1,12 +1,18 @@
 # dream_postgres Makefile
 
-.PHONY: test test-playback build format check check-snippets docs clean db-up db-down
+.PHONY: test test-driver test-playback build format check check-snippets docs clean db-up db-down
 
 # Run the tests with line coverage (fails below 100%). The tests need the
 # PostgreSQL servers of docker-compose.yml: start them with `make db-up`.
 # The test run stops at once with a message when a server does not answer.
 test:
 	@gleam test
+
+# Run only the driver tests (test/driver), with the coverage gate on the
+# driver modules (src/dream_postgres/driver). They need the driver servers
+# of docker-compose.yml: start them with `make db-up`.
+test-driver:
+	@gleam run -m driver/driver_test_main
 
 # Run only the recorder tests that need no database. They pass with both
 # test servers stopped (`make db-down`), which proves that playback mode
