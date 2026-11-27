@@ -1,7 +1,7 @@
 //// Test fixtures that start connection processes on the driver servers:
-//// the connection config, a started connection, a connection through a
-//// test proxy with a control connection beside it, the backend process
-//// IDs, and callers in their own processes. A test stops each connection
+//// the connection config, a started connection, a text query, a
+//// connection through a test proxy with a control connection beside it,
+//// the backend process IDs, and callers in their own processes. A test stops each connection
 //// that it starts, because the shared servers keep a connection open
 //// until it ends.
 
@@ -41,7 +41,7 @@ pub fn user_config(
 ) -> ConnectionConfig {
   ConnectionConfig(
     transport: TransportConfig(server_address(port), NoTls, 5000, 500),
-    login: login_config(user, password),
+    login: login_config(user, password, []),
     setup_timeout_milliseconds: 5000,
     reconnect: Backoff(10, 60_000),
     events: None,
@@ -53,6 +53,21 @@ pub fn user_config(
 /// The config of a connection to localhost on `port` as `dream`.
 pub fn connection_config(port: Int) -> ConnectionConfig {
   user_config(port, "dream", servers.password)
+}
+
+/// The config of a connection as `dream` that sets the server parameter
+/// `application_name`, so a control connection can find its session in
+/// `pg_stat_activity`.
+pub fn application_config(
+  port: Int,
+  application_name: String,
+) -> ConnectionConfig {
+  ConnectionConfig(
+    ..connection_config(port),
+    login: login_config("dream", servers.password, [
+      #("application_name", application_name),
+    ]),
+  )
 }
 
 /// The config with its events sent to `events`, and a first reconnect
@@ -93,13 +108,17 @@ fn server_address(port: Int) -> Address {
   }
 }
 
-fn login_config(user: String, password: String) -> LoginConfig {
+fn login_config(
+  user: String,
+  password: String,
+  parameters: List(#(String, String)),
+) -> LoginConfig {
   let config =
     login.new(
       user:,
       database: servers.database,
       password: login.password(password),
-      parameters: [],
+      parameters:,
       channel_binding: PreferChannelBinding,
       protocol_version: Protocol30,
     )
@@ -203,13 +222,19 @@ pub fn next_event_after_refused_reconnects(
 /// The backend process ID of the connection, as text. It panics when the
 /// query fails: that is a setup failure.
 pub fn backend_pid(connection: Connection) -> String {
-  single_text(run_script(connection, "SELECT pg_backend_pid()::text", 5000))
+  query_text(connection, "SELECT pg_backend_pid()::text")
+}
+
+/// The one text cell that `sql` gives on the connection. It panics when
+/// the query fails or gives other rows: that is a setup failure.
+pub fn query_text(connection: Connection, sql: String) -> String {
+  single_text(run_script(connection, sql, 5000))
 }
 
 /// The backend process ID of the session that waits for the advisory lock
 /// `key`, as text. It panics when there is no such session.
 pub fn lock_waiter_pid(control: Connection, key: Int) -> String {
-  single_text(run_script(control, lock_waiters(key, "pid::text"), 5000))
+  query_text(control, lock_waiters(key, "pid::text"))
 }
 
 fn single_text(answer: Result(List(Outcome), DriverError)) -> String {

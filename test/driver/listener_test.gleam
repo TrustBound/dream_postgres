@@ -3,282 +3,52 @@
 //// the server: it sends the notifications, ends the listener's backend,
 //// and reads the listener's last statement from `pg_stat_activity`. A gate
 //// proxy between a listener and the server keeps the connection lost while
-//// a test subscribes. Each
-//// listener has its own application name and its own channels, so tests
-//// that run at the same time do not meet, and no test sleeps.
+//// a test subscribes. Each listener has its own application name and its
+//// own channels, so tests that run at the same time do not meet, and no
+//// test sleeps.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionConfig, type DriverError, Backoff,
-  CacheStatements, ConnectionConfig, InvalidRequest, Notification,
-  TransportRefused,
+  Backoff, InvalidRequest, Notification, TransportRefused,
 }
 import dream_postgres/driver/listener.{
-  type Listener, type ListenerConfig, type ListenerError, type ListenerMessage,
-  type Subscription, ChannelTooLong, ConnectFailed, ListenFailed, ListenedAgain,
-  ListenerConfig, ListenerProcessDown, ListeningLost, NotificationArrived,
-  SubscriberHasNoProcess,
+  ChannelTooLong, ConnectFailed, ListenFailed, ListenedAgain,
+  ListenerProcessDown, ListeningLost, NotificationArrived,
+  SubscriberHasNoProcess, start, stop, subscribe, supervised, unsubscribe,
 }
-import dream_postgres/driver/login.{PreferChannelBinding}
-import dream_postgres/driver/message.{Protocol30, ZeroByteInString}
-import dream_postgres/driver/transport.{ConnectRefused, NoTls, TransportConfig}
-import dream_postgres/internal/cell.{Text}
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_postgres/driver/message.{ZeroByteInString}
+import dream_postgres/driver/transport.{ConnectRefused}
+import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import driver/servers.{type Server, driver_servers}
-import gleam/bit_array
-import gleam/erlang/process.{type Subject}
+import driver/fake_server.{free_port}
+import driver/listener_gate.{
+  break_gate, open_gate, start_gate, stop_gate, wait_refused,
+}
+import driver/server_connection.{
+  caller_answer, start_caller, start_connection, start_in_ended_owner,
+}
+import driver/server_listener.{
+  backend_process_id, end_listener_backend, listener_config, listener_statement,
+  send_notification, start_configured_listener, start_listener, subscribe_to,
+  wait_for_statement,
+}
+import driver/servers.{type Server, driver_servers, first_driver_server}
+import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/list.{map}
-import gleam/option.{None}
 import gleam/otp/static_supervisor
-import gleam/result.{try}
 import gleam/string.{repeat}
-
-@external(erlang, "port_ffi", "free_port")
-fn free_port() -> Int
-
-@external(erlang, "listener_gate_ffi", "start")
-fn start_gate(server_port: Int) -> #(Int, Gate)
-
-@external(erlang, "listener_gate_ffi", "break")
-fn break_gate(gate: Gate) -> Nil
-
-@external(erlang, "listener_gate_ffi", "wait_refused")
-fn wait_refused(gate: Gate) -> Nil
-
-@external(erlang, "listener_gate_ffi", "open")
-fn open_gate(gate: Gate) -> Nil
-
-@external(erlang, "listener_gate_ffi", "stop")
-fn stop_gate(gate: Gate) -> Nil
-
-type Gate
-
-/// Why a test could not do its steps.
-type TestError {
-  SetupFailed
-  RequestFailed(error: DriverError)
-  SubscribeFailed(error: ListenerError)
-  NoMessage
-  UnexpectedRows
-}
+import matchers/extract_arrived_notification.{extract_arrived_notification}
+import matchers/extract_channel_and_payload.{extract_channel_and_payload}
 
 /// The tests of the listener.
 pub fn tests() -> TestSuite {
   describe("dream_postgres/driver/listener", [
     group("on each driver server", map(driver_servers(), server_tests)),
     group("subscribing", subscribe_tests()),
+    group("a subscription while the connection is lost", gate_tests()),
     group("starting and stopping", start_tests()),
   ])
-}
-
-// Settings --------------------------------------------------------------------
-
-fn first_server() -> Server {
-  servers.Server(version: 16, port: 5441)
-}
-
-fn connection_config(
-  port: Int,
-  application_name: String,
-  first_delay: Int,
-) -> Result(ConnectionConfig, TestError) {
-  use address <- try(
-    transport.address("localhost", port) |> result.replace_error(SetupFailed),
-  )
-  use login_config <- try(
-    login.new(
-      user: "dream",
-      database: servers.database,
-      password: login.password(servers.password),
-      parameters: [#("application_name", application_name)],
-      channel_binding: PreferChannelBinding,
-      protocol_version: Protocol30,
-    )
-    |> result.replace_error(SetupFailed),
-  )
-  Ok(ConnectionConfig(
-    transport: TransportConfig(address, NoTls, 5000, 500),
-    login: login_config,
-    setup_timeout_milliseconds: 5000,
-    reconnect: Backoff(first_delay, 60_000),
-    events: None,
-    notifications: None,
-    statements: CacheStatements(512),
-  ))
-}
-
-fn listener_config(
-  port: Int,
-  application_name: String,
-  first_delay: Int,
-) -> Result(ListenerConfig, TestError) {
-  use settings <- try(connection_config(port, application_name, first_delay))
-  Ok(ListenerConfig(connection: settings, deadline_milliseconds: 5000))
-}
-
-/// A listener and the control connection of one test.
-type Setup {
-  Setup(listener: Listener, control: Connection, application_name: String)
-}
-
-/// Starts a listener with its own application name and a control
-/// connection, gives them to `body`, and stops them.
-fn with_setup(
-  port: Int,
-  application_name: String,
-  first_delay: Int,
-  body: fn(Setup) -> Result(value, TestError),
-) -> Result(value, TestError) {
-  use settings <- try(listener_config(port, application_name, first_delay))
-  with_started_setup(settings, port, application_name, body)
-}
-
-/// Starts the listener of `settings` and a control connection to the
-/// server on `server_port`, gives them to `body`, and stops them.
-fn with_started_setup(
-  settings: ListenerConfig,
-  server_port: Int,
-  application_name: String,
-  body: fn(Setup) -> Result(value, TestError),
-) -> Result(value, TestError) {
-  use control_settings <- try(connection_config(
-    server_port,
-    "svc827_control",
-    10,
-  ))
-  use started <- try(
-    listener.start(settings) |> result.replace_error(SetupFailed),
-  )
-  use control <- try(
-    connection.start(control_settings) |> result.replace_error(SetupFailed),
-  )
-  let value = body(Setup(started, control, application_name))
-  connection.stop(control)
-  listener.stop(started)
-  value
-}
-
-fn subscribe(
-  setup: Setup,
-  channel: String,
-  subscriber: Subject(ListenerMessage),
-) -> Result(Subscription, TestError) {
-  listener.subscribe(setup.listener, channel, subscriber)
-  |> result.map_error(SubscribeFailed)
-}
-
-fn unsubscribe(
-  setup: Setup,
-  subscription: Subscription,
-) -> Result(Nil, TestError) {
-  listener.unsubscribe(setup.listener, subscription)
-  |> result.map_error(SubscribeFailed)
-}
-
-/// Runs a statement on the control connection and gives its only text
-/// cell.
-fn control_text(setup: Setup, sql: String) -> Result(String, TestError) {
-  use outcomes <- try(
-    connection.run_script(setup.control, sql, 5000)
-    |> result.map_error(RequestFailed),
-  )
-  case map(outcomes, rows) {
-    [[[Text(bytes)]]] ->
-      bit_array.to_string(bytes) |> result.replace_error(UnexpectedRows)
-    _ -> Error(UnexpectedRows)
-  }
-}
-
-fn rows(outcome: connection.Outcome) {
-  outcome.result.rows
-}
-
-/// The backend process ID of the control connection.
-fn control_pid(setup: Setup) -> Result(Int, TestError) {
-  use text <- try(control_text(setup, "SELECT pg_backend_pid()::text"))
-  int.parse(text) |> result.replace_error(UnexpectedRows)
-}
-
-/// Sends a notification from the control connection.
-fn notify(
-  setup: Setup,
-  channel: String,
-  payload: String,
-) -> Result(Nil, TestError) {
-  control_text(
-    setup,
-    "SELECT pg_notify("
-      <> literal(channel)
-      <> ", "
-      <> literal(payload)
-      <> ")::text",
-  )
-  |> result.replace(Nil)
-}
-
-fn literal(text: String) -> String {
-  "'" <> string.replace(text, "'", "''") <> "'"
-}
-
-/// The last statement of the listener's backend.
-fn listener_statement(setup: Setup) -> Result(String, TestError) {
-  control_text(
-    setup,
-    "SELECT query FROM pg_stat_activity WHERE application_name = "
-      <> literal(setup.application_name),
-  )
-}
-
-/// Asks the control connection again and again, without a sleep, until the
-/// listener's last statement is `expected`.
-fn wait_for_statement(
-  setup: Setup,
-  expected: String,
-  attempts: Int,
-) -> Result(String, TestError) {
-  use statement <- try(listener_statement(setup))
-  case statement == expected, attempts {
-    True, _ -> Ok(statement)
-    False, 0 -> Ok(statement)
-    False, _ -> wait_for_statement(setup, expected, attempts - 1)
-  }
-}
-
-/// Ends the listener's backend from the control connection, and waits
-/// until the server has no backend of the listener left.
-fn end_listener_backend(setup: Setup) -> Result(Nil, TestError) {
-  use _ended <- try(control_text(
-    setup,
-    "SELECT bool_and(pg_terminate_backend(pid))::text FROM pg_stat_activity"
-      <> " WHERE application_name = "
-      <> literal(setup.application_name),
-  ))
-  wait_for_no_backend(setup, 1000)
-}
-
-fn wait_for_no_backend(setup: Setup, attempts: Int) -> Result(Nil, TestError) {
-  use count <- try(control_text(
-    setup,
-    "SELECT count(*)::text FROM pg_stat_activity WHERE application_name = "
-      <> literal(setup.application_name),
-  ))
-  case count, attempts {
-    "0", _ -> Ok(Nil)
-    _, 0 -> Error(UnexpectedRows)
-    _, _ -> wait_for_no_backend(setup, attempts - 1)
-  }
-}
-
-fn next_message(
-  subscriber: Subject(ListenerMessage),
-) -> Result(ListenerMessage, TestError) {
-  process.receive(subscriber, 5000) |> result.replace_error(NoMessage)
-}
-
-fn name_for(test_name: String, server: Server) -> String {
-  "svc827_" <> test_name <> "_" <> to_string(server.version)
 }
 
 // On each server --------------------------------------------------------------
@@ -286,211 +56,225 @@ fn name_for(test_name: String, server: Server) -> String {
 fn server_tests(server: Server) {
   group("PostgreSQL " <> to_string(server.version), [
     it("gives a notification with the channel, payload and sender", fn() {
-      check_notification(server)
+      // Arrange
+      let channel = "svc827_jobs_" <> to_string(server.version)
+      let application_name = "svc827_notify_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+      let subscriber = process.new_subject()
+      let _subscription = subscribe_to(listener, channel, subscriber)
+      let sender = backend_process_id(control)
+
+      // Act
+      send_notification(control, channel, "hello")
+      let message = process.receive(subscriber, 5000)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      message
+      |> should
+      |> be_ok
+      |> be_equal(NotificationArrived(Notification(sender, channel, "hello")))
+      |> or_fail_with("Expected the notification of the control connection")
     }),
     it("keeps a channel name exact, with capitals and quotes", fn() {
-      check_exact_channel(server)
+      // Arrange
+      let channel = "Svc827 \"Quoted\" " <> to_string(server.version)
+      let application_name = "svc827_exact_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+      let subscriber = process.new_subject()
+      let _subscription = subscribe_to(listener, channel, subscriber)
+
+      // Act
+      send_notification(control, channel, "it's exact")
+      let message = process.receive(subscriber, 5000)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      message
+      |> should
+      |> be_ok
+      |> extract_arrived_notification
+      |> extract_channel_and_payload
+      |> be_equal(#(channel, "it's exact"))
+      |> or_fail_with("Expected the notification on the exact channel")
     }),
     it("sends UNLISTEN when the last subscriber unsubscribes", fn() {
-      check_unlisten(server)
+      // Arrange
+      let channel = "svc827_unlisten_" <> to_string(server.version)
+      let application_name = "svc827_unlisten_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+      let subscription = subscribe_to(listener, channel, process.new_subject())
+
+      // Act
+      let _unsubscribed = unsubscribe(listener, subscription)
+      let statement = listener_statement(control, application_name)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      statement
+      |> should
+      |> be_equal("UNLISTEN \"" <> channel <> "\"")
+      |> or_fail_with("Expected UNLISTEN as the last statement")
     }),
     it("keeps listening while another subscriber remains", fn() {
-      check_other_subscriber_remains(server)
+      // Arrange
+      let channel = "svc827_shared_" <> to_string(server.version)
+      let application_name = "svc827_shared_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+      let first = process.new_subject()
+      let second = process.new_subject()
+      let subscription = subscribe_to(listener, channel, first)
+      let _other = subscribe_to(listener, channel, second)
+
+      // Act
+      let _unsubscribed = unsubscribe(listener, subscription)
+      send_notification(control, channel, "still here")
+      let message = process.receive(second, 5000)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      message
+      |> should
+      |> be_ok
+      |> extract_arrived_notification
+      |> extract_channel_and_payload
+      |> be_equal(#(channel, "still here"))
+      |> or_fail_with("Expected the notification for the second subscriber")
+    }),
+    it("gives no notification to the subscriber that unsubscribed", fn() {
+      // Arrange
+      let channel = "svc827_left_" <> to_string(server.version)
+      let application_name = "svc827_left_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+      let first = process.new_subject()
+      let second = process.new_subject()
+      let subscription = subscribe_to(listener, channel, first)
+      let _other = subscribe_to(listener, channel, second)
+
+      // Act
+      let _unsubscribed = unsubscribe(listener, subscription)
+      send_notification(control, channel, "still here")
+      let _second_message = process.receive(second, 5000)
+      let first_message = process.receive(first, 0)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      first_message
+      |> should
+      |> be_error
+      |> or_fail_with("Expected no notification for the first subscriber")
     }),
     it("removes a subscriber whose process stopped", fn() {
-      check_subscriber_down(server)
+      // Arrange
+      let channel = "svc827_down_" <> to_string(server.version)
+      let application_name = "svc827_down_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+
+      // Act
+      let caller =
+        start_caller(fn() {
+          subscribe(listener, channel, process.new_subject())
+        })
+      let _subscribed = caller_answer(caller)
+      let statement =
+        wait_for_statement(
+          control,
+          application_name,
+          "UNLISTEN \"" <> channel <> "\"",
+        )
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      statement
+      |> should
+      |> be_equal("UNLISTEN \"" <> channel <> "\"")
+      |> or_fail_with("Expected UNLISTEN after the subscriber stopped")
     }),
     it("listens again after a reconnect and says so", fn() {
-      check_listened_again(server)
+      // Arrange
+      let channel = "svc827_again_" <> to_string(server.version)
+      let application_name = "svc827_again_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+      let subscriber = process.new_subject()
+      let _subscription = subscribe_to(listener, channel, subscriber)
+
+      // Act
+      end_listener_backend(control, application_name)
+      let _lost = process.receive(subscriber, 5000)
+      let again = process.receive(subscriber, 5000)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      again
+      |> should
+      |> be_ok
+      |> be_equal(ListenedAgain(channel, Ok(Nil)))
+      |> or_fail_with("Expected ListenedAgain after ListeningLost")
+    }),
+    it("says ListeningLost when the backend ends", fn() {
+      // Arrange
+      let channel = "svc827_lost_" <> to_string(server.version)
+      let application_name = "svc827_lost_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+      let subscriber = process.new_subject()
+      let _subscription = subscribe_to(listener, channel, subscriber)
+
+      // Act
+      end_listener_backend(control, application_name)
+      let lost = process.receive(subscriber, 5000)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      lost
+      |> should
+      |> be_ok
+      |> be_equal(ListeningLost)
+      |> or_fail_with("Expected ListeningLost first")
     }),
     it("gives notifications after a reconnect", fn() {
-      check_notification_after_reconnect(server)
+      // Arrange
+      let channel = "svc827_after_" <> to_string(server.version)
+      let application_name = "svc827_after_" <> to_string(server.version)
+      let listener = start_listener(server.port, application_name, 10)
+      let control = start_connection(server.port)
+      let subscriber = process.new_subject()
+      let _subscription = subscribe_to(listener, channel, subscriber)
+
+      // Act
+      end_listener_backend(control, application_name)
+      let _lost = process.receive(subscriber, 5000)
+      let _again = process.receive(subscriber, 5000)
+      send_notification(control, channel, "back")
+      let message = process.receive(subscriber, 5000)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      message
+      |> should
+      |> be_ok
+      |> extract_arrived_notification
+      |> extract_channel_and_payload
+      |> be_equal(#(channel, "back"))
+      |> or_fail_with("Expected the notification on the new session")
     }),
   ])
-}
-
-fn check_notification(server: Server) {
-  // Arrange
-  let channel = name_for("jobs", server)
-
-  // Act
-  let message = {
-    use setup <- with_setup(server.port, name_for("notify", server), 10)
-    let subscriber = process.new_subject()
-    use _subscription <- try(subscribe(setup, channel, subscriber))
-    use pid <- try(control_pid(setup))
-    use Nil <- try(notify(setup, channel, "hello"))
-    use message <- try(next_message(subscriber))
-    Ok(#(message, pid))
-  }
-
-  // Assert
-  message
-  |> result.map(sent_by_control(_, channel, "hello"))
-  |> should
-  |> be_equal(Ok(True))
-  |> or_fail_with("Expected the notification of the control connection")
-}
-
-fn sent_by_control(
-  received: #(ListenerMessage, Int),
-  channel: String,
-  payload: String,
-) -> Bool {
-  let #(message, pid) = received
-  message == NotificationArrived(Notification(pid, channel, payload))
-}
-
-fn check_exact_channel(server: Server) {
-  // Arrange
-  let channel = "Svc827 \"Quoted\" " <> to_string(server.version)
-
-  // Act
-  let message = {
-    use setup <- with_setup(server.port, name_for("exact", server), 10)
-    let subscriber = process.new_subject()
-    use _subscription <- try(subscribe(setup, channel, subscriber))
-    use Nil <- try(notify(setup, channel, "it's exact"))
-    next_message(subscriber) |> result.map(payload_on_channel)
-  }
-
-  // Assert
-  message
-  |> should
-  |> be_equal(Ok(#(channel, "it's exact")))
-  |> or_fail_with("Expected the notification on the exact channel")
-}
-
-fn payload_on_channel(message: ListenerMessage) -> #(String, String) {
-  case message {
-    NotificationArrived(notification) -> #(
-      notification.channel,
-      notification.payload,
-    )
-    ListenedAgain(channel, _result) -> #(channel, "listened again")
-    ListeningLost -> #("", "listening lost")
-  }
-}
-
-fn check_unlisten(server: Server) {
-  // Arrange
-  let channel = name_for("unlisten", server)
-
-  // Act
-  let statement = {
-    use setup <- with_setup(server.port, name_for("unlisten", server), 10)
-    use subscription <- try(subscribe(setup, channel, process.new_subject()))
-    use Nil <- try(unsubscribe(setup, subscription))
-    listener_statement(setup)
-  }
-
-  // Assert
-  statement
-  |> should
-  |> be_equal(Ok("UNLISTEN \"" <> channel <> "\""))
-  |> or_fail_with("Expected UNLISTEN as the last statement")
-}
-
-fn check_other_subscriber_remains(server: Server) {
-  // Arrange
-  let channel = name_for("shared", server)
-
-  // Act
-  let messages = {
-    use setup <- with_setup(server.port, name_for("shared", server), 10)
-    let first = process.new_subject()
-    let second = process.new_subject()
-    use subscription <- try(subscribe(setup, channel, first))
-    use _other <- try(subscribe(setup, channel, second))
-    use Nil <- try(unsubscribe(setup, subscription))
-    use Nil <- try(notify(setup, channel, "still here"))
-    use message <- try(next_message(second))
-    Ok(#(payload_on_channel(message), process.receive(first, 0)))
-  }
-
-  // Assert
-  messages
-  |> should
-  |> be_equal(Ok(#(#(channel, "still here"), Error(Nil))))
-  |> or_fail_with("Expected the notification for the second subscriber only")
-}
-
-fn check_subscriber_down(server: Server) {
-  // Arrange
-  let channel = name_for("down", server)
-
-  // Act
-  let statement = {
-    use setup <- with_setup(server.port, name_for("down", server), 10)
-    let answers = process.new_subject()
-    process.spawn(fn() { subscribe_and_stop(setup, channel, answers) })
-    use _subscribed <- try(
-      process.receive(answers, 5000)
-      |> result.replace_error(NoMessage)
-      |> result.flatten,
-    )
-    wait_for_statement(setup, "UNLISTEN \"" <> channel <> "\"", 1000)
-  }
-
-  // Assert
-  statement
-  |> should
-  |> be_equal(Ok("UNLISTEN \"" <> channel <> "\""))
-  |> or_fail_with("Expected UNLISTEN after the subscriber stopped")
-}
-
-/// Subscribes its own subject, tells the test, and stops.
-fn subscribe_and_stop(
-  setup: Setup,
-  channel: String,
-  answers: Subject(Result(Subscription, TestError)),
-) -> Nil {
-  process.send(answers, subscribe(setup, channel, process.new_subject()))
-}
-
-fn check_listened_again(server: Server) {
-  // Arrange
-  let channel = name_for("again", server)
-
-  // Act
-  let message = {
-    use setup <- with_setup(server.port, name_for("again", server), 10)
-    let subscriber = process.new_subject()
-    use _subscription <- try(subscribe(setup, channel, subscriber))
-    use Nil <- try(end_listener_backend(setup))
-    use lost <- try(next_message(subscriber))
-    use again <- try(next_message(subscriber))
-    Ok(#(lost, again))
-  }
-
-  // Assert
-  message
-  |> should
-  |> be_equal(Ok(#(ListeningLost, ListenedAgain(channel, Ok(Nil)))))
-  |> or_fail_with("Expected ListeningLost, then ListenedAgain")
-}
-
-fn check_notification_after_reconnect(server: Server) {
-  // Arrange
-  let channel = name_for("after", server)
-
-  // Act
-  let message = {
-    use setup <- with_setup(server.port, name_for("after", server), 10)
-    let subscriber = process.new_subject()
-    use _subscription <- try(subscribe(setup, channel, subscriber))
-    use Nil <- try(end_listener_backend(setup))
-    use _lost <- try(next_message(subscriber))
-    use _again <- try(next_message(subscriber))
-    use Nil <- try(notify(setup, channel, "back"))
-    next_message(subscriber) |> result.map(payload_on_channel)
-  }
-
-  // Assert
-  message
-  |> should
-  |> be_equal(Ok(#(channel, "back")))
-  |> or_fail_with("Expected the notification on the new session")
 }
 
 // Subscribing -----------------------------------------------------------------
@@ -498,213 +282,295 @@ fn check_notification_after_reconnect(server: Server) {
 fn subscribe_tests() {
   [
     it("gives a notification only to the subscribers of its channel", fn() {
+      // Arrange
+      let port = first_driver_server.port
+      let listener = start_listener(port, "svc827_routing", 10)
+      let control = start_connection(port)
+      let first = process.new_subject()
+      let second = process.new_subject()
+      let _first = subscribe_to(listener, "svc827_routing_one", first)
+      let _second = subscribe_to(listener, "svc827_routing_two", second)
+
       // Act
-      let messages = {
-        use setup <- with_setup(first_server().port, "svc827_routing", 10)
-        let first = process.new_subject()
-        let second = process.new_subject()
-        use _first <- try(subscribe(setup, "svc827_routing_one", first))
-        use _second <- try(subscribe(setup, "svc827_routing_two", second))
-        use Nil <- try(notify(setup, "svc827_routing_one", "one"))
-        use message <- try(next_message(first))
-        Ok(#(payload_on_channel(message), process.receive(second, 0)))
-      }
+      send_notification(control, "svc827_routing_one", "one")
+      let message = process.receive(first, 5000)
+      connection.stop(control)
+      stop(listener)
 
       // Assert
-      messages
+      message
       |> should
-      |> be_equal(Ok(#(#("svc827_routing_one", "one"), Error(Nil))))
-      |> or_fail_with("Expected the notification on the first channel only")
+      |> be_ok
+      |> extract_arrived_notification
+      |> extract_channel_and_payload
+      |> be_equal(#("svc827_routing_one", "one"))
+      |> or_fail_with("Expected the notification on the first channel")
+    }),
+    it("gives no notification to a subscriber of another channel", fn() {
+      // Arrange
+      let port = first_driver_server.port
+      let listener = start_listener(port, "svc827_other", 10)
+      let control = start_connection(port)
+      let first = process.new_subject()
+      let second = process.new_subject()
+      let _first = subscribe_to(listener, "svc827_other_one", first)
+      let _second = subscribe_to(listener, "svc827_other_two", second)
+
+      // Act
+      send_notification(control, "svc827_other_one", "one")
+      let _first_message = process.receive(first, 5000)
+      let second_message = process.receive(second, 0)
+      connection.stop(control)
+      stop(listener)
+
+      // Assert
+      second_message
+      |> should
+      |> be_error
+      |> or_fail_with("Expected no notification on the second channel")
     }),
     it("refuses a channel name of more than 63 bytes", fn() {
       // Arrange
       let channel = repeat("a", 64)
+      let listener = start_listener(first_driver_server.port, "svc827_long", 10)
 
       // Act
-      let answer = {
-        use setup <- with_setup(first_server().port, "svc827_long", 10)
-        Ok(listener.subscribe(setup.listener, channel, process.new_subject()))
-      }
+      let answer = subscribe(listener, channel, process.new_subject())
+      stop(listener)
 
       // Assert
       answer
-      |> result.map(result.replace(_, Nil))
       |> should
-      |> be_equal(Ok(Error(ChannelTooLong(channel))))
+      |> be_error
+      |> be_equal(ChannelTooLong(channel))
       |> or_fail_with("Expected ChannelTooLong")
     }),
     it("takes a channel name of 63 bytes", fn() {
       // Arrange
       let channel = "svc827_" <> repeat("b", 56)
+      let port = first_driver_server.port
+      let listener = start_listener(port, "svc827_longest", 10)
+      let control = start_connection(port)
+      let subscriber = process.new_subject()
+      let _subscription = subscribe_to(listener, channel, subscriber)
 
       // Act
-      let message = {
-        use setup <- with_setup(first_server().port, "svc827_longest", 10)
-        let subscriber = process.new_subject()
-        use _subscription <- try(subscribe(setup, channel, subscriber))
-        use Nil <- try(notify(setup, channel, "fits"))
-        next_message(subscriber) |> result.map(payload_on_channel)
-      }
+      send_notification(control, channel, "fits")
+      let message = process.receive(subscriber, 5000)
+      connection.stop(control)
+      stop(listener)
 
       // Assert
       message
       |> should
-      |> be_equal(Ok(#(channel, "fits")))
+      |> be_ok
+      |> extract_arrived_notification
+      |> extract_channel_and_payload
+      |> be_equal(#(channel, "fits"))
       |> or_fail_with("Expected the notification on the longest channel")
     }),
     it("refuses a named subject that no process has", fn() {
       // Arrange
       let subscriber = process.named_subject(process.new_name("svc827"))
+      let listener =
+        start_listener(first_driver_server.port, "svc827_named", 10)
 
       // Act
-      let answer = {
-        use setup <- with_setup(first_server().port, "svc827_named", 10)
-        Ok(listener.subscribe(setup.listener, "svc827_named", subscriber))
-      }
+      let answer = subscribe(listener, "svc827_named", subscriber)
+      stop(listener)
 
       // Assert
       answer
-      |> result.map(result.replace(_, Nil))
       |> should
-      |> be_equal(Ok(Error(SubscriberHasNoProcess)))
+      |> be_error
+      |> be_equal(SubscriberHasNoProcess)
       |> or_fail_with("Expected SubscriberHasNoProcess")
     }),
     it("refuses a channel that the LISTEN cannot carry", fn() {
+      // Arrange
+      let listener = start_listener(first_driver_server.port, "svc827_zero", 10)
+
       // Act
-      let answer = {
-        use setup <- with_setup(first_server().port, "svc827_zero", 10)
-        Ok(
-          listener.subscribe(
-            setup.listener,
-            "svc827\u{0}zero",
-            process.new_subject(),
-          )
-          |> result.replace(Nil),
-        )
-      }
+      let answer = subscribe(listener, "svc827\u{0}zero", process.new_subject())
+      stop(listener)
 
       // Assert
       answer
       |> should
-      |> be_equal(
-        Ok(Error(ListenFailed(InvalidRequest(ZeroByteInString("query"))))),
-      )
+      |> be_error
+      |> be_equal(ListenFailed(InvalidRequest(ZeroByteInString("query"))))
       |> or_fail_with("Expected ListenFailed with the zero byte")
     }),
     it("keeps a subscription made while the connection is lost", fn() {
+      // Arrange
+      let port = first_driver_server.port
+      let listener = start_listener(port, "svc827_lost", 60_000)
+      let control = start_connection(port)
+      let subscriber = process.new_subject()
+
       // Act
-      let message = {
-        use setup <- with_setup(first_server().port, "svc827_lost", 60_000)
-        use Nil <- try(end_listener_backend(setup))
-        let subscriber = process.new_subject()
-        use _subscription <- try(subscribe(setup, "svc827_lost", subscriber))
-        next_message(subscriber)
-      }
+      end_listener_backend(control, "svc827_lost")
+      let _subscription = subscribe(listener, "svc827_lost", subscriber)
+      let message = process.receive(subscriber, 5000)
+      connection.stop(control)
+      stop(listener)
 
       // Assert
       message
       |> should
-      |> be_equal(Ok(ListeningLost))
+      |> be_ok
+      |> be_equal(ListeningLost)
       |> or_fail_with("Expected ListeningLost at once")
     }),
     it("tells a new subscriber of a lost channel at once", fn() {
+      // Arrange
+      let port = first_driver_server.port
+      let listener = start_listener(port, "svc827_joined", 60_000)
+      let control = start_connection(port)
+      let first = process.new_subject()
+      let second = process.new_subject()
+      let _first = subscribe_to(listener, "svc827_joined", first)
+
       // Act
-      let message = {
-        use setup <- with_setup(first_server().port, "svc827_joined", 60_000)
-        let first = process.new_subject()
-        use _first <- try(subscribe(setup, "svc827_joined", first))
-        use Nil <- try(end_listener_backend(setup))
-        use _lost <- try(next_message(first))
-        let second = process.new_subject()
-        use _second <- try(subscribe(setup, "svc827_joined", second))
-        next_message(second)
-      }
+      end_listener_backend(control, "svc827_joined")
+      let _lost = process.receive(first, 5000)
+      let _second = subscribe(listener, "svc827_joined", second)
+      let message = process.receive(second, 5000)
+      connection.stop(control)
+      stop(listener)
 
       // Assert
       message
       |> should
-      |> be_equal(Ok(ListeningLost))
+      |> be_ok
+      |> be_equal(ListeningLost)
       |> or_fail_with("Expected ListeningLost for the new subscriber")
     }),
-    it("listens at the reconnect for a subscription made while lost", fn() {
-      check_subscribe_while_lost()
-    }),
     it("ends a subscription that ended already without an error", fn() {
+      // Arrange
+      let listener =
+        start_listener(first_driver_server.port, "svc827_twice", 10)
+      let subscription =
+        subscribe_to(listener, "svc827_twice", process.new_subject())
+
       // Act
-      let answer = {
-        use setup <- with_setup(first_server().port, "svc827_twice", 10)
-        use subscription <- try(subscribe(
-          setup,
-          "svc827_twice",
-          process.new_subject(),
-        ))
-        use Nil <- try(unsubscribe(setup, subscription))
-        unsubscribe(setup, subscription)
-      }
+      let _first_answer = unsubscribe(listener, subscription)
+      let answer = unsubscribe(listener, subscription)
+      stop(listener)
 
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Nil))
+      |> be_ok
       |> or_fail_with("Expected Ok for the second unsubscribe")
     }),
   ]
 }
 
+// A subscription while the connection is lost ---------------------------------
+
 /// A gate keeps the connection lost while a second subscriber comes on a
 /// second channel, and refuses one reconnect. Both channels listen again
 /// when the gate opens.
-fn check_subscribe_while_lost() {
-  // Act
-  let messages = {
-    let server = first_server()
-    let #(port, gate) = start_gate(server.port)
-    use settings <- try(listener_config(port, "svc827_gate", 10))
-    let settings =
-      ListenerConfig(
-        ..settings,
-        connection: ConnectionConfig(
-          ..settings.connection,
-          reconnect: Backoff(10, 50),
-        ),
-      )
-    let messages = {
-      use setup <- with_started_setup(settings, server.port, "svc827_gate")
-      gate_scenario(setup, gate)
-    }
-    stop_gate(gate)
-    messages
-  }
+fn gate_tests() {
+  [
+    it("listens at the reconnect for a subscription made while lost", fn() {
+      // Arrange
+      let #(port, gate) = start_gate(first_driver_server.port)
+      let listener =
+        start_configured_listener(listener_config(
+          port,
+          "svc827_gate",
+          Backoff(10, 50),
+        ))
+      let first = process.new_subject()
+      let second = process.new_subject()
+      let _first = subscribe_to(listener, "svc827_gate_one", first)
 
-  // Assert
-  messages
-  |> should
-  |> be_equal(
-    Ok(#(
-      ListenedAgain("svc827_gate_one", Ok(Nil)),
-      ListeningLost,
-      ListenedAgain("svc827_gate_two", Ok(Nil)),
-    )),
-  )
-  |> or_fail_with("Expected both channels to listen again")
-}
+      // Act
+      break_gate(gate)
+      let _first_lost = process.receive(first, 5000)
+      let _second = subscribe(listener, "svc827_gate_two", second)
+      let _second_lost = process.receive(second, 5000)
+      wait_refused(gate)
+      open_gate(gate)
+      let _first_again = process.receive(first, 5000)
+      let second_again = process.receive(second, 5000)
+      stop(listener)
+      stop_gate(gate)
 
-fn gate_scenario(
-  setup: Setup,
-  gate: Gate,
-) -> Result(#(ListenerMessage, ListenerMessage, ListenerMessage), TestError) {
-  let first = process.new_subject()
-  let second = process.new_subject()
-  use _first <- try(subscribe(setup, "svc827_gate_one", first))
-  break_gate(gate)
-  use _lost <- try(next_message(first))
-  use _second <- try(subscribe(setup, "svc827_gate_two", second))
-  use second_lost <- try(next_message(second))
-  wait_refused(gate)
-  open_gate(gate)
-  use first_again <- try(next_message(first))
-  use second_again <- try(next_message(second))
-  Ok(#(first_again, second_lost, second_again))
+      // Assert
+      second_again
+      |> should
+      |> be_ok
+      |> be_equal(ListenedAgain("svc827_gate_two", Ok(Nil)))
+      |> or_fail_with("Expected the second channel to listen again")
+    }),
+    it("listens again for a subscription made before the loss", fn() {
+      // Arrange
+      let #(port, gate) = start_gate(first_driver_server.port)
+      let listener =
+        start_configured_listener(listener_config(
+          port,
+          "svc827_gate_before",
+          Backoff(10, 50),
+        ))
+      let first = process.new_subject()
+      let second = process.new_subject()
+      let _first = subscribe_to(listener, "svc827_gate_before_one", first)
+
+      // Act
+      break_gate(gate)
+      let _first_lost = process.receive(first, 5000)
+      let _second = subscribe(listener, "svc827_gate_before_two", second)
+      let _second_lost = process.receive(second, 5000)
+      wait_refused(gate)
+      open_gate(gate)
+      let first_again = process.receive(first, 5000)
+      let _second_again = process.receive(second, 5000)
+      stop(listener)
+      stop_gate(gate)
+
+      // Assert
+      first_again
+      |> should
+      |> be_ok
+      |> be_equal(ListenedAgain("svc827_gate_before_one", Ok(Nil)))
+      |> or_fail_with("Expected the first channel to listen again")
+    }),
+    it("gives ListeningLost to a subscription made while lost", fn() {
+      // Arrange
+      let #(port, gate) = start_gate(first_driver_server.port)
+      let listener =
+        start_configured_listener(listener_config(
+          port,
+          "svc827_gate_while",
+          Backoff(10, 50),
+        ))
+      let first = process.new_subject()
+      let second = process.new_subject()
+      let _first = subscribe_to(listener, "svc827_gate_while_one", first)
+
+      // Act
+      break_gate(gate)
+      let _first_lost = process.receive(first, 5000)
+      let _second = subscribe(listener, "svc827_gate_while_two", second)
+      let second_lost = process.receive(second, 5000)
+      wait_refused(gate)
+      open_gate(gate)
+      let _first_again = process.receive(first, 5000)
+      let _second_again = process.receive(second, 5000)
+      stop(listener)
+      stop_gate(gate)
+
+      // Assert
+      second_lost
+      |> should
+      |> be_ok
+      |> be_equal(ListeningLost)
+      |> or_fail_with("Expected ListeningLost for the second subscriber")
+    }),
+  ]
 }
 
 // Starting and stopping -------------------------------------------------------
@@ -713,77 +579,77 @@ fn start_tests() {
   [
     it("gives ConnectFailed for a port with no server", fn() {
       // Arrange
-      let settings = listener_config(free_port(), "svc827_refused", 10)
+      let config =
+        listener_config(free_port(), "svc827_refused", Backoff(10, 60_000))
 
       // Act
-      let started = settings |> result.map(listener.start)
+      let started = start(config)
 
       // Assert
       started
-      |> result.map(result.replace(_, Nil))
       |> should
-      |> be_equal(Ok(Error(ConnectFailed(TransportRefused(ConnectRefused)))))
+      |> be_error
+      |> be_equal(ConnectFailed(TransportRefused(ConnectRefused)))
       |> or_fail_with("Expected ConnectFailed")
     }),
     it("gives ListenerProcessDown to a subscribe after the stop", fn() {
+      // Arrange
+      let listener =
+        start_listener(first_driver_server.port, "svc827_stopped", 10)
+      let subscriber = process.new_subject()
+      let _subscription = subscribe_to(listener, "svc827_stopped", subscriber)
+
       // Act
-      let answers = {
-        use settings <- try(listener_config(
-          first_server().port,
-          "svc827_stopped",
-          10,
-        ))
-        use started <- try(
-          listener.start(settings) |> result.replace_error(SetupFailed),
-        )
-        let subscriber = process.new_subject()
-        use subscription <- try(
-          listener.subscribe(started, "svc827_stopped", subscriber)
-          |> result.map_error(SubscribeFailed),
-        )
-        listener.stop(started)
-        Ok(#(
-          listener.subscribe(started, "svc827_stopped", subscriber)
-            |> result.replace(Nil),
-          listener.unsubscribe(started, subscription),
-        ))
-      }
+      stop(listener)
+      let answer = subscribe(listener, "svc827_stopped", subscriber)
 
       // Assert
-      answers
+      answer
       |> should
-      |> be_equal(Ok(#(Error(ListenerProcessDown), Error(ListenerProcessDown))))
+      |> be_error
+      |> be_equal(ListenerProcessDown)
+      |> or_fail_with("Expected ListenerProcessDown")
+    }),
+    it("gives ListenerProcessDown to an unsubscribe after the stop", fn() {
+      // Arrange
+      let listener =
+        start_listener(first_driver_server.port, "svc827_stopped_end", 10)
+      let subscription =
+        subscribe_to(listener, "svc827_stopped_end", process.new_subject())
+
+      // Act
+      stop(listener)
+      let answer = unsubscribe(listener, subscription)
+
+      // Assert
+      answer
+      |> should
+      |> be_error
+      |> be_equal(ListenerProcessDown)
       |> or_fail_with("Expected ListenerProcessDown")
     }),
     it("starts under a supervisor", fn() {
-      // Act
-      let started = {
-        use settings <- try(listener_config(
-          first_server().port,
+      // Arrange
+      let config =
+        listener_config(
+          first_driver_server.port,
           "svc827_supervised",
-          10,
-        ))
-        start_supervised(settings)
-      }
+          Backoff(10, 60_000),
+        )
+      let supervisor =
+        static_supervisor.new(static_supervisor.OneForOne)
+        |> static_supervisor.add(supervised(config))
+
+      // Act
+      let started =
+        start_in_ended_owner(fn() { static_supervisor.start(supervisor) })
 
       // Assert
       started
       |> should
-      |> be_equal(Ok(Nil))
+      |> be_ok
+      |> be_ok
       |> or_fail_with("Expected the supervisor to start the listener")
     }),
   ]
-}
-
-/// Starts a supervisor with a listener, then stops the supervisor, which
-/// stops the listener.
-fn start_supervised(settings: ListenerConfig) -> Result(Nil, TestError) {
-  use supervisor <- try(
-    static_supervisor.new(static_supervisor.OneForOne)
-    |> static_supervisor.add(listener.supervised(settings))
-    |> static_supervisor.start
-    |> result.replace_error(SetupFailed),
-  )
-  process.send_exit(supervisor.pid)
-  Ok(Nil)
 }
