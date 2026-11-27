@@ -20,15 +20,14 @@
 //// RFC 5929 section 4.1 gives.
 
 import dream_postgres/driver/channel_binding.{
-  type CertificateError, InvalidCertificate, UnsupportedSignatureAlgorithm,
-  server_end_point_hash,
+  InvalidCertificate, UnsupportedSignatureAlgorithm, server_end_point_hash,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import gleam/bit_array.{base16_encode}
 import gleam/list.{map}
-import gleam/result.{map_error, try}
+import matchers/extract_base16.{extract_base16}
+import matchers/extract_server_end_point_hash.{extract_server_end_point_hash}
 
 @external(erlang, "driver_file_ffi", "read_certificate")
 fn read_certificate(name: String) -> Result(BitArray, String)
@@ -38,8 +37,30 @@ pub fn tests() -> TestSuite {
   describe("dream_postgres/driver/channel_binding", [
     group("the hash of each signature algorithm", map(hash_cases(), hash_test)),
     group("certificates without channel binding data", [
-      it("refuses an Ed25519 certificate", check_ed25519),
-      it("refuses bytes that are not a certificate", check_not_certificate),
+      it("refuses an Ed25519 certificate", fn() {
+        // Act
+        let certificate = read_certificate("ed25519.der")
+
+        // Assert
+        certificate
+        |> should
+        |> be_ok
+        |> extract_server_end_point_hash
+        |> be_error
+        |> be_equal(UnsupportedSignatureAlgorithm([1, 3, 101, 112]))
+        |> or_fail_with("Expected Ed25519 to have no tls-server-end-point hash")
+      }),
+      it("refuses bytes that are not a certificate", fn() {
+        // Act
+        let hash = server_end_point_hash(<<1, 2, 3>>)
+
+        // Assert
+        hash
+        |> should
+        |> be_error
+        |> be_equal(InvalidCertificate)
+        |> or_fail_with("Expected bytes that are not a certificate to fail")
+      }),
     ]),
   ])
 }
@@ -48,33 +69,21 @@ type HashCase {
   HashCase(name: String, file: String, expected_hash: String)
 }
 
-/// Why a test certificate gives no hash: the file is missing, or the
-/// certificate gives an error.
-type HashFailure {
-  MissingFile(reason: String)
-  HashError(error: CertificateError)
-}
-
-fn certificate_hash(file: String) -> Result(String, HashFailure) {
-  use certificate <- try(read_certificate(file) |> map_error(MissingFile))
-  server_end_point_hash(certificate)
-  |> result.map(base16_encode)
-  |> map_error(HashError)
-}
-
 fn hash_test(test_case: HashCase) {
-  it(test_case.name, fn() { check_hash(test_case) })
-}
+  it(test_case.name, fn() {
+    // Act
+    let certificate = read_certificate(test_case.file)
 
-fn check_hash(test_case: HashCase) {
-  // Act
-  let hash = certificate_hash(test_case.file)
-
-  // Assert
-  hash
-  |> should
-  |> be_equal(Ok(test_case.expected_hash))
-  |> or_fail_with("Expected the hash of " <> test_case.file)
+    // Assert
+    certificate
+    |> should
+    |> be_ok
+    |> extract_server_end_point_hash
+    |> be_ok
+    |> extract_base16
+    |> be_equal(test_case.expected_hash)
+    |> or_fail_with("Expected the hash of " <> test_case.file)
+  })
 }
 
 fn hash_cases() -> List(HashCase) {
@@ -110,26 +119,4 @@ fn hash_cases() -> List(HashCase) {
       "BAEF2447C599C1453840F03226F820A449D2B13E4E4CE37266BD75715183423497088240F1A6A468905B06C3DFC02281",
     ),
   ]
-}
-
-fn check_ed25519() {
-  // Act
-  let hash = certificate_hash("ed25519.der")
-
-  // Assert
-  hash
-  |> should
-  |> be_equal(Error(HashError(UnsupportedSignatureAlgorithm([1, 3, 101, 112]))))
-  |> or_fail_with("Expected Ed25519 to have no tls-server-end-point hash")
-}
-
-fn check_not_certificate() {
-  // Act
-  let hash = server_end_point_hash(<<1, 2, 3>>)
-
-  // Assert
-  hash
-  |> should
-  |> be_equal(Error(InvalidCertificate))
-  |> or_fail_with("Expected bytes that are not a certificate to fail")
 }

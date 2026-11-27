@@ -12,10 +12,14 @@ pub type Server {
   )
 }
 
+/// The first driver server, PostgreSQL 16. A test that needs one server,
+/// not each of them, uses it.
+pub const first_driver_server = Server(version: 16, port: 5441)
+
 /// The four driver servers, PostgreSQL 16 to 19.
 pub fn driver_servers() -> List(Server) {
   [
-    Server(version: 16, port: 5441),
+    first_driver_server,
     Server(version: 17, port: 5442),
     Server(version: 18, port: 5443),
     Server(version: 19, port: 5444),

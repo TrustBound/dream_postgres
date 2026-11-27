@@ -7,47 +7,229 @@
 //// 7677 example exactly.
 
 import dream_postgres/driver/scram.{
-  type ClientFinal, type ScramError, ClientWithoutChannelBinding,
-  InvalidIterationCount, InvalidSalt, InvalidServerFinalMessage,
-  InvalidServerFirstMessage, MandatoryExtension, ServerEndPoint,
-  ServerNonceMismatch, ServerReportedError, ServerSignatureMismatch,
-  ServerWithoutChannelBinding, client_final, client_final_message, client_first,
-  client_first_message, verify_server_final,
+  type ScramError, ClientWithoutChannelBinding, InvalidIterationCount,
+  InvalidSalt, InvalidServerFinalMessage, InvalidServerFirstMessage,
+  MandatoryExtension, ServerEndPoint, ServerNonceMismatch, ServerReportedError,
+  ServerSignatureMismatch, ServerWithoutChannelBinding, client_final,
+  client_first, client_first_message,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import gleam/bit_array.{base16_decode}
 import gleam/list.{map}
-import gleam/result.{try}
+import matchers/extract_client_final_message.{extract_client_final_message}
+import matchers/extract_server_final_check.{extract_server_final_check}
 
 /// The tests of SCRAM.
 pub fn tests() -> TestSuite {
   describe("dream_postgres/driver/scram", [
     group("the example of RFC 7677", [
-      it("gives the client-first-message", check_rfc_client_first),
-      it("gives the client-final-message", check_rfc_client_final),
-      it("accepts the server-final-message", check_rfc_server_final),
-      it("applies SASLprep to the password", check_saslprep_password),
+      it("gives the client-first-message", fn() {
+        // Arrange
+        let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
+
+        // Act
+        let message = client_first_message(first)
+
+        // Assert
+        message
+        |> should
+        |> be_equal(<<"n,,n=user,r=rOprNGfwEbeRWgbNEkqO">>)
+        |> or_fail_with("Expected the client-first-message of RFC 7677")
+      }),
+      it("gives the client-final-message", fn() {
+        // Arrange
+        let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
+
+        // Act
+        let final = client_final(first, "pencil", <<rfc_server_first:utf8>>)
+
+        // Assert
+        final
+        |> should
+        |> be_ok
+        |> extract_client_final_message
+        |> be_equal(<<
+          "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=",
+        >>)
+        |> or_fail_with("Expected the client-final-message of RFC 7677")
+      }),
+      it("accepts the server-final-message", fn() {
+        // Arrange
+        let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
+        let server_final = <<"v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=">>
+
+        // Act
+        let final = client_final(first, "pencil", <<rfc_server_first:utf8>>)
+
+        // Assert
+        final
+        |> should
+        |> be_ok
+        |> extract_server_final_check(server_final)
+        |> be_ok
+        |> be_equal(Nil)
+        |> or_fail_with("Expected the server signature of RFC 7677 to verify")
+      }),
+      it("applies SASLprep to the password", fn() {
+        // Arrange
+        let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
+
+        // Act
+        let final =
+          client_final(first, "pen\u{00AD}cil", <<rfc_server_first:utf8>>)
+
+        // Assert
+        final
+        |> should
+        |> be_ok
+        |> extract_client_final_message
+        |> be_equal(<<
+          "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=",
+        >>)
+        |> or_fail_with("Expected SASLprep to remove the SOFT HYPHEN")
+      }),
     ]),
     group("the client messages", [
-      it("escapes = and , in the user name", check_user_name),
-      it("gives the y flag", check_flag_y),
-      it("gives the channel binding data", check_end_point),
-      it(
-        "uses a password that SASLprep refuses as given",
-        check_refused_password,
-      ),
+      it("escapes = and , in the user name", fn() {
+        // Arrange
+        let first =
+          client_first("a=b,c", <<1, 2, 3>>, ClientWithoutChannelBinding)
+
+        // Act
+        let message = client_first_message(first)
+
+        // Assert
+        message
+        |> should
+        |> be_equal(<<"n,,n=a=3Db=2Cc,r=AQID">>)
+        |> or_fail_with("Expected the escaped user name")
+      }),
+      it("gives the y flag in the client-first-message", fn() {
+        // Arrange
+        let first = client_first("", nonce, ServerWithoutChannelBinding)
+
+        // Act
+        let message = client_first_message(first)
+
+        // Assert
+        message
+        |> should
+        |> be_equal(<<"y,,n=,r=AAECAwQFBgcICQoLDA0ODxAR">>)
+        |> or_fail_with("Expected the client-first-message with the y flag")
+      }),
+      it("gives the y flag in the client-final-message", fn() {
+        // Arrange
+        let first = client_first("", nonce, ServerWithoutChannelBinding)
+
+        // Act
+        let final = client_final(first, "pencil", <<server_first:utf8>>)
+
+        // Assert
+        final
+        |> should
+        |> be_ok
+        |> extract_client_final_message
+        |> be_equal(<<
+          "c=eSws,r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,p=msyn1LY0Oxyf+gll/EK7CSRK3qevfV2WO+EnTVvsmtY=",
+        >>)
+        |> or_fail_with("Expected the client-final-message with the y flag")
+      }),
+      it("gives the channel binding data in the client-first-message", fn() {
+        // Arrange
+        let first = client_first("", nonce, ServerEndPoint(certificate_hash))
+
+        // Act
+        let message = client_first_message(first)
+
+        // Assert
+        message
+        |> should
+        |> be_equal(<<"p=tls-server-end-point,,n=,r=AAECAwQFBgcICQoLDA0ODxAR">>)
+        |> or_fail_with(
+          "Expected the client-first-message with tls-server-end-point",
+        )
+      }),
+      it("gives the channel binding data in the client-final-message", fn() {
+        // Arrange
+        let first = client_first("", nonce, ServerEndPoint(certificate_hash))
+
+        // Act
+        let final = client_final(first, "pencil", <<server_first:utf8>>)
+
+        // Assert
+        final
+        |> should
+        |> be_ok
+        |> extract_client_final_message
+        |> be_equal(<<
+          "c=cD10bHMtc2VydmVyLWVuZC1wb2ludCwsGWtpJLD+PZUvUNHkl3nPH9RfsMH6IB1iMsapkzkqGNU=,r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,p=Fx0VuA3kaR3WQ4pqLtQ5uy0fXOuvt6uaMPY0dBUxApk=",
+        >>)
+        |> or_fail_with(
+          "Expected the client-final-message with tls-server-end-point",
+        )
+      }),
+      it("uses a password that SASLprep refuses as given", fn() {
+        // Arrange
+        let first = client_first("", nonce, ClientWithoutChannelBinding)
+
+        // Act
+        let final = client_final(first, "pen\u{0007}cil", <<server_first:utf8>>)
+
+        // Assert
+        final
+        |> should
+        |> be_ok
+        |> extract_client_final_message
+        |> be_equal(<<
+          "c=biws,r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,p=9AArJk5GJUOIRDIF6gJUvBRZKrmbM6JmnoXb02vz+1Y=",
+        >>)
+        |> or_fail_with("Expected the proof of the raw password")
+      }),
     ]),
     group("the extensions of RFC 5802 section 7", [
-      it(
-        "reads a server-first-message with an extension after it",
-        check_server_first_extension,
-      ),
-      it(
-        "reads a server-final-message with an extension after it",
-        check_server_final_extension,
-      ),
+      it("reads a server-first-message with an extension after it", fn() {
+        // Arrange
+        let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
+
+        // Act
+        let final =
+          client_final(first, "pencil", <<
+            rfc_server_first:utf8,
+            ",x=later-extension",
+          >>)
+
+        // Assert
+        final
+        |> should
+        |> be_ok
+        |> extract_client_final_message
+        |> be_equal(<<
+          "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=Eki7g8gSabXzUcBbHMW0YjX8eKNV2eh2a8/mpS4wvj0=",
+        >>)
+        |> or_fail_with(
+          "Expected the proof over the message with its extension",
+        )
+      }),
+      it("reads a server-final-message with an extension after it", fn() {
+        // Arrange
+        let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
+        let server_final = <<
+          "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=,x=later-extension",
+        >>
+
+        // Act
+        let final = client_final(first, "pencil", <<rfc_server_first:utf8>>)
+
+        // Assert
+        final
+        |> should
+        |> be_ok
+        |> extract_server_final_check(server_final)
+        |> be_ok
+        |> be_equal(Nil)
+        |> or_fail_with("Expected the signature to verify before the extension")
+      }),
     ]),
     group(
       "server-first-messages that are wrong",
@@ -75,228 +257,62 @@ const nonce = <<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17>>
 const server_first =
   "r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096"
 
-/// The SHA-256 of `test/fixtures/channel_binding/rsa_sha256.der`.
-const certificate_hash =
-  "196B6924B0FE3D952F50D1E49779CF1FD45FB0C1FA201D6232C6A993392A18D5"
-
-fn rfc_final(password: String) -> Result(BitArray, ScramError) {
-  let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
-  client_final(first, password, <<rfc_server_first:utf8>>)
-  |> result.map(client_final_message)
-}
-
-fn rfc_client_final() -> Result(ClientFinal, ScramError) {
-  let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
-  client_final(first, "pencil", <<rfc_server_first:utf8>>)
-}
-
-fn check_rfc_client_first() {
-  // Arrange
-  let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
-
-  // Act
-  let message = client_first_message(first)
-
-  // Assert
-  message
-  |> should
-  |> be_equal(<<"n,,n=user,r=rOprNGfwEbeRWgbNEkqO">>)
-  |> or_fail_with("Expected the client-first-message of RFC 7677")
-}
-
-fn check_rfc_client_final() {
-  // Act
-  let message = rfc_final("pencil")
-
-  // Assert
-  message
-  |> should
-  |> be_equal(
-    Ok(<<
-      "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=",
-    >>),
-  )
-  |> or_fail_with("Expected the client-final-message of RFC 7677")
-}
-
-fn check_rfc_server_final() {
-  // Arrange
-  let server_final = <<"v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=">>
-
-  // Act
-  let verified = {
-    use final <- try(rfc_client_final())
-    verify_server_final(final, server_final)
-  }
-
-  // Assert
-  verified
-  |> should
-  |> be_equal(Ok(Nil))
-  |> or_fail_with("Expected the server signature of RFC 7677 to verify")
-}
-
-fn check_server_first_extension() {
-  // Arrange
-  let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
-  let server_first = <<rfc_server_first:utf8, ",x=later-extension">>
-
-  // Act
-  let message =
-    client_final(first, "pencil", server_first)
-    |> result.map(client_final_message)
-
-  // Assert
-  message
-  |> should
-  |> be_equal(
-    Ok(<<
-      "c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,p=Eki7g8gSabXzUcBbHMW0YjX8eKNV2eh2a8/mpS4wvj0=",
-    >>),
-  )
-  |> or_fail_with("Expected the proof over the message with its extension")
-}
-
-fn check_server_final_extension() {
-  // Arrange
-  let server_final = <<
-    "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=,x=later-extension",
-  >>
-
-  // Act
-  let verified = {
-    use final <- try(rfc_client_final())
-    verify_server_final(final, server_final)
-  }
-
-  // Assert
-  verified
-  |> should
-  |> be_equal(Ok(Nil))
-  |> or_fail_with("Expected the signature to verify before the extension")
-}
-
-fn check_saslprep_password() {
-  // Act
-  let message = rfc_final("pen\u{00AD}cil")
-
-  // Assert
-  message
-  |> should
-  |> be_equal(rfc_final("pencil"))
-  |> or_fail_with("Expected SASLprep to remove the SOFT HYPHEN")
-}
-
-fn check_user_name() {
-  // Arrange
-  let first = client_first("a=b,c", <<1, 2, 3>>, ClientWithoutChannelBinding)
-
-  // Act
-  let message = client_first_message(first)
-
-  // Assert
-  message
-  |> should
-  |> be_equal(<<"n,,n=a=3Db=2Cc,r=AQID">>)
-  |> or_fail_with("Expected the escaped user name")
-}
-
-fn check_flag_y() {
-  // Arrange
-  let first = client_first("", nonce, ServerWithoutChannelBinding)
-
-  // Act
-  let messages = #(
-    client_first_message(first),
-    client_final(first, "pencil", <<server_first:utf8>>)
-      |> result.map(client_final_message),
-  )
-
-  // Assert
-  messages
-  |> should
-  |> be_equal(#(
-    <<"y,,n=,r=AAECAwQFBgcICQoLDA0ODxAR">>,
-    Ok(<<
-      "c=eSws,r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,p=msyn1LY0Oxyf+gll/EK7CSRK3qevfV2WO+EnTVvsmtY=",
-    >>),
-  ))
-  |> or_fail_with("Expected the messages with the y flag")
-}
-
-fn check_end_point() {
-  // Arrange
-  let binding = ServerEndPoint(hash_bytes(certificate_hash))
-  let first = client_first("", nonce, binding)
-
-  // Act
-  let messages = #(
-    client_first_message(first),
-    client_final(first, "pencil", <<server_first:utf8>>)
-      |> result.map(client_final_message),
-  )
-
-  // Assert
-  messages
-  |> should
-  |> be_equal(#(
-    <<"p=tls-server-end-point,,n=,r=AAECAwQFBgcICQoLDA0ODxAR">>,
-    Ok(<<
-      "c=cD10bHMtc2VydmVyLWVuZC1wb2ludCwsGWtpJLD+PZUvUNHkl3nPH9RfsMH6IB1iMsapkzkqGNU=,r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,p=Fx0VuA3kaR3WQ4pqLtQ5uy0fXOuvt6uaMPY0dBUxApk=",
-    >>),
-  ))
-  |> or_fail_with("Expected the messages with tls-server-end-point")
-}
-
-fn hash_bytes(hexadecimal: String) -> BitArray {
-  case base16_decode(hexadecimal) {
-    Ok(bytes) -> bytes
-    Error(Nil) -> <<>>
-  }
-}
-
-fn check_refused_password() {
-  // Arrange
-  let first = client_first("", nonce, ClientWithoutChannelBinding)
-
-  // Act
-  let message =
-    client_final(first, "pen\u{0007}cil", <<server_first:utf8>>)
-    |> result.map(client_final_message)
-
-  // Assert
-  message
-  |> should
-  |> be_equal(
-    Ok(<<
-      "c=biws,r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,p=9AArJk5GJUOIRDIF6gJUvBRZKrmbM6JmnoXb02vz+1Y=",
-    >>),
-  )
-  |> or_fail_with("Expected the proof of the raw password")
-}
+/// The SHA-256 of `test/fixtures/channel_binding/rsa_sha256.der`:
+/// 196B6924B0FE3D952F50D1E49779CF1FD45FB0C1FA201D6232C6A993392A18D5.
+const certificate_hash = <<
+  0x19,
+  0x6B,
+  0x69,
+  0x24,
+  0xB0,
+  0xFE,
+  0x3D,
+  0x95,
+  0x2F,
+  0x50,
+  0xD1,
+  0xE4,
+  0x97,
+  0x79,
+  0xCF,
+  0x1F,
+  0xD4,
+  0x5F,
+  0xB0,
+  0xC1,
+  0xFA,
+  0x20,
+  0x1D,
+  0x62,
+  0x32,
+  0xC6,
+  0xA9,
+  0x93,
+  0x39,
+  0x2A,
+  0x18,
+  0xD5,
+>>
 
 type ServerMessageCase {
   ServerMessageCase(name: String, message: BitArray, error: ScramError)
 }
 
 fn server_first_test(test_case: ServerMessageCase) {
-  it(test_case.name, fn() { check_server_first(test_case) })
-}
+  it(test_case.name, fn() {
+    // Arrange
+    let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
 
-fn check_server_first(test_case: ServerMessageCase) {
-  // Arrange
-  let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
+    // Act
+    let final = client_final(first, "pencil", test_case.message)
 
-  // Act
-  let final =
-    client_final(first, "pencil", test_case.message)
-    |> result.map(client_final_message)
-
-  // Assert
-  final
-  |> should
-  |> be_equal(Error(test_case.error))
-  |> or_fail_with("Expected an error for " <> test_case.name)
+    // Assert
+    final
+    |> should
+    |> be_error
+    |> be_equal(test_case.error)
+    |> or_fail_with("Expected an error for " <> test_case.name)
+  })
 }
 
 fn server_first_cases() -> List(ServerMessageCase) {
@@ -345,21 +361,22 @@ fn server_first_cases() -> List(ServerMessageCase) {
 }
 
 fn server_final_test(test_case: ServerMessageCase) {
-  it(test_case.name, fn() { check_server_final(test_case) })
-}
+  it(test_case.name, fn() {
+    // Arrange
+    let first = client_first("user", rfc_nonce, ClientWithoutChannelBinding)
 
-fn check_server_final(test_case: ServerMessageCase) {
-  // Act
-  let verified = {
-    use final <- try(rfc_client_final())
-    verify_server_final(final, test_case.message)
-  }
+    // Act
+    let final = client_final(first, "pencil", <<rfc_server_first:utf8>>)
 
-  // Assert
-  verified
-  |> should
-  |> be_equal(Error(test_case.error))
-  |> or_fail_with("Expected an error for " <> test_case.name)
+    // Assert
+    final
+    |> should
+    |> be_ok
+    |> extract_server_final_check(test_case.message)
+    |> be_error
+    |> be_equal(test_case.error)
+    |> or_fail_with("Expected an error for " <> test_case.name)
+  })
 }
 
 fn server_final_cases() -> List(ServerMessageCase) {
