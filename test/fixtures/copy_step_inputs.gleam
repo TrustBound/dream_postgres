@@ -161,23 +161,3 @@ fn stepped_state(
     _other -> before
   }
 }
-
-/// Whether a `COPY ... FROM STDIN` takes data before its start, after its
-/// start, and after the app finished it.
-pub fn data_acceptance() -> #(Bool, Bool, Bool) {
-  let start = query.start_copy("COPY t FROM STDIN", CopyFrom)
-  let started = started_copy_in()
-  let #(finished, _bytes) = query.finish_copy(started)
-  #(
-    query.accepts_copy_data(start.state),
-    query.accepts_copy_data(started),
-    query.accepts_copy_data(finished),
-  )
-}
-
-/// The bytes that the deadline of a started `COPY ... FROM STDIN` sends,
-/// and whether it takes data after the deadline.
-pub fn deadline_on_copy_in() -> #(BitArray, Bool) {
-  let #(state, bytes) = query.stop_at_deadline(started_copy_in())
-  #(bytes, query.accepts_copy_data(state))
-}

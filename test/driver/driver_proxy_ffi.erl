@@ -1,7 +1,7 @@
 -module(driver_proxy_ffi).
 -export([start/1, inject/2, close_client/1, reset_client/1, stop_reading/1,
-         stop_listening/1, answer_next_request/2,
-         watch_client_end/1, client_end/1]).
+         stop_listening/1, answer_next_request/2, freeze/1, next_kept/1,
+         watch_client_end/1, client_end/1, stop/1]).
 
 %% A TCP proxy between a connection process and a driver server, for the
 %% connection tests: it passes every byte both ways, and on a command it
@@ -22,8 +22,18 @@
 %% - answer_next_request(Proxy, Bytes): the next bytes from the client do
 %%   not reach the server; the proxy answers them with Bytes and then reads
 %%   nothing more from the client.
+%% - freeze(Proxy): the proxy keeps each byte that the client of now sends,
+%%   and sends nothing of it to the server, as a network that drops the
+%%   client's packets. It gives a reference for next_kept, which waits at
+%%   most 5 seconds for the next bytes that the proxy kept, and gives
+%%   {ok, Bytes} or {error, Text}. A new client is
+%%   never frozen.
 %%
 %% Each command waits until the proxy did it.
+%%
+%% stop(Proxy) ends the proxy at once. Its sockets close with it, so the
+%% server ends the session even when the proxy stopped reading, and saw
+%% no close of the client.
 %%
 %% watch_client_end(Proxy) asks for the last bytes that the client sends
 %% before it closes its socket; client_end(Watch) waits for them, so a test
@@ -44,6 +54,17 @@ stop_reading(Proxy) -> command(Proxy, stop_reading).
 stop_listening(Proxy) -> command(Proxy, stop_listening).
 answer_next_request(Proxy, Bytes) -> command(Proxy, {answer_next_request, Bytes}).
 
+freeze(Proxy) ->
+    Reference = make_ref(),
+    command(Proxy, {freeze, self(), Reference}),
+    Reference.
+
+next_kept(Reference) ->
+    receive
+        {Reference, Bytes} -> {ok, Bytes}
+    after 5000 -> {error, <<"the proxy kept no bytes within 5 seconds">>}
+    end.
+
 watch_client_end(Proxy) ->
     Reference = make_ref(),
     Proxy ! {watch, self(), Reference},
@@ -53,6 +74,10 @@ client_end(Reference) ->
     receive
         {Reference, LastBytes} -> LastBytes
     end.
+
+stop(Proxy) ->
+    exit(Proxy, kill),
+    nil.
 
 command(Proxy, Command) ->
     Reference = make_ref(),
@@ -79,6 +104,7 @@ accepted({ok, Client}, Listen, ServerPort, Watch) ->
     {ok, Server} = gen_tcp:connect("localhost", ServerPort, [binary, {active, once}]),
     ok = inet:setopts(Client, [{active, once}]),
     put(listen_socket, Listen),
+    erase(frozen),
     NextWatch = loop(Client, Server, <<>>, Watch),
     accept(Listen, ServerPort, NextWatch).
 
@@ -107,7 +133,7 @@ loop(Client, Server, Last, Watch) ->
     end.
 
 client_bytes(undefined, Client, Server, Bytes) ->
-    ok = gen_tcp:send(Server, Bytes),
+    ok = pass_or_keep(get(frozen), Server, Bytes),
     ok = inet:setopts(Client, [{active, once}]);
 client_bytes(Answer, Client, _Server, _Bytes) ->
     erase(answer_next_request),
@@ -122,6 +148,12 @@ after_command(ended, _Client, Server, _Last, Watch) ->
     gen_tcp:close(Server),
     Watch.
 
+pass_or_keep(undefined, Server, Bytes) ->
+    gen_tcp:send(Server, Bytes);
+pass_or_keep({Keeper, Reference}, _Server, Bytes) ->
+    Keeper ! {Reference, Bytes},
+    ok.
+
 report_end({From, Reference}, Last) -> From ! {Reference, Last};
 report_end(none, _Last) -> ok.
 
@@ -135,6 +167,9 @@ run(reset_client, Client) ->
     inet:setopts(Client, [{linger, {true, 0}}]),
     gen_tcp:close(Client),
     ended;
+run({freeze, Keeper, Reference}, _Client) ->
+    put(frozen, {Keeper, Reference}),
+    continue;
 run({answer_next_request, Bytes}, _Client) ->
     put(answer_next_request, Bytes),
     continue;

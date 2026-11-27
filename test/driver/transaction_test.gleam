@@ -11,11 +11,12 @@ import dream_postgres/driver/transaction.{
 }
 import dream_postgres/internal/cell.{
   type ServerReport, type TransactionStatus, Idle, InFailedTransaction,
-  InTransaction, ServerReport,
+  InTransaction,
 }
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_none, be_some, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
+import fixtures/server_report.{server_report}
 import gleam/option.{None, Some}
 
 /// The tests of the transaction tracker.
@@ -38,7 +39,7 @@ pub fn tests() -> TestSuite {
       // Assert
       error
       |> should
-      |> be_equal(None)
+      |> be_none
       |> or_fail_with("Expected no error")
     }),
     it("keeps the status of the last step", fn() {
@@ -65,7 +66,8 @@ pub fn tests() -> TestSuite {
       // Assert
       aborting_error(tracker)
       |> should
-      |> be_equal(Some(division()))
+      |> be_some
+      |> be_equal(division())
       |> or_fail_with("Expected the division error")
     }),
     it("keeps the first error while the transaction stays failed", fn() {
@@ -84,7 +86,8 @@ pub fn tests() -> TestSuite {
       // Assert
       aborting_error(tracker)
       |> should
-      |> be_equal(Some(division()))
+      |> be_some
+      |> be_equal(division())
       |> or_fail_with("Expected the first error")
     }),
     it("clears the error when the transaction ends", fn() {
@@ -102,7 +105,7 @@ pub fn tests() -> TestSuite {
       // Assert
       aborting_error(tracker)
       |> should
-      |> be_equal(None)
+      |> be_none
       |> or_fail_with("Expected no error after the rollback")
     }),
     it("clears the error after a rollback to a savepoint", fn() {
@@ -120,7 +123,7 @@ pub fn tests() -> TestSuite {
       // Assert
       aborting_error(tracker)
       |> should
-      |> be_equal(None)
+      |> be_none
       |> or_fail_with("Expected no error in the restored transaction")
     }),
     it("keeps the error of a refused COPY", fn() {
@@ -137,7 +140,8 @@ pub fn tests() -> TestSuite {
       // Assert
       aborting_error(tracker)
       |> should
-      |> be_equal(Some(division()))
+      |> be_some
+      |> be_equal(division())
       |> or_fail_with("Expected the error of the COPY")
     }),
     it("keeps the error that aborted a script", fn() {
@@ -154,7 +158,8 @@ pub fn tests() -> TestSuite {
       // Assert
       aborting_error(tracker)
       |> should
-      |> be_equal(Some(division()))
+      |> be_some
+      |> be_equal(division())
       |> or_fail_with("Expected the error of the script")
     }),
     it("keeps the status of a script that succeeded", fn() {
@@ -177,7 +182,7 @@ pub fn tests() -> TestSuite {
       // Assert
       aborting_error(tracker)
       |> should
-      |> be_equal(None)
+      |> be_none
       |> or_fail_with("Expected no error")
     }),
   ])
@@ -198,33 +203,9 @@ fn script_outcome(
 }
 
 fn division() -> ServerReport {
-  report("22012", "division by zero")
+  server_report("ERROR", "22012", "division by zero")
 }
 
 fn aborted() -> ServerReport {
-  report("25P02", "current transaction is aborted")
-}
-
-fn report(code: String, text: String) -> ServerReport {
-  ServerReport(
-    severity: "ERROR",
-    localized_severity: "ERROR",
-    code:,
-    message: text,
-    detail: None,
-    hint: None,
-    position: None,
-    internal_position: None,
-    internal_query: None,
-    context: None,
-    schema: None,
-    table: None,
-    column: None,
-    data_type: None,
-    constraint: None,
-    file: None,
-    line: None,
-    routine: None,
-    other_fields: [],
-  )
+  server_report("ERROR", "25P02", "current transaction is aborted")
 }

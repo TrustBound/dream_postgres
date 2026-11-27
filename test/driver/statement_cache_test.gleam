@@ -5,10 +5,9 @@ import dream_postgres/driver/statement_cache.{
   CachedStatement, forget, insert, lookup, make_room, new, new_name, take_stale,
 }
 import dream_postgres/internal/cell.{StatementDescription}
-import dream_test/matchers.{be_equal, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_none, be_some, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
-import gleam/option.{None, Some}
 
 const description = StatementDescription(parameters: [], columns: [])
 
@@ -25,34 +24,45 @@ pub fn tests() -> TestSuite {
       // Assert
       found
       |> should
-      |> be_equal(Some(CachedStatement("s1", description)))
+      |> be_some
+      |> be_equal(CachedStatement("s1", description))
       |> or_fail_with("Expected the statement s1")
+    }),
+    it("gives the first name dream_postgres_1", fn() {
+      // Act
+      let #(_cache, first) = new_name(new(2))
+
+      // Assert
+      first
+      |> should
+      |> be_equal("dream_postgres_1")
+      |> or_fail_with("Expected the name dream_postgres_1")
     }),
     it("gives a new name each time", fn() {
       // Arrange
-      let #(cache, first) = new_name(new(2))
+      let #(cache, _first) = new_name(new(2))
 
       // Act
       let #(_cache, second) = new_name(cache)
 
       // Assert
-      #(first, second)
+      second
       |> should
-      |> be_equal(#("dream_postgres_1", "dream_postgres_2"))
-      |> or_fail_with("Expected two names")
+      |> be_equal("dream_postgres_2")
+      |> or_fail_with("Expected the second name dream_postgres_2")
     }),
     it("makes room by the least recently used, whichever comes first", fn() {
       // Arrange
-      let cache =
+      let filled =
         new(3)
         |> insert("a", "s1", description)
         |> insert("b", "s2", description)
         |> insert("c", "s3", description)
-      let #(cache, _found) = lookup(cache, "a")
-      let #(cache, _found) = lookup(cache, "c")
+      let #(after_a, _found_a) = lookup(filled, "a")
+      let #(after_c, _found_c) = lookup(after_a, "c")
 
       // Act
-      let #(_cache, closing) = take_stale(make_room(cache))
+      let #(_cache, closing) = take_stale(make_room(after_c))
 
       // Assert
       closing
@@ -78,14 +88,26 @@ pub fn tests() -> TestSuite {
       let cache = new(2) |> insert("a", "s1", description) |> forget("a")
 
       // Act
-      let #(cache, closing) = take_stale(cache)
+      let #(_cache, closing) = take_stale(cache)
+
+      // Assert
+      closing
+      |> should
+      |> be_equal(["s1"])
+      |> or_fail_with("Expected the name s1 to close")
+    }),
+    it("finds no statement for SQL that it forgot", fn() {
+      // Arrange
+      let cache = new(2) |> insert("a", "s1", description) |> forget("a")
+
+      // Act
       let #(_cache, found) = lookup(cache, "a")
 
       // Assert
-      #(closing, found)
+      found
       |> should
-      |> be_equal(#(["s1"], None))
-      |> or_fail_with("Expected the name s1 to close and no statement")
+      |> be_none
+      |> or_fail_with("Expected no statement for a")
     }),
     it("changes nothing when it forgets SQL that it does not hold", fn() {
       // Arrange
