@@ -27,6 +27,7 @@ import driver/server_connection.{connection_config, next_event, stop_connection}
 import driver/servers.{first_driver_server}
 import fixtures/backoff_strategies.{capped_delay}
 import fixtures/copy_callbacks.{send_nothing}
+import fixtures/identity_sink.{identity_sink}
 import gleam/erlang/process
 import gleam/option.{Some}
 import gleam/result.{map_error, try}
@@ -165,7 +166,7 @@ fn start_before_server() -> Result(LateServer, String) {
     ConnectionConfig(
       ..config,
       reconnect: Backoff(10, 100, capped_delay),
-      events: Some(events),
+      events: Some(identity_sink(events)),
     )
   use started <- try(supervised(config).start() |> map_error(inspect))
   watch_late_server(started.data, port, events)

@@ -28,6 +28,7 @@ import driver/server_connection.{
 }
 import driver/servers.{type Server}
 import fixtures/backoff_strategies.{capped_delay}
+import fixtures/identity_sink.{identity_sink}
 import gleam/bit_array
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int.{parse, to_string}
@@ -79,7 +80,7 @@ pub fn subscribe_to(
   channel: String,
   subscriber: Subject(ListenerMessage),
 ) -> Result(Subscription, String) {
-  subscribe(listener, channel, subscriber)
+  subscribe(listener, channel, identity_sink(subscriber))
   |> map_error(fn(error) {
     "could not subscribe to " <> channel <> ": " <> inspect(error)
   })

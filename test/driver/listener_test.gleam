@@ -59,6 +59,7 @@ import driver/server_named_listener.{
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/backoff_strategies.{capped_delay}
+import fixtures/identity_sink.{identity_sink}
 import fixtures/server_report.{server_report}
 import gleam/erlang/process
 import gleam/int.{to_string}
@@ -308,7 +309,12 @@ fn subscribe_tests() {
         let channel = repeat("a", 64)
 
         // Act
-        let answer = subscribe(session.listener, channel, process.new_subject())
+        let answer =
+          subscribe(
+            session.listener,
+            channel,
+            identity_sink(process.new_subject()),
+          )
 
         // Assert
         answer
@@ -325,7 +331,12 @@ fn subscribe_tests() {
         let subscriber = process.named_subject(process.new_name("svc827"))
 
         // Act
-        let answer = subscribe(session.listener, session.channel, subscriber)
+        let answer =
+          subscribe(
+            session.listener,
+            session.channel,
+            identity_sink(subscriber),
+          )
 
         // Assert
         answer
@@ -340,7 +351,11 @@ fn subscribe_tests() {
       fn(session: ListenerSession) {
         // Act
         let answer =
-          subscribe(session.listener, "svc827\u{0}zero", process.new_subject())
+          subscribe(
+            session.listener,
+            "svc827\u{0}zero",
+            identity_sink(process.new_subject()),
+          )
 
         // Assert
         answer
@@ -635,7 +650,7 @@ fn subscription_tests() -> TestSuite {
           subscribe(
             subscribed.listener,
             "svc827_stopped",
-            subscribed.subscriber,
+            identity_sink(subscribed.subscriber),
           )
 
         // Assert
@@ -1016,7 +1031,11 @@ fn listen_failure_tests() -> TestSuite {
 
           // Act
           let answer =
-            subscribe(proxied.listener, proxied.channel, proxied.subscriber)
+            subscribe(
+              proxied.listener,
+              proxied.channel,
+              identity_sink(proxied.subscriber),
+            )
 
           // Assert
           answer
@@ -1039,7 +1058,11 @@ fn listen_failure_tests() -> TestSuite {
 
           // Act
           let answer =
-            subscribe(proxied.listener, proxied.channel, proxied.subscriber)
+            subscribe(
+              proxied.listener,
+              proxied.channel,
+              identity_sink(proxied.subscriber),
+            )
 
           // Assert
           answer
@@ -1057,7 +1080,11 @@ fn listen_failure_tests() -> TestSuite {
 
           // Act
           let answer =
-            subscribe(proxied.listener, proxied.channel, proxied.subscriber)
+            subscribe(
+              proxied.listener,
+              proxied.channel,
+              identity_sink(proxied.subscriber),
+            )
           resume_listener_connection(proxied.listener)
 
           // Assert
@@ -1076,7 +1103,11 @@ fn listen_failure_tests() -> TestSuite {
 
           // Act
           let answer =
-            subscribe(proxied.listener, proxied.channel, proxied.subscriber)
+            subscribe(
+              proxied.listener,
+              proxied.channel,
+              identity_sink(proxied.subscriber),
+            )
 
           // Assert
           answer

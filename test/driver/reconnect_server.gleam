@@ -12,6 +12,7 @@ import driver/server_connection.{
   connection_config, next_event, start_watched, stop_connection,
 }
 import fixtures/backoff_strategies.{capped_delay}
+import fixtures/identity_sink.{identity_sink}
 import gleam/erlang/process.{type Subject}
 import gleam/option.{Some}
 import gleam/result.{map_error, try}
@@ -117,7 +118,7 @@ fn reconnect_badly(
       ..config,
       setup_timeout_milliseconds: setup_timeout,
       reconnect: Backoff(10, 60_000, capped_delay),
-      events: Some(events),
+      events: Some(identity_sink(events)),
     ),
     events,
   ))
