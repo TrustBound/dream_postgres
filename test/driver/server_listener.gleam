@@ -387,7 +387,7 @@ pub type GatedOutcome(outcome) {
 
 /// Starts a gate proxy to `server` and a listener through it.
 pub fn start_gated_listener(server: Server) -> Result(GatedListener, String) {
-  let #(port, gate) = start_gate(server.port)
+  use #(port, gate) <- try(start_gate(server.port))
   listener_config(port, "svc827_gate", Backoff(10, 50))
   |> try(start_configured_listener)
   |> result.map(GatedListener(

@@ -19,54 +19,111 @@
 %% {Reference, open} when 5 seconds pass first. After that it accepts one
 %% more connection and keeps it open until the client closes it, for the
 %% tests where the client connects again.
+%%
+%% start gives {ok, {Port, Reference}}, or {error, Reason} when the server
+%% cannot listen. client_closed gives {ok, true} or {ok, false}, or
+%% {error, Reason} when a step of the server failed. Reason is a text.
+%%
+%% start_silent() gives {ok, Port} of a server that accepts one connection
+%% and never sends a byte, until the client closes, or {error, Reason}.
 
 -define(WAIT, 5000).
 
 start(Behavior) ->
     Caller = self(),
     Reference = make_ref(),
-    Ready = make_ref(),
-    spawn(fun() -> listen(Caller, Reference, Ready, Behavior) end),
+    open(Caller, Reference, fun(Listen) ->
+        Caller ! {Reference, serve(Listen, Behavior)},
+        second_connection(Listen)
+    end).
+
+start_silent() ->
+    Silent = fun(Listen) ->
+        then(gen_tcp:accept(Listen, ?WAIT), fun(Socket) ->
+            wait_for_close(gen_tcp, Socket)
+        end),
+        gen_tcp:close(Listen)
+    end,
+    case open(self(), make_ref(), Silent) of
+        {ok, {Port, _Reference}} -> {ok, Port};
+        {error, Reason} -> {error, Reason}
+    end.
+
+%% Starts a process that listens on a free port and then runs Serve with
+%% the listen socket. Gives {ok, {Port, Reference}} once it listens.
+open(Caller, Reference, Serve) ->
+    spawn(fun() -> listen(Caller, Reference, Serve) end),
     receive
-        {Ready, Port} -> {Port, Reference}
+        {Reference, {ready, Port}} -> {ok, {Port, Reference}};
+        {Reference, {failed, Reason}} -> {error, Reason}
     end.
 
 client_closed(Reference) ->
     receive
-        {Reference, closed} -> true;
-        {Reference, open} -> false
+        {Reference, closed} -> {ok, true};
+        {Reference, open} -> {ok, false};
+        {Reference, {failed, Reason}} -> {error, Reason}
     end.
 
-listen(Caller, Reference, Ready, Behavior) ->
-    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]),
-    {ok, Port} = inet:port(Listen),
-    Caller ! {Ready, Port},
-    {ok, Socket} = gen_tcp:accept(Listen, ?WAIT),
-    {ok, _Request} = gen_tcp:recv(Socket, 8, ?WAIT),
-    Caller ! {Reference, behave(Socket, Behavior)},
-    second_connection(Listen).
+listen(Caller, Reference, Serve) ->
+    Options = [binary, {active, false}, {reuseaddr, true}],
+    case gen_tcp:listen(0, Options) of
+        {ok, Listen} ->
+            listening(Caller, Reference, Serve, Listen, inet:port(Listen));
+        {error, Reason} ->
+            Caller ! {Reference, failed(Reason)}
+    end.
+
+listening(Caller, Reference, Serve, Listen, {ok, Port}) ->
+    Caller ! {Reference, {ready, Port}},
+    Serve(Listen);
+listening(Caller, Reference, _Serve, Listen, {error, Reason}) ->
+    gen_tcp:close(Listen),
+    Caller ! {Reference, failed(Reason)}.
+
+serve(Listen, Behavior) ->
+    then(gen_tcp:accept(Listen, ?WAIT), fun(Socket) ->
+        then(gen_tcp:recv(Socket, 8, ?WAIT), fun(_Request) ->
+            behave(Socket, Behavior)
+        end)
+    end).
 
 behave(Socket, {answer, Bytes}) ->
-    ok = gen_tcp:send(Socket, Bytes),
-    wait_for_close(gen_tcp, Socket);
+    then(gen_tcp:send(Socket, Bytes), fun(_) ->
+        wait_for_close(gen_tcp, Socket)
+    end);
 behave(Socket, reset) ->
-    ok = inet:setopts(Socket, [{linger, {true, 0}}]),
-    gen_tcp:close(Socket),
-    closed;
+    then(inet:setopts(Socket, [{linger, {true, 0}}]), fun(_) ->
+        gen_tcp:close(Socket),
+        closed
+    end);
 behave(Socket, not_tls) ->
-    ok = gen_tcp:send(Socket, <<"S">>),
-    {ok, _Hello} = gen_tcp:recv(Socket, 0, ?WAIT),
-    ok = gen_tcp:send(Socket, <<"this is not TLS">>),
-    wait_for_close(gen_tcp, Socket);
+    then(gen_tcp:send(Socket, <<"S">>), fun(_) ->
+        then(gen_tcp:recv(Socket, 0, ?WAIT), fun(_Hello) ->
+            then(gen_tcp:send(Socket, <<"this is not TLS">>), fun(_) ->
+                wait_for_close(gen_tcp, Socket)
+            end)
+        end)
+    end);
 behave(Socket, {tls, CertificateFile, KeyFile}) ->
-    ok = gen_tcp:send(Socket, <<"S">>),
     Options = [{certfile, binary_to_list(CertificateFile)},
                {keyfile, binary_to_list(KeyFile)},
                {log_level, none}],
-    tls_handshake(ssl:handshake(Socket, Options, ?WAIT), Socket).
+    then(gen_tcp:send(Socket, <<"S">>), fun(_) ->
+        tls_handshake(ssl:handshake(Socket, Options, ?WAIT), Socket)
+    end).
 
 tls_handshake({ok, TlsSocket}, _Socket) -> wait_for_close(ssl, TlsSocket);
 tls_handshake({error, _Reason}, Socket) -> wait_for_close(gen_tcp, Socket).
+
+%% Runs Next with the value of a step that worked, or gives the failure of
+%% a step that failed.
+then(ok, Next) -> Next(ok);
+then({ok, Value}, Next) -> Next(Value);
+then({error, Reason}, _Next) -> failed(Reason).
+
+failed(Reason) ->
+    {failed, unicode:characters_to_binary(io_lib:format("~p", [Reason]))}.
 
 wait_for_close(Module, Socket) ->
     case Module:recv(Socket, 0, ?WAIT) of
@@ -82,20 +139,3 @@ second_connection(Listen) ->
         {error, _Reason} -> ok
     end,
     gen_tcp:close(Listen).
-
-%% A server that accepts one connection and never sends a byte, until the
-%% client closes. It gives its port.
-start_silent() ->
-    Caller = self(),
-    Ready = make_ref(),
-    spawn(fun() ->
-        {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]),
-        {ok, Port} = inet:port(Listen),
-        Caller ! {Ready, Port},
-        {ok, Socket} = gen_tcp:accept(Listen, ?WAIT),
-        wait_for_close(gen_tcp, Socket),
-        gen_tcp:close(Listen)
-    end),
-    receive
-        {Ready, Port} -> Port
-    end.
