@@ -38,7 +38,7 @@ import gleam/list.{map}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/static_supervisor
 import gleam/result.{try}
-import gleam/string.{repeat, starts_with}
+import gleam/string.{contains, repeat, starts_with}
 
 @external(erlang, "port_ffi", "free_port")
 fn free_port() -> Int
@@ -98,6 +98,7 @@ pub fn tests() -> TestSuite {
     group("the statement cache", map(driver_servers(), cache_tests)),
     group("deadlines on each server", map(driver_servers(), deadline_tests)),
     group("deadlines", more_deadline_tests()),
+    group("what dream_model needs", map(driver_servers(), model_tests)),
   ])
 }
 
@@ -2080,4 +2081,111 @@ fn check_failed_cancel(breaking: fn(Proxy) -> Nil) {
     Ok(#(Error(DeadlinePassed(cancelled: False)), Ok("lost at deadline"))),
   )
   |> or_fail_with("Expected DeadlinePassed and the loss of the connection")
+}
+
+// What dream_model needs -------------------------------------------------------
+
+/// A connection that sets run-time parameters with the startup parameter
+/// `options`, as dream_model does to get the rewritten query tree.
+fn options_config(
+  port: Int,
+  options: String,
+) -> Result(ConnectionConfig, DriverError) {
+  use settings <- try(config(port, "dream", "dream", 10, None))
+  use login_config <- try(
+    login.new(
+      user: "dream",
+      database: servers.database,
+      password: login.password("dream"),
+      parameters: [#("options", options)],
+      channel_binding: PreferChannelBinding,
+      protocol_version: Protocol30,
+    )
+    |> result.replace_error(ConnectionLost(SocketClosed)),
+  )
+  Ok(ConnectionConfig(..settings, login: login_config))
+}
+
+fn model_tests(server: Server) {
+  group("PostgreSQL " <> to_string(server.version), [
+    it("reads the rewritten query tree from a notice, with options", fn() {
+      // Act
+      let seen = {
+        use settings <- try(options_config(
+          server.port,
+          "-c debug_print_rewritten=on -c client_min_messages=log",
+        ))
+        use connection <- with_started(settings)
+        use outcome <- try(
+          run(
+            connection,
+            "SELECT relname FROM pg_class WHERE relname = 'pg_class'",
+            [],
+          ),
+        )
+        Ok(#(
+          map(outcome.notices, notice_message),
+          map(outcome.notices, tree_detail),
+          map(outcome.columns, column_origin),
+          rows(outcome),
+        ))
+      }
+
+      // Assert
+      seen
+      |> should
+      |> be_equal(
+        Ok(
+          #(["rewritten parse tree:"], [True], [#("relname", 1259, 2)], [
+            [Text(<<"pg_class">>)],
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected the tree notice, the column origin and the row")
+    }),
+    it("gives each notice in the middle of a result, and every row", fn() {
+      // Act
+      let seen = {
+        use connection <- with_connection(server.port)
+        use _function <- try(script(
+          connection,
+          "CREATE FUNCTION pg_temp.noisy(n int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'row %', n; RETURN n; END $$",
+        ))
+        use outcome <- try(
+          run(
+            connection,
+            "SELECT pg_temp.noisy(g) FROM generate_series(1, 3) AS g",
+            [],
+          ),
+        )
+        Ok(#(map(outcome.notices, notice_message), rows(outcome)))
+      }
+
+      // Assert
+      seen
+      |> should
+      |> be_equal(
+        Ok(
+          #(["row 1", "row 2", "row 3"], [
+            [Text(<<"1">>)],
+            [Text(<<"2">>)],
+            [Text(<<"3">>)],
+          ]),
+        ),
+      )
+      |> or_fail_with("Expected three notices and three rows")
+    }),
+  ])
+}
+
+/// Whether the notice's detail holds the query tree.
+fn tree_detail(report: ServerReport) -> Bool {
+  case report.detail {
+    Some(detail) -> contains(detail, "{QUERY")
+    None -> False
+  }
+}
+
+fn column_origin(column: ColumnDescription) -> #(String, Int, Int) {
+  #(column.name, column.table_id, column.column_number)
 }
