@@ -25,9 +25,11 @@
 //// Each pool keeps all of its state in its own processes: two pools never
 //// share state, also when their settings are the same.
 ////
-//// A pool can start under a process name. A handle made from the name
-//// with `from_name` holds only the name, so it stays valid when a
-//// supervisor starts the pool again under the same name.
+//// A pool under a supervisor runs under a process name (`supervised`). A
+//// handle made from the name with `from_name` holds only the name, so it
+//// stays valid when the supervisor starts the pool again. Each call looks
+//// the name up and sends to the process it finds, so a call during a
+//// restart gives `PoolStopped` and never crashes the caller.
 ////
 //// This module is internal to dream_postgres.
 
@@ -42,6 +44,7 @@ import dream_postgres/driver/pool_member.{
 }
 import gleam/bool.{guard}
 import gleam/dict.{type Dict}
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom
 import gleam/erlang/process.{
   type Down, type ExitMessage, type Monitor, type Name, type Pid, type Subject,
@@ -52,7 +55,9 @@ import gleam/list.{append, count, each, find, find_map, partition}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{OneForOne}
+import gleam/otp/supervision.{type ChildSpecification, Transient}
 import gleam/result.{map_error, try}
+import gleam/string
 
 // Types -----------------------------------------------------------------------
 
@@ -127,10 +132,19 @@ pub opaque type Pool {
   Pool(subject: Subject(PoolMessage))
 }
 
-/// A connection that a checkout gives, with the ID of the hold.
+/// A connection that a checkout gives, with the ID of the hold and the
+/// manager process that gave it.
 type Lease {
-  Lease(id: Int, connection: Connection)
+  Lease(id: Int, connection: Connection, manager: Pid)
 }
+
+/// Sends a request to the manager's process (see the FFI module).
+@external(erlang, "dream_postgres_pool_ffi", "deliver")
+fn deliver(manager: Pid, message: PoolMessage) -> Nil
+
+/// The request inside a message of `deliver`.
+@external(erlang, "dream_postgres_pool_ffi", "request_of")
+fn request_of(message: Dynamic) -> PoolMessage
 
 /// A message to the manager process of a pool. A name for `start_named`
 /// is a name for these messages.
@@ -258,14 +272,17 @@ type State {
 /// - `Error(StartError)`: a setting is not valid, or the manager did not
 ///   start
 pub fn start(config: PoolConfig, size: Int) -> Result(Pool, StartError) {
-  start_pool(config, size, None)
+  use Nil <- try(check_settings(config, size))
+  start_manager(config, size, None)
+  |> map_error(PoolProcessStartFailed)
+  |> result.map(started_pool)
 }
 
-/// Starts a pool as `start` does, with its manager process registered
-/// under `name`. A supervisor that starts the pool again with the same
-/// name gives the name to the new manager, so a handle of `from_name`
-/// stays valid. The name must come from `process.new_name`, made once when
-/// the program starts.
+/// The pool as a child of a gleam_otp supervisor, with its manager
+/// process registered under `name`. When the supervisor starts the pool
+/// again, the new manager takes the name, so a handle of `from_name` stays
+/// valid. The name must come from `process.new_name`, made once when the
+/// program starts.
 ///
 /// ## Parameters
 ///
@@ -275,24 +292,48 @@ pub fn start(config: PoolConfig, size: Int) -> Result(Pool, StartError) {
 ///
 /// ## Returns
 ///
-/// - `Ok(Pool)`: the pool runs under the name, and its members connect
-/// - `Error(StartError)`: a setting is not valid, or the manager did not
-///   start, for example because another process has the name
-pub fn start_named(
+/// A transient worker child: the supervisor starts it again after an
+/// abnormal exit, and not after `stop`. A setting that is not valid fails
+/// the start with `InitFailed` and the `StartError` as text. The
+/// supervisor's shutdown drains the pool as the exit of its owner does, so
+/// the child has the shutdown deadline of the settings and 10 seconds more
+/// to close its connections.
+pub fn supervised(
   config: PoolConfig,
   size: Int,
   name: Name(PoolMessage),
-) -> Result(Pool, StartError) {
-  start_pool(config, size, Some(name))
+) -> ChildSpecification(Pool) {
+  supervision.worker(fn() { start_child(config, size, name) })
+  |> supervision.restart(Transient)
+  |> supervision.timeout(config.shutdown_deadline_milliseconds + 10_000)
+}
+
+fn start_child(
+  config: PoolConfig,
+  size: Int,
+  name: Name(PoolMessage),
+) -> Result(actor.Started(Pool), actor.StartError) {
+  use Nil <- try(check_settings(config, size) |> map_error(setting_refused))
+  start_manager(config, size, Some(name)) |> result.map(started_child)
+}
+
+fn setting_refused(error: StartError) -> actor.StartError {
+  actor.InitFailed(string.inspect(error))
+}
+
+fn started_child(
+  started: actor.Started(Subject(PoolMessage)),
+) -> actor.Started(Pool) {
+  actor.Started(pid: started.pid, data: started_pool(started))
 }
 
 /// The pool that runs, or will run, under a name. It makes the handle
 /// from the name alone, with no call to the pool, so a handle made once
-/// stays valid when the pool starts again under the name.
+/// stays valid when the supervisor starts the pool again under the name.
 ///
 /// ## Parameters
 ///
-/// - `name`: the name of `start_named`
+/// - `name`: the name of `supervised`
 ///
 /// ## Returns
 ///
@@ -302,15 +343,11 @@ pub fn from_name(name: Name(PoolMessage)) -> Pool {
   Pool(subject: process.named_subject(name))
 }
 
-fn start_pool(
-  config: PoolConfig,
-  size: Int,
-  name: Option(Name(PoolMessage)),
-) -> Result(Pool, StartError) {
+fn check_settings(config: PoolConfig, size: Int) -> Result(Nil, StartError) {
   use <- guard(size < 1, Error(InvalidSize(size)))
   let interval = config.health_check_interval_milliseconds
   use <- guard(interval < 1, Error(InvalidHealthCheckInterval(interval)))
-  start_manager(config, size, name) |> result.map(started_pool)
+  Ok(Nil)
 }
 
 fn started_pool(started: actor.Started(Subject(PoolMessage))) -> Pool {
@@ -321,7 +358,7 @@ fn start_manager(
   config: PoolConfig,
   size: Int,
   name: Option(Name(PoolMessage)),
-) -> Result(actor.Started(Subject(PoolMessage)), StartError) {
+) -> Result(actor.Started(Subject(PoolMessage)), actor.StartError) {
   let settings =
     Settings(
       size:,
@@ -338,7 +375,6 @@ fn start_manager(
   |> actor.on_message(handle_message)
   |> with_name(name)
   |> actor.start
-  |> map_error(PoolProcessStartFailed)
 }
 
 fn with_name(
@@ -398,6 +434,11 @@ fn initialised(
   let selector =
     process.new_selector()
     |> process.select(subject)
+    |> process.select_record(
+      atom.create("dream_postgres_pool_request"),
+      1,
+      request_of,
+    )
     |> process.select_map(reports, MemberReported)
     |> process.select_monitors(monitor_fired)
     |> process.select_trapped_exits(ExitReceived)
@@ -485,18 +526,14 @@ pub fn hold(
 ) -> Result(value, HoldError) {
   use lease <- result.map(check_out(pool, deadline_milliseconds))
   let value = callback(lease.connection)
-  check_in_lease(pool, lease)
+  check_in_lease(lease)
   value
 }
 
-/// Ends the hold at the manager that gave the lease, or at the manager that
-/// took over its name, which knows no such lease and changes nothing. When
-/// no manager runs, there is nothing to end.
-fn check_in_lease(pool: Pool, lease: Lease) -> Nil {
-  case manager_pid(pool) {
-    Ok(_manager) -> process.send(pool.subject, CheckIn(lease.id))
-    Error(_gone) -> Nil
-  }
+/// Ends the hold at the manager that gave the lease. When that manager is
+/// gone, the message is dropped, and there is nothing to end.
+fn check_in_lease(lease: Lease) -> Nil {
+  deliver(lease.manager, CheckIn(lease.id))
 }
 
 fn check_out(
@@ -541,7 +578,9 @@ pub fn status(pool: Pool) -> Result(PoolStatus, HoldError) {
 
 /// Sends a request to the manager and waits for its answer. The manager
 /// answers each request; a manager that is gone, or a name that no
-/// manager has, gives `PoolStopped`.
+/// manager has, gives `PoolStopped`. The request goes to the process ID
+/// that the subject has now, never to the name, so a manager that exits
+/// at that moment gives `PoolStopped` too, not a crash of the caller.
 fn ask(
   pool: Pool,
   make: fn(Subject(reply)) -> PoolMessage,
@@ -549,7 +588,7 @@ fn ask(
   use manager <- try(manager_pid(pool))
   let reply_to = process.new_subject()
   let monitor = process.monitor(manager)
-  process.send(pool.subject, make(reply_to))
+  deliver(manager, make(reply_to))
   let answer =
     process.new_selector()
     |> process.select_map(reply_to, Ok)
@@ -722,7 +761,7 @@ fn hand_out(
   process.cancel_timer(waiter.timer)
   let lease_id = state.next_id
   let holder = Holder(slot: slot_id, monitor: process.monitor(waiter.caller))
-  process.send(waiter.reply, Ok(Lease(lease_id, connection)))
+  process.send(waiter.reply, Ok(Lease(lease_id, connection, process.self())))
   let held = Slot(..slot, usage: HeldBy(lease_id), used_since_check: True)
   State(
     ..state,
