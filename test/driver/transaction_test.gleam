@@ -75,7 +75,16 @@ pub fn tests() -> TestSuite {
       let first =
         step_outcome(Error(ServerError(division())), InFailedTransaction)
       let second =
-        step_outcome(Error(ServerError(aborted())), InFailedTransaction)
+        step_outcome(
+          Error(
+            ServerError(server_report(
+              "ERROR",
+              "25P02",
+              "current transaction is aborted",
+            )),
+          ),
+          InFailedTransaction,
+        )
 
       // Act
       let tracker =
@@ -204,8 +213,4 @@ fn script_outcome(
 
 fn division() -> ServerReport {
   server_report("ERROR", "22012", "division by zero")
-}
-
-fn aborted() -> ServerReport {
-  server_report("ERROR", "25P02", "current transaction is aborted")
 }
