@@ -1,0 +1,6 @@
+{
+  "dream_postgres_recording": 1,
+  "entries": [
+    {"key":"script\nBEGIN","script":{"outcome":{"answer":{"results":[{"count":0,"rows":[],"tag":"BEGIN"}]}},"sql":"BEGIN"}}
+  ]
+}

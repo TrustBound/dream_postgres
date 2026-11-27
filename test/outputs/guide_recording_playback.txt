@@ -1,5 +1,0 @@
-run_recorded(recorder.Playback, "postgresql://app:secret@127.0.0.1:1/app", "test/fixtures/recordings")
-  -> Ok(User(1, "Ada", "ada@example.com"))
-
-create_and_find(a pool with no database)
-  -> Error(ConnectionUnavailable)

@@ -18,12 +18,14 @@ dream_postgres is part of the [Dream](https://github.com/TrustBound/dream) famil
 
 - Gleam 1.19.2 or later
 - Erlang/OTP 28 or later, with the JIT (the test run measures line coverage)
-- Docker with Docker Compose, for the two PostgreSQL 16 servers that the tests run against
+- Docker with Docker Compose, for the PostgreSQL servers that the tests run against
 
-Many tests run queries on a real PostgreSQL server. `make db-up` starts two from `docker-compose.yml`, both with the user `dream`, the password `dream` and the database `dream_test`, and both keep no data:
+Many tests run queries on a real PostgreSQL server. `make db-up` starts nine from `docker-compose.yml`, all with the user `dream`, the password `dream` and the database `dream_test`, and all keep their data in memory, so each start gives an empty database. Each one uses the image `dream-test-postgres:<version>`: `postgres:<version>-alpine` with pgvector, which `test/docker/Dockerfile` builds when the image is not there yet. At the first start, `test/docker/extensions.sql` makes the extensions `hstore`, `ltree`, `citext` and `vector`.
 
 - `postgres`, on port 5436, with SSL off. Most tests use it. To use another server, set `DREAM_POSTGRES_TEST_URL` to its URL.
 - `postgres-ssl`, on port 5437, with SSL on. The SSL tests (`test/postgres_ssl_test.gleam`) use it. Its certificate and the test CA that signed it are in `test/fixtures/ssl`, which also says how they were made. They are for the tests only. The certificate names only `localhost`, so the tests connect to `localhost` for a matching host name and to `127.0.0.1` for one that does not match.
+- `postgres-17`, `postgres-18` and `postgres-19`, on ports 5438, 5439 and 5440, for the type proof. Give the proof the URLs of all four versions in `DREAM_POSTGRES_PROOF_URLS`, divided by commas, as CI does.
+- `driver-16`, `driver-17`, `driver-18` and `driver-19`, on ports 5441, 5442, 5443 and 5444, for the driver tests (`test/driver`), which run on all four. Each has SSL on with the certificate of `test/fixtures/ssl`. `test/docker/driver_pg_hba.conf` gives each database user its own login method: `dream` uses SCRAM-SHA-256, `dream_trust` needs no password, `dream_cleartext` sends a cleartext password, `dream_md5` uses MD5, and `dream_tls` uses SCRAM-SHA-256 over TLS only. `test/docker/driver_users.sql` makes these users, all with the password `dream`.
 
 When a server does not answer, `make test` stops at once with a message that says so. The SSL tests change the CA list of the whole BEAM, so they run one at a time, after the other tests.
 
@@ -37,10 +39,10 @@ When a server does not answer, `make test` stops at once with a message that say
 
 2. **Run tests:**
    ```bash
-   make db-up               # Start the two test PostgreSQL servers
+   make db-up               # Start the test PostgreSQL servers
    make test                # All tests, with line coverage
    make check               # Format check, build, tests and docs build
-   make db-down             # Stop the two test PostgreSQL servers
+   make db-down             # Stop the test PostgreSQL servers
    ```
 
 3. **Make your changes:**

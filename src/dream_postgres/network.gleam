@@ -1,0 +1,281 @@
+//// The Gleam values of PostgreSQL's network types: `inet`, `cidr`,
+//// `macaddr` and `macaddr8`.
+
+import gleam/int
+import gleam/list
+import gleam/result
+import gleam/string
+
+/// An IP address. Each part of `Ipv4` is from 0 to 255, and each part of
+/// `Ipv6` is from 0 to 65535.
+pub type IpAddress {
+  Ipv4(Int, Int, Int, Int)
+  Ipv6(Int, Int, Int, Int, Int, Int, Int, Int)
+}
+
+/// An `inet` or a `cidr` value: an address and the length of its network
+/// prefix. A plain address has the full length, 32 or 128.
+pub type IpNetwork {
+  IpNetwork(address: IpAddress, prefix_length: Int)
+}
+
+/// A text that is not an IP address or network.
+pub type NotAnIpNetwork {
+  NotAnIpNetwork(text: String)
+}
+
+/// A MAC address of 6 bytes (`macaddr`) or 8 bytes (`macaddr8`). The type
+/// is opaque, so each byte is always from 0 to 255.
+pub opaque type MacAddress {
+  MacAddress6(Int, Int, Int, Int, Int, Int)
+  MacAddress8(Int, Int, Int, Int, Int, Int, Int, Int)
+}
+
+/// The MAC address 00:00:00:00:00:00, the placeholder of the MAC address
+/// codec.
+@internal
+pub const placeholder_mac_address = MacAddress6(0, 0, 0, 0, 0, 0)
+
+/// A value that is not a MAC address.
+pub type NotAMacAddress {
+  NotAMacAddress
+}
+
+/// Whether each part of a network is in range: the address parts, and a
+/// prefix length of at most 32 (IPv4) or 128 (IPv6).
+pub fn is_valid(network: IpNetwork) -> Bool {
+  valid_ip_network(network)
+}
+
+/// The network of a text such as `10.0.0.0/8`, `::1` or `192.168.0.1`.
+pub fn ip_network_from_string(
+  text: String,
+) -> Result(IpNetwork, NotAnIpNetwork) {
+  parse_network(text) |> result.replace_error(NotAnIpNetwork(text))
+}
+
+// PostgreSQL's inet takes no zone index (`fe80::1%eth0`), and OTP's
+// parser does, so a `%` is refused here.
+fn parse_network(text: String) -> Result(IpNetwork, Nil) {
+  case string.contains(text, "%") {
+    True -> Error(Nil)
+    False -> parse_network_text(text)
+  }
+}
+
+fn parse_network_text(text: String) -> Result(IpNetwork, Nil) {
+  case string.split_once(text, "/") {
+    Ok(#(address_text, length_text)) -> {
+      use address <- result.try(parse_address(address_text))
+      use length <- result.try(int.parse(length_text))
+      let network = IpNetwork(address: address, prefix_length: length)
+      case int.to_string(length) == length_text && valid_ip_network(network) {
+        True -> Ok(network)
+        False -> Error(Nil)
+      }
+    }
+    Error(Nil) ->
+      parse_address(text)
+      |> result.map(fn(address) {
+        IpNetwork(address: address, prefix_length: full_prefix_length(address))
+      })
+  }
+}
+
+@external(erlang, "dream_postgres_network_ffi", "parse_address")
+fn parse_address(text: String) -> Result(IpAddress, Nil)
+
+/// The text of a network, as PostgreSQL writes an `inet` value: the
+/// address alone when the prefix is the full length.
+pub fn ip_network_to_string(value: IpNetwork) -> String {
+  let address = ip_address_text(value.address)
+  case value.prefix_length == full_prefix_length(value.address) {
+    True -> address
+    False -> address <> "/" <> int.to_string(value.prefix_length)
+  }
+}
+
+/// The length of a full prefix: 32 for IPv4, 128 for IPv6.
+pub fn full_prefix_length(address: IpAddress) -> Int {
+  case address {
+    Ipv4(..) -> 32
+    Ipv6(..) -> 128
+  }
+}
+
+fn valid_ip_network(value: IpNetwork) -> Bool {
+  case value.address {
+    Ipv4(a, b, c, d) ->
+      list.all([a, b, c, d], in_range(_, 0, 255))
+      && in_range(value.prefix_length, 0, 32)
+    Ipv6(a, b, c, d, e, f, g, h) ->
+      list.all([a, b, c, d, e, f, g, h], in_range(_, 0, 65_535))
+      && in_range(value.prefix_length, 0, 128)
+  }
+}
+
+fn in_range(value: Int, lowest: Int, highest: Int) -> Bool {
+  value >= lowest && value <= highest
+}
+
+fn ip_address_text(address: IpAddress) -> String {
+  case address {
+    Ipv4(a, b, c, d) -> string.join(list.map([a, b, c, d], int.to_string), ".")
+    Ipv6(a, b, c, d, e, f, g, h) -> ipv6_text([a, b, c, d, e, f, g, h])
+  }
+}
+
+// The text that PostgreSQL gives for an IPv6 address. The longest run of
+// two or more zero parts, the first one of two runs of the same length,
+// becomes `::`. When the run is the first 6 parts, or the first 5 parts
+// before a part `ffff`, the last 2 parts are an IPv4 address.
+fn ipv6_text(parts: List(Int)) -> String {
+  let #(start, length) = longest_zero_run(parts, 0, #(0, 0), #(0, 0))
+  let ipv4_end =
+    start == 0
+    && {
+      length == 6
+      || { length == 5 && list.drop(parts, 5) |> list.first == Ok(0xffff) }
+    }
+  let text = ipv6_parts_text(parts, 0, start, length, ipv4_end, "")
+  case length > 0 && start + length == 8 {
+    True -> text <> ":"
+    False -> text
+  }
+}
+
+// The start and the length of the longest run of zero parts, from `index`
+// on. `best` and `current` are the runs that the parts before gave. A run
+// of 1 part does not count.
+fn longest_zero_run(
+  parts: List(Int),
+  index: Int,
+  best: #(Int, Int),
+  current: #(Int, Int),
+) -> #(Int, Int) {
+  case parts {
+    [] -> {
+      let best = longer_run(best, current)
+      case best.1 >= 2 {
+        True -> best
+        False -> #(0, 0)
+      }
+    }
+    [0, ..rest] -> {
+      let current = case current.1 {
+        0 -> #(index, 1)
+        length -> #(current.0, length + 1)
+      }
+      longest_zero_run(rest, index + 1, best, current)
+    }
+    [_, ..rest] ->
+      longest_zero_run(rest, index + 1, longer_run(best, current), #(0, 0))
+  }
+}
+
+fn longer_run(best: #(Int, Int), current: #(Int, Int)) -> #(Int, Int) {
+  case current.1 > best.1 {
+    True -> current
+    False -> best
+  }
+}
+
+fn ipv6_parts_text(
+  parts: List(Int),
+  index: Int,
+  start: Int,
+  length: Int,
+  ipv4_end: Bool,
+  text: String,
+) -> String {
+  case parts {
+    [] -> text
+    [_, ..rest] if index >= start && index < start + length -> {
+      let text = case index == start {
+        True -> text <> ":"
+        False -> text
+      }
+      ipv6_parts_text(rest, index + 1, start, length, ipv4_end, text)
+    }
+    [high, low] if index == 6 && ipv4_end ->
+      text
+      <> ":"
+      <> string.join(
+        list.map([high / 256, high % 256, low / 256, low % 256], int.to_string),
+        ".",
+      )
+    [part, ..rest] -> {
+      let separator = case index {
+        0 -> ""
+        _ -> ":"
+      }
+      let text = text <> separator <> string.lowercase(int.to_base16(part))
+      ipv6_parts_text(rest, index + 1, start, length, ipv4_end, text)
+    }
+  }
+}
+
+/// The MAC address of 6 or 8 bytes.
+pub fn mac_address_from_bit_array(
+  bytes: BitArray,
+) -> Result(MacAddress, NotAMacAddress) {
+  case bytes {
+    <<a, b, c, d, e, f>> -> Ok(MacAddress6(a, b, c, d, e, f))
+    <<a, b, c, d, e, f, g, h>> -> Ok(MacAddress8(a, b, c, d, e, f, g, h))
+    _ -> Error(NotAMacAddress)
+  }
+}
+
+/// The 6 or 8 bytes of a MAC address.
+pub fn mac_address_to_bit_array(value: MacAddress) -> BitArray {
+  case value {
+    MacAddress6(a, b, c, d, e, f) -> <<a, b, c, d, e, f>>
+    MacAddress8(a, b, c, d, e, f, g, h) -> <<a, b, c, d, e, f, g, h>>
+  }
+}
+
+/// The MAC address of a text such as `08:00:2b:01:02:03` or
+/// `08-00-2b-01-02-03-04-05`.
+pub fn mac_address_from_string(
+  text: String,
+) -> Result(MacAddress, NotAMacAddress) {
+  let separator = case string.contains(text, "-") {
+    True -> "-"
+    False -> ":"
+  }
+  string.split(text, separator)
+  |> list.try_map(hex_byte)
+  |> result.replace_error(NotAMacAddress)
+  |> result.try(fn(bytes) {
+    list.fold(bytes, <<>>, fn(all, byte) { <<all:bits, byte>> })
+    |> mac_address_from_bit_array
+  })
+}
+
+fn hex_byte(text: String) -> Result(Int, Nil) {
+  use byte <- result.try(int.base_parse(text, 16))
+  case string.lowercase(text) == hex_text(byte) {
+    True -> Ok(byte)
+    False -> Error(Nil)
+  }
+}
+
+fn hex_text(byte: Int) -> String {
+  int.to_base16(byte)
+  |> string.lowercase
+  |> string.pad_start(to: 2, with: "0")
+}
+
+/// The text of a MAC address, as PostgreSQL writes it: `08:00:2b:01:02:03`.
+pub fn mac_address_to_string(value: MacAddress) -> String {
+  bytes_of(mac_address_to_bit_array(value))
+  |> list.map(hex_text)
+  |> string.join(":")
+}
+
+fn bytes_of(bytes: BitArray) -> List(Int) {
+  case bytes {
+    <<byte, rest:bytes>> -> [byte, ..bytes_of(rest)]
+    _ -> []
+  }
+}

@@ -1,97 +1,97 @@
-import architecture_snippets_test
-import client_test
-import deployment_guide_snippets_test
-import dream_test/coverage
-import dream_test/parallel
+import dream_postgres/advanced_guide_snippets_test
+import dream_postgres/client_test
+import dream_postgres/codec_parity_test
+import dream_postgres/codec_probe_test
+import dream_postgres/codec_test
+import dream_postgres/composite_codecs_test
+import dream_postgres/copy_stream_test
+import dream_postgres/copy_test
+import dream_postgres/database_url_test
+import dream_postgres/driver_executor_test
+import dream_postgres/error_test
+import dream_postgres/geometry_range_codecs_test
+import dream_postgres/guide_snippets_test
+import dream_postgres/interceptor_test
+import dream_postgres/json_test
+import dream_postgres/listener_test
+import dream_postgres/match_test
+import dream_postgres/network_codecs_test
+import dream_postgres/normalize_test
+import dream_postgres/numeric_codec_test
+import dream_postgres/pool_options_test
+import dream_postgres/posix_test
+import dream_postgres/query_test
+import dream_postgres/reconnect_test
+import dream_postgres/recorder_test
+import dream_postgres/recording_test
+import dream_postgres/row_reader_test
+import dream_postgres/runner_test
+import dream_postgres/secrets_test
+import dream_postgres/sql_state_test
+import dream_postgres/supervision_test
+import dream_postgres/text_search_vector_codecs_test
+import dream_postgres/time_codecs_test
+import dream_postgres/verify_test
+import dream_test/coverage.{json_path, minimum_percent, show_missing}
 import dream_test/reporters/bdd
 import dream_test/reporters/progress
-import dream_test/runner
-import fixtures/ssl_database
-import fixtures/test_database
-import gleam/io
-import gleam/result
-import guide_connecting_test
-import guide_getting_started_test
-import guide_queries_test
-import guide_recording_test
-import hexdocs_snippets_test
-import learn_building_api_snippets_test
-import postgres_server_test
-import postgres_ssl_test
-import query_test
-import readme_snippets_test
-import recorder_playback_test
-import recorder_snippets_test
-import recorder_test
-import recorder_types_test
-import snippets/guide_connecting_testing
-import snippets/guide_getting_started_testing
-import snippets/guide_queries_testing
-import snippets/guide_recording_testing
+import dream_test/runner.{exit_on_failure, progress_reporter, results_reporters}
+import driver/driver_test_main
 
-@external(erlang, "database_ffi", "halt")
-fn halt(status: Int) -> Nil
-
-@external(erlang, "database_ffi", "drop_pool_shutdown_reports")
-fn drop_pool_shutdown_reports() -> Nil
-
-// Many tests run queries on the two real PostgreSQL servers of
-// docker-compose.yml. When one does not answer, the run stops here with
-// one message, not with a failure in each of those tests.
 pub fn main() {
-  drop_pool_shutdown_reports()
-  ssl_database.drop_tls_alert_reports()
-  let reachable = {
-    use Nil <- result.try(test_database.check_reachable())
-    ssl_database.check_reachable()
-  }
-  case reachable {
-    Ok(Nil) -> run_tests()
-    Error(message) -> {
-      io.println_error(message)
-      halt(1)
-    }
-  }
-}
-
-fn run_tests() -> Nil {
   runner.new([
-    client_test.tests(),
+    sql_state_test.tests(),
+    posix_test.tests(),
+    error_test.tests(),
+    codec_test.tests(),
+    codec_parity_test.tests(),
+    numeric_codec_test.tests(),
+    json_test.tests(),
+    time_codecs_test.tests(),
+    network_codecs_test.tests(),
+    geometry_range_codecs_test.tests(),
+    text_search_vector_codecs_test.tests(),
+    row_reader_test.tests(),
     query_test.tests(),
-    hexdocs_snippets_test.tests(),
-    readme_snippets_test.tests(),
-    architecture_snippets_test.tests(),
-    deployment_guide_snippets_test.tests(),
-    learn_building_api_snippets_test.tests(),
-    guide_getting_started_test.tests(),
-    guide_getting_started_testing.tests(),
-    guide_connecting_test.tests(),
-    guide_connecting_testing.tests(),
-    guide_queries_test.tests(),
-    guide_queries_testing.tests(),
-    postgres_server_test.tests(),
-    recorder_types_test.tests(),
+    database_url_test.tests(),
+    composite_codecs_test.tests(),
+    runner_test.tests(),
+    supervision_test.tests(),
+    reconnect_test.tests(),
+    codec_probe_test.tests(),
+    driver_executor_test.mapping_tests(),
+    driver_executor_test.tests(),
+    client_test.unit_tests(),
+    client_test.tests(),
+    interceptor_test.unit_tests(),
+    interceptor_test.tests(),
+    copy_stream_test.tests(),
+    copy_test.tests(),
+    recording_test.tests(),
+    secrets_test.unit_tests(),
+    secrets_test.tests(),
+    match_test.tests(),
+    normalize_test.tests(),
     recorder_test.tests(),
-    recorder_playback_test.tests(),
-    recorder_snippets_test.tests(),
-    guide_recording_test.tests(),
-    guide_recording_testing.tests(),
+    pool_options_test.unit_tests(),
+    pool_options_test.tests(),
+    listener_test.mapping_tests(),
+    listener_test.tests(),
+    verify_test.unit_tests(),
+    verify_test.tests(),
+    guide_snippets_test.tests(),
+    advanced_guide_snippets_test.unit_tests(),
+    advanced_guide_snippets_test.tests(),
+    ..driver_test_main.suites()
   ])
-  // The SSL tests change the CA list of the whole BEAM, so they run one at
-  // a time, after the other suites.
-  |> runner.add_suites_with_config(
-    parallel.ParallelConfig(max_concurrency: 1, default_timeout_ms: 30_000),
-    [postgres_ssl_test.tests()],
-  )
-  |> runner.progress_reporter(progress.new())
-  |> runner.results_reporters([bdd.new()])
+  |> progress_reporter(progress.new())
+  |> results_reporters([bdd.new()])
   |> runner.coverage(
     coverage.new()
-    |> coverage.show_missing()
-    |> coverage.minimum_percent(100.0)
-    |> coverage.json_path("build/coverage/coverage.json"),
+    |> show_missing()
+    |> minimum_percent(100.0)
+    |> json_path("build/coverage/coverage.json"),
   )
-  |> runner.exit_on_failure()
+  |> exit_on_failure()
   |> runner.run()
-  Nil
 }

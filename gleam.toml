@@ -1,8 +1,11 @@
 name = "dream_postgres"
-version = "2.0.0"
-description = "PostgreSQL utilities for Gleam with type-safe query helpers"
+version = "3.0.0"
+description = "A PostgreSQL client for Gleam, with queries that are checked against the database before they run"
 licences = ["MIT"]
 repository = { type = "github", user = "TrustBound", repo = "dream_postgres" }
+# The modules that are not part of the public API: the shared internal
+# types and the driver.
+internal_modules = ["dream_postgres/internal/*", "dream_postgres/driver/*"]
 links = [
     { title = "Documentation", href = "https://hexdocs.pm/dream_postgres" },
     { title = "GitHub", href = "https://github.com/TrustBound/dream_postgres" },
@@ -11,25 +14,46 @@ links = [
 [documentation]
 pages = [
     { title = "Getting started", path = "guides/getting-started.html", source = "./docs/guides/getting-started.md" },
-    { title = "Connecting to PostgreSQL in production", path = "guides/connecting.html", source = "./docs/guides/connecting.md" },
-    { title = "Running queries and handling their results", path = "guides/queries.html", source = "./docs/guides/queries.md" },
+    { title = "Connecting to PostgreSQL", path = "guides/connecting.html", source = "./docs/guides/connecting.md" },
+    { title = "Pool tuning", path = "guides/pool-tuning.html", source = "./docs/guides/pool-tuning.md" },
+    { title = "Queries", path = "guides/queries.html", source = "./docs/guides/queries.md" },
+    { title = "Transactions", path = "guides/transactions.html", source = "./docs/guides/transactions.md" },
+    { title = "Codecs", path = "guides/codecs.html", source = "./docs/guides/codecs.md" },
+    { title = "Load and export rows with COPY", path = "guides/copy.html", source = "./docs/guides/copy.md" },
+    { title = "Listen for notifications", path = "guides/listen-notify.html", source = "./docs/guides/listen-notify.md" },
+    { title = "Interceptors", path = "guides/interceptors.html", source = "./docs/guides/interceptors.md" },
     { title = "Test database code with recorded queries", path = "guides/recorded-queries.html", source = "./docs/guides/recorded-queries.md" },
+    { title = "Check the queries at boot", path = "guides/boot-check.html", source = "./docs/guides/boot-check.md" },
+    { title = "Trace queries with OpenTelemetry", path = "guides/tracing.html", source = "./docs/guides/tracing.md" },
+    { title = "Upgrading to 3.0", path = "guides/upgrading-to-3.html", source = "./docs/guides/upgrading-to-3.md" },
 ]
 
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
-gleam_erlang = ">= 0.30.0 and < 2.0.0"
+gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
-dream_postgres_client = ">= 1.0.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
+gleam_time = ">= 1.0.0 and < 2.0.0"
+opentelemetry_api = ">= 1.5.0 and < 2.0.0"
+# Not on Hex yet. A path dependency for development only: the release
+# (SVC-835) needs both on Hex first, and no published package may have a
+# path or git dependency.
+dream_errors = { path = "../dream_errors-retry" }
+dream_uuid = { path = "../dream_uuid" }
 
 [dev-dependencies]
 dream_test = ">= 3.0.0 and < 4.0.0"
 dream_snippets = ">= 1.0.0 and < 2.0.0"
+simplifile = ">= 2.3.0 and < 3.0.0"
 
 [tools.dream_snippets]
 # Changelog sections and release notes before this version are history. They are not checked.
-checked_from_version = "2.0.0"
+checked_from_version = "3.0.0"
 # The files that the tests or CI use. A file, command or output block of the
 # docs must copy one of them.
 tested_files = ["test", ".github", "scripts", "gleam.toml", "docker-compose.yml"]
+
+[erlang]
+# The driver uses TLS (ssl), reads certificates (public_key) and computes
+# SCRAM and MD5 logins (crypto).
+extra_applications = ["crypto", "public_key", "ssl"]

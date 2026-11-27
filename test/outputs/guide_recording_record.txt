@@ -1,2 +1,0 @@
-run_recorded(recorder.Record, database_url, "test/fixtures/recordings")
-  -> Ok(User(1, "Ada", "ada@example.com"))

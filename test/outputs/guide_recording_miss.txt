@@ -1,2 +1,0 @@
-find_user(db, 2) |> result.map_error(recorder.error)
-  -> Error(Ok(NoRecording("SELECT id, name, email FROM users WHERE id = $1", "[2]", "test/fixtures/recordings/create_and_find.json", [NearestRecording(2, "[1]", "[2]")])))

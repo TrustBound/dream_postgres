@@ -1,1545 +1,1209 @@
-//// Record the queries of a test against a real database, then play them
-//// back with no database.
+//// Record the queries of a test in one run, and play them back in the
+//// next run with no database.
 ////
-//// A recorder keeps the queries of one test in one file,
-//// `<directory>/<name>.json`, in the order they ran. It runs in one of
-//// three modes, the constructors of `Mode`:
-////
-//// - `Record`: each query runs on the real database, and the recorder
-////   writes the query, its parameters and its result (the rows and the
-////   count, or the error) to the file before the query returns. A query
-////   that the recorder cannot record fails.
-//// - `Playback`: no pool starts and nothing connects. Each query gets the
-////   result of its recording. A query with no recording fails, and never
-////   reaches a database.
-//// - `Passthrough`: each query runs on the real database, and nothing is
-////   recorded.
-////
-//// A query that the recorder fails returns
-//// `dream_postgres_client.InterceptorFailed`, and `error` reads the
-//// `RecorderError` back from it.
-////
-//// `recording` documents the file format.
-////
-//// ## Example
-////
-//// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+//// ### Record a test, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
-//// import dream_postgres/recorder
-//// import dream_postgres_client
-//// import gleam/result
-//// import gleam/string
-//// import snippets/guide_recording_setup.{connect, start_recorder}
-//// import snippets/guide_recording_users.{type User, create_user, find_user}
-////
-//// pub fn create_and_find(
-////   db: dream_postgres_client.Connection,
-//// ) -> Result(User, dream_postgres_client.QueryError) {
-////   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
-////   find_user(db, id)
+//// import dream_errors.{type Error}
+//// import dream_postgres.{type PostgresError}
+//// import dream_postgres/recorder.{
+////   type Mode, type Recorder, intercept, match_on, mode, new, start,
 //// }
+//// import dream_postgres/recorder/match.{sql_and_parameters}
+//// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ////
-//// pub fn run_recorded(
-////   mode: recorder.Mode,
-////   database_url: String,
-////   directory: String,
-//// ) -> Result(User, String) {
-////   use recording <- result.try(start_recorder(mode, directory, "create_and_find"))
-////   use db <- result.try(connect(recording, database_url))
-////   let user = create_and_find(db) |> result.map_error(string.inspect)
-////   // In record mode, each query was on disk when it returned
-////   use Nil <- result.try(recorder.stop(recording))
-////   user
+//// /// Starts the recorder of the test that creates an API key. The test
+//// /// gives the mode, which it reads from its own config.
+//// pub fn start_api_key_recorder(
+////   recorder_mode: Mode,
+//// ) -> Result(Recorder, Error(PostgresError)) {
+////   new(file: "test/recordings/api_key_create.json")
+////   |> mode(recorder_mode)
+////   |> match_on(sql_and_parameters)
+////   |> intercept(generated_uuids(keep: []))
+////   |> intercept(timestamps_near_now(window_days: 400))
+////   |> start
 //// }
 //// ```
+////
+//// Attach the started recorder to the config of the app with
+//// `dream_postgres.record`, and start the connection as the app does. In
+//// `Record` mode the connection is a live pool, and the recorder saves
+//// each request and the answer of PostgreSQL before the answer returns.
+//// In `Playback` mode nothing connects: after the interceptors of the
+//// config, the recording answers each request. The code under test is the
+//// same in both modes, and the recorded cells go through the same codecs
+//// and the same checks as live ones.
+////
+//// Playback follows the recorded order. The key of each request, from
+//// `match_on`, must be the key of the next recorded request, else the
+//// request fails with `RequestNotMatched`, which names both SQL texts. A
+//// request after the last recorded one fails with `RequestNotRecorded`.
+////
+//// The interceptors of `intercept` change only the copy that the
+//// recorder keeps: in `Record` mode what it saves, and in `Playback` mode
+//// the request before its key is made. The secrets of the config apply
+//// to the copy first. The app always gets the real answer in `Record`
+//// mode, and the saved answer in `Playback` mode.
 
-import dream_postgres/client as postgres
-import dream_postgres/recording.{
-  type RecordedQuery, type RecordedResult, type RecordedValue, type Recording,
-  Failed, RecordedQuery, Recording, Returned,
+import dream_errors.{type Error}
+import dream_postgres/error.{
+  type PostgresError, type Reason, type ServerError, PostgresError,
+  RecorderNotStarted, RecorderStopped, RecordingInUse, RecordingNotDecoded,
+  RecordingNotFound, RecordingNotRead, RecordingNotWritten, RequestNotMatched,
+  RequestNotRecorded,
 }
-import dream_postgres_client
-import gleam/dynamic.{type Dynamic}
-import gleam/dynamic/decode
-import gleam/erlang/atom
-import gleam/erlang/process.{type Pid, type Subject}
+import dream_postgres/interceptor.{
+  type Interceptor, type Outcome, type Request, CopyFrom, CopyFromAnswer, CopyTo,
+  CopyToAnswer, Request, Script, ScriptAnswer, Statement, StatementAnswer,
+}
+import dream_postgres/internal/cell.{
+  type Cell, type StatementDescription, type TypeDescription, CommandResult,
+}
+import dream_postgres/internal/copy
+import dream_postgres/internal/copy_request.{
+  type RowFeed, type RowWatcher, CopyRows, RecordedRows, RowWatcher,
+}
+import dream_postgres/internal/query.{
+  type Value, type WriteEvent, SecretWritten, TypeChecked, TypeLookedUp, Written,
+}
+import dream_postgres/internal/replay.{type Replay, Replay}
+import dream_postgres/internal/runner
+import dream_postgres/posix.{type Posix}
+import dream_postgres/recorder/match
+import dream_postgres/recording.{
+  type RecordedEntry, type RecordedFailure, type RecordedRequest,
+  type WrittenParameter, type WrittenParameters, type WrittenRows,
+  RecordedCopyFrom, RecordedCopyTo, RecordedEntry, RecordedScript,
+  RecordedStatement, RecordedStream, Recording, SecretCell, StatementReply,
+  WrittenParameters, WrittenRows,
+}
+import dream_postgres/secrets.{type Secrets}
+import gleam/dict
+import gleam/erlang/process.{type Down, type Pid, type Subject}
 import gleam/int
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/order
 import gleam/otp/actor
 import gleam/result
-import gleam/string
 
-/// Why the recorder failed a query.
-///
-/// The query returns `dream_postgres_client.InterceptorFailed`, and `error`
-/// reads the `RecorderError` back from it.
-///
-/// - `NoRecording`: in playback mode, no recording in the file at `path`
-///   matches the query. `parameters` is the text of the parameters, as
-///   `recording.values_to_json` writes them. `sql` and `parameters` are
-///   those after the query transformer. `nearest` holds at most 3
-///   recordings of the same SQL, nearest first: see `NearestRecording`.
-/// - `PlayedAlready`: in playback mode, each recording in the file at
-///   `path` that matches the query was played already.
-/// - `WriteFailed`: in record mode, the recorder could not write the file
-///   at `path`. `reason` is the error of the file system, such as
-///   `permission denied`. The query ran on the database.
-/// - `NotRecordable`: a parameter or a value of the result of the query is
-///   a term that a recording cannot hold, such as a process.
-/// - `RecorderStopped`: the recorder had stopped already, so it could not
-///   record or play the query.
-pub type RecorderError {
-  NoRecording(
-    sql: String,
-    parameters: String,
-    path: String,
-    nearest: List(NearestRecording),
-  )
-  PlayedAlready(sql: String, parameters: String, path: String)
-  WriteFailed(path: String, reason: String)
-  NotRecordable(sql: String, reason: String)
-  RecorderStopped(sql: String)
-}
-
-/// A recording near a query that no recording matches.
-///
-/// - `position`: the place of the recording in the file, 1 for the first.
-/// - `recorded`: the parameters of the recording, as
-///   `recording.values_to_json` writes them.
-/// - `requested`: the parameters of the query, after the query transformer.
-///
-/// A candidate is a recording that the key would match if the query had
-/// the recording's parameters: so with `sql_and_parameters` it has the same
-/// SQL, and with `normalized_sql_and_parameters` the same SQL apart from
-/// whitespace. The SQL is the same, so the parameters are the part that
-/// differs. The nearest candidates have the fewest parameters that differ,
-/// where each value that one list has and the other has not counts too.
-/// Candidates with the same count are in file order. A recording with the
-/// same parameters as a nearer one is left out. A miss names at most 3.
-pub type NearestRecording {
-  NearestRecording(position: Int, recorded: String, requested: String)
-}
-
-// The reason that the recorder gives to
-// `dream_postgres_client.InterceptorFailed`. The tag keeps it apart from the
-// reason of any other interceptor.
-type Failure {
-  DreamPostgresRecorderError(error: RecorderError)
-}
-
-/// Gives the text that two queries must share to match.
-///
-/// In playback mode, a query gets the result of the first recording that
-/// it was not given yet whose key is the same as its own. Use
-/// `sql_and_parameters` (the default), `normalized_sql_and_parameters`,
-/// `sql_only`, or your own function.
-pub type MatchKey =
-  fn(RecordedQuery) -> String
-
-/// Changes a query before the recorder computes its key, and before it
-/// writes the query to the file, in both record and playback mode.
-///
-/// Use it to remove a secret from the parameters: the file then never
-/// holds the secret, and a query with the secret still matches its
-/// recording.
-pub type QueryTransformer =
-  fn(RecordedQuery) -> RecordedQuery
-
-/// Changes a result before the recorder writes it to the file, in record
-/// mode only. The query is the one that `QueryTransformer` gave.
-///
-/// Use it to remove a secret from the rows. Playback then gives the rows
-/// without the secret.
-pub type ResultTransformer =
-  fn(RecordedQuery, RecordedResult) -> RecordedResult
-
-/// What a recorder does with each query.
-///
-/// - `Record`: the query runs on the real database, and the recorder writes
-///   it and its result to the file before the query returns.
-/// - `Playback`: nothing connects, and the query gets the result of its
-///   recording.
-/// - `Passthrough`: the query runs on the real database, and nothing is
-///   recorded.
-///
-/// Set it with `mode`. For a mode in a text, for example from an
-/// environment variable, use `parse_mode`.
+/// What a recorder does with the requests of its connection.
 pub type Mode {
+  /// Each request runs on the database, and the recorder saves it and its
+  /// answer to the recording file before the answer returns. The file is
+  /// new for each run.
   Record
+  /// Nothing connects: the recording answers each request. A missing file
+  /// fails `start` with `RecordingNotFound`.
   Playback
+  /// `Playback` when the recording file exists, else `Record`.
+  RecordMissing
+  /// Each request runs on the database, and nothing is saved or read.
   Passthrough
 }
 
 /// The settings of a recorder, before it starts.
-///
-/// Make one with `new`, change it with `directory`, `name`, `mode`, `key`,
-/// `query_transformer` and `result_transformer`, then start it with
-/// `start`.
 pub opaque type RecorderBuilder {
   RecorderBuilder(
+    path: String,
     mode: Mode,
-    directory: Option(String),
-    name: Option(String),
-    key: MatchKey,
-    query_transformer: QueryTransformer,
-    result_transformer: ResultTransformer,
+    key: fn(Request) -> String,
+    interceptors: List(Interceptor),
   )
 }
 
-/// A recorder that runs. Give it to `connect`, and stop it with `stop`.
+/// A started recorder. Attach it to a config with `dream_postgres.record`.
+/// It stops with `dream_postgres.stop` of its connection, or when the
+/// process that started it ends.
 pub opaque type Recorder {
-  RecordMode(server: Server(RecordMessage), settings: Settings)
-  PlaybackMode(server: Server(PlaybackMessage), settings: Settings)
-  PassthroughMode
+  Recorder(session: Session, subject: Subject(Message), pid: Pid)
 }
 
-type Server(message) {
-  Server(pid: Pid, subject: Subject(message))
+/// What a started recorder does: its mode, with `RecordMissing` decided.
+type Session {
+  Saving
+  PlayingBack
+  PassingThrough
 }
 
-type Settings {
-  Settings(
-    key: MatchKey,
-    query_transformer: QueryTransformer,
-    result_transformer: ResultTransformer,
-  )
+/// How `dream_postgres.start` uses a recorder.
+@internal
+pub type Attachment {
+  /// A pool, with this interceptor after all other interceptors.
+  RecordingPool(interceptor: Interceptor)
+  /// A pool with no interceptor of the recorder.
+  PlainPool
+  /// No pool: the replay answers each request. `recorder` is the
+  /// recorder to stop with the connection.
+  NoPool(replay: Replay, recorder: Recorder)
 }
 
-/// Make the settings of a recorder.
+/// A recorder of the recording file at `path`, in `Playback` mode, with
+/// the key `match.sql_and_parameters` and no interceptor.
 ///
-/// The defaults: mode `Passthrough`, no directory, no name, the key
-/// `sql_and_parameters`, and transformers that change nothing.
-///
-/// ## Example
-///
-/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start the recorder of one test <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import dream_postgres/recorder
-/// import dream_postgres_client
-/// import gleam/erlang/process
-/// import gleam/result
-/// import gleam/string
-///
-/// pub fn start_recorder(
-///   mode: recorder.Mode,
-///   directory: String,
-///   test_name: String,
-/// ) -> Result(recorder.Recorder, String) {
-///   recorder.new()
-///   |> recorder.directory(directory)
-///   |> recorder.name(test_name)
-///   |> recorder.mode(mode)
-///   |> recorder.start()
+/// import dream_errors.{type Error}
+/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/recorder.{
+///   type Mode, type Recorder, intercept, match_on, mode, new, start,
 /// }
+/// import dream_postgres/recorder/match.{sql_and_parameters}
+/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
-/// /// In playback mode, nothing connects to `database_url`.
-/// pub fn connect(
-///   recording: recorder.Recorder,
-///   database_url: String,
-/// ) -> Result(dream_postgres_client.Connection, String) {
-///   use config <- result.try(
-///     postgres.parse_config(process.new_name("test_database"), database_url)
-///     |> result.map_error(string.inspect),
-///   )
-///   recorder.connect(recording, config)
-///   |> result.map_error(string.inspect)
+/// /// Starts the recorder of the test that creates an API key. The test
+/// /// gives the mode, which it reads from its own config.
+/// pub fn start_api_key_recorder(
+///   recorder_mode: Mode,
+/// ) -> Result(Recorder, Error(PostgresError)) {
+///   new(file: "test/recordings/api_key_create.json")
+///   |> mode(recorder_mode)
+///   |> match_on(sql_and_parameters)
+///   |> intercept(generated_uuids(keep: []))
+///   |> intercept(timestamps_near_now(window_days: 400))
+///   |> start
 /// }
 /// ```
-pub fn new() -> RecorderBuilder {
+pub fn new(file path: String) -> RecorderBuilder {
   RecorderBuilder(
-    mode: Passthrough,
-    directory: None,
-    name: None,
-    key: sql_and_parameters,
-    query_transformer: keep_query,
-    result_transformer: keep_result,
+    path:,
+    mode: Playback,
+    key: match.sql_and_parameters,
+    interceptors: [],
   )
 }
 
-fn keep_query(query: RecordedQuery) -> RecordedQuery {
-  query
-}
-
-fn keep_result(
-  _query: RecordedQuery,
-  result: RecordedResult,
-) -> RecordedResult {
-  result
-}
-
-/// Set the directory of the recording files. Record and playback mode need
-/// it. Record mode makes it when it does not exist.
+/// Sets the mode.
 ///
-/// ## Example
-///
-/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start the recorder of one test <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/client as postgres
-/// import dream_postgres/recorder
-/// import dream_postgres_client
-/// import gleam/erlang/process
-/// import gleam/result
-/// import gleam/string
-///
-/// pub fn start_recorder(
-///   mode: recorder.Mode,
-///   directory: String,
-///   test_name: String,
-/// ) -> Result(recorder.Recorder, String) {
-///   recorder.new()
-///   |> recorder.directory(directory)
-///   |> recorder.name(test_name)
-///   |> recorder.mode(mode)
-///   |> recorder.start()
+/// import dream_errors.{type Error}
+/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/recorder.{
+///   type Mode, type Recorder, intercept, match_on, mode, new, start,
 /// }
+/// import dream_postgres/recorder/match.{sql_and_parameters}
+/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
-/// /// In playback mode, nothing connects to `database_url`.
-/// pub fn connect(
-///   recording: recorder.Recorder,
-///   database_url: String,
-/// ) -> Result(dream_postgres_client.Connection, String) {
-///   use config <- result.try(
-///     postgres.parse_config(process.new_name("test_database"), database_url)
-///     |> result.map_error(string.inspect),
-///   )
-///   recorder.connect(recording, config)
-///   |> result.map_error(string.inspect)
-/// }
-/// ```
-pub fn directory(
-  builder: RecorderBuilder,
-  directory: String,
-) -> RecorderBuilder {
-  RecorderBuilder(..builder, directory: Some(directory))
-}
-
-/// Set the name of the recording, usually the name of the test. The file is
-/// `<directory>/<name>.json`. Record and playback mode need it.
-///
-/// A name has letters, digits, `_`, `-` and `.` only, and does not start
-/// with `.`, so it is always one file in the directory.
-///
-/// ## Example
-///
-/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/client as postgres
-/// import dream_postgres/recorder
-/// import dream_postgres_client
-/// import gleam/erlang/process
-/// import gleam/result
-/// import gleam/string
-///
-/// pub fn start_recorder(
-///   mode: recorder.Mode,
-///   directory: String,
-///   test_name: String,
-/// ) -> Result(recorder.Recorder, String) {
-///   recorder.new()
-///   |> recorder.directory(directory)
-///   |> recorder.name(test_name)
-///   |> recorder.mode(mode)
-///   |> recorder.start()
-/// }
-///
-/// /// In playback mode, nothing connects to `database_url`.
-/// pub fn connect(
-///   recording: recorder.Recorder,
-///   database_url: String,
-/// ) -> Result(dream_postgres_client.Connection, String) {
-///   use config <- result.try(
-///     postgres.parse_config(process.new_name("test_database"), database_url)
-///     |> result.map_error(string.inspect),
-///   )
-///   recorder.connect(recording, config)
-///   |> result.map_error(string.inspect)
-/// }
-/// ```
-pub fn name(builder: RecorderBuilder, name: String) -> RecorderBuilder {
-  RecorderBuilder(..builder, name: Some(name))
-}
-
-/// Set the mode: `Record`, `Playback` or `Passthrough`.
-///
-/// For a mode in a text, for example from an environment variable, use
-/// `parse_mode` first.
-///
-/// ## Example
-///
-/// ### Start a recorder and connect <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_setup.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/client as postgres
-/// import dream_postgres/recorder
-/// import dream_postgres_client
-/// import gleam/erlang/process
-/// import gleam/result
-/// import gleam/string
-///
-/// pub fn start_recorder(
-///   mode: recorder.Mode,
-///   directory: String,
-///   test_name: String,
-/// ) -> Result(recorder.Recorder, String) {
-///   recorder.new()
-///   |> recorder.directory(directory)
-///   |> recorder.name(test_name)
-///   |> recorder.mode(mode)
-///   |> recorder.start()
-/// }
-///
-/// /// In playback mode, nothing connects to `database_url`.
-/// pub fn connect(
-///   recording: recorder.Recorder,
-///   database_url: String,
-/// ) -> Result(dream_postgres_client.Connection, String) {
-///   use config <- result.try(
-///     postgres.parse_config(process.new_name("test_database"), database_url)
-///     |> result.map_error(string.inspect),
-///   )
-///   recorder.connect(recording, config)
-///   |> result.map_error(string.inspect)
+/// /// Starts the recorder of the test that creates an API key. The test
+/// /// gives the mode, which it reads from its own config.
+/// pub fn start_api_key_recorder(
+///   recorder_mode: Mode,
+/// ) -> Result(Recorder, Error(PostgresError)) {
+///   new(file: "test/recordings/api_key_create.json")
+///   |> mode(recorder_mode)
+///   |> match_on(sql_and_parameters)
+///   |> intercept(generated_uuids(keep: []))
+///   |> intercept(timestamps_near_now(window_days: 400))
+///   |> start
 /// }
 /// ```
 pub fn mode(builder: RecorderBuilder, mode: Mode) -> RecorderBuilder {
-  RecorderBuilder(..builder, mode: mode)
+  RecorderBuilder(..builder, mode:)
 }
 
-/// Read a mode from a text, for example from an environment variable such
-/// as `RECORD_QUERIES=record`.
+/// Sets the key of each request: `match.sql_and_parameters`,
+/// `match.sql_only`, or a function of the app. The recorder saves the key
+/// with each request, and playback compares the key of each request with
+/// the key of the next recorded request.
 ///
-/// The texts are `"record"`, `"playback"` and `"passthrough"`. They are
-/// case-sensitive. Any other text gives an error that names it, such as
-/// `Error("The recorder mode \"replay\" is not known. Use \"record\",
-/// \"playback\" or \"passthrough\".")`.
-///
-/// ## Example
-///
-/// ### Read the mode from a text <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_parse_mode.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Match on the SQL only <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_sql_only_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/recorder
-/// import gleam/result
+/// import dream_errors.{type Error}
+/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/recorder.{
+///   type Mode, type Recorder, match_on, mode, new, start,
+/// }
+/// import dream_postgres/recorder/match.{sql_only}
 ///
-/// pub fn start_from_text(
-///   mode_text: String,
-///   directory: String,
-///   test_name: String,
-/// ) -> Result(recorder.Recorder, String) {
-///   use mode <- result.try(recorder.parse_mode(mode_text))
-///   recorder.new()
-///   |> recorder.directory(directory)
-///   |> recorder.name(test_name)
-///   |> recorder.mode(mode)
-///   |> recorder.start()
+/// /// A recorder that takes any parameters of the recorded SQL, for a test
+/// /// whose parameters change in each run.
+/// pub fn start_sql_only_recorder(
+///   recorder_mode: Mode,
+/// ) -> Result(Recorder, Error(PostgresError)) {
+///   new(file: "test/recordings/api_key_list.json")
+///   |> mode(recorder_mode)
+///   |> match_on(sql_only)
+///   |> start
 /// }
 /// ```
-pub fn parse_mode(text: String) -> Result(Mode, String) {
-  case text {
-    "record" -> Ok(Record)
-    "playback" -> Ok(Playback)
-    "passthrough" -> Ok(Passthrough)
-    _ ->
-      Error(
-        "The recorder mode "
-        <> string.inspect(text)
-        <> " is not known. Use \"record\", \"playback\" or \"passthrough\".",
-      )
-  }
-}
-
-/// Set the function that decides which recording a query matches in
-/// playback mode.
-///
-/// ## Example
-///
-/// ### Match the SQL with its whitespace made the same <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_key.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recorder
-///
-/// pub fn playback_ignoring_whitespace(
-///   directory: String,
-///   test_name: String,
-/// ) -> Result(recorder.Recorder, String) {
-///   recorder.new()
-///   |> recorder.directory(directory)
-///   |> recorder.name(test_name)
-///   |> recorder.mode(recorder.Playback)
-///   |> recorder.key(recorder.normalized_sql_and_parameters)
-///   |> recorder.start()
-/// }
-/// ```
-pub fn key(builder: RecorderBuilder, key: MatchKey) -> RecorderBuilder {
-  RecorderBuilder(..builder, key: key)
-}
-
-/// Set the function that changes each query before it is matched and
-/// written. See `QueryTransformer`.
-///
-/// ## Example
-///
-/// ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres/recording.{
-///   type RecordedQuery, type RecordedResult, RecordedQuery, Returned, Text, Tuple,
-/// }
-/// import dream_postgres_client
-/// import gleam/dynamic/decode
-/// import gleam/list
-/// import gleam/result
-///
-/// const insert_session = "INSERT INTO sessions (user_name, token) VALUES ($1, $2)"
-///
-/// const select_tokens = "SELECT token FROM sessions WHERE user_name = $1"
-///
-/// pub fn find_tokens(
-///   db: dream_postgres_client.Connection,
-///   user_name: String,
-/// ) -> Result(List(String), dream_postgres_client.QueryError) {
-///   dream_postgres_client.query(select_tokens)
-///   |> dream_postgres_client.parameter(dream_postgres_client.text(user_name))
-///   |> dream_postgres_client.returning(decode.at([0], decode.string))
-///   |> dream_postgres_client.execute(db)
-///   |> result.map(fn(returned) { returned.rows })
-/// }
-///
-/// pub fn scrubbing_builder(
-///   directory: String,
-///   name: String,
-/// ) -> recorder.RecorderBuilder {
-///   recorder.new()
-///   |> recorder.directory(directory)
-///   |> recorder.name(name)
-///   |> recorder.query_transformer(hide_token_parameter)
-///   |> recorder.result_transformer(hide_token_column)
-/// }
-///
-/// // Runs in record and in playback mode, so a played-back INSERT with the
-/// // real token still matches its recording.
-/// fn hide_token_parameter(query: RecordedQuery) -> RecordedQuery {
-///   case query.sql, query.parameters {
-///     sql, [user_name, _token] if sql == insert_session ->
-///       RecordedQuery(..query, parameters: [user_name, Text("[hidden]")])
-///     _, _ -> query
-///   }
-/// }
-///
-/// // Runs in record mode only: playback gives the hidden rows.
-/// fn hide_token_column(
-///   query: RecordedQuery,
-///   result: RecordedResult,
-/// ) -> RecordedResult {
-///   case query.sql, result {
-///     sql, Returned(count:, rows:) if sql == select_tokens ->
-///       Returned(
-///         count:,
-///         rows: list.map(rows, fn(_row) { Tuple([Text("[hidden]")]) }),
-///       )
-///     _, _ -> result
-///   }
-/// }
-/// ```
-pub fn query_transformer(
+pub fn match_on(
   builder: RecorderBuilder,
-  transformer: QueryTransformer,
+  key: fn(Request) -> String,
 ) -> RecorderBuilder {
-  RecorderBuilder(..builder, query_transformer: transformer)
+  RecorderBuilder(..builder, key:)
 }
 
-/// Set the function that changes each result before it is written. See
-/// `ResultTransformer`.
+/// Adds an interceptor that runs only on the copy that the recorder
+/// keeps, after the interceptors added before. In `Record` mode it
+/// changes what is saved: the request and the answer. In `Playback` mode
+/// it changes the request before its key is made, and the app gets the
+/// saved answer. See `dream_postgres/recorder/normalize`.
 ///
-/// ## Example
-///
-/// ### Hide a secret before it reaches the file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_scrub.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start the recorder of one test <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres/recording.{
-///   type RecordedQuery, type RecordedResult, RecordedQuery, Returned, Text, Tuple,
+/// import dream_errors.{type Error}
+/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/recorder.{
+///   type Mode, type Recorder, intercept, match_on, mode, new, start,
 /// }
-/// import dream_postgres_client
-/// import gleam/dynamic/decode
-/// import gleam/list
-/// import gleam/result
+/// import dream_postgres/recorder/match.{sql_and_parameters}
+/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
-/// const insert_session = "INSERT INTO sessions (user_name, token) VALUES ($1, $2)"
-///
-/// const select_tokens = "SELECT token FROM sessions WHERE user_name = $1"
-///
-/// pub fn find_tokens(
-///   db: dream_postgres_client.Connection,
-///   user_name: String,
-/// ) -> Result(List(String), dream_postgres_client.QueryError) {
-///   dream_postgres_client.query(select_tokens)
-///   |> dream_postgres_client.parameter(dream_postgres_client.text(user_name))
-///   |> dream_postgres_client.returning(decode.at([0], decode.string))
-///   |> dream_postgres_client.execute(db)
-///   |> result.map(fn(returned) { returned.rows })
-/// }
-///
-/// pub fn scrubbing_builder(
-///   directory: String,
-///   name: String,
-/// ) -> recorder.RecorderBuilder {
-///   recorder.new()
-///   |> recorder.directory(directory)
-///   |> recorder.name(name)
-///   |> recorder.query_transformer(hide_token_parameter)
-///   |> recorder.result_transformer(hide_token_column)
-/// }
-///
-/// // Runs in record and in playback mode, so a played-back INSERT with the
-/// // real token still matches its recording.
-/// fn hide_token_parameter(query: RecordedQuery) -> RecordedQuery {
-///   case query.sql, query.parameters {
-///     sql, [user_name, _token] if sql == insert_session ->
-///       RecordedQuery(..query, parameters: [user_name, Text("[hidden]")])
-///     _, _ -> query
-///   }
-/// }
-///
-/// // Runs in record mode only: playback gives the hidden rows.
-/// fn hide_token_column(
-///   query: RecordedQuery,
-///   result: RecordedResult,
-/// ) -> RecordedResult {
-///   case query.sql, result {
-///     sql, Returned(count:, rows:) if sql == select_tokens ->
-///       Returned(
-///         count:,
-///         rows: list.map(rows, fn(_row) { Tuple([Text("[hidden]")]) }),
-///       )
-///     _, _ -> result
-///   }
+/// /// Starts the recorder of the test that creates an API key. The test
+/// /// gives the mode, which it reads from its own config.
+/// pub fn start_api_key_recorder(
+///   recorder_mode: Mode,
+/// ) -> Result(Recorder, Error(PostgresError)) {
+///   new(file: "test/recordings/api_key_create.json")
+///   |> mode(recorder_mode)
+///   |> match_on(sql_and_parameters)
+///   |> intercept(generated_uuids(keep: []))
+///   |> intercept(timestamps_near_now(window_days: 400))
+///   |> start
 /// }
 /// ```
-pub fn result_transformer(
+pub fn intercept(
   builder: RecorderBuilder,
-  transformer: ResultTransformer,
+  added_interceptor: Interceptor,
 ) -> RecorderBuilder {
-  RecorderBuilder(..builder, result_transformer: transformer)
+  RecorderBuilder(
+    ..builder,
+    interceptors: list.append(builder.interceptors, [added_interceptor]),
+  )
 }
 
-/// Start a recorder.
+/// Starts the recorder, in a process that ends with the process that
+/// starts it. In `Record` mode it writes an empty recording first, and
+/// makes each missing directory of the path. In `Playback` mode it reads
+/// the recording. A path that another recorder that runs holds fails with
+/// `RecordingInUse`.
 ///
-/// - Record mode writes the file with no queries at once, so the file never
-///   keeps the queries of an earlier run, and a directory that cannot be
-///   written is an error here.
-/// - Playback mode reads the file.
-/// - Passthrough mode does nothing.
-///
-/// ## Returns
-///
-/// - `Ok(Recorder)`: the recorder runs
-/// - `Error(message)`: the directory or the name is missing or not valid, the
-///   file cannot be written (record mode), or the file cannot be read or is not
-///   a recording file (playback mode)
-///
-/// ## Example
-///
-/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Start the recorder of one test <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres_client
-/// import gleam/result
-/// import gleam/string
-/// import snippets/guide_recording_setup.{connect, start_recorder}
-/// import snippets/guide_recording_users.{type User, create_user, find_user}
-///
-/// pub fn create_and_find(
-///   db: dream_postgres_client.Connection,
-/// ) -> Result(User, dream_postgres_client.QueryError) {
-///   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
-///   find_user(db, id)
+/// import dream_errors.{type Error}
+/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/recorder.{
+///   type Mode, type Recorder, intercept, match_on, mode, new, start,
 /// }
+/// import dream_postgres/recorder/match.{sql_and_parameters}
+/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
-/// pub fn run_recorded(
-///   mode: recorder.Mode,
-///   database_url: String,
-///   directory: String,
-/// ) -> Result(User, String) {
-///   use recording <- result.try(start_recorder(mode, directory, "create_and_find"))
-///   use db <- result.try(connect(recording, database_url))
-///   let user = create_and_find(db) |> result.map_error(string.inspect)
-///   // In record mode, each query was on disk when it returned
-///   use Nil <- result.try(recorder.stop(recording))
-///   user
+/// /// Starts the recorder of the test that creates an API key. The test
+/// /// gives the mode, which it reads from its own config.
+/// pub fn start_api_key_recorder(
+///   recorder_mode: Mode,
+/// ) -> Result(Recorder, Error(PostgresError)) {
+///   new(file: "test/recordings/api_key_create.json")
+///   |> mode(recorder_mode)
+///   |> match_on(sql_and_parameters)
+///   |> intercept(generated_uuids(keep: []))
+///   |> intercept(timestamps_near_now(window_days: 400))
+///   |> start
 /// }
 /// ```
-pub fn start(builder: RecorderBuilder) -> Result(Recorder, String) {
-  let settings =
-    Settings(
-      key: builder.key,
-      query_transformer: builder.query_transformer,
-      result_transformer: builder.result_transformer,
-    )
-  case builder.mode {
-    Passthrough -> Ok(PassthroughMode)
-    Record -> start_record(builder, settings)
-    Playback -> start_playback(builder, settings)
-  }
-}
-
-fn start_record(
+pub fn start(
   builder: RecorderBuilder,
-  settings: Settings,
-) -> Result(Recorder, String) {
-  use path <- result.try(file_path(builder))
-  use Nil <- result.try(
-    write_file(path, recording.to_json([]))
-    |> result.map_error(fn(reason) { path <> ": " <> reason }),
-  )
-  use server <- result.map(start_server(
-    RecordState(path:, recordings: []),
-    handle_record,
-  ))
-  RecordMode(server:, settings:)
+) -> Result(Recorder, Error(PostgresError)) {
+  let owner = process.self()
+  actor.new_with_initialiser(5000, fn(subject) {
+    Ok(initialised(builder, owner, subject))
+  })
+  |> actor.on_message(handle_message)
+  |> actor.start
+  |> result.map_error(RecorderNotStarted)
+  |> result.try(started_recorder)
+  |> result.map_error(start_failure)
 }
 
-fn start_playback(
+fn start_failure(reason: Reason) -> Error(PostgresError) {
+  PostgresError(query_name: None, sql: None, reason:)
+  |> error.to_dream_error
+}
+
+fn started_recorder(
+  started: actor.Started(#(Subject(Message), Result(Session, Reason))),
+) -> Result(Recorder, Reason) {
+  let #(subject, loaded) = started.data
+  let recorder = Recorder(session: PassingThrough, subject:, pid: started.pid)
+  case loaded {
+    Ok(session) -> Ok(Recorder(..recorder, session:))
+    Error(reason) -> {
+      stop(recorder)
+      Error(reason)
+    }
+  }
+}
+
+/// How `dream_postgres.start` uses the recorder, with the secrets of the
+/// config it is attached to.
+@internal
+pub fn attachment(recorder: Recorder, secrets: Secrets) -> Attachment {
+  case recorder.session {
+    Saving ->
+      RecordingPool(fn(request, next) {
+        record(recorder, secrets, request, next)
+      })
+    PlayingBack ->
+      NoPool(
+        Replay(
+          answer: fn(request) {
+            ask(recorder, Take(request, secrets, _)) |> result.flatten
+          },
+          aborted_by: fn() { ask(recorder, AbortedBy) },
+        ),
+        recorder:,
+      )
+    PassingThrough -> PlainPool
+  }
+}
+
+/// Stops the recorder. A request after it fails with `RecorderStopped`.
+/// `dream_postgres.stop` of its connection calls it.
+@internal
+pub fn stop(recorder: Recorder) -> Nil {
+  let monitor = process.monitor(recorder.pid)
+  process.send(recorder.subject, Stop)
+  process.new_selector()
+  |> process.select_specific_monitor(monitor, fn(_down: Down) { Nil })
+  |> process.selector_receive_forever
+}
+
+// --- The process --------------------------------------------------------------------
+
+type State {
+  State(
+    path: String,
+    key: fn(Request) -> String,
+    interceptors: List(Interceptor),
+    /// The entries saved so far, the last one first.
+    saved: List(RecordedEntry),
+    /// The entries of the recording not given yet, in recorded order.
+    waiting: List(RecordedEntry),
+    /// The server error of the last failed answer since the last answer
+    /// that succeeded: what the transaction failed with.
+    aborted_by: Option(ServerError),
+  )
+}
+
+type Message {
+  Save(
+    request: Request,
+    outcome: Outcome,
+    types: List(TypeDescription),
+    secrets: Secrets,
+    reply: Subject(Result(Nil, Reason)),
+  )
+  Take(request: Request, secrets: Secrets, reply: Subject(Outcome))
+  AbortedBy(reply: Subject(Option(ServerError)))
+  Stop
+  OwnerDown
+}
+
+fn initialised(
   builder: RecorderBuilder,
-  settings: Settings,
-) -> Result(Recorder, String) {
-  use path <- result.try(file_path(builder))
-  use text <- result.try(read_file(path))
-  use recordings <- result.try(
-    recording.from_json(text)
-    |> result.map_error(fn(message) { path <> ": " <> message }),
-  )
-  let entries =
-    list.map(recordings, fn(recording) {
-      Entry(key: settings.key(recording.query), recording:, played: False)
-    })
-  use server <- result.map(start_server(
-    PlaybackState(path:, key_of: settings.key, entries:),
-    handle_playback,
+  owner: Pid,
+  subject: Subject(Message),
+) -> actor.Initialised(
+  State,
+  Message,
+  #(Subject(Message), Result(Session, Reason)),
+) {
+  let owner_monitor = process.monitor(owner)
+  let loaded = load(builder)
+  actor.initialised(State(
+    path: builder.path,
+    key: builder.key,
+    interceptors: builder.interceptors,
+    saved: [],
+    waiting: result.map(loaded, fn(session) { session.1 })
+      |> result.unwrap([]),
+    aborted_by: None,
   ))
-  PlaybackMode(server:, settings:)
-}
-
-fn file_path(builder: RecorderBuilder) -> Result(String, String) {
-  case builder.directory, builder.name {
-    None, _ -> Error("The recorder needs a directory: call recorder.directory.")
-    _, None -> Error("The recorder needs a name: call recorder.name.")
-    Some(directory), Some(name) -> directory_and_name(directory, name)
-  }
-}
-
-fn directory_and_name(
-  directory: String,
-  name: String,
-) -> Result(String, String) {
-  case is_valid_name(name) {
-    True -> Ok(directory <> "/" <> name <> ".json")
-    False ->
-      Error(
-        "The recording name "
-        <> string.inspect(name)
-        <> " is not valid. Use letters, digits, _, - and ., and do not start with a dot.",
-      )
-  }
-}
-
-fn is_valid_name(name: String) -> Bool {
-  name != ""
-  && !string.starts_with(name, ".")
-  && list.all(string.to_graphemes(name), is_name_character)
-}
-
-fn is_name_character(character: String) -> Bool {
-  string.contains(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.",
-    character,
-  )
-}
-
-/// Start a pool for the recorder, or, in playback mode, make a connection
-/// with no pool.
-///
-/// - Record mode starts the pool of `config` with `client.connect`, with an
-///   interceptor that records each query. A query in
-///   `dream_postgres_client.transaction` is recorded too.
-/// - Playback mode starts no pool and opens no connection: it returns
-///   `dream_postgres_client.disconnected`, and every query gets the result of
-///   its recording. `config` is not used, so the database does not have to
-///   exist.
-/// - Passthrough mode starts the pool of `config` with `client.connect`.
-///
-/// ## Returns
-///
-/// - `Ok(Connection)`: use it as any other connection
-/// - `Error(StartError)`: the error of `client.connect` (record and
-///   passthrough mode)
-///
-/// ## Example
-///
-/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres_client
-/// import gleam/result
-/// import gleam/string
-/// import snippets/guide_recording_setup.{connect, start_recorder}
-/// import snippets/guide_recording_users.{type User, create_user, find_user}
-///
-/// pub fn create_and_find(
-///   db: dream_postgres_client.Connection,
-/// ) -> Result(User, dream_postgres_client.QueryError) {
-///   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
-///   find_user(db, id)
-/// }
-///
-/// pub fn run_recorded(
-///   mode: recorder.Mode,
-///   database_url: String,
-///   directory: String,
-/// ) -> Result(User, String) {
-///   use recording <- result.try(start_recorder(mode, directory, "create_and_find"))
-///   use db <- result.try(connect(recording, database_url))
-///   let user = create_and_find(db) |> result.map_error(string.inspect)
-///   // In record mode, each query was on disk when it returned
-///   use Nil <- result.try(recorder.stop(recording))
-///   user
-/// }
-/// ```
-pub fn connect(
-  recorder: Recorder,
-  config: postgres.Config,
-) -> Result(postgres.Connection, actor.StartError) {
-  case recorder {
-    PassthroughMode -> postgres.connect(config)
-    RecordMode(server:, settings:) ->
-      config
-      |> dream_postgres_client.interceptor(
-        Some(record_interceptor(server, settings)),
-      )
-      |> postgres.connect()
-    PlaybackMode(server:, settings:) ->
-      Ok(
-        dream_postgres_client.disconnected(playback_interceptor(
-          server,
-          settings,
-        )),
-      )
-  }
-}
-
-/// Stop the recorder process.
-///
-/// In record mode, each query is on disk when it returns, so `stop` does
-/// not write. A query that the recorder could not record failed already,
-/// with a `RecorderError`.
-///
-/// ## Returns
-///
-/// - `Ok(Nil)`: the recorder stopped
-/// - `Error(message)`: the recorder had stopped already
-///
-/// ## Example
-///
-/// ### Record a test once, then play it back <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/guide_recording_round_trip.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres_client
-/// import gleam/result
-/// import gleam/string
-/// import snippets/guide_recording_setup.{connect, start_recorder}
-/// import snippets/guide_recording_users.{type User, create_user, find_user}
-///
-/// pub fn create_and_find(
-///   db: dream_postgres_client.Connection,
-/// ) -> Result(User, dream_postgres_client.QueryError) {
-///   use id <- result.try(create_user(db, "Ada", "ada@example.com"))
-///   find_user(db, id)
-/// }
-///
-/// pub fn run_recorded(
-///   mode: recorder.Mode,
-///   database_url: String,
-///   directory: String,
-/// ) -> Result(User, String) {
-///   use recording <- result.try(start_recorder(mode, directory, "create_and_find"))
-///   use db <- result.try(connect(recording, database_url))
-///   let user = create_and_find(db) |> result.map_error(string.inspect)
-///   // In record mode, each query was on disk when it returned
-///   use Nil <- result.try(recorder.stop(recording))
-///   user
-/// }
-/// ```
-pub fn stop(recorder: Recorder) -> Result(Nil, String) {
-  case recorder {
-    PassthroughMode -> Ok(Nil)
-    RecordMode(server:, ..) -> stop_server(server, StopRecording)
-    PlaybackMode(server:, ..) -> stop_server(server, StopPlayback)
-  }
-}
-
-fn stop_server(
-  server: Server(message),
-  stop: fn(Subject(Nil)) -> message,
-) -> Result(Nil, String) {
-  call(server, stop)
-  |> result.replace_error("The recorder had stopped already.")
-}
-
-/// The default key: the SQL text exactly, and every parameter.
-///
-/// ## Example
-///
-/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres/recording.{Integer, RecordedQuery}
-///
-/// pub fn keys() -> List(String) {
-///   let query =
-///     RecordedQuery(sql: "SELECT name\n  FROM users WHERE id = $1", parameters: [
-///       Integer(7),
-///     ])
-///   [
-///     recorder.sql_and_parameters(query),
-///     recorder.normalized_sql_and_parameters(query),
-///     recorder.sql_only(query),
-///   ]
-/// }
-/// ```
-pub fn sql_and_parameters(query: RecordedQuery) -> String {
-  query.sql <> "\n" <> parameters_text(query.parameters)
-}
-
-/// The SQL text with each run of whitespace outside quotes made one space,
-/// and with no whitespace at the start or the end, and every parameter. A
-/// query that only changed its line breaks or its indentation still
-/// matches.
-///
-/// ## Example
-///
-/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres/recording.{Integer, RecordedQuery}
-///
-/// pub fn keys() -> List(String) {
-///   let query =
-///     RecordedQuery(sql: "SELECT name\n  FROM users WHERE id = $1", parameters: [
-///       Integer(7),
-///     ])
-///   [
-///     recorder.sql_and_parameters(query),
-///     recorder.normalized_sql_and_parameters(query),
-///     recorder.sql_only(query),
-///   ]
-/// }
-/// ```
-pub fn normalized_sql_and_parameters(query: RecordedQuery) -> String {
-  normalize_sql(query.sql) <> "\n" <> parameters_text(query.parameters)
-}
-
-/// The SQL text exactly, and no parameters. Queries with the same SQL get
-/// their recordings in recorded order, whatever their parameters.
-///
-/// ## Example
-///
-/// ### The three keys of a query <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_keys.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres/recording.{Integer, RecordedQuery}
-///
-/// pub fn keys() -> List(String) {
-///   let query =
-///     RecordedQuery(sql: "SELECT name\n  FROM users WHERE id = $1", parameters: [
-///       Integer(7),
-///     ])
-///   [
-///     recorder.sql_and_parameters(query),
-///     recorder.normalized_sql_and_parameters(query),
-///     recorder.sql_only(query),
-///   ]
-/// }
-/// ```
-pub fn sql_only(query: RecordedQuery) -> String {
-  query.sql
-}
-
-fn parameters_text(parameters: List(RecordedValue)) -> String {
-  recording.values_to_json(parameters)
-}
-
-// Whitespace outside '...' and "..." becomes one space. A quote inside
-// quotes is written two times, so it ends the quote and starts it again,
-// which keeps the state right.
-type SqlState {
-  SqlState(text: List(String), quote: Option(String), space: Bool)
-}
-
-fn normalize_sql(sql: String) -> String {
-  let state =
-    string.to_graphemes(string.trim(sql))
-    |> list.fold(SqlState(text: [], quote: None, space: False), add_character)
-  string.concat(list.reverse(state.text))
-}
-
-fn add_character(state: SqlState, character: String) -> SqlState {
-  case state.quote, is_whitespace(character), character {
-    None, True, _ -> SqlState(..state, space: True)
-    None, False, "'" | None, False, "\"" ->
-      SqlState(..push(state, character), quote: Some(character))
-    None, False, _ -> push(state, character)
-    Some(quote), _, _ if quote == character ->
-      SqlState(..push(state, character), quote: None)
-    Some(_), _, _ -> SqlState(..state, text: [character, ..state.text])
-  }
-}
-
-fn push(state: SqlState, character: String) -> SqlState {
-  case state.space {
-    True ->
-      SqlState(..state, text: [character, " ", ..state.text], space: False)
-    False -> SqlState(..state, text: [character, ..state.text])
-  }
-}
-
-fn is_whitespace(character: String) -> Bool {
-  list.contains([" ", "\n", "\t", "\r", "\r\n"], character)
-}
-
-// The interceptors
-
-fn record_interceptor(
-  server: Server(RecordMessage),
-  settings: Settings,
-) -> dream_postgres_client.Interceptor {
-  dream_postgres_client.Interceptor(fn(request) {
-    dream_postgres_client.Capture(on_result: fn(result) {
-      add(server, settings, request, result)
-      |> result.map_error(to_reason)
-    })
-  })
-}
-
-// Runs in the process of the query, before the query returns. An error
-// here fails the query.
-fn add(
-  server: Server(RecordMessage),
-  settings: Settings,
-  request: dream_postgres_client.InterceptRequest,
-  result: Result(#(Int, List(Dynamic)), dream_postgres_client.QueryError),
-) -> Result(Nil, RecorderError) {
-  use recording <- result.try(to_recording(settings, request, result))
-  call(server, Add(recording, _))
-  |> result.replace_error(RecorderStopped(sql: recording.query.sql))
-  |> result.flatten()
-}
-
-fn to_recording(
-  settings: Settings,
-  request: dream_postgres_client.InterceptRequest,
-  result: Result(#(Int, List(Dynamic)), dream_postgres_client.QueryError),
-) -> Result(Recording, RecorderError) {
-  use query <- result.try(to_query(settings, request))
-  use recorded <- result.map(
-    to_result(result)
-    |> result.map_error(not_recordable(query.sql, "A value of the result", _)),
-  )
-  Recording(query:, result: settings.result_transformer(query, recorded))
-}
-
-fn to_query(
-  settings: Settings,
-  request: dream_postgres_client.InterceptRequest,
-) -> Result(RecordedQuery, RecorderError) {
-  use parameters <- result.map(
-    list.try_map(request.parameters, fn(parameter) {
-      to_recorded(to_dynamic(parameter))
-    })
-    |> result.map_error(not_recordable(request.sql, "A parameter", _)),
-  )
-  settings.query_transformer(RecordedQuery(sql: request.sql, parameters:))
-}
-
-fn not_recordable(sql: String, what: String, term: String) -> RecorderError {
-  NotRecordable(sql:, reason: what <> " cannot be recorded: " <> term)
-}
-
-fn to_result(
-  result: Result(#(Int, List(Dynamic)), dream_postgres_client.QueryError),
-) -> Result(RecordedResult, String) {
-  case result {
-    Error(error) -> Ok(Failed(error))
-    Ok(#(count, rows)) -> to_returned(count, rows)
-  }
-}
-
-fn to_returned(
-  count: Int,
-  rows: List(Dynamic),
-) -> Result(RecordedResult, String) {
-  use rows <- result.map(list.try_map(rows, to_recorded))
-  Returned(count:, rows:)
-}
-
-fn playback_interceptor(
-  server: Server(PlaybackMessage),
-  settings: Settings,
-) -> dream_postgres_client.Interceptor {
-  dream_postgres_client.Interceptor(fn(request) {
-    play(server, settings, request)
-  })
-}
-
-fn play(
-  server: Server(PlaybackMessage),
-  settings: Settings,
-  request: dream_postgres_client.InterceptRequest,
-) -> dream_postgres_client.InterceptResult {
-  let answer = {
-    use query <- result.try(to_query(settings, request))
-    call(server, Play(settings.key(query), query, _))
-    |> result.replace_error(RecorderStopped(sql: query.sql))
-    |> result.flatten()
-  }
-  case answer {
-    Ok(Returned(count:, rows:)) ->
-      dream_postgres_client.Respond(count:, rows: list.map(rows, from_recorded))
-    Ok(Failed(query_error)) -> dream_postgres_client.Fail(query_error)
-    Error(recorder_error) ->
-      dream_postgres_client.Fail(
-        dream_postgres_client.InterceptorFailed(to_reason(recorder_error)),
-      )
-  }
-}
-
-fn to_reason(recorder_error: RecorderError) -> Dynamic {
-  failure_to_dynamic(DreamPostgresRecorderError(recorder_error))
-}
-
-/// Reads the recorder's error back from a query error.
-///
-/// ## Returns
-///
-/// - `Ok(RecorderError)`: the recorder failed the query
-/// - `Error(Nil)`: the error is not from this recorder: an error of the
-///   database, or the `dream_postgres_client.InterceptorFailed` of another
-///   interceptor
-///
-/// ## Example
-///
-/// ### Explain a query error <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recorder_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recorder
-/// import dream_postgres_client
-///
-/// pub fn explain(query_error: dream_postgres_client.QueryError) -> String {
-///   case recorder.error(query_error) {
-///     Ok(recorder.NoRecording(sql:, parameters:, path:, ..)) ->
-///       "Record again: " <> path <> " has no " <> sql <> " with " <> parameters
-///     Ok(_other) -> "The recorder failed the query"
-///     Error(Nil) -> "The database failed the query"
-///   }
-/// }
-/// ```
-pub fn error(
-  query_error: dream_postgres_client.QueryError,
-) -> Result(RecorderError, Nil) {
-  case query_error {
-    dream_postgres_client.InterceptorFailed(reason:) ->
-      decode.run(reason, failure_decoder())
-      |> result.replace_error(Nil)
-    _ -> Error(Nil)
-  }
-}
-
-/// The text of a recorder error, for a test failure or a log line.
-///
-/// A `NoRecording` names the query, then each nearest recording with its
-/// parameters on a `-` line and the query's parameters on a `+` line.
-///
-/// ### The text of a query with no recording <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/outputs/guide_recording_miss_text.txt"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```text
-/// No recording matches SELECT id, name, email FROM users WHERE id = $1 with [2]
-/// Nearest recording in test/fixtures/recordings/create_and_find.json:
-///   parameters:
-///   - [1]
-///   + [2]
-/// ```
-///
-/// When no recording has the SQL, the second line names the file that the
-/// recorder searched: `No recording in <path> has this SQL`.
-pub fn describe_error(error: RecorderError) -> String {
-  case error {
-    NoRecording(sql:, parameters:, path:, nearest:) ->
-      "No recording matches "
-      <> sql
-      <> " with "
-      <> parameters
-      <> "\n"
-      <> describe_nearest(path, nearest)
-    PlayedAlready(sql:, parameters:, path:) ->
-      "Each recording of "
-      <> sql
-      <> " with "
-      <> parameters
-      <> " in "
-      <> path
-      <> " was played already"
-    WriteFailed(path:, reason:) -> "Could not write " <> path <> ": " <> reason
-    NotRecordable(sql:, reason:) -> "Cannot record " <> sql <> ": " <> reason
-    RecorderStopped(sql:) -> "The recorder stopped before " <> sql
-  }
-}
-
-fn describe_nearest(path: String, nearest: List(NearestRecording)) -> String {
-  case nearest {
-    [] -> "No recording in " <> path <> " has this SQL"
-    [first, ..rest] ->
-      [
-        describe_candidate("Nearest recording in ", path, first),
-        ..list.map(rest, describe_candidate(
-          "Next nearest recording in ",
-          path,
-          _,
-        ))
-      ]
-      |> string.join("\n")
-  }
-}
-
-fn describe_candidate(
-  label: String,
-  path: String,
-  candidate: NearestRecording,
-) -> String {
-  label
-  <> path
-  <> ":\n  parameters:\n  - "
-  <> candidate.recorded
-  <> "\n  + "
-  <> candidate.requested
-}
-
-fn failure_decoder() -> decode.Decoder(RecorderError) {
-  use Nil <- decode.then(tag("dream_postgres_recorder_error"))
-  decode.at([1], recorder_error_decoder())
-}
-
-fn recorder_error_decoder() -> decode.Decoder(RecorderError) {
-  decode.one_of(
-    variant("no_recording", {
-      use sql <- decode.field(1, decode.string)
-      use parameters <- decode.field(2, decode.string)
-      use path <- decode.field(3, decode.string)
-      use nearest <- decode.field(4, decode.list(nearest_decoder()))
-      decode.success(NoRecording(sql:, parameters:, path:, nearest:))
+  |> actor.selecting(
+    process.new_selector()
+    |> process.select(subject)
+    |> process.select_specific_monitor(owner_monitor, fn(_down: Down) {
+      OwnerDown
     }),
-    [
-      variant("played_already", miss_decoder(PlayedAlready)),
-      variant("write_failed", {
-        use path <- decode.field(1, decode.string)
-        use reason <- decode.field(2, decode.string)
-        decode.success(WriteFailed(path:, reason:))
-      }),
-      variant("not_recordable", {
-        use sql <- decode.field(1, decode.string)
-        use reason <- decode.field(2, decode.string)
-        decode.success(NotRecordable(sql:, reason:))
-      }),
-      variant("recorder_stopped", {
-        use sql <- decode.field(1, decode.string)
-        decode.success(RecorderStopped(sql:))
-      }),
-    ],
   )
+  |> actor.returning(#(subject, result.map(loaded, fn(session) { session.0 })))
 }
 
-fn nearest_decoder() -> decode.Decoder(NearestRecording) {
-  use position <- decode.field(1, decode.int)
-  use recorded <- decode.field(2, decode.string)
-  use requested <- decode.field(3, decode.string)
-  decode.success(NearestRecording(position:, recorded:, requested:))
-}
-
-fn miss_decoder(
-  make: fn(String, String, String) -> RecorderError,
-) -> decode.Decoder(RecorderError) {
-  use sql <- decode.field(1, decode.string)
-  use parameters <- decode.field(2, decode.string)
-  use path <- decode.field(3, decode.string)
-  decode.success(make(sql, parameters, path))
-}
-
-// A decoder of the constructor `name`: the first element of its tuple is
-// the atom `name`.
-fn variant(
-  name: String,
-  fields: decode.Decoder(RecorderError),
-) -> decode.Decoder(RecorderError) {
-  use Nil <- decode.then(tag(name))
-  fields
-}
-
-fn tag(name: String) -> decode.Decoder(Nil) {
-  use found <- decode.field(0, atom.decoder())
-  case found == atom.create(name) {
-    True -> decode.success(Nil)
-    False -> decode.failure(Nil, name)
+// Takes the path for this process, then makes the file or reads it.
+fn load(
+  builder: RecorderBuilder,
+) -> Result(#(Session, List(RecordedEntry)), Reason) {
+  let path = builder.path
+  use Nil <- result.try(case claim(path) {
+    True -> Ok(Nil)
+    False -> Error(RecordingInUse(path:))
+  })
+  case builder.mode, is_file(path) {
+    Record, _ | RecordMissing, False ->
+      write_recording(path, [])
+      |> result.replace(#(Saving, []))
+      |> result.map_error(RecordingNotWritten(path, _))
+    Playback, True | RecordMissing, True ->
+      read_recording(path)
+      |> result.map(fn(entries) { #(PlayingBack, entries) })
+    Playback, False -> Error(RecordingNotFound(path:))
+    Passthrough, _ -> Ok(#(PassingThrough, []))
   }
 }
 
-@external(erlang, "dream_postgres_recorder_ffi", "to_recorded")
-fn to_recorded(term: Dynamic) -> Result(RecordedValue, String)
-
-@external(erlang, "dream_postgres_recorder_ffi", "from_recorded")
-fn from_recorded(value: RecordedValue) -> Dynamic
-
-@external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
-fn to_dynamic(value: dream_postgres_client.Value) -> Dynamic
-
-@external(erlang, "dream_postgres_recorder_ffi", "to_dynamic")
-fn failure_to_dynamic(failure: Failure) -> Dynamic
-
-@external(erlang, "dream_postgres_recorder_ffi", "write_file")
-fn write_file(path: String, content: String) -> Result(Nil, String)
-
-@external(erlang, "dream_postgres_recorder_ffi", "read_file")
-fn read_file(path: String) -> Result(String, String)
-
-// The recorder processes. A recorder in record mode and one in playback
-// mode run different processes, with different messages, so a message of
-// one mode never reaches the process of the other.
-
-type RecordMessage {
-  Add(recording: Recording, reply: Subject(Result(Nil, RecorderError)))
-  StopRecording(reply: Subject(Nil))
-}
-
-type RecordState {
-  RecordState(path: String, recordings: List(Recording))
-}
-
-type PlaybackMessage {
-  Play(
-    key: String,
-    query: RecordedQuery,
-    reply: Subject(Result(RecordedResult, RecorderError)),
-  )
-  StopPlayback(reply: Subject(Nil))
-}
-
-type PlaybackState {
-  PlaybackState(path: String, key_of: MatchKey, entries: List(Entry))
-}
-
-type Entry {
-  Entry(key: String, recording: Recording, played: Bool)
-}
-
-fn start_server(
-  state: state,
-  handle: fn(state, message) -> actor.Next(state, message),
-) -> Result(Server(message), String) {
-  actor.new(state)
-  |> actor.on_message(handle)
-  |> actor.start()
-  |> result.map(fn(started) { Server(pid: started.pid, subject: started.data) })
-  |> result.replace_error("The recorder process did not start.")
-}
-
-fn handle_record(
-  state: RecordState,
-  message: RecordMessage,
-) -> actor.Next(RecordState, RecordMessage) {
+fn handle_message(
+  state: State,
+  message: Message,
+) -> actor.Next(State, Message) {
   case message {
-    Add(recording, reply) -> {
-      let #(state, written) = add_recording(state, recording)
-      process.send(reply, written)
+    Save(request:, outcome:, types:, secrets:, reply:) -> {
+      let #(saved, state) = save_copy(state, request, outcome, types, secrets)
+      process.send(reply, saved)
       actor.continue(state)
     }
-    StopRecording(reply) -> {
-      process.send(reply, Nil)
-      actor.stop()
+    Take(request:, secrets:, reply:) -> {
+      let #(outcome, state) = take(state, request, secrets)
+      process.send(reply, outcome)
+      actor.continue(state)
     }
-  }
-}
-
-// The recordings of the state are newest first. The whole file is written
-// again for each query, so the file on disk always holds every query that
-// returned its result. When the write fails, the state keeps the
-// recordings of before: the query fails, so it is not recorded.
-fn add_recording(
-  state: RecordState,
-  recording: Recording,
-) -> #(RecordState, Result(Nil, RecorderError)) {
-  let recordings = [recording, ..state.recordings]
-  case write_file(state.path, recording.to_json(list.reverse(recordings))) {
-    Ok(Nil) -> #(RecordState(..state, recordings:), Ok(Nil))
-    Error(reason) -> #(state, Error(WriteFailed(path: state.path, reason:)))
-  }
-}
-
-fn handle_playback(
-  state: PlaybackState,
-  message: PlaybackMessage,
-) -> actor.Next(PlaybackState, PlaybackMessage) {
-  case message {
-    Play(key, query, reply) -> {
-      let #(answer, entries) =
-        take(state.entries, key, query, state.path, state.key_of)
-      process.send(reply, answer)
-      actor.continue(PlaybackState(..state, entries:))
+    AbortedBy(reply:) -> {
+      process.send(reply, state.aborted_by)
+      actor.continue(state)
     }
-    StopPlayback(reply) -> {
-      process.send(reply, Nil)
-      actor.stop()
-    }
+    Stop | OwnerDown -> actor.stop()
   }
 }
 
-// Matching wins over order: the query gets the first recording with its key
-// that it was not given yet. So queries that run at the same time, in any
-// order, each get their own recording, and the same query run two times
-// gets its two results in recorded order.
-fn take(
-  entries: List(Entry),
-  key: String,
-  query: RecordedQuery,
-  path: String,
-  key_of: MatchKey,
-) -> #(Result(RecordedResult, RecorderError), List(Entry)) {
-  let #(before, rest) =
-    list.split_while(entries, fn(entry) { entry.played || entry.key != key })
-  case rest {
-    [entry, ..after] -> #(
-      Ok(entry.recording.result),
-      list.append(before, [Entry(..entry, played: True), ..after]),
-    )
-    [] -> #(Error(miss_error(entries, key, query, path, key_of)), entries)
-  }
-}
-
-fn miss_error(
-  entries: List(Entry),
-  key: String,
-  query: RecordedQuery,
-  path: String,
-  key_of: MatchKey,
-) -> RecorderError {
-  let matching = list.count(entries, fn(entry) { entry.key == key })
-  let parameters = parameters_text(query.parameters)
-  case matching {
-    0 ->
-      NoRecording(
-        sql: query.sql,
-        parameters:,
-        path:,
-        nearest: nearest_recordings(entries, key_of, query),
-      )
-    _ -> PlayedAlready(sql: query.sql, parameters:, path:)
-  }
-}
-
-/// The most recordings that a miss names.
-const nearest_limit = 3
-
-// The recordings that the key would match if the query had their
-// parameters, fewest differing parameters first, then in file order, with
-// no two that have the same parameters.
-fn nearest_recordings(
-  entries: List(Entry),
-  key_of: MatchKey,
-  query: RecordedQuery,
-) -> List(NearestRecording) {
-  let requested = parameters_text(query.parameters)
-  entries
-  |> list.index_map(fn(entry, index) {
-    #(index + 1, entry.key, entry.recording.query.parameters)
-  })
-  |> list.filter(fn(candidate) {
-    let #(_position, key, parameters) = candidate
-    key_of(RecordedQuery(..query, parameters:)) == key
-  })
-  |> first_of_each_parameters()
-  |> list.map(fn(candidate) {
-    #(changed_count(candidate.2, query.parameters), candidate)
-  })
-  |> list.sort(fn(left, right) {
-    int.compare(left.0, right.0)
-    |> order.break_tie(int.compare(left.1.0, right.1.0))
-  })
-  |> list.take(nearest_limit)
-  |> list.map(fn(scored) {
-    let #(_count, #(position, _key, parameters)) = scored
-    NearestRecording(
-      position:,
-      recorded: parameters_text(parameters),
-      requested:,
-    )
-  })
-}
-
-// Keeps the first candidate with each list of parameters.
-fn first_of_each_parameters(
-  candidates: List(#(Int, String, List(RecordedValue))),
-) -> List(#(Int, String, List(RecordedValue))) {
-  list.fold(candidates, [], fn(kept, candidate) {
-    case
-      list.any(kept, fn(earlier: #(Int, String, List(RecordedValue))) {
-        earlier.2 == candidate.2
-      })
-    {
-      True -> kept
-      False -> [candidate, ..kept]
-    }
-  })
-  |> list.reverse()
-}
-
-// The number of places where two parameter lists differ. A value that one
-// list has and the other has not counts as a place that differs.
-fn changed_count(left: List(RecordedValue), right: List(RecordedValue)) -> Int {
-  case left, right {
-    [], rest | rest, [] -> list.length(rest)
-    [a, ..left_rest], [b, ..right_rest] ->
-      case a == b {
-        True -> 0
-        False -> 1
-      }
-      + changed_count(left_rest, right_rest)
-  }
-}
-
-// Sends a message and waits for the answer. When the recorder process
-// stopped, the answer is `Error(Nil)`, not a crash of the caller.
-fn call(
-  server: Server(message),
-  make: fn(Subject(a)) -> message,
-) -> Result(a, Nil) {
-  let reply = process.new_subject()
-  let monitor = process.monitor(server.pid)
-  process.send(server.subject, make(reply))
+// Sends a message to the recorder and waits for its answer. A recorder
+// that is stopped gives `RecorderStopped`.
+fn ask(
+  recorder: Recorder,
+  make: fn(Subject(answer)) -> Message,
+) -> Result(answer, Reason) {
+  let reply_to = process.new_subject()
+  let monitor = process.monitor(recorder.pid)
+  process.send(recorder.subject, make(reply_to))
   let answer =
     process.new_selector()
-    |> process.select_map(reply, Ok)
-    |> process.select_specific_monitor(monitor, fn(_down) { Error(Nil) })
-    |> process.selector_receive_forever()
+    |> process.select_map(reply_to, Ok)
+    |> process.select_specific_monitor(monitor, recorder_down)
+    |> process.selector_receive_forever
   process.demonitor_process(monitor)
   answer
+}
+
+fn recorder_down(_down: Down) -> Result(answer, Reason) {
+  Error(RecorderStopped)
+}
+
+// Runs the interceptors of the recorder on its copy of the request, with
+// `outcome` at the end of the chain. Gives the request that reached the
+// end, or the copy when an interceptor answered by itself, and the
+// outcome that the interceptors made.
+fn intercepted_copy(
+  interceptors: List(Interceptor),
+  request: Request,
+  outcome: Outcome,
+) -> #(Request, Outcome) {
+  let reached_end = process.new_subject()
+  let changed_outcome =
+    runner.intercept(interceptors, request, fn(final_request) {
+      process.send(reached_end, final_request)
+      outcome
+    })
+  let final_request = process.receive(reached_end, 0) |> result.unwrap(request)
+  #(final_request, changed_outcome)
+}
+
+// --- The file -----------------------------------------------------------------------
+
+fn write_recording(
+  path: String,
+  entries: List(RecordedEntry),
+) -> Result(Nil, Posix) {
+  write_file(path, <<recording.to_file_text(Recording(entries:)):utf8>>)
+}
+
+fn read_recording(path: String) -> Result(List(RecordedEntry), Reason) {
+  use bytes <- result.try(
+    read_file(path) |> result.map_error(RecordingNotRead(path, _)),
+  )
+  recording.from_file_bytes(bytes)
+  |> result.map(fn(read) { read.entries })
+  |> result.map_error(fn(decode_error: json.DecodeError) {
+    RecordingNotDecoded(path:, reason: decode_error)
+  })
+}
+
+@external(erlang, "dream_postgres_recorder_ffi", "write_file")
+fn write_file(path: String, bytes: BitArray) -> Result(Nil, Posix)
+
+@external(erlang, "dream_postgres_recorder_ffi", "read_file")
+fn read_file(path: String) -> Result(BitArray, Posix)
+
+@external(erlang, "dream_postgres_recorder_ffi", "is_file")
+fn is_file(path: String) -> Bool
+
+/// Takes the path for the process that calls it, until it ends. `False`
+/// when another process that runs holds it.
+@external(erlang, "dream_postgres_recorder_ffi", "claim")
+fn claim(path: String) -> Bool
+
+// --- Record -------------------------------------------------------------------------
+
+// What a watched value of a request did: the number of its row (0 for the
+// parameters of a statement), its position, and the event.
+type WriteSeen {
+  WriteSeen(row_number: Int, position: Int, event: WriteEvent)
+}
+
+// Passes the request on with each parameter or row field watched, so the
+// recorder sees each cell as it was written and its type, then saves the
+// copy of the request with the answer. The app gets the answer of the
+// database.
+fn record(
+  recorder: Recorder,
+  secrets: Secrets,
+  request: Request,
+  next: fn(Request) -> Outcome,
+) -> Outcome {
+  let seen = process.new_subject()
+  let outcome = next(watched_request(request, seen))
+  let events = receive_all(seen, [])
+  let copy = written_request(request, events)
+  case outcome {
+    Ok(CopyToAnswer(description:, types:, rows:)) ->
+      Ok(CopyToAnswer(
+        description:,
+        types:,
+        rows: copy_request.watch(
+          rows,
+          stream_watcher(recorder, secrets, copy, description, types, []),
+        ),
+      ))
+    Ok(StatementAnswer(types:, ..)) ->
+      save(recorder, secrets, copy, outcome, every_type(events, types))
+    Ok(ScriptAnswer(..)) | Ok(CopyFromAnswer(..)) | Error(_) ->
+      save(recorder, secrets, copy, outcome, every_type(events, []))
+  }
+}
+
+fn save(
+  recorder: Recorder,
+  secrets: Secrets,
+  copy: Request,
+  outcome: Outcome,
+  types: List(TypeDescription),
+) -> Outcome {
+  ask(recorder, Save(copy, outcome, types, secrets, _))
+  |> result.flatten
+  |> result.try(fn(_saved) { outcome })
+}
+
+fn watched_request(request: Request, seen: Subject(WriteSeen)) -> Request {
+  case request.kind {
+    CopyFrom(table:, columns:, rows:) ->
+      Request(
+        ..request,
+        kind: CopyFrom(
+          table:,
+          columns:,
+          rows: copy_request.map_rows(rows, fn(row_number, values) {
+            watched_values(values, row_number, seen)
+          }),
+        ),
+      )
+    Statement | Script | CopyTo ->
+      Request(
+        ..request,
+        parameters: watched_values(request.parameters, 0, seen),
+      )
+  }
+}
+
+fn watched_values(
+  values: List(Value),
+  row_number: Int,
+  seen: Subject(WriteSeen),
+) -> List(Value) {
+  list.index_map(values, fn(value, position) {
+    query.watch(value, fn(event) {
+      process.send(seen, WriteSeen(row_number:, position:, event:))
+    })
+  })
+}
+
+fn receive_all(
+  seen: Subject(WriteSeen),
+  received: List(WriteSeen),
+) -> List(WriteSeen) {
+  case process.receive(seen, 0) {
+    Ok(write_seen) -> receive_all(seen, [write_seen, ..received])
+    Error(Nil) -> list.reverse(received)
+  }
+}
+
+// The request with each value that was written set to what it was
+// written as.
+fn written_request(request: Request, events: List(WriteSeen)) -> Request {
+  case request.kind {
+    CopyFrom(table:, columns:, rows:) ->
+      Request(
+        ..request,
+        kind: CopyFrom(
+          table:,
+          columns:,
+          rows: feed_rows(rows, [])
+            |> list.index_map(fn(values, row_number) {
+              written_values(values, events, row_number)
+            })
+            |> copy_request.feed(fn(values) { values }),
+        ),
+      )
+    Statement | Script | CopyTo ->
+      Request(
+        ..request,
+        parameters: written_values(request.parameters, events, 0),
+      )
+  }
+}
+
+fn written_values(
+  values: List(Value),
+  events: List(WriteSeen),
+  row_number: Int,
+) -> List(Value) {
+  list.index_map(values, fn(value, position) {
+    let seen_here =
+      events
+      |> list.filter(fn(seen) {
+        seen.row_number == row_number && seen.position == position
+      })
+      |> list.map(fn(seen) { seen.event })
+    written_value(
+      value,
+      list.filter_map(seen_here, checked_type) |> list.first,
+      list.filter_map(seen_here, write_of) |> list.first,
+    )
+  })
+}
+
+fn written_value(
+  value: Value,
+  checked: Result(TypeDescription, Nil),
+  write: Result(WriteEvent, Nil),
+) -> Value {
+  case checked, write {
+    Ok(type_description), Ok(Written(cell:)) ->
+      query.written_as(value, type_description, cell)
+    Ok(type_description), Ok(SecretWritten(..)) ->
+      query.written_secret(value, type_description)
+    Ok(_), Ok(TypeChecked(..))
+    | Ok(_), Ok(TypeLookedUp(..))
+    | Ok(_), Error(Nil)
+    | Error(Nil), _
+    -> value
+  }
+}
+
+fn checked_type(event: WriteEvent) -> Result(TypeDescription, Nil) {
+  case event {
+    TypeChecked(type_description:) -> Ok(type_description)
+    TypeLookedUp(..) | Written(..) | SecretWritten(..) -> Error(Nil)
+  }
+}
+
+fn write_of(event: WriteEvent) -> Result(WriteEvent, Nil) {
+  case event {
+    Written(..) | SecretWritten(..) -> Ok(event)
+    TypeChecked(..) | TypeLookedUp(..) -> Error(Nil)
+  }
+}
+
+// Sees each row of a `copy_to`, and saves the stream when it ends.
+fn stream_watcher(
+  recorder: Recorder,
+  secrets: Secrets,
+  copy: Request,
+  description: StatementDescription,
+  types: List(TypeDescription),
+  rows: List(List(Cell)),
+) -> RowWatcher {
+  RowWatcher(
+    take: fn(cells) {
+      stream_watcher(recorder, secrets, copy, description, types, [
+        cells,
+        ..rows
+      ])
+    },
+    finish: fn(ending) {
+      let outcome =
+        Ok(CopyToAnswer(
+          description:,
+          types:,
+          rows: CopyRows(
+            source: RecordedRows(rows: list.reverse(rows), ending:),
+            watchers: [],
+          ),
+        ))
+      save(recorder, secrets, copy, outcome, every_type([], types))
+      |> result.replace(Nil)
+    },
+  )
+}
+
+// Every type that the writes and the answer needed, each one time, in the
+// order of their IDs.
+fn every_type(
+  events: List(WriteSeen),
+  answer_types: List(TypeDescription),
+) -> List(TypeDescription) {
+  events
+  |> list.filter_map(fn(seen) { event_type(seen.event) })
+  |> list.append(answer_types)
+  |> list.map(fn(type_description) { #(type_description.id, type_description) })
+  |> dict.from_list
+  |> dict.values
+  |> list.sort(fn(left, right) { int.compare(left.id, right.id) })
+}
+
+fn event_type(event: WriteEvent) -> Result(TypeDescription, Nil) {
+  case event {
+    TypeChecked(type_description:) | TypeLookedUp(type_description:) ->
+      Ok(type_description)
+    Written(..) | SecretWritten(..) -> Error(Nil)
+  }
+}
+
+fn feed_rows(rows: RowFeed, read: List(List(Value))) -> List(List(Value)) {
+  case copy_request.next_row(rows) {
+    Some(#(values, rest)) -> feed_rows(rest, [values, ..read])
+    None -> list.reverse(read)
+  }
+}
+
+// --- Saving -------------------------------------------------------------------------
+
+// Saves the copy of a request with its outcome: the secrets first, then
+// the interceptors of the recorder. A request that PostgreSQL did not
+// answer is not saved.
+fn save_copy(
+  state: State,
+  copy: Request,
+  outcome: Outcome,
+  types: List(TypeDescription),
+  secrets: Secrets,
+) -> #(Result(Nil, Reason), State) {
+  let entry = {
+    use secret_free <- result.map(secret_free_outcome(secrets, outcome))
+    let #(final_request, final_outcome) =
+      intercepted_copy(
+        state.interceptors,
+        Request(..copy, sql: secrets.replace_text(secrets, copy.sql)),
+        secret_free,
+      )
+    recorded_request(final_request, final_outcome, types)
+    |> option.map(RecordedEntry(key: state.key(final_request), request: _))
+  }
+  case entry {
+    Ok(Some(entry)) -> {
+      let saved = [entry, ..state.saved]
+      #(
+        write_recording(state.path, list.reverse(saved))
+          |> result.map_error(RecordingNotWritten(state.path, _)),
+        State(..state, saved:),
+      )
+    }
+    Ok(None) -> #(Ok(Nil), state)
+    Error(reason) -> #(Error(reason), state)
+  }
+}
+
+fn secret_free_outcome(
+  secrets: Secrets,
+  outcome: Outcome,
+) -> Result(Outcome, Reason) {
+  case outcome {
+    Ok(StatementAnswer(description:, types:, result:)) ->
+      secrets.replace_columns(secrets, description, types, result.rows)
+      |> result.map(fn(rows) {
+        Ok(StatementAnswer(
+          description:,
+          types:,
+          result: CommandResult(..result, rows:),
+        ))
+      })
+    Ok(CopyToAnswer(
+      description:,
+      types:,
+      rows: CopyRows(source: RecordedRows(rows:, ending:), watchers:),
+    )) ->
+      secrets.replace_columns(secrets, description, types, rows)
+      |> result.map(fn(rows) {
+        Ok(CopyToAnswer(
+          description:,
+          types:,
+          rows: CopyRows(source: RecordedRows(rows:, ending:), watchers:),
+        ))
+      })
+    Ok(CopyToAnswer(..))
+    | Ok(ScriptAnswer(..))
+    | Ok(CopyFromAnswer(..))
+    | Error(_) -> Ok(outcome)
+  }
+}
+
+fn recorded_request(
+  request: Request,
+  outcome: Outcome,
+  types: List(TypeDescription),
+) -> Option(RecordedRequest) {
+  case request.kind, outcome {
+    Statement, Ok(StatementAnswer(description:, result:, ..)) ->
+      Some(RecordedStatement(
+        sql: request.sql,
+        parameters: written_parameters(request.parameters),
+        types:,
+        outcome: Ok(StatementReply(description:, result:)),
+      ))
+    Script, Ok(ScriptAnswer(results:)) ->
+      Some(RecordedScript(sql: request.sql, outcome: Ok(results)))
+    CopyFrom(rows:, ..), Ok(CopyFromAnswer(count:)) ->
+      Some(RecordedCopyFrom(
+        sql: request.sql,
+        rows: written_rows(rows),
+        types:,
+        outcome: Ok(count),
+      ))
+    CopyTo,
+      Ok(CopyToAnswer(
+        description:,
+        rows: CopyRows(source: RecordedRows(rows:, ending:), ..),
+        ..,
+      ))
+    ->
+      recorded_ending(ending)
+      |> option.map(fn(recorded_end) {
+        RecordedCopyTo(
+          sql: request.sql,
+          types:,
+          outcome: Ok(RecordedStream(description:, rows:, ending: recorded_end)),
+        )
+      })
+    // An answer of another kind than the request: it is not one that
+    // PostgreSQL gave, so it is not saved.
+    Statement, Ok(_) | Script, Ok(_) | CopyFrom(..), Ok(_) | CopyTo, Ok(_) ->
+      None
+    Statement, Error(reason)
+    | Script, Error(reason)
+    | CopyFrom(..), Error(reason)
+    | CopyTo, Error(reason)
+    ->
+      recording.recorded_failure(reason)
+      |> option.map(failed_request(request, _, types))
+  }
+}
+
+fn failed_request(
+  request: Request,
+  failure: RecordedFailure,
+  types: List(TypeDescription),
+) -> RecordedRequest {
+  case request.kind {
+    Statement ->
+      RecordedStatement(
+        sql: request.sql,
+        parameters: written_parameters(request.parameters),
+        types:,
+        outcome: Error(failure),
+      )
+    Script -> RecordedScript(sql: request.sql, outcome: Error(failure))
+    CopyFrom(rows:, ..) ->
+      RecordedCopyFrom(
+        sql: request.sql,
+        rows: written_rows(rows),
+        types:,
+        outcome: Error(failure),
+      )
+    CopyTo -> RecordedCopyTo(sql: request.sql, types:, outcome: Error(failure))
+  }
+}
+
+fn recorded_ending(
+  ending: Result(Nil, Reason),
+) -> Option(Result(Nil, RecordedFailure)) {
+  case ending {
+    Ok(Nil) -> Some(Ok(Nil))
+    Error(reason) -> recording.recorded_failure(reason) |> option.map(Error)
+  }
+}
+
+// The parameters as written, when each one was written. A secret
+// parameter is kept as its codec, with no cell.
+fn written_parameters(values: List(Value)) -> Option(WrittenParameters) {
+  values
+  |> list.try_map(fn(value) {
+    case query.written(value) {
+      Some(query.WrittenCell(type_description:, cell:)) ->
+        Ok(#(type_description, recording.WrittenCell(cell:)))
+      Some(query.WrittenSecret(type_description:)) ->
+        Ok(#(type_description, SecretCell(codec: query.codec_name(value))))
+      None -> Error(Nil)
+    }
+  })
+  |> result.map(fn(written: List(#(TypeDescription, WrittenParameter))) {
+    let #(types, parameters) = list.unzip(written)
+    WrittenParameters(types:, parameters:)
+  })
+  |> option.from_result
+}
+
+// The rows as written, when each field of each row was written. A field
+// of a `copy_from` row is never secret: `codec.field` makes it.
+fn written_rows(rows: RowFeed) -> Option(WrittenRows) {
+  feed_rows(rows, [])
+  |> list.try_map(fn(values) {
+    list.try_map(values, fn(value) {
+      case query.written(value) {
+        Some(query.WrittenCell(type_description:, cell:)) ->
+          Ok(#(type_description, cell))
+        Some(query.WrittenSecret(..)) | None -> Error(Nil)
+      }
+    })
+  })
+  |> result.map(fn(written) {
+    WrittenRows(
+      types: written
+        |> list.first
+        |> result.map(fn(row) { list.map(row, fn(field) { field.0 }) })
+        |> result.unwrap([]),
+      rows: list.map(written, list.map(_, fn(field) { field.1 })),
+    )
+  })
+  |> option.from_result
+}
+
+// --- Playback -----------------------------------------------------------------------
+
+// Answers a request with the next entry of the recording, when the key of
+// the request is the key of the entry. A request that the entry does not
+// answer leaves the recording as it was.
+fn take(state: State, request: Request, secrets: Secrets) -> #(Outcome, State) {
+  let sql = secrets.replace_text(secrets, request.sql)
+  case state.waiting {
+    [] -> #(Error(RequestNotRecorded(sql:)), state)
+    [entry, ..rest] ->
+      answered(
+        state,
+        entry,
+        rest,
+        answer_of_entry(state, entry, Request(..request, sql:)),
+      )
+  }
+}
+
+fn answered(
+  state: State,
+  entry: RecordedEntry,
+  rest: List(RecordedEntry),
+  answer: Result(Outcome, Reason),
+) -> #(Outcome, State) {
+  case answer {
+    Ok(outcome) -> #(outcome, given(state, entry, rest))
+    Error(reason) -> #(Error(reason), state)
+  }
+}
+
+// The saved outcome of the entry, or why the entry does not answer the
+// request: its key is another, or its values cannot be written with the
+// recorded types, as a live run could not write them.
+fn answer_of_entry(
+  state: State,
+  entry: RecordedEntry,
+  request: Request,
+) -> Result(Outcome, Reason) {
+  let recorded_sql = recorded_sql(entry.request)
+  let not_matched = RequestNotMatched(recorded_sql:, sql: request.sql)
+  use written <- result.try(
+    written_like(request, entry.request)
+    |> result.map_error(fn(reason) {
+      case request.sql == recorded_sql {
+        True -> reason
+        False -> not_matched
+      }
+    }),
+  )
+  let outcome = recorded_outcome(entry.request)
+  let #(final_request, _changed_outcome) =
+    intercepted_copy(state.interceptors, written, outcome)
+  case state.key(final_request) == entry.key {
+    True -> Ok(outcome)
+    False -> Error(not_matched)
+  }
+}
+
+// The state after an entry answered: a failed answer fails the
+// transaction, and the first failure is what it failed with. An answer
+// that succeeded means no transaction is failed.
+fn given(
+  state: State,
+  entry: RecordedEntry,
+  rest: List(RecordedEntry),
+) -> State {
+  case entry_failure(entry.request) {
+    Ok(Nil) -> State(..state, waiting: rest, aborted_by: None)
+    Error(failure) ->
+      State(
+        ..state,
+        waiting: rest,
+        aborted_by: option.or(state.aborted_by, Some(failure.server_error)),
+      )
+  }
+}
+
+fn entry_failure(request: RecordedRequest) -> Result(Nil, RecordedFailure) {
+  case request {
+    RecordedStatement(outcome:, ..) -> result.replace(outcome, Nil)
+    RecordedScript(outcome:, ..) -> result.replace(outcome, Nil)
+    RecordedCopyFrom(outcome:, ..) -> result.replace(outcome, Nil)
+    RecordedCopyTo(outcome:, ..) -> result.replace(outcome, Nil)
+  }
+}
+
+fn recorded_sql(request: RecordedRequest) -> String {
+  case request {
+    RecordedStatement(sql:, ..)
+    | RecordedScript(sql:, ..)
+    | RecordedCopyFrom(sql:, ..)
+    | RecordedCopyTo(sql:, ..) -> sql
+  }
+}
+
+// The request with its values written with the recorded types, as the
+// live run wrote them.
+fn written_like(
+  request: Request,
+  recorded: RecordedRequest,
+) -> Result(Request, Reason) {
+  case request.kind {
+    CopyFrom(table:, columns:, rows:) ->
+      rows_written_like(rows, columns, recorded)
+      |> result.map(fn(rows) {
+        Request(..request, kind: CopyFrom(table:, columns:, rows:))
+      })
+    Statement | Script | CopyTo ->
+      parameters_written_like(request.parameters, recorded)
+      |> result.map(fn(parameters) { Request(..request, parameters:) })
+  }
+}
+
+fn parameters_written_like(
+  values: List(Value),
+  recorded: RecordedRequest,
+) -> Result(List(Value), Reason) {
+  case recorded {
+    RecordedStatement(
+      parameters: Some(WrittenParameters(types: parameter_types, ..)),
+      types:,
+      ..,
+    ) ->
+      query.write_values(values, parameter_types, lookup_of(types))
+      |> result.map(fn(written) {
+        list.zip(values, parameter_types)
+        |> list.map2(written.values, fn(pair, cell) {
+          query.written_as(pair.0, pair.1, cell)
+        })
+      })
+    RecordedStatement(parameters: None, ..)
+    | RecordedScript(..)
+    | RecordedCopyFrom(..)
+    | RecordedCopyTo(..) -> Ok(values)
+  }
+}
+
+fn rows_written_like(
+  rows: RowFeed,
+  columns: List(String),
+  recorded: RecordedRequest,
+) -> Result(RowFeed, Reason) {
+  case recorded {
+    RecordedCopyFrom(
+      rows: Some(WrittenRows(types: column_types, ..)),
+      types:,
+      ..,
+    ) ->
+      feed_rows(rows, [])
+      |> list.try_map(fn(values) {
+        copy.write_row(values, column_types, lookup_of(types), columns)
+        |> result.map(fn(fields) {
+          list.zip(values, column_types)
+          |> list.map2(fields, fn(pair, field) {
+            query.written_as(pair.0, pair.1, copy.field_cell(field))
+          })
+        })
+      })
+      |> result.map(copy_request.feed(_, fn(values) { values }))
+    RecordedCopyFrom(rows: None, ..)
+    | RecordedStatement(..)
+    | RecordedScript(..)
+    | RecordedCopyTo(..) -> Ok(rows)
+  }
+}
+
+fn lookup_of(
+  types: List(TypeDescription),
+) -> fn(Int) -> Result(TypeDescription, Nil) {
+  let by_id =
+    types
+    |> list.map(fn(type_description) {
+      #(type_description.id, type_description)
+    })
+    |> dict.from_list
+  dict.get(by_id, _)
+}
+
+fn recorded_outcome(recorded: RecordedRequest) -> Outcome {
+  case recorded {
+    RecordedStatement(types:, outcome:, ..) ->
+      outcome
+      |> result.map(fn(reply) {
+        StatementAnswer(
+          description: reply.description,
+          types:,
+          result: reply.result,
+        )
+      })
+      |> result.map_error(recording.failure_reason)
+    RecordedScript(outcome:, ..) ->
+      outcome
+      |> result.map(ScriptAnswer)
+      |> result.map_error(recording.failure_reason)
+    RecordedCopyFrom(outcome:, ..) ->
+      outcome
+      |> result.map(CopyFromAnswer)
+      |> result.map_error(recording.failure_reason)
+    RecordedCopyTo(types:, outcome:, ..) ->
+      outcome
+      |> result.map(fn(stream) {
+        CopyToAnswer(
+          description: stream.description,
+          types:,
+          rows: CopyRows(
+            source: RecordedRows(
+              rows: stream.rows,
+              ending: result.map_error(stream.ending, recording.failure_reason),
+            ),
+            watchers: [],
+          ),
+        )
+      })
+      |> result.map_error(recording.failure_reason)
+  }
 }

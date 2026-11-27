@@ -1,3 +1,0 @@
-from_url("postgresql://dream:dream@localhost:5436/dream_test?search_path=app&timezone=UTC&application_name=billing")
-SELECT current_setting('search_path') || '|' || current_setting('timezone') || '|' || current_setting('application_name')
-  -> "app|UTC|billing"
