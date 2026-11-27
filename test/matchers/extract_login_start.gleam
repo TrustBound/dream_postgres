@@ -14,10 +14,11 @@ fn read_certificate(name: String) -> Result(BitArray, String)
 
 /// Gives the result of `start` for the settings, the client nonce and the
 /// server certificate: the first login state and the StartupMessage, or
-/// the error. `nonce` has `shortest_client_nonce` bytes or more.
+/// the error. `nonce` has from `shortest_client_nonce` to
+/// `longest_client_nonce()` bytes.
 /// `certificate_file` names a DER file in
 /// `test/fixtures/channel_binding`, or is `None` for a login without TLS.
-/// Fails when the nonce is too short or the file cannot be read.
+/// Fails when `client_nonce` refuses the nonce or the file cannot be read.
 ///
 /// ```gleam
 /// new(..)
@@ -48,13 +49,13 @@ fn start_with_nonce(
 ) -> MatchResult(Result(#(LoginState, LoginMessage), LoginStartError)) {
   case nonce {
     Ok(nonce) -> start_with(config, nonce, certificate_file)
-    Error(_too_short) ->
+    Error(_refused) ->
       MatchFailed(AssertionFailure(
         operator: "extract_login_start",
         message: "",
         payload: Some(CustomMatcherFailure(
-          actual: "a client nonce that is too short",
-          description: "Expected a client nonce of 18 bytes or more",
+          actual: "a client nonce that client_nonce refuses",
+          description: "Expected a client nonce of 18 to 618 bytes",
         )),
       ))
   }

@@ -11,7 +11,7 @@ import dream_postgres/internal/cell.{Idle}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import driver/server_login.{type TestLogin, TestLogin, log_in}
+import driver/server_login.{type TestLogin, TestLogin, log_in, log_in_with_nonce}
 import driver/servers.{type Server, driver_servers}
 import fixtures/driver_tls.{verify_full}
 import gleam/int.{to_string}
@@ -127,6 +127,36 @@ fn server_tests(server: Server) {
 
       // Act
       let outcome = log_in(server, test_login)
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_transaction_status
+      |> be_equal(Idle)
+      |> or_fail_with("Expected an idle connection after the login")
+    }),
+    it("logs in with SCRAM-SHA-256 and a client nonce of 618 bytes", fn() {
+      // Arrange
+      let test_login = plain("dream", "dream")
+
+      // Act
+      let outcome = log_in_with_nonce(server, test_login, <<0:size(4944)>>)
+
+      // Assert
+      outcome
+      |> should
+      |> be_ok
+      |> extract_transaction_status
+      |> be_equal(Idle)
+      |> or_fail_with("Expected an idle connection after the login")
+    }),
+    it("logs in with SCRAM-SHA-256-PLUS and a client nonce of 618 bytes", fn() {
+      // Arrange
+      let test_login = over_tls("dream_tls", RequireChannelBinding)
+
+      // Act
+      let outcome = log_in_with_nonce(server, test_login, <<0:size(4944)>>)
 
       // Assert
       outcome

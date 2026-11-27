@@ -28,24 +28,127 @@ import gleam/string.{replace, split, starts_with}
 /// The length in bytes of a SHA-256 key and of each SCRAM-SHA-256 proof.
 const key_length = 32
 
-/// The longest server-first-message, in bytes, that `client_final` reads:
-/// 16384.
+/// The longest SASL message, in bytes, that a PostgreSQL server reads:
+/// 1024. The limit counts the length field (4 bytes) and the body of a
+/// SASLInitialResponse or a SASLResponse, not the message type byte `p`.
 ///
-/// PostgreSQL's server-first-message is far shorter, under 200 bytes: the
-/// client's nonce and 18 random bytes in base64 (`SCRAM_RAW_NONCE_LEN` in
-/// `src/include/common/scram-common.h`), a 16-byte salt in base64
-/// (`SCRAM_DEFAULT_SALT_LEN`), and the iteration count. The server nonce
-/// of the message goes again into the client-final-message, so this limit
-/// keeps the client-final-message, and the SASLResponse that holds it,
-/// within a length field that `login.encode_login_message` always writes.
+/// PostgreSQL reads each SASL message with `pq_getmessage`, which refuses a
+/// length field below 4 or above the limit before it takes away the 4
+/// bytes of the field itself (`src/backend/libpq/pqcomm.c:1233` on
+/// REL_16_STABLE, `:1220` on master). The limit is
+/// `PG_MAX_SASL_MESSAGE_LENGTH`, 1024, on each supported branch:
 ///
-/// PostgreSQL reads each SASL message with `pq_getmessage(&buf,
-/// mech->max_message_length)` (`src/backend/libpq/auth-sasl.c`), and for
-/// SCRAM that is `PG_MAX_SASL_MESSAGE_LENGTH`, 1024
-/// (`src/include/libpq/sasl.h`, master e347dae2d4). So a PostgreSQL server
-/// refuses a client-final-message with a server nonce of more than 964
-/// bytes, and fewer with channel binding.
-pub const longest_server_first = 16_384
+/// - REL_16_STABLE and REL_17_STABLE: `src/backend/libpq/auth-sasl.c:29`,
+///   used at `:106`.
+/// - REL_18_STABLE: `src/include/libpq/sasl.h:35`. `auth-sasl.c:98` reads
+///   `mech->max_message_length`, which `auth-scram.c:119` sets to
+///   `PG_MAX_SASL_MESSAGE_LENGTH`.
+/// - master: `src/include/libpq/sasl.h:36`, `auth-sasl.c:104`,
+///   `auth-scram.c:119`.
+pub const longest_sasl_message = 1024
+
+/// The length field of a message, in bytes. It counts itself.
+pub const length_field_bytes = 4
+
+/// The gs2-header of SCRAM-SHA-256-PLUS (RFC 5802 section 7): the longest
+/// gs2-header that the driver sends, 24 bytes.
+pub const server_end_point_header = "p=tls-server-end-point,,"
+
+/// The longest channel binding data, in bytes: 64, a SHA-512 hash of the
+/// server certificate. SHA-512 is the longest hash function of
+/// `channel_binding.server_end_point_hash`.
+pub const longest_certificate_hash = 64
+
+/// The attribute before the server nonce in the client-final-message.
+const nonce_attribute = ",r="
+
+/// The attribute before the channel binding in the client-final-message.
+const channel_binding_attribute = "c="
+
+/// The attribute before the proof in the client-final-message.
+const proof_attribute = ",p="
+
+/// The longest server nonce, in bytes, that `client_final` accepts: 848.
+///
+/// The server nonce goes again into the client-final-message, which the
+/// SASLResponse carries. The SASLResponse is the type byte `p`, then the
+/// length field and the client-final-message
+/// `c=<base64 of the gs2-header and the channel binding data>,r=<server
+/// nonce>,p=<base64 of the proof>`. The longest one binds to the channel
+/// with a SHA-512 hash:
+///
+/// - 4 bytes: the length field, which counts itself
+/// - 2 bytes: `c=`
+/// - 120 bytes: the base64 of the 24 bytes of `p=tls-server-end-point,,`
+///   and the 64 bytes of the hash
+/// - 3 bytes: `,r=`
+/// - the server nonce
+/// - 3 bytes: `,p=`
+/// - 44 bytes: the base64 of the 32 bytes of the SHA-256 proof
+///
+/// So `longest_sasl_message` (1024) leaves 1024 - 176 = 848 bytes for the
+/// server nonce. A longer server nonce makes a SASLResponse that the
+/// server refuses, so the login does not send it.
+///
+/// The limit is on the server nonce, not on the whole
+/// server-first-message: the salt, the iteration count and any extensions
+/// after them have no limit in RFC 5802, and PostgreSQL takes the salt
+/// from the stored secret, which can have any length. Only the server
+/// nonce goes back to the server.
+pub fn longest_server_nonce() -> Int {
+  let channel_binding_input =
+    string.byte_size(server_end_point_header) + longest_certificate_hash
+  longest_sasl_message
+  - length_field_bytes
+  - string.byte_size(channel_binding_attribute)
+  - base64_length(channel_binding_input)
+  - string.byte_size(nonce_attribute)
+  - string.byte_size(proof_attribute)
+  - base64_length(key_length)
+}
+
+/// The number of characters of the padded base64 of `bytes` bytes: 4 for
+/// each 3 bytes or part of 3 bytes (RFC 4648 section 4).
+///
+/// ## Parameters
+///
+/// - `bytes`: the number of bytes, 0 or more
+///
+/// ## Returns
+///
+/// The number of base64 characters.
+pub fn base64_length(bytes: Int) -> Int {
+  { bytes + 2 } / 3 * 4
+}
+
+/// The most bytes whose padded base64 has `characters` characters or
+/// fewer: 3 bytes for each 4 characters.
+///
+/// ## Parameters
+///
+/// - `characters`: the number of base64 characters, 0 or more
+///
+/// ## Returns
+///
+/// The number of bytes.
+pub fn longest_base64_input(characters: Int) -> Int {
+  characters / 4 * 3
+}
+
+/// The client-first-message-bare before the nonce: `n=`, the user name as
+/// a saslname, and `,r=` (RFC 5802 section 7).
+///
+/// ## Parameters
+///
+/// - `user_name`: the user name of the message
+///
+/// ## Returns
+///
+/// The start of the client-first-message-bare, for example `n=,r=` for
+/// the empty user name.
+pub fn bare_message_before_nonce(user_name: String) -> String {
+  "n=" <> sasl_name(user_name) <> ",r="
+}
 
 /// The channel binding of an exchange: the gs2-header of RFC 5802 section
 /// 7.
@@ -63,9 +166,10 @@ pub type ChannelBinding {
 
 /// Why `client_final` refuses the server-first-message.
 pub type ServerFirstError {
-  /// The server-first-message has `length` bytes, more than
-  /// `longest_server_first`.
-  ServerFirstTooLong(length: Int)
+  /// The server nonce has `length` bytes, more than
+  /// `longest_server_nonce`, so the client-final-message would not fit in
+  /// `longest_sasl_message`.
+  ServerNonceTooLong(length: Int)
   /// The server-first-message does not have the form
   /// `r=<nonce>,s=<salt>,i=<iteration count>`, with optional extensions
   /// after it (RFC 5802 section 7).
@@ -123,7 +227,7 @@ type ServerChallenge {
 ///   uses the user of the StartupMessage, so libpq sends the empty name.
 /// - `client_nonce`: random bytes from `crypto:strong_rand_bytes/1`, 18 or
 ///   more, new for each exchange. The message holds them as base64.
-///   `login.client_nonce` keeps them to `login.longest_client_nonce`.
+///   `login.client_nonce` keeps them to `login.longest_client_nonce()`.
 /// - `channel_binding`: the channel binding of the exchange
 ///
 /// ## Returns
@@ -137,7 +241,7 @@ pub fn client_first(
   let nonce = base64_encode(client_nonce, True)
   ClientFirst(
     gs2_header: gs2_header(channel_binding),
-    bare_message: "n=" <> sasl_name(user_name) <> ",r=" <> nonce,
+    bare_message: bare_message_before_nonce(user_name) <> nonce,
     client_nonce: nonce,
     channel_binding:,
   )
@@ -175,25 +279,23 @@ pub fn client_first_message(first: ClientFirst) -> BitArray {
 ///
 /// - `Ok(ClientFinal)`: the client-final-message and the server signature
 ///   to expect
-/// - `Error(ServerFirstError)`: the server-first-message is longer than
-///   `longest_server_first`, or it is not valid
+/// - `Error(ServerFirstError)`: the server nonce is longer than
+///   `longest_server_nonce`, or the message is not valid
 pub fn client_final(
   first: ClientFirst,
   password: String,
   server_first_message: BitArray,
 ) -> Result(ClientFinal, ServerFirstError) {
-  let length = byte_size(server_first_message)
-  use <- guard(length > longest_server_first, {
-    Error(ServerFirstTooLong(length))
-  })
   use text <- try(
     to_string(server_first_message)
     |> replace_error(InvalidServerFirstMessage(server_first_message)),
   )
   use challenge <- try(read_server_first(text, server_first_message))
+  use _ <- try(check_nonce_length(challenge.nonce))
   use _ <- try(check_nonce(challenge.nonce, first.client_nonce))
   let binding = base64_encode(channel_binding_input(first), True)
-  let without_proof = "c=" <> binding <> ",r=" <> challenge.nonce
+  let without_proof =
+    channel_binding_attribute <> binding <> nonce_attribute <> challenge.nonce
   let authentication_message = <<
     first.bare_message:utf8,
     ",",
@@ -247,7 +349,7 @@ fn gs2_header(channel_binding: ChannelBinding) -> String {
   case channel_binding {
     ClientWithoutChannelBinding -> "n,,"
     ServerWithoutChannelBinding -> "y,,"
-    ServerEndPoint(_) -> "p=tls-server-end-point,,"
+    ServerEndPoint(_) -> server_end_point_header
   }
 }
 
@@ -302,6 +404,14 @@ fn read_iteration_count(text: String) -> Result(Int, ServerFirstError) {
   }
 }
 
+fn check_nonce_length(server_nonce: String) -> Result(Nil, ServerFirstError) {
+  let length = string.byte_size(server_nonce)
+  use <- guard(length > longest_server_nonce(), {
+    Error(ServerNonceTooLong(length))
+  })
+  Ok(Nil)
+}
+
 fn check_nonce(
   server_nonce: String,
   client_nonce: String,
@@ -334,7 +444,7 @@ fn final_message(
   let proof = exclusive_or(client_key, client_signature)
   let server_key = hmac(Sha256, salted_password, <<"Server Key">>)
   ClientFinal(
-    message: without_proof <> ",p=" <> base64_encode(proof, True),
+    message: without_proof <> proof_attribute <> base64_encode(proof, True),
     server_signature: hmac(Sha256, server_key, authentication_message),
   )
 }

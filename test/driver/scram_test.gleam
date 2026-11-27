@@ -10,7 +10,7 @@ import dream_postgres/driver/scram.{
   type ServerFinalError, type ServerFirstError, ClientWithoutChannelBinding,
   InvalidIterationCount, InvalidSalt, InvalidServerFinalMessage,
   InvalidServerFirstMessage, MandatoryExtension, ServerEndPoint,
-  ServerFirstTooLong, ServerNonceMismatch, ServerReportedError,
+  ServerNonceMismatch, ServerNonceTooLong, ServerReportedError,
   ServerSignatureMismatch, ServerWithoutChannelBinding, client_final,
   client_first, client_first_message,
 }
@@ -18,6 +18,8 @@ import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import gleam/list.{map}
+import gleam/string.{repeat}
+import matchers/extract_byte_size.{extract_byte_size}
 import matchers/extract_client_final_message.{extract_client_final_message}
 import matchers/extract_server_final_check.{extract_server_final_check}
 
@@ -232,6 +234,34 @@ pub fn tests() -> TestSuite {
         |> or_fail_with("Expected the signature to verify before the extension")
       }),
     ]),
+    group("the longest server nonce", [
+      it(
+        "gives a client-final-message of 1020 bytes for a server nonce of 848 bytes and a SHA-512 hash",
+        fn() {
+          // Arrange
+          let first = client_first("", nonce, ServerEndPoint(<<0:size(512)>>))
+          let message = <<
+            "r=AAECAwQFBgcICQoLDA0ODxAR":utf8,
+            repeat("a", 824):utf8,
+            ",s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096",
+          >>
+
+          // Act
+          let final = client_final(first, "pencil", message)
+
+          // Assert
+          final
+          |> should
+          |> be_ok
+          |> extract_client_final_message
+          |> extract_byte_size
+          |> be_equal(1020)
+          |> or_fail_with(
+            "Expected 1020 bytes, 1024 with the length field of the SASLResponse",
+          )
+        },
+      ),
+    ]),
     group(
       "server-first-messages that are wrong",
       map(server_first_cases(), server_first_test),
@@ -319,14 +349,13 @@ fn server_first_test(test_case: ServerMessageCase(ServerFirstError)) {
 fn server_first_cases() -> List(ServerMessageCase(ServerFirstError)) {
   [
     ServerMessageCase(
-      "a message of 16385 bytes, one more than longest_server_first",
-      <<0:size(131_080)>>,
-      ServerFirstTooLong(16_385),
-    ),
-    ServerMessageCase(
-      "a message of 16384 bytes is read, and has no nonce",
-      <<0:size(131_072)>>,
-      InvalidServerFirstMessage(<<0:size(131_072)>>),
+      "a server nonce of 849 bytes, one more than longest_server_nonce",
+      <<
+        "r=rOprNGfwEbeRWgbNEkqO":utf8,
+        repeat("a", 829):utf8,
+        ",s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096",
+      >>,
+      ServerNonceTooLong(849),
     ),
     ServerMessageCase(
       "bytes that are not UTF-8",

@@ -45,6 +45,7 @@ import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{base16_encode, byte_size}
 import gleam/bool.{guard}
 import gleam/dict.{type Dict}
+import gleam/int
 import gleam/list.{
   append, contains, filter, fold, map as map_list, reverse, try_each, try_fold,
 }
@@ -60,23 +61,67 @@ pub const default_application_name = "dream_postgres"
 /// (`SCRAM_RAW_NONCE_LEN`).
 pub const shortest_client_nonce = 18
 
-/// The most random bytes of a SCRAM client nonce: 1024.
+/// The most random bytes of a SCRAM client nonce: 618. The message holds
+/// the nonce as padded base64, 4 characters for each 3 bytes, so 618 bytes
+/// are 824 characters.
 ///
 /// libpq makes a nonce of 18 random bytes (`SCRAM_RAW_NONCE_LEN` in
 /// PostgreSQL's `src/include/common/scram-common.h`, master e347dae2d4),
 /// which base64 makes 24 characters. Npgsql makes 18 bytes too (`GetNonce`
-/// in `NpgsqlConnector.Auth.cs`). RFC 5802 sets no length. 1024 bytes are
-/// far above the length that a client uses. With this limit the length
-/// field of the SASLInitialResponse is at most 1424, so it always holds
-/// the length and `encode_login_message` cannot fail.
+/// in `NpgsqlConnector.Auth.cs`). RFC 5802 sets no length.
 ///
-/// PostgreSQL reads each SASL message with `pq_getmessage(&buf,
-/// mech->max_message_length)` (`src/backend/libpq/auth-sasl.c`), and for
-/// SCRAM that is `PG_MAX_SASL_MESSAGE_LENGTH`, 1024
-/// (`src/include/libpq/sasl.h`). So the server refuses the
-/// SASLInitialResponse of a nonce above 744 bytes, or above 726 bytes with
-/// channel binding.
-pub const longest_client_nonce = 1024
+/// The limit comes from `scram.longest_sasl_message`, the 1024 bytes of
+/// length field and body that a PostgreSQL server reads in each SASL
+/// message. The nonce goes into two of them, and each must fit:
+///
+/// 1. The SASLInitialResponse: the type byte `p`, then the length field
+///    and `SCRAM-SHA-256-PLUS`, a zero byte, the length of the
+///    client-first-message, and the client-first-message
+///    `p=tls-server-end-point,,n=,r=<nonce>`. The longest one, with
+///    channel binding, leaves 1024 - 4 - 19 - 4 - 24 - 5 = 968 characters
+///    for the nonce.
+/// 2. The SASLResponse: its client-final-message holds the server nonce,
+///    which is the client nonce and the server's part. A PostgreSQL server
+///    adds the base64 of `SCRAM_RAW_NONCE_LEN` (18) random bytes, 24
+///    characters (`src/backend/libpq/auth-scram.c`). So the client nonce
+///    has the `scram.longest_server_nonce()` (848) characters less 24: 824
+///    characters.
+///
+/// The smaller of the two is 824 characters, which are the base64 of 618
+/// bytes. With a longer nonce, the server refuses the SASLResponse, so
+/// `client_nonce` refuses the nonce before the login.
+pub fn longest_client_nonce() -> Int {
+  let initial_response_characters =
+    scram.longest_sasl_message
+    - scram.length_field_bytes
+    - string.byte_size(scram_plus_mechanism)
+    - mechanism_end_bytes
+    - client_first_length_bytes
+    - string.byte_size(scram.server_end_point_header)
+    - string.byte_size(scram.bare_message_before_nonce(scram_user_name))
+  let response_characters =
+    scram.longest_server_nonce()
+    - scram.base64_length(postgres_server_nonce_bytes)
+  int.min(initial_response_characters, response_characters)
+  |> scram.longest_base64_input
+}
+
+/// The user name of the client-first-message. PostgreSQL ignores it and
+/// uses the user of the StartupMessage, so the login sends the empty name,
+/// as libpq does.
+const scram_user_name = ""
+
+/// The zero byte after the mechanism name of a SASLInitialResponse.
+const mechanism_end_bytes = 1
+
+/// The Int32 length of the client-first-message in a SASLInitialResponse.
+const client_first_length_bytes = 4
+
+/// The random bytes that a PostgreSQL server adds to the client nonce to
+/// make the server nonce: `SCRAM_RAW_NONCE_LEN`, 18
+/// (`src/include/common/scram-common.h`, used in
+/// `src/backend/libpq/auth-scram.c`).
+const postgres_server_nonce_bytes = 18
 
 /// The longest password, in bytes, that a cleartext login sends: 65530.
 ///
@@ -173,7 +218,7 @@ pub type LoginMethod {
 }
 
 /// The random bytes of a SCRAM client nonce: from `shortest_client_nonce`
-/// to `longest_client_nonce`. Only `client_nonce` and `random_client_nonce`
+/// to `longest_client_nonce()`. Only `client_nonce` and `random_client_nonce`
 /// make one.
 pub opaque type ClientNonce {
   ClientNonce(bytes: BitArray)
@@ -183,7 +228,7 @@ pub opaque type ClientNonce {
 pub type ClientNonceError {
   /// The bytes are fewer than `shortest_client_nonce`.
   ClientNonceTooShort(length: Int)
-  /// The bytes are more than `longest_client_nonce`.
+  /// The bytes are more than `longest_client_nonce()`.
   ClientNonceTooLong(length: Int)
 }
 
@@ -269,10 +314,10 @@ pub opaque type LoginMessage {
   /// zero byte, or the 35 characters of an MD5 hash.
   PasswordMessage(password: String)
   /// One of the two SCRAM mechanism names, and the client-first-message of
-  /// a client nonce of `longest_client_nonce` bytes or fewer.
+  /// a client nonce of `longest_client_nonce()` bytes or fewer.
   SaslInitialResponse(mechanism: String, first: ClientFirst)
-  /// The client-final-message of a server-first-message of
-  /// `scram.longest_server_first` bytes or fewer.
+  /// The client-final-message of a server nonce of
+  /// `scram.longest_server_nonce()` bytes or fewer.
   SaslResponse(final: ClientFinal)
 }
 
@@ -565,7 +610,7 @@ pub fn random_client_nonce() -> ClientNonce {
 ///
 /// ## Parameters
 ///
-/// - `bytes`: from `shortest_client_nonce` to `longest_client_nonce`
+/// - `bytes`: from `shortest_client_nonce` to `longest_client_nonce()`
 ///   random bytes
 ///
 /// ## Returns
@@ -578,7 +623,7 @@ pub fn client_nonce(bytes: BitArray) -> Result(ClientNonce, ClientNonceError) {
   use <- guard(length < shortest_client_nonce, {
     Error(ClientNonceTooShort(length))
   })
-  use <- guard(length > longest_client_nonce, {
+  use <- guard(length > longest_client_nonce(), {
     Error(ClientNonceTooLong(length))
   })
   Ok(ClientNonce(bytes))
@@ -804,7 +849,7 @@ fn sasl_login(
 ) -> Result(LoginStep, LoginError) {
   use binding <- try(choose_channel_binding(state, mechanisms))
   let mechanism = mechanism_name(binding)
-  let first = client_first("", state.client_nonce.bytes, binding)
+  let first = client_first(scram_user_name, state.client_nonce.bytes, binding)
   let reply = SaslInitialResponse(mechanism, first)
   continue(state, AwaitingServerFirst(mechanism, first), Some(reply))
 }
@@ -992,17 +1037,17 @@ fn continue(
 ///   and a length above 2147483647 (`StartupMessageTooLong`).
 /// - PasswordMessage: at most `longest_password` bytes and no zero byte,
 ///   or an MD5 hash of 35 characters.
-/// - SASLInitialResponse: a client nonce of at most `longest_client_nonce`
-///   bytes, so a length field of at most 1424: 4 for itself, 19 for
+/// - SASLInitialResponse: a client nonce of at most `longest_client_nonce()`
+///   bytes, so a length field of at most 880: 4 for itself, 19 for
 ///   `SCRAM-SHA-256-PLUS` and its zero byte, 4 for the data length, 24 for
-///   the gs2-header `p=tls-server-end-point,,`, 5 for `n=,r=`, and 1368
+///   the gs2-header `p=tls-server-end-point,,`, 5 for `n=,r=`, and 824
 ///   for the nonce in base64.
 /// - SASLResponse: a channel binding hash of at most 64 bytes (SHA-512)
-///   and a server nonce from a server-first-message of at most
-///   `scram.longest_server_first` bytes, so a length field of at most
-///   16560: 4 for itself, 122 for `c=` and the gs2-header with the hash
-///   in base64, 3 for `,r=`, 16384 for the server nonce, and 47 for `,p=`
-///   and the proof in base64.
+///   and a server nonce of at most `scram.longest_server_nonce()` bytes,
+///   so a length field of at most `scram.longest_sasl_message` (1024): 4
+///   for itself, 122 for `c=` and the gs2-header with the hash in base64,
+///   3 for `,r=`, 848 for the server nonce, and 47 for `,p=` and the
+///   proof in base64.
 ///
 /// ## Parameters
 ///

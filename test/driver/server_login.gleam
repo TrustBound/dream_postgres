@@ -5,9 +5,10 @@
 
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/login.{
-  type ChannelBindingSetting, type ConfigError, type LoginError,
-  type LoginMessage, type LoginOutcome, type LoginStartError, type LoginState,
-  Continue, LoggedIn, encode_login_message,
+  type ChannelBindingSetting, type ClientNonce, type ClientNonceError,
+  type ConfigError, type LoginError, type LoginMessage, type LoginOutcome,
+  type LoginStartError, type LoginState, Continue, LoggedIn,
+  encode_login_message,
 }
 import dream_postgres/driver/message.{
   type ProtocolError, type ProtocolVersion, Decoded, NeedMoreBytes,
@@ -31,6 +32,7 @@ pub type LoginFailure {
   SendRefused(error: SendError)
   ReceiveRefused(error: ReceiveError)
   DecodeFailed(error: ProtocolError)
+  NonceRefused(error: ClientNonceError)
   StartFailed(error: LoginStartError)
   LoginFailed(error: LoginError)
 }
@@ -52,9 +54,28 @@ pub fn log_in(
   server: Server,
   test_login: TestLogin,
 ) -> Result(LoginOutcome, LoginFailure) {
+  log_in_with(server, test_login, login.random_client_nonce())
+}
+
+/// Logs in with the given client nonce bytes, then closes the connection.
+/// Fails with `NonceRefused` when `login.client_nonce` refuses the bytes.
+pub fn log_in_with_nonce(
+  server: Server,
+  test_login: TestLogin,
+  nonce_bytes: BitArray,
+) -> Result(LoginOutcome, LoginFailure) {
+  use nonce <- try(login.client_nonce(nonce_bytes) |> map_error(NonceRefused))
+  log_in_with(server, test_login, nonce)
+}
+
+fn log_in_with(
+  server: Server,
+  test_login: TestLogin,
+  nonce: ClientNonce,
+) -> Result(LoginOutcome, LoginFailure) {
   use config <- try(login_config(test_login))
   use connection <- try(open(server, test_login))
-  let outcome = run_login(connection, config)
+  let outcome = run_login(connection, config, nonce)
   close(connection)
   outcome |> result.map(pair.first)
 }
@@ -69,7 +90,7 @@ pub fn open_logged_in(
 ) -> Result(#(Connection, BitArray), LoginFailure) {
   use config <- try(login_config(test_login))
   use connection <- try(open(server, test_login))
-  case run_login(connection, config) {
+  case run_login(connection, config, login.random_client_nonce()) {
     Ok(#(_outcome, rest)) -> Ok(#(connection, rest))
     Error(failure) -> close_with(connection, failure)
   }
@@ -117,13 +138,10 @@ fn open(
 fn run_login(
   connection: Connection,
   config: login.LoginConfig,
+  nonce: ClientNonce,
 ) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
   use #(state, first) <- try(
-    login.start(
-      config,
-      login.random_client_nonce(),
-      server_certificate(connection),
-    )
+    login.start(config, nonce, server_certificate(connection))
     |> map_error(StartFailed),
   )
   use Nil <- try(send_message(connection, first))

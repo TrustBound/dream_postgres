@@ -33,7 +33,7 @@ import dream_postgres/driver/message.{
   Protocol32, ReadyForQuery,
 }
 import dream_postgres/driver/scram.{
-  InvalidServerFirstMessage, ServerFirstTooLong, ServerSignatureMismatch,
+  InvalidServerFirstMessage, ServerNonceTooLong, ServerSignatureMismatch,
 }
 import dream_postgres/internal/cell.{Idle, ServerReport}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
@@ -62,7 +62,40 @@ pub fn tests() -> TestSuite {
   describe("dream_postgres/driver/login", [
     group("the StartupMessage", map(startup_cases(), startup_test)),
     group("settings that new refuses", map(config_error_cases(), config_test)),
-    group("client_nonce", [client_nonce_test(), client_nonce_too_long_test()]),
+    group("client_nonce", [
+      client_nonce_test(),
+      it(
+        "sends a client nonce of 618 bytes, the longest, with SCRAM-SHA-256-PLUS",
+        fn() {
+          // Arrange
+          let config = build(pencil(RequireChannelBinding))
+
+          // Act and Assert
+          config
+          |> should
+          |> be_ok
+          |> extract_login_start(
+            nonce: <<0:size(4944)>>,
+            certificate_file: Some("rsa_sha512.der"),
+          )
+          |> extract_login_run([
+            AuthenticationSasl(["SCRAM-SHA-256", "SCRAM-SHA-256-PLUS"]),
+          ])
+          |> be_ok
+          |> be_equal(LoginRun(
+            [
+              sasl_initial_response_bytes("SCRAM-SHA-256-PLUS", <<
+                "p=tls-server-end-point,,n=,r=":utf8,
+                repeat("A", 824):utf8,
+              >>),
+            ],
+            None,
+          ))
+          |> or_fail_with("Expected the SASLInitialResponse of the nonce")
+        },
+      ),
+      client_nonce_too_long_test(),
+    ]),
     group("start", map(start_error_cases(), start_error_test)),
     group("logins that work", map(login_cases(), login_test)),
     group("logins that fail", map(failure_cases(), login_test)),
@@ -492,16 +525,16 @@ fn client_nonce_test() {
 }
 
 fn client_nonce_too_long_test() {
-  it("refuses a client nonce of 1025 bytes", fn() {
+  it("refuses a client nonce of 619 bytes, one more than the longest", fn() {
     // Act
-    let made = client_nonce(<<0:size(8200)>>)
+    let made = client_nonce(<<0:size(4952)>>)
 
     // Assert
     made
     |> should
     |> be_error
-    |> be_equal(ClientNonceTooLong(1025))
-    |> or_fail_with("Expected ClientNonceTooLong(1025)")
+    |> be_equal(ClientNonceTooLong(619))
+    |> or_fail_with("Expected ClientNonceTooLong(619)")
   })
 }
 
@@ -697,14 +730,18 @@ fn failure_cases() -> List(LoginCase) {
       Error(PasswordTooLong(65_531)),
     ),
     LoginCase(
-      "a server-first-message of 16385 bytes",
+      "a server nonce of 849 bytes",
       pencil(PreferChannelBinding),
       None,
       [
         AuthenticationSasl(["SCRAM-SHA-256"]),
-        AuthenticationSaslContinue(<<0:size(131_080)>>),
+        AuthenticationSaslContinue(<<
+          "r=AAECAwQFBgcICQoLDA0ODxAR":utf8,
+          repeat("a", 825):utf8,
+          ",s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096",
+        >>),
       ],
-      Error(ScramServerFirstFailed(ServerFirstTooLong(16_385))),
+      Error(ScramServerFirstFailed(ServerNonceTooLong(849))),
     ),
     LoginCase(
       "a wrong password gives the server's report",
