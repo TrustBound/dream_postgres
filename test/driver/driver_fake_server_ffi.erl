@@ -1,5 +1,6 @@
 -module(driver_fake_server_ffi).
--export([start/1, client_closed/1, start_silent/0]).
+-export([start/1, client_closed/1, start_silent/0,
+         start_tls_then_bad_record/2, send_bad_record/1]).
 
 %% A fake PostgreSQL server for the transport tests: it does one thing a
 %% real server never does, then reports whether the client closed its end.
@@ -27,6 +28,13 @@
 %% start_silent() gives {ok, Port} of a server that accepts one connection
 %% and never sends a byte, until the client closes, or {error, Reason}.
 
+%% start_tls_then_bad_record(CertificateFile, KeyFile) gives
+%% {ok, {Port, Server}} of a server that answers S, does the TLS handshake,
+%% and waits. send_bad_record(Server) makes it send a record that no key of
+%% the session protects, so the client's TLS layer raises an alert, and
+%% gives {ok, nil} once it is sent. The test arms its read first, so the
+%% alert reaches it in a fixed order.
+
 -define(WAIT, 5000).
 
 start(Behavior) ->
@@ -47,6 +55,58 @@ start_silent() ->
     case open(self(), make_ref(), Silent) of
         {ok, {Port, _Reference}} -> {ok, Port};
         {error, Reason} -> {error, Reason}
+    end.
+
+start_tls_then_bad_record(CertificateFile, KeyFile) ->
+    Caller = self(),
+    Reference = make_ref(),
+    Serve = fun(Listen) ->
+        Caller ! {Reference, {server, self()}},
+        Options = [{certfile, binary_to_list(CertificateFile)},
+                   {keyfile, binary_to_list(KeyFile)},
+                   {log_level, none}],
+        then(gen_tcp:accept(Listen, ?WAIT), fun(Socket) ->
+            then(gen_tcp:recv(Socket, 8, ?WAIT), fun(_Request) ->
+                then(gen_tcp:send(Socket, <<"S">>), fun(_) ->
+                    then(ssl:handshake(Socket, Options, ?WAIT), fun(TlsSocket) ->
+                        send_record_on_command(Socket, TlsSocket)
+                    end)
+                end)
+            end)
+        end),
+        gen_tcp:close(Listen)
+    end,
+    case open(Caller, Reference, Serve) of
+        {ok, {Port, Reference}} -> server_of(Port, Reference);
+        {error, Reason} -> {error, Reason}
+    end.
+
+server_of(Port, Reference) ->
+    receive
+        {Reference, {server, Server}} -> {ok, {Port, Server}}
+    after ?WAIT -> {error, <<"the server gave no process within 5 seconds">>}
+    end.
+
+send_record_on_command(Socket, TlsSocket) ->
+    receive
+        {send_bad_record, From, Reference} ->
+            %% A record header for application data, then 5 bytes that no
+            %% key of the session protects.
+            Sent = gen_tcp:send(Socket, <<23, 3, 3, 0, 5, "hello">>),
+            From ! {Reference, Sent},
+            wait_for_close(ssl, TlsSocket)
+    after ?WAIT ->
+        {error, <<"no command within 5 seconds">>}
+    end.
+
+send_bad_record(Server) ->
+    Reference = make_ref(),
+    Server ! {send_bad_record, self(), Reference},
+    receive
+        {Reference, ok} -> {ok, nil};
+        {Reference, {error, Reason}} ->
+            {error, unicode:characters_to_binary(io_lib:format("~p", [Reason]))}
+    after ?WAIT -> {error, <<"the server did not send the record within 5 seconds">>}
     end.
 
 %% Starts a process that listens on a free port and then runs Serve with
