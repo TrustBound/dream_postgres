@@ -6,7 +6,10 @@
 //// `start` gives the StartupMessage, with a client nonce from
 //// `random_client_nonce`. Then the caller gives each message of
 //// the server to `step`, and sends the reply that `step` gives, until
-//// `step` gives `LoggedIn` or an error.
+//// `step` gives `LoggedIn` or an error. `encode_login_message` gives the
+//// bytes of each message to send. It cannot fail: each value that a login
+//// message holds has a limit that keeps the message within its length
+//// field, and the login checks it before it makes the message.
 ////
 //// The login methods are: no password, a cleartext password, MD5, and
 //// SCRAM-SHA-256 (with SCRAM-SHA-256-PLUS over TLS). Kerberos V5, GSSAPI and
@@ -23,15 +26,14 @@ import dream_postgres/driver/channel_binding.{
   type CertificateError, server_end_point_hash,
 }
 import dream_postgres/driver/crypto.{Md5, hash, random_bytes}
-import dream_postgres/driver/encode.{length_field, startup_message_length}
+import dream_postgres/driver/encode.{length_field}
 import dream_postgres/driver/message.{
-  type BackendMessage, type FrontendMessage, type ProtocolVersion,
-  AuthenticationCleartextPassword, AuthenticationGss, AuthenticationKerberosV5,
-  AuthenticationMd5Password, AuthenticationOk, AuthenticationSasl,
-  AuthenticationSaslContinue, AuthenticationSaslFinal, AuthenticationSspi,
-  BackendKeyData, ErrorResponse, NegotiateProtocolVersion, NoticeResponse,
-  ParameterStatus, PasswordMessage, Protocol30, Protocol32, ReadyForQuery,
-  SaslInitialResponse, SaslResponse, StartupMessage,
+  type BackendMessage, type ProtocolVersion, AuthenticationCleartextPassword,
+  AuthenticationGss, AuthenticationKerberosV5, AuthenticationMd5Password,
+  AuthenticationOk, AuthenticationSasl, AuthenticationSaslContinue,
+  AuthenticationSaslFinal, AuthenticationSspi, BackendKeyData, ErrorResponse,
+  NegotiateProtocolVersion, NoticeResponse, ParameterStatus, Protocol30,
+  Protocol32, ReadyForQuery,
 }
 import dream_postgres/driver/scram.{
   type ChannelBinding, type ClientFinal, type ClientFirst, type ServerFinalError,
@@ -43,7 +45,9 @@ import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{base16_encode, byte_size}
 import gleam/bool.{guard}
 import gleam/dict.{type Dict}
-import gleam/list.{append, contains, filter, reverse, try_each, try_fold}
+import gleam/list.{
+  append, contains, filter, fold, map as map_list, reverse, try_each, try_fold,
+}
 import gleam/option.{type Option, None, Some}
 import gleam/result.{map, map_error, replace, replace_error, try, unwrap}
 import gleam/set.{type Set}
@@ -55,6 +59,39 @@ pub const default_application_name = "dream_postgres"
 /// The fewest random bytes of a SCRAM client nonce. libpq uses 18
 /// (`SCRAM_RAW_NONCE_LEN`).
 pub const shortest_client_nonce = 18
+
+/// The most random bytes of a SCRAM client nonce: 1024.
+///
+/// libpq makes a nonce of 18 random bytes (`SCRAM_RAW_NONCE_LEN` in
+/// PostgreSQL's `src/include/common/scram-common.h`, master e347dae2d4),
+/// which base64 makes 24 characters. Npgsql makes 18 bytes too (`GetNonce`
+/// in `NpgsqlConnector.Auth.cs`). RFC 5802 sets no length. 1024 bytes are
+/// far above the length that a client uses. With this limit the length
+/// field of the SASLInitialResponse is at most 1424, so it always holds
+/// the length and `encode_login_message` cannot fail.
+///
+/// PostgreSQL reads each SASL message with `pq_getmessage(&buf,
+/// mech->max_message_length)` (`src/backend/libpq/auth-sasl.c`), and for
+/// SCRAM that is `PG_MAX_SASL_MESSAGE_LENGTH`, 1024
+/// (`src/include/libpq/sasl.h`). So the server refuses the
+/// SASLInitialResponse of a nonce above 744 bytes, or above 726 bytes with
+/// channel binding.
+pub const longest_client_nonce = 1024
+
+/// The longest password, in bytes, that a cleartext login sends: 65530.
+///
+/// PostgreSQL reads a PasswordMessage with `pq_getmessage(&buf,
+/// PG_MAX_AUTH_TOKEN_LENGTH)` (`src/backend/libpq/auth.c:739`), and
+/// `PG_MAX_AUTH_TOKEN_LENGTH` is 65535 (`src/include/libpq/auth.h:33`).
+/// `pq_getmessage` (`src/backend/libpq/pqcomm.c:1220`) refuses a length
+/// field above that limit. The length field counts itself (4 bytes), the
+/// password and its zero byte: 4 + 65530 + 1 = 65535. A longer password
+/// is a message that the server refuses, so the login does not send it.
+///
+/// Only the cleartext login sends the password. MD5 sends a hash of 35
+/// characters, and SCRAM only makes its keys from the password (after
+/// SASLprep). So the limit applies to the cleartext login alone.
+pub const longest_password = 65_530
 
 const scram_mechanism = "SCRAM-SHA-256"
 
@@ -135,8 +172,9 @@ pub type LoginMethod {
   SspiLogin
 }
 
-/// The random bytes of a SCRAM client nonce: `shortest_client_nonce` or
-/// more. Only `client_nonce` and `random_client_nonce` make one.
+/// The random bytes of a SCRAM client nonce: from `shortest_client_nonce`
+/// to `longest_client_nonce`. Only `client_nonce` and `random_client_nonce`
+/// make one.
 pub opaque type ClientNonce {
   ClientNonce(bytes: BitArray)
 }
@@ -145,6 +183,8 @@ pub opaque type ClientNonce {
 pub type ClientNonceError {
   /// The bytes are fewer than `shortest_client_nonce`.
   ClientNonceTooShort(length: Int)
+  /// The bytes are more than `longest_client_nonce`.
+  ClientNonceTooLong(length: Int)
 }
 
 /// Why `start` refuses a login.
@@ -169,6 +209,10 @@ pub type LoginError {
   /// The password function gave a password with a zero byte, which would
   /// end it early. No password went to the server.
   PasswordHasZeroByte
+  /// The server asks for a cleartext password, and the password has
+  /// `length` bytes, more than `longest_password`. No password went to the
+  /// server.
+  PasswordTooLong(length: Int)
   /// The setting is `RequireChannelBinding`, and the server asks for a
   /// login method that does not bind to the channel.
   ChannelBindingNotOffered(method: LoginMethod)
@@ -214,12 +258,30 @@ pub type LoginOutcome {
   )
 }
 
+/// A message that the login sends to the server. Only `start` and `step`
+/// make one, from values that fit the message, so `encode_login_message`
+/// cannot fail.
+pub opaque type LoginMessage {
+  /// The StartupMessage of the settings that `new` checked: no zero byte,
+  /// no empty or repeated name, and a length that its length field holds.
+  StartupMessage(config: LoginConfig)
+  /// A cleartext password of `longest_password` bytes or fewer with no
+  /// zero byte, or the 35 characters of an MD5 hash.
+  PasswordMessage(password: String)
+  /// One of the two SCRAM mechanism names, and the client-first-message of
+  /// a client nonce of `longest_client_nonce` bytes or fewer.
+  SaslInitialResponse(mechanism: String, first: ClientFirst)
+  /// The client-final-message of a server-first-message of
+  /// `scram.longest_server_first` bytes or fewer.
+  SaslResponse(final: ClientFinal)
+}
+
 /// The state of a login between two messages of the server.
 pub opaque type LoginState {
   LoginState(
     stage: Stage,
     config: LoginConfig,
-    client_nonce: BitArray,
+    client_nonce: ClientNonce,
     server_certificate: Option(BitArray),
     progress: Progress,
   )
@@ -229,7 +291,7 @@ pub opaque type LoginState {
 pub type LoginStep {
   /// The login goes on: send the reply, if any, then give the next message
   /// of the server to `step`.
-  Continue(state: LoginState, reply: Option(FrontendMessage))
+  Continue(state: LoginState, reply: Option(LoginMessage))
   /// The login is done. The connection is ready for queries.
   LoggedIn(outcome: LoginOutcome)
 }
@@ -423,6 +485,32 @@ fn check_startup_length(
   |> replace(Nil)
 }
 
+/// The length field of the StartupMessage of `user` and `parameters`,
+/// worked out from the lengths of the texts alone, with no bytes built:
+/// the length field itself, the protocol version, each name and value with
+/// its zero byte, and the zero byte that ends the list.
+fn startup_message_length(
+  user: String,
+  parameters: List(#(String, String)),
+) -> Int {
+  let length_and_version = 8
+  let end_of_list = 1
+  fold(
+    parameters,
+    length_and_version + end_of_list + parameter_length(#("user", user)),
+    add_parameter_length,
+  )
+}
+
+fn add_parameter_length(total: Int, parameter: #(String, String)) -> Int {
+  total + parameter_length(parameter)
+}
+
+/// A name and a value, each with its zero byte.
+fn parameter_length(parameter: #(String, String)) -> Int {
+  string.byte_size(parameter.0) + 1 + string.byte_size(parameter.1) + 1
+}
+
 const unicode = ["u", "n", "i", "c", "o", "d", "e"]
 
 const letters_and_digits = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -477,16 +565,21 @@ pub fn random_client_nonce() -> ClientNonce {
 ///
 /// ## Parameters
 ///
-/// - `bytes`: `shortest_client_nonce` or more random bytes
+/// - `bytes`: from `shortest_client_nonce` to `longest_client_nonce`
+///   random bytes
 ///
 /// ## Returns
 ///
 /// - `Ok(ClientNonce)`: the client nonce
 /// - `Error(ClientNonceTooShort(length))`: the bytes are too few
+/// - `Error(ClientNonceTooLong(length))`: the bytes are too many
 pub fn client_nonce(bytes: BitArray) -> Result(ClientNonce, ClientNonceError) {
   let length = byte_size(bytes)
   use <- guard(length < shortest_client_nonce, {
     Error(ClientNonceTooShort(length))
+  })
+  use <- guard(length > longest_client_nonce, {
+    Error(ClientNonceTooLong(length))
   })
   Ok(ClientNonce(bytes))
 }
@@ -503,7 +596,7 @@ pub fn client_nonce(bytes: BitArray) -> Result(ClientNonce, ClientNonceError) {
 ///
 /// ## Returns
 ///
-/// - `Ok(#(LoginState, StartupMessage))`: the state, and the StartupMessage
+/// - `Ok(#(LoginState, LoginMessage))`: the state, and the StartupMessage
 ///   to send
 /// - `Error(ChannelBindingRequiresTls)`: the settings require channel
 ///   binding, and the connection has no TLS
@@ -511,20 +604,18 @@ pub fn start(
   config: LoginConfig,
   client_nonce: ClientNonce,
   server_certificate: Option(BitArray),
-) -> Result(#(LoginState, FrontendMessage), LoginStartError) {
+) -> Result(#(LoginState, LoginMessage), LoginStartError) {
   let requires_tls = config.channel_binding == RequireChannelBinding
   use <- guard(requires_tls && server_certificate == None, {
     Error(ChannelBindingRequiresTls)
   })
-  let state = initial_state(config, client_nonce.bytes, server_certificate)
-  let startup =
-    StartupMessage(config.protocol_version, config.user, config.parameters)
-  Ok(#(state, startup))
+  let state = initial_state(config, client_nonce, server_certificate)
+  Ok(#(state, StartupMessage(config)))
 }
 
 fn initial_state(
   config: LoginConfig,
-  client_nonce: BitArray,
+  client_nonce: ClientNonce,
   server_certificate: Option(BitArray),
 ) -> LoginState {
   let progress =
@@ -646,7 +737,18 @@ fn trust_login(state: LoginState) -> Result(LoginStep, LoginError) {
 
 fn cleartext_login(state: LoginState) -> Result(LoginStep, LoginError) {
   use password <- try(unbound_password(state, CleartextLogin))
+  use password <- try(check_password_length(password))
   continue(state, AwaitingAuthenticationOk, Some(PasswordMessage(password)))
+}
+
+/// The one check of the limit `longest_password`, on the text that the
+/// password gives for the PasswordMessage. `new` does not check it: the
+/// login method is not known before the server asks, and only the
+/// cleartext login sends the password.
+fn check_password_length(password: String) -> Result(String, LoginError) {
+  let length = string.byte_size(password)
+  use <- guard(length > longest_password, Error(PasswordTooLong(length)))
+  Ok(password)
 }
 
 fn md5_login(
@@ -702,8 +804,8 @@ fn sasl_login(
 ) -> Result(LoginStep, LoginError) {
   use binding <- try(choose_channel_binding(state, mechanisms))
   let mechanism = mechanism_name(binding)
-  let first = client_first("", state.client_nonce, binding)
-  let reply = SaslInitialResponse(mechanism, Some(client_first_message(first)))
+  let first = client_first("", state.client_nonce.bytes, binding)
+  let reply = SaslInitialResponse(mechanism, first)
   continue(state, AwaitingServerFirst(mechanism, first), Some(reply))
 }
 
@@ -800,7 +902,7 @@ fn scram_proof(
   use final <- try(
     client_final(first, password, data) |> map_error(ScramServerFirstFailed),
   )
-  let reply = SaslResponse(client_final_message(final))
+  let reply = SaslResponse(final)
   continue(state, AwaitingServerFinal(final), Some(reply))
 }
 
@@ -872,7 +974,83 @@ fn outcome(progress: Progress, status: TransactionStatus) -> LoginOutcome {
 fn continue(
   state: LoginState,
   stage: Stage,
-  reply: Option(FrontendMessage),
+  reply: Option(LoginMessage),
 ) -> Result(LoginStep, LoginError) {
   Ok(Continue(LoginState(..state, stage:), reply))
+}
+
+// The bytes of a login message ------------------------------------------------
+
+/// Writes a login message as the bytes to send. The layouts are the ones
+/// of the PostgreSQL documentation, chapter "Frontend/Backend Protocol",
+/// section "Message Formats".
+///
+/// The function cannot fail. The values of each message are checked when
+/// the login makes it, so its length field holds its length:
+///
+/// - StartupMessage: `new` refuses a zero byte, an empty or repeated name,
+///   and a length above 2147483647 (`StartupMessageTooLong`).
+/// - PasswordMessage: at most `longest_password` bytes and no zero byte,
+///   or an MD5 hash of 35 characters.
+/// - SASLInitialResponse: a client nonce of at most `longest_client_nonce`
+///   bytes, so a length field of at most 1424: 4 for itself, 19 for
+///   `SCRAM-SHA-256-PLUS` and its zero byte, 4 for the data length, 24 for
+///   the gs2-header `p=tls-server-end-point,,`, 5 for `n=,r=`, and 1368
+///   for the nonce in base64.
+/// - SASLResponse: a channel binding hash of at most 64 bytes (SHA-512)
+///   and a server nonce from a server-first-message of at most
+///   `scram.longest_server_first` bytes, so a length field of at most
+///   16560: 4 for itself, 122 for `c=` and the gs2-header with the hash
+///   in base64, 3 for `,r=`, 16384 for the server nonce, and 47 for `,p=`
+///   and the proof in base64.
+///
+/// ## Parameters
+///
+/// - `message`: a message from `start` or `step`
+///
+/// ## Returns
+///
+/// The whole message, with its type byte (if it has one) and its length.
+pub fn encode_login_message(message: LoginMessage) -> BitArray {
+  case message {
+    StartupMessage(config:) -> startup_message_bytes(config)
+    PasswordMessage(password:) -> typed_message("p", <<password:utf8, 0>>)
+    SaslInitialResponse(mechanism:, first:) -> {
+      let data = client_first_message(first)
+      let data_length = byte_size(data)
+      typed_message("p", <<mechanism:utf8, 0, data_length:32, data:bits>>)
+    }
+    SaslResponse(final:) -> typed_message("p", client_final_message(final))
+  }
+}
+
+/// The StartupMessage has no type byte: the length, the protocol version,
+/// each name and value with its zero byte, then a zero byte.
+fn startup_message_bytes(config: LoginConfig) -> BitArray {
+  let parameters = [#("user", config.user), ..config.parameters]
+  let body = <<
+    version_code(config.protocol_version):32,
+    bit_array.concat(map_list(parameters, parameter_bytes)):bits,
+    0,
+  >>
+  let length = byte_size(body) + 4
+  <<length:32, body:bits>>
+}
+
+fn parameter_bytes(parameter: #(String, String)) -> BitArray {
+  <<parameter.0:utf8, 0, parameter.1:utf8, 0>>
+}
+
+fn version_code(version: ProtocolVersion) -> Int {
+  case version {
+    Protocol30 -> 196_608
+    Protocol32 -> 196_610
+  }
+}
+
+/// A message with a type byte: the byte, the length, the body. The length
+/// field counts itself and the body, not the type byte.
+fn typed_message(type_byte: String, body: BitArray) -> BitArray {
+  let length = byte_size(body) + 4
+  <<type_byte:utf8, length:32, body:bits>>
 }

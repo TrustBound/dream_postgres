@@ -28,6 +28,25 @@ import gleam/string.{replace, split, starts_with}
 /// The length in bytes of a SHA-256 key and of each SCRAM-SHA-256 proof.
 const key_length = 32
 
+/// The longest server-first-message, in bytes, that `client_final` reads:
+/// 16384.
+///
+/// PostgreSQL's server-first-message is far shorter, under 200 bytes: the
+/// client's nonce and 18 random bytes in base64 (`SCRAM_RAW_NONCE_LEN` in
+/// `src/include/common/scram-common.h`), a 16-byte salt in base64
+/// (`SCRAM_DEFAULT_SALT_LEN`), and the iteration count. The server nonce
+/// of the message goes again into the client-final-message, so this limit
+/// keeps the client-final-message, and the SASLResponse that holds it,
+/// within a length field that `login.encode_login_message` always writes.
+///
+/// PostgreSQL reads each SASL message with `pq_getmessage(&buf,
+/// mech->max_message_length)` (`src/backend/libpq/auth-sasl.c`), and for
+/// SCRAM that is `PG_MAX_SASL_MESSAGE_LENGTH`, 1024
+/// (`src/include/libpq/sasl.h`, master e347dae2d4). So a PostgreSQL server
+/// refuses a client-final-message with a server nonce of more than 964
+/// bytes, and fewer with channel binding.
+pub const longest_server_first = 16_384
+
 /// The channel binding of an exchange: the gs2-header of RFC 5802 section
 /// 7.
 pub type ChannelBinding {
@@ -44,6 +63,9 @@ pub type ChannelBinding {
 
 /// Why `client_final` refuses the server-first-message.
 pub type ServerFirstError {
+  /// The server-first-message has `length` bytes, more than
+  /// `longest_server_first`.
+  ServerFirstTooLong(length: Int)
   /// The server-first-message does not have the form
   /// `r=<nonce>,s=<salt>,i=<iteration count>`, with optional extensions
   /// after it (RFC 5802 section 7).
@@ -101,6 +123,7 @@ type ServerChallenge {
 ///   uses the user of the StartupMessage, so libpq sends the empty name.
 /// - `client_nonce`: random bytes from `crypto:strong_rand_bytes/1`, 18 or
 ///   more, new for each exchange. The message holds them as base64.
+///   `login.client_nonce` keeps them to `login.longest_client_nonce`.
 /// - `channel_binding`: the channel binding of the exchange
 ///
 /// ## Returns
@@ -152,12 +175,17 @@ pub fn client_first_message(first: ClientFirst) -> BitArray {
 ///
 /// - `Ok(ClientFinal)`: the client-final-message and the server signature
 ///   to expect
-/// - `Error(ServerFirstError)`: the server-first-message is not valid
+/// - `Error(ServerFirstError)`: the server-first-message is longer than
+///   `longest_server_first`, or it is not valid
 pub fn client_final(
   first: ClientFirst,
   password: String,
   server_first_message: BitArray,
 ) -> Result(ClientFinal, ServerFirstError) {
+  let length = byte_size(server_first_message)
+  use <- guard(length > longest_server_first, {
+    Error(ServerFirstTooLong(length))
+  })
   use text <- try(
     to_string(server_first_message)
     |> replace_error(InvalidServerFirstMessage(server_first_message)),

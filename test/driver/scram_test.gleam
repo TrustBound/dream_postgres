@@ -10,8 +10,9 @@ import dream_postgres/driver/scram.{
   type ServerFinalError, type ServerFirstError, ClientWithoutChannelBinding,
   InvalidIterationCount, InvalidSalt, InvalidServerFinalMessage,
   InvalidServerFirstMessage, MandatoryExtension, ServerEndPoint,
-  ServerNonceMismatch, ServerReportedError, ServerSignatureMismatch,
-  ServerWithoutChannelBinding, client_final, client_first, client_first_message,
+  ServerFirstTooLong, ServerNonceMismatch, ServerReportedError,
+  ServerSignatureMismatch, ServerWithoutChannelBinding, client_final,
+  client_first, client_first_message,
 }
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -317,6 +318,16 @@ fn server_first_test(test_case: ServerMessageCase(ServerFirstError)) {
 
 fn server_first_cases() -> List(ServerMessageCase(ServerFirstError)) {
   [
+    ServerMessageCase(
+      "a message of 16385 bytes, one more than longest_server_first",
+      <<0:size(131_080)>>,
+      ServerFirstTooLong(16_385),
+    ),
+    ServerMessageCase(
+      "a message of 16384 bytes is read, and has no nonce",
+      <<0:size(131_072)>>,
+      InvalidServerFirstMessage(<<0:size(131_072)>>),
+    ),
     ServerMessageCase(
       "bytes that are not UTF-8",
       <<255>>,

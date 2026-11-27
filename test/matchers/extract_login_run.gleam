@@ -1,10 +1,11 @@
 //// Runs a started login through the messages of a server.
 
 import dream_postgres/driver/login.{
-  type LoginError, type LoginOutcome, type LoginStartError, type LoginState,
-  type LoginStep, Continue, LoggedIn, step,
+  type LoginError, type LoginMessage, type LoginOutcome, type LoginStartError,
+  type LoginState, type LoginStep, Continue, LoggedIn, encode_login_message,
+  step,
 }
-import dream_postgres/driver/message.{type BackendMessage, type FrontendMessage}
+import dream_postgres/driver/message.{type BackendMessage}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -13,9 +14,10 @@ import gleam/option.{type Option, None, Some}
 import gleam/result.{try}
 import gleam/string.{inspect}
 
-/// What a login gave: each reply in order, and the outcome if it ended.
+/// What a login gave: the bytes of each reply in order, and the outcome if
+/// it ended.
 pub type LoginRun {
-  LoginRun(replies: List(FrontendMessage), outcome: Option(LoginOutcome))
+  LoginRun(replies: List(BitArray), outcome: Option(LoginOutcome))
 }
 
 /// Takes the result of `start`, and gives each message to `step` in turn.
@@ -32,7 +34,7 @@ pub type LoginRun {
 /// |> or_fail_with("Expected a login with no password")
 /// ```
 pub fn extract_login_run(
-  result: MatchResult(Result(#(LoginState, FrontendMessage), LoginStartError)),
+  result: MatchResult(Result(#(LoginState, LoginMessage), LoginStartError)),
   messages: List(BackendMessage),
 ) -> MatchResult(Result(LoginRun, LoginError)) {
   case result {
@@ -42,7 +44,7 @@ pub fn extract_login_run(
 }
 
 fn run_started(
-  started: Result(#(LoginState, FrontendMessage), LoginStartError),
+  started: Result(#(LoginState, LoginMessage), LoginStartError),
   messages: List(BackendMessage),
 ) -> MatchResult(Result(LoginRun, LoginError)) {
   case started {
@@ -60,7 +62,7 @@ fn run_started(
 }
 
 fn run(
-  started: #(LoginState, FrontendMessage),
+  started: #(LoginState, LoginMessage),
   messages: List(BackendMessage),
 ) -> Result(LoginRun, LoginError) {
   run_messages(started.0, messages, [])
@@ -69,7 +71,7 @@ fn run(
 fn run_messages(
   state: LoginState,
   messages: List(BackendMessage),
-  replies: List(FrontendMessage),
+  replies: List(BitArray),
 ) -> Result(LoginRun, LoginError) {
   case messages {
     [] -> Ok(LoginRun(reverse(replies), None))
@@ -81,7 +83,7 @@ fn run_messages(
 fn next_step(
   login_step: LoginStep,
   rest: List(BackendMessage),
-  replies: List(FrontendMessage),
+  replies: List(BitArray),
 ) -> Result(LoginRun, LoginError) {
   case login_step {
     Continue(state:, reply:) ->
@@ -91,11 +93,11 @@ fn next_step(
 }
 
 fn add_reply(
-  replies: List(FrontendMessage),
-  reply: Option(FrontendMessage),
-) -> List(FrontendMessage) {
+  replies: List(BitArray),
+  reply: Option(LoginMessage),
+) -> List(BitArray) {
   case reply {
-    Some(message) -> [message, ..replies]
+    Some(message) -> [encode_login_message(message), ..replies]
     None -> replies
   }
 }

@@ -5,28 +5,26 @@
 //// documentation, chapter "Frontend/Backend Protocol", section "Message
 //// Formats". A value that the layout cannot hold, such as a zero byte in a
 //// string or a 70000-item list, is an `EncodeError`, never a wrong message.
+//// The messages of the login are not here: `login.encode_login_message`
+//// writes them, and it cannot fail.
 ////
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/message.{
-  type EncodeError, type FrontendMessage, type ProtocolVersion, type Target,
-  Bind, CancelRequest, Close, CopyData, CopyDone, CopyFail, Describe,
-  DuplicateStartupParameter, EmptyStartupParameterName, Execute, Flush,
-  FunctionCall, GssEncryptionRequest, GssResponse, MessageTooLong,
-  NumberOutOfRange, Parse, PasswordMessage, Portal, Protocol30, Protocol32,
-  Query, SaslInitialResponse, SaslResponse, SecretKeyLengthOutOfRange,
-  SslRequest, StartupMessage, Statement, Sync, Terminate, TooManyItems,
-  ZeroByteInString,
+  type EncodeError, type FrontendMessage, type Target, Bind, CancelRequest,
+  Close, CopyData, CopyDone, CopyFail, Describe, Execute, Flush, FunctionCall,
+  GssEncryptionRequest, GssResponse, MessageTooLong, NumberOutOfRange, Parse,
+  Portal, Query, SecretKeyLengthOutOfRange, SslRequest, Statement, Sync,
+  Terminate, TooManyItems, ZeroByteInString,
 }
 import dream_postgres/internal/cell.{
   type Cell, type Format, Binary, BinaryFormat, Null, Text, TextFormat,
 }
 import gleam/bit_array.{byte_size}
 import gleam/bool.{guard}
-import gleam/list.{fold, length, try_fold, try_map}
+import gleam/list.{length, try_map}
 import gleam/option.{type Option, None, Some}
 import gleam/result.{map, map_error, try}
-import gleam/set.{type Set}
 import gleam/string.{contains}
 
 /// The largest count that a 16-bit count field holds.
@@ -60,16 +58,10 @@ const cancel_request_code = 80_877_102
 ///   hold
 pub fn encode(message: FrontendMessage) -> Result(BitArray, EncodeError) {
   case message {
-    StartupMessage(version:, user:, parameters:) ->
-      startup_message(version, user, parameters)
     SslRequest -> Ok(ssl_request())
     GssEncryptionRequest -> Ok(<<8:32, gss_encryption_request_code:32>>)
     CancelRequest(process_id:, secret_key:) ->
       cancel_request(process_id, secret_key)
-    PasswordMessage(password:) -> string_message("p", "password", password)
-    SaslInitialResponse(mechanism:, data:) ->
-      sasl_initial_response(mechanism, data)
-    SaslResponse(data:) -> framed(data, "p")
     GssResponse(data:) -> framed(data, "p")
     Parse(statement:, query:, parameter_type_ids:) ->
       parse(statement, query, parameter_type_ids)
@@ -191,86 +183,6 @@ pub fn terminate() -> BitArray {
   <<"X", 4:32>>
 }
 
-fn startup_message(
-  version: ProtocolVersion,
-  user: String,
-  parameters: List(#(String, String)),
-) -> Result(BitArray, EncodeError) {
-  use _names <- try(try_fold(parameters, set.new(), check_parameter_name))
-  use user_pair <- try(startup_parameter(#("user", user)))
-  use pairs <- try(try_map(parameters, startup_parameter))
-  let body = <<
-    version_code(version):32,
-    user_pair:bits,
-    bit_array.concat(pairs):bits,
-    0,
-  >>
-  unframed(body)
-}
-
-/// The length field of the StartupMessage of `user` and `parameters`,
-/// worked out from the lengths of the texts alone, with no bytes built:
-/// the length field itself, the protocol version, each name and value with
-/// its zero byte, and the zero byte that ends the list. `encode` writes
-/// this length, or gives `MessageTooLong` with it when it is above
-/// 2147483647.
-///
-/// ## Parameters
-///
-/// - `user`: the value of the `user` parameter
-/// - `parameters`: the other startup parameters
-///
-/// ## Returns
-///
-/// The length that the length field of the message holds.
-pub fn startup_message_length(
-  user: String,
-  parameters: List(#(String, String)),
-) -> Int {
-  let length_and_version = 8
-  let end_of_list = 1
-  fold(
-    parameters,
-    length_and_version + end_of_list + parameter_length(#("user", user)),
-    add_parameter_length,
-  )
-}
-
-fn add_parameter_length(total: Int, parameter: #(String, String)) -> Int {
-  total + parameter_length(parameter)
-}
-
-/// A name and a value, each with its zero byte.
-fn parameter_length(parameter: #(String, String)) -> Int {
-  string.byte_size(parameter.0) + 1 + string.byte_size(parameter.1) + 1
-}
-
-fn version_code(version: ProtocolVersion) -> Int {
-  case version {
-    Protocol30 -> 196_608
-    Protocol32 -> 196_610
-  }
-}
-
-fn check_parameter_name(
-  seen: Set(String),
-  parameter: #(String, String),
-) -> Result(Set(String), EncodeError) {
-  let name = parameter.0
-  use <- guard(name == "", Error(EmptyStartupParameterName))
-  let repeated = name == "user" || set.contains(seen, name)
-  use <- guard(repeated, Error(DuplicateStartupParameter(name)))
-  Ok(set.insert(seen, name))
-}
-
-fn startup_parameter(
-  parameter: #(String, String),
-) -> Result(BitArray, EncodeError) {
-  use name <- try(string_field("startup parameter name", parameter.0))
-  use value <- try(string_field("startup parameter value", parameter.1))
-  Ok(<<name:bits, value:bits>>)
-}
-
 fn cancel_request(
   process_id: Int,
   secret_key: BitArray,
@@ -280,15 +192,6 @@ fn cancel_request(
   let wrong_length = key_length < 4 || key_length > 256
   use <- guard(wrong_length, Error(SecretKeyLengthOutOfRange(key_length)))
   unframed(<<cancel_request_code:32, process:bits, secret_key:bits>>)
-}
-
-fn sasl_initial_response(
-  mechanism: String,
-  data: Option(BitArray),
-) -> Result(BitArray, EncodeError) {
-  use name <- try(string_field("mechanism", mechanism))
-  use value <- try(optional_value(data))
-  framed(<<name:bits, value:bits>>, "p")
 }
 
 fn parse(

@@ -7,6 +7,11 @@
 //// "Frontend/Backend Protocol", section "Message Formats", so each one can
 //// be found there.
 ////
+//// The messages of the login (the StartupMessage, the PasswordMessage, the
+//// SASLInitialResponse and the SASLResponse) are not here: they are
+//// `login.LoginMessage`, which only the login makes, from values that it
+//// checked, so that `login.encode_login_message` cannot fail.
+////
 //// The driver never reads a value: a parameter and a result cell are bytes
 //// or NULL, and the format of each is the one the caller gave.
 ////
@@ -37,14 +42,6 @@ pub type Target {
 
 /// A message that the client sends to the server.
 pub type FrontendMessage {
-  /// The first message of a connection: the protocol version, the user, and
-  /// the other startup parameters (for example `database`, `options` or
-  /// `client_encoding`) in the order to send them.
-  StartupMessage(
-    version: ProtocolVersion,
-    user: String,
-    parameters: List(#(String, String)),
-  )
   /// Asks the server for TLS before the StartupMessage.
   SslRequest
   /// Asks the server for GSSAPI encryption before the StartupMessage.
@@ -53,13 +50,6 @@ pub type FrontendMessage {
   /// one. The secret key has 4 bytes in protocol 3.0, and 4 to 256 bytes
   /// in protocol 3.2.
   CancelRequest(process_id: Int, secret_key: BitArray)
-  /// A password, in clear or as MD5, as the login request asked.
-  PasswordMessage(password: String)
-  /// The first SASL message: the chosen mechanism and its first data, if
-  /// any.
-  SaslInitialResponse(mechanism: String, data: Option(BitArray))
-  /// A later SASL message.
-  SaslResponse(data: BitArray)
   /// A GSSAPI or SSPI message.
   GssResponse(data: BitArray)
   /// Prepares a statement: its name, its SQL, and the type OIDs of the
@@ -262,10 +252,4 @@ pub type EncodeError {
   SecretKeyLengthOutOfRange(length: Int)
   /// A value or a message is longer than a 32-bit length can give.
   MessageTooLong(length: Int)
-  /// A startup parameter name given two times, or the name `user`, which
-  /// the StartupMessage has as its own field.
-  DuplicateStartupParameter(name: String)
-  /// A startup parameter with an empty name. Its zero byte would end the
-  /// parameter list early.
-  EmptyStartupParameterName
 }

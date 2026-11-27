@@ -1,7 +1,6 @@
 //// Extracts the first login state of a started login.
 
-import dream_postgres/driver/login.{type LoginState}
-import dream_postgres/driver/message.{type FrontendMessage}
+import dream_postgres/driver/login.{type LoginMessage, type LoginState}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the login state that `start` gave with the StartupMessage.
@@ -17,7 +16,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 /// |> or_fail_with("Expected no password text")
 /// ```
 pub fn extract_login_state(
-  result: MatchResult(#(LoginState, FrontendMessage)),
+  result: MatchResult(#(LoginState, LoginMessage)),
 ) -> MatchResult(LoginState) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)

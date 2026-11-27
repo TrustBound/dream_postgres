@@ -6,12 +6,10 @@
 import dream_postgres/driver/encode.{encode, length_field}
 import dream_postgres/driver/message.{
   type EncodeError, type FrontendMessage, Bind, CancelRequest, Close, CopyData,
-  CopyDone, CopyFail, Describe, DuplicateStartupParameter,
-  EmptyStartupParameterName, Execute, Flush, FunctionCall, GssEncryptionRequest,
-  GssResponse, NumberOutOfRange, Parse, PasswordMessage, Portal, Protocol30,
-  Protocol32, Query, SaslInitialResponse, SaslResponse,
-  SecretKeyLengthOutOfRange, SslRequest, StartupMessage, Statement, Sync,
-  Terminate, TooManyItems, ZeroByteInString,
+  CopyDone, CopyFail, Describe, Execute, Flush, FunctionCall,
+  GssEncryptionRequest, GssResponse, NumberOutOfRange, Parse, Portal, Query,
+  SecretKeyLengthOutOfRange, SslRequest, Statement, Sync, Terminate,
+  TooManyItems, ZeroByteInString,
 }
 import dream_postgres/internal/cell.{
   Binary, BinaryFormat, Null, Text, TextFormat,
@@ -20,7 +18,6 @@ import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import gleam/list.{map, repeat}
-import gleam/option.{None, Some}
 
 /// The tests of the encoder.
 pub fn tests() -> TestSuite {
@@ -76,22 +73,6 @@ fn message_cases() -> List(MessageCase) {
 
 fn startup_cases() -> List(MessageCase) {
   [
-    MessageCase(
-      "a StartupMessage of protocol 3.0 with the user only",
-      StartupMessage(Protocol30, "ada", []),
-      <<18:32, 3:16, 0:16, "user":utf8, 0, "ada":utf8, 0, 0>>,
-    ),
-    MessageCase(
-      "a StartupMessage of protocol 3.2 with database and options",
-      StartupMessage(Protocol32, "ada", [
-        #("database", "shop"),
-        #("options", "-c search_path=app"),
-      ]),
-      <<
-        59:32, 3:16, 2:16, "user":utf8, 0, "ada":utf8, 0, "database":utf8, 0,
-        "shop":utf8, 0, "options":utf8, 0, "-c search_path=app":utf8, 0, 0,
-      >>,
-    ),
     MessageCase("an SSLRequest", SslRequest, <<8:32, 1234:16, 5679:16>>),
     MessageCase("a GSSENCRequest", GssEncryptionRequest, <<
       8:32,
@@ -114,27 +95,6 @@ fn startup_cases() -> List(MessageCase) {
 
 fn login_cases() -> List(MessageCase) {
   [
-    MessageCase("a PasswordMessage", PasswordMessage("secret"), <<
-      "p",
-      11:32,
-      "secret":utf8,
-      0,
-    >>),
-    MessageCase(
-      "a SASLInitialResponse with data",
-      SaslInitialResponse("SCRAM-SHA-256", Some(<<"n,,n=,r=abc":utf8>>)),
-      <<"p", 33:32, "SCRAM-SHA-256":utf8, 0, 11:32, "n,,n=,r=abc":utf8>>,
-    ),
-    MessageCase(
-      "a SASLInitialResponse without data",
-      SaslInitialResponse("SCRAM-SHA-256", None),
-      <<"p", 22:32, "SCRAM-SHA-256":utf8, 0, -1:32>>,
-    ),
-    MessageCase("a SASLResponse", SaslResponse(<<"c=biws":utf8>>), <<
-      "p",
-      10:32,
-      "c=biws":utf8,
-    >>),
     MessageCase("a GSSResponse", GssResponse(<<1, 2, 3>>), <<
       "p",
       7:32,
@@ -245,39 +205,6 @@ fn error_cases() -> List(ErrorCase) {
       ZeroByteInString("query"),
     ),
     ErrorCase(
-      "a zero byte in a startup parameter name",
-      StartupMessage(Protocol30, "ada", [#("data\u{0000}base", "shop")]),
-      ZeroByteInString("startup parameter name"),
-    ),
-    ErrorCase(
-      "a zero byte in a startup parameter value",
-      StartupMessage(Protocol30, "ada", [#("database", "sh\u{0000}op")]),
-      ZeroByteInString("startup parameter value"),
-    ),
-    ErrorCase(
-      "a zero byte in the user",
-      StartupMessage(Protocol30, "a\u{0000}da", []),
-      ZeroByteInString("startup parameter value"),
-    ),
-    ErrorCase(
-      "a startup parameter with an empty name",
-      StartupMessage(Protocol30, "ada", [#("", "x")]),
-      EmptyStartupParameterName,
-    ),
-    ErrorCase(
-      "a startup parameter named user",
-      StartupMessage(Protocol30, "ada", [#("user", "bob")]),
-      DuplicateStartupParameter("user"),
-    ),
-    ErrorCase(
-      "a startup parameter given two times",
-      StartupMessage(Protocol30, "ada", [
-        #("database", "shop"),
-        #("database", "shop"),
-      ]),
-      DuplicateStartupParameter("database"),
-    ),
-    ErrorCase(
       "a CancelRequest key of 3 bytes",
       CancelRequest(1, <<1, 2, 3>>),
       SecretKeyLengthOutOfRange(3),
@@ -331,11 +258,6 @@ fn error_cases() -> List(ErrorCase) {
       "a negative function OID",
       FunctionCall(-5, [], TextFormat),
       NumberOutOfRange("object id", -5),
-    ),
-    ErrorCase(
-      "a zero byte in a SASL mechanism",
-      SaslInitialResponse("SCRAM\u{0000}", None),
-      ZeroByteInString("mechanism"),
     ),
   ]
 }

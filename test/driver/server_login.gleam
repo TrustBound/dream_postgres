@@ -4,14 +4,13 @@
 //// sends each reply, until the login is done or fails.
 
 import dream_postgres/driver/decode.{decode_backend}
-import dream_postgres/driver/encode.{encode}
 import dream_postgres/driver/login.{
   type ChannelBindingSetting, type ConfigError, type LoginError,
-  type LoginOutcome, type LoginStartError, type LoginState, Continue, LoggedIn,
+  type LoginMessage, type LoginOutcome, type LoginStartError, type LoginState,
+  Continue, LoggedIn, encode_login_message,
 }
 import dream_postgres/driver/message.{
-  type EncodeError, type FrontendMessage, type ProtocolError,
-  type ProtocolVersion, Decoded, NeedMoreBytes,
+  type ProtocolError, type ProtocolVersion, Decoded, NeedMoreBytes,
 }
 import dream_postgres/driver/transport.{
   type Connection, type ReceiveError, type SendError, type Tls,
@@ -31,7 +30,6 @@ pub type LoginFailure {
   TransportFailed(error: TransportError)
   SendRefused(error: SendError)
   ReceiveRefused(error: ReceiveError)
-  EncodeFailed(error: EncodeError)
   DecodeFailed(error: ProtocolError)
   StartFailed(error: LoginStartError)
   LoginFailed(error: LoginError)
@@ -161,7 +159,7 @@ fn next_step(
 fn reply_and_read(
   connection: Connection,
   state: LoginState,
-  reply: Option(FrontendMessage),
+  reply: Option(LoginMessage),
   rest: BitArray,
 ) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
   use Nil <- try(send_reply(connection, reply))
@@ -170,7 +168,7 @@ fn reply_and_read(
 
 fn send_reply(
   connection: Connection,
-  reply: Option(FrontendMessage),
+  reply: Option(LoginMessage),
 ) -> Result(Nil, LoginFailure) {
   case reply {
     Some(message) -> send_message(connection, message)
@@ -189,8 +187,7 @@ fn read_more(
 
 fn send_message(
   connection: Connection,
-  message: FrontendMessage,
+  message: LoginMessage,
 ) -> Result(Nil, LoginFailure) {
-  use bytes <- try(encode(message) |> map_error(EncodeFailed))
-  send(connection, bytes) |> map_error(SendRefused)
+  send(connection, encode_login_message(message)) |> map_error(SendRefused)
 }

@@ -36,9 +36,9 @@ import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
 import dream_postgres/driver/housekeeping_sql.{type HousekeepingSql}
 import dream_postgres/driver/login.{
-  type CancelKey, type LoginConfig, type LoginError, type LoginOutcome,
-  type LoginStartError, type LoginState, ChannelBindingRequiresTls, Continue,
-  LoggedIn,
+  type CancelKey, type LoginConfig, type LoginError, type LoginMessage,
+  type LoginOutcome, type LoginStartError, type LoginState,
+  ChannelBindingRequiresTls, Continue, LoggedIn, encode_login_message,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type EncodeError, type FrontendMessage,
@@ -185,12 +185,6 @@ pub type ConnectError {
   LoginRefused(error: LoginError)
   /// The server sent bytes during the login that are not a valid message.
   LoginUndecodable(error: ProtocolError)
-  /// A login message after the StartupMessage could not be written. The
-  /// StartupMessage always can: `login.new` refuses settings that make it
-  /// too long. A PasswordMessage of a cleartext password, or a SCRAM
-  /// message with a client or server nonce, longer than its length field
-  /// can hold still gives this error.
-  LoginUnencodable(error: EncodeError)
   /// The connect and the login took longer than the setup timeout.
   SetupTimedOut
   /// The process exited while it connected.
@@ -3636,12 +3630,14 @@ fn more_login_bytes(
   login_messages(socket, state, <<bytes:bits, more:bits>>, setup_deadline)
 }
 
+/// A login message cannot fail to encode: the login checks each value
+/// that it holds (see `login.encode_login_message`).
 fn send_login_message(
   socket: transport.Connection,
-  message: FrontendMessage,
+  message: LoginMessage,
 ) -> Result(Nil, ConnectError) {
-  use bytes <- try(encode(message) |> map_error(LoginUnencodable))
-  transport.send(socket, bytes) |> map_error(LoginSendFailed)
+  transport.send(socket, encode_login_message(message))
+  |> map_error(LoginSendFailed)
 }
 
 /// The receive waits for the time left of the setup, so its timeout is

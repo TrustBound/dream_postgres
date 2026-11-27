@@ -3,15 +3,13 @@
 
 import dream_postgres/driver/deadline
 import dream_postgres/driver/decode.{decode_backend}
-import dream_postgres/driver/encode.{encode}
-import dream_postgres/driver/message.{
-  type BackendMessage, Decoded, Protocol30, StartupMessage,
-}
+import dream_postgres/driver/message.{type BackendMessage, Decoded}
 import dream_postgres/driver/transport.{
   type Connection, type TransportConfig, type TransportError, close, receive,
   send, server_certificate,
 }
 import driver/servers.{database}
+import fixtures/login_message_bytes.{startup_message_bytes}
 import gleam/option.{None}
 import gleam/result.{map_error, try}
 import gleam/string.{inspect}
@@ -57,9 +55,8 @@ pub fn read_startup_answer(
 
 fn first_answer(connection: Connection) -> Result(BackendMessage, String) {
   let startup =
-    StartupMessage(Protocol30, "dream_trust", [#("database", database)])
-  use bytes <- try(encode(startup) |> map_error(inspect))
-  use Nil <- try(send(connection, bytes) |> map_error(inspect))
+    startup_message_bytes(0, "dream_trust", [#("database", database)])
+  use Nil <- try(send(connection, startup) |> map_error(inspect))
   use answer <- try(receive(connection, 5000) |> map_error(inspect))
   first_message(answer)
 }

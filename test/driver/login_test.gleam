@@ -14,37 +14,41 @@ import dream_postgres/driver/login.{
   type LoginError, type LoginOutcome, type LoginStartError, CancelKey,
   CertificateHashFailed, ChannelBindingNotOffered,
   ChannelBindingOfferedWithoutTls, ChannelBindingRequiresTls, CleartextLogin,
-  ClientNonceTooShort, DisableChannelBinding, DuplicateParameter,
-  EmptyParameterName, EmptyUser, GssLogin, KerberosV5Login, LoginOutcome,
-  Md5Login, PasswordHasZeroByte, PasswordRequired, PreferChannelBinding,
-  RequireChannelBinding, SaslLogin, ScramLogin, ScramServerFinalFailed,
-  ScramServerFirstFailed, ServerRejectedLogin, SspiLogin, StartupMessageTooLong,
-  TrustLogin, UnexpectedMessage, UnsupportedClientEncoding,
-  UnsupportedLoginMethod, UnsupportedProtocolVersion, ZeroByteInParameter,
-  ZeroByteInPassword, client_nonce, new, no_password, password,
-  password_function,
+  ClientNonceTooLong, ClientNonceTooShort, DisableChannelBinding,
+  DuplicateParameter, EmptyParameterName, EmptyUser, GssLogin, KerberosV5Login,
+  LoginOutcome, Md5Login, PasswordHasZeroByte, PasswordRequired, PasswordTooLong,
+  PreferChannelBinding, RequireChannelBinding, SaslLogin, ScramLogin,
+  ScramServerFinalFailed, ScramServerFirstFailed, ServerRejectedLogin, SspiLogin,
+  StartupMessageTooLong, TrustLogin, UnexpectedMessage,
+  UnsupportedClientEncoding, UnsupportedLoginMethod, UnsupportedProtocolVersion,
+  ZeroByteInParameter, ZeroByteInPassword, client_nonce, new, no_password,
+  password, password_function,
 }
 import dream_postgres/driver/message.{
-  type BackendMessage, type FrontendMessage, type ProtocolVersion,
-  AuthenticationCleartextPassword, AuthenticationGss, AuthenticationKerberosV5,
-  AuthenticationMd5Password, AuthenticationOk, AuthenticationSasl,
-  AuthenticationSaslContinue, AuthenticationSaslFinal, AuthenticationSspi,
-  BackendKeyData, ErrorResponse, NegotiateProtocolVersion, NoticeResponse,
-  ParameterStatus, PasswordMessage, Protocol30, Protocol32, ReadyForQuery,
-  SaslInitialResponse, SaslResponse, StartupMessage,
+  type BackendMessage, type ProtocolVersion, AuthenticationCleartextPassword,
+  AuthenticationGss, AuthenticationKerberosV5, AuthenticationMd5Password,
+  AuthenticationOk, AuthenticationSasl, AuthenticationSaslContinue,
+  AuthenticationSaslFinal, AuthenticationSspi, BackendKeyData, ErrorResponse,
+  NegotiateProtocolVersion, NoticeResponse, ParameterStatus, Protocol30,
+  Protocol32, ReadyForQuery,
 }
 import dream_postgres/driver/scram.{
-  InvalidServerFirstMessage, ServerSignatureMismatch,
+  InvalidServerFirstMessage, ServerFirstTooLong, ServerSignatureMismatch,
 }
 import dream_postgres/internal/cell.{Idle, ServerReport}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/stored_password.{store_password, stored_password}
+import fixtures/login_message_bytes.{
+  password_message_bytes, sasl_initial_response_bytes, sasl_response_bytes,
+  startup_message_bytes,
+}
 import fixtures/long_startup_parameters.{long_startup_parameters}
 import gleam/dict
 import gleam/list.{map}
 import gleam/option.{type Option, None, Some}
+import gleam/string.{repeat}
 import matchers/extract_login_run.{type LoginRun, LoginRun, extract_login_run}
 import matchers/extract_login_start.{extract_login_start}
 import matchers/extract_login_state.{extract_login_state}
@@ -58,7 +62,7 @@ pub fn tests() -> TestSuite {
   describe("dream_postgres/driver/login", [
     group("the StartupMessage", map(startup_cases(), startup_test)),
     group("settings that new refuses", map(config_error_cases(), config_test)),
-    group("client_nonce", [client_nonce_test()]),
+    group("client_nonce", [client_nonce_test(), client_nonce_too_long_test()]),
     group("start", map(start_error_cases(), start_error_test)),
     group("logins that work", map(login_cases(), login_test)),
     group("logins that fail", map(failure_cases(), login_test)),
@@ -208,19 +212,19 @@ fn pencil(channel_binding: ChannelBindingSetting) -> Settings {
   config_with(TextPassword("pencil"), channel_binding, Protocol30)
 }
 
-fn sasl_first(flag: String) -> FrontendMessage {
+fn sasl_first(flag: String) -> BitArray {
   let mechanism = case flag {
     "p=tls-server-end-point" -> "SCRAM-SHA-256-PLUS"
     _ -> "SCRAM-SHA-256"
   }
-  SaslInitialResponse(
-    mechanism,
-    Some(<<flag:utf8, ",,n=,r=AAECAwQFBgcICQoLDA0ODxAR">>),
-  )
+  sasl_initial_response_bytes(mechanism, <<
+    flag:utf8,
+    ",,n=,r=AAECAwQFBgcICQoLDA0ODxAR",
+  >>)
 }
 
-fn sasl_final(binding: String, proof: String) -> FrontendMessage {
-  SaslResponse(<<
+fn sasl_final(binding: String, proof: String) -> BitArray {
+  sasl_response_bytes(<<
     "c=":utf8,
     binding:utf8,
     ",r=AAECAwQFBgcICQoLDA0ODxARserver-nonce,p=":utf8,
@@ -279,7 +283,7 @@ fn scram_messages(signature: String) -> List(BackendMessage) {
 // The StartupMessage ----------------------------------------------------------
 
 type StartupCase {
-  StartupCase(name: String, settings: Settings, expected: FrontendMessage)
+  StartupCase(name: String, settings: Settings, expected: BitArray)
 }
 
 fn startup_test(test_case: StartupCase) {
@@ -308,7 +312,7 @@ fn startup_cases() -> List(StartupCase) {
     StartupCase(
       "the default application_name and client_encoding",
       with_parameters([]),
-      StartupMessage(Protocol30, "ada", [
+      startup_message_bytes(0, "ada", [
         #("database", "shop"),
         #("application_name", "dream_postgres"),
         #("client_encoding", "UTF8"),
@@ -320,7 +324,7 @@ fn startup_cases() -> List(StartupCase) {
         #("Application_Name", "billing"),
         #("options", "-c search_path=app"),
       ]),
-      StartupMessage(Protocol30, "ada", [
+      startup_message_bytes(0, "ada", [
         #("database", "shop"),
         #("options", "-c search_path=app"),
         #("Application_Name", "billing"),
@@ -330,7 +334,7 @@ fn startup_cases() -> List(StartupCase) {
     StartupCase(
       "a client_encoding that names UTF-8 is sent as UTF8",
       with_parameters([#("client_encoding", "utf-8")]),
-      StartupMessage(Protocol30, "ada", [
+      startup_message_bytes(0, "ada", [
         #("database", "shop"),
         #("application_name", "dream_postgres"),
         #("client_encoding", "UTF8"),
@@ -339,7 +343,7 @@ fn startup_cases() -> List(StartupCase) {
     StartupCase(
       "the client_encoding unicode is UTF-8",
       with_parameters([#("CLIENT_ENCODING", "Unicode")]),
-      StartupMessage(Protocol30, "ada", [
+      startup_message_bytes(0, "ada", [
         #("database", "shop"),
         #("application_name", "dream_postgres"),
         #("client_encoding", "UTF8"),
@@ -348,7 +352,7 @@ fn startup_cases() -> List(StartupCase) {
     StartupCase(
       "protocol 3.2",
       config_with(TextPassword("pencil"), PreferChannelBinding, Protocol32),
-      StartupMessage(Protocol32, "ada", [
+      startup_message_bytes(2, "ada", [
         #("database", "shop"),
         #("application_name", "dream_postgres"),
         #("client_encoding", "UTF8"),
@@ -487,6 +491,20 @@ fn client_nonce_test() {
   })
 }
 
+fn client_nonce_too_long_test() {
+  it("refuses a client nonce of 1025 bytes", fn() {
+    // Act
+    let made = client_nonce(<<0:size(8200)>>)
+
+    // Assert
+    made
+    |> should
+    |> be_error
+    |> be_equal(ClientNonceTooLong(1025))
+    |> or_fail_with("Expected ClientNonceTooLong(1025)")
+  })
+}
+
 // start -----------------------------------------------------------------------
 
 type StartErrorCase {
@@ -610,7 +628,18 @@ fn login_cases() -> List(LoginCase) {
       pencil(PreferChannelBinding),
       None,
       [AuthenticationCleartextPassword, ..ready_messages()],
-      Ok(LoginRun([PasswordMessage("pencil")], Some(ready_outcome()))),
+      Ok(LoginRun([password_message_bytes("pencil")], Some(ready_outcome()))),
+    ),
+    LoginCase(
+      "a cleartext password of 65530 bytes, the longest_password",
+      config_with(
+        TextPassword(repeat("a", 65_530)),
+        PreferChannelBinding,
+        Protocol30,
+      ),
+      None,
+      [AuthenticationCleartextPassword],
+      Ok(LoginRun([password_message_bytes(repeat("a", 65_530))], None)),
     ),
     LoginCase(
       "an MD5 password",
@@ -618,7 +647,7 @@ fn login_cases() -> List(LoginCase) {
       None,
       [AuthenticationMd5Password(<<1, 2, 3, 4>>), ..ready_messages()],
       Ok(LoginRun(
-        [PasswordMessage("md5d1b13b8314d3b5545feef5ce8ab91e15")],
+        [password_message_bytes("md5d1b13b8314d3b5545feef5ce8ab91e15")],
         Some(ready_outcome()),
       )),
     ),
@@ -656,6 +685,27 @@ fn login_cases() -> List(LoginCase) {
 
 fn failure_cases() -> List(LoginCase) {
   [
+    LoginCase(
+      "a cleartext password of 65531 bytes, one more than longest_password",
+      config_with(
+        TextPassword(repeat("a", 65_531)),
+        PreferChannelBinding,
+        Protocol30,
+      ),
+      None,
+      [AuthenticationCleartextPassword],
+      Error(PasswordTooLong(65_531)),
+    ),
+    LoginCase(
+      "a server-first-message of 16385 bytes",
+      pencil(PreferChannelBinding),
+      None,
+      [
+        AuthenticationSasl(["SCRAM-SHA-256"]),
+        AuthenticationSaslContinue(<<0:size(131_080)>>),
+      ],
+      Error(ScramServerFirstFailed(ServerFirstTooLong(16_385))),
+    ),
     LoginCase(
       "a wrong password gives the server's report",
       pencil(PreferChannelBinding),
