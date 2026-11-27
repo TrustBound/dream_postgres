@@ -26,6 +26,7 @@ import driver/login_test
 import driver/notices_test
 import driver/parity_test
 import driver/pool_test
+import driver/pool_without_database_test
 import driver/prepare_refresh_test
 import driver/query_copy_test
 import driver/query_server_test
@@ -68,6 +69,7 @@ pub fn suites() -> List(TestSuite) {
     connection_copy_test.tests(),
     connection_housekeeping_test.tests(),
     pool_test.tests(),
+    pool_without_database_test.tests(),
     catalog_table_test.tests(),
     catalog_test.tests(),
     listener_test.tests(),
