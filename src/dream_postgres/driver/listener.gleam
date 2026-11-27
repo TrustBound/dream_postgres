@@ -513,9 +513,9 @@ fn listen(state: State, channel: String) -> Result(Nil, DriverError) {
 }
 
 fn run(state: State, sql: String) -> Result(Nil, DriverError) {
-  connection.run_script(
+  connection.run_housekeeping_script(
     state.connection,
-    connection.statement(sql),
+    sql,
     state.deadline_milliseconds,
   )
   |> replace(Nil)

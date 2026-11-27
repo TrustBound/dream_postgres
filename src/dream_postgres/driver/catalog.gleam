@@ -280,9 +280,9 @@ fn load_and_find(
   resolution: Resolution,
 ) -> Result(TypeDescription, CatalogError) {
   use outcome <- try(
-    connection.run(
+    connection.run_housekeeping(
       connection,
-      connection.statement(catalog_table.query),
+      catalog_table.query,
       [],
       [],
       deadline_milliseconds,

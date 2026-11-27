@@ -1,5 +1,6 @@
 -module(driver_test_tracer_ffi).
--export([install/0, record_spans_here/0, next_span/0,
+-export([install/0, record_spans_here/0, record_every_process_here/0,
+         stop_recording_every_process/0, next_span/0, spans_now/0,
          start_span/4, with_span/5,
          set_attribute/3, set_attributes/2, add_event/3, add_events/2,
          set_status/2, update_name/2, end_span/1, end_span/2]).
@@ -21,6 +22,45 @@ install() ->
 record_spans_here() ->
     put(?MODULE, recording),
     nil.
+
+%% Records the spans of every process, sent to the calling process, until
+%% stop_recording_every_process/0. For a test of the processes of the
+%% driver itself, which run in no test's process.
+record_every_process_here() ->
+    persistent_term:put({?MODULE, sink}, self()),
+    nil.
+
+stop_recording_every_process() ->
+    persistent_term:erase({?MODULE, sink}),
+    nil.
+
+%% Every span that waits in the mailbox of the calling process now, ended
+%% or not, in the order they started. It never waits.
+spans_now() ->
+    spans_now([]).
+
+spans_now(Spans) ->
+    receive
+        {?MODULE, Id, {started, Name, Kind, Attributes}} ->
+            spans_now([pending_span(Id, Name, Kind, Attributes) | Spans])
+    after 0 ->
+        lists:reverse(Spans)
+    end.
+
+pending_span(Id, Name, Kind, Attributes) ->
+    finish_now(Id, Name, Kind, Attributes, false).
+
+finish_now(Id, Name, Kind, Attributes, Failed) ->
+    receive
+        {?MODULE, Id, {attributes, More}} ->
+            finish_now(Id, Name, Kind, maps:merge(Attributes, More), Failed);
+        {?MODULE, Id, {status, Code}} ->
+            finish_now(Id, Name, Kind, Attributes, Code =:= ?OTEL_STATUS_ERROR);
+        {?MODULE, Id, ended} ->
+            {recorded_span, Name, atom_to_binary(Kind), texts(Attributes), Failed}
+    after 0 ->
+        {recorded_span, Name, atom_to_binary(Kind), texts(Attributes), Failed}
+    end.
 
 %% The next span that the calling process ended:
 %% {recorded_span, Name, Kind, Attributes, Failed}, with each attribute as
@@ -54,40 +94,48 @@ text(Value) -> unicode:characters_to_binary(io_lib:format("~0p", [Value])).
 
 %% The otel_tracer callbacks.
 start_span(Ctx, _Tracer, Name, Opts) ->
-    start(get(?MODULE), Ctx, Name, Opts).
+    start(destination(), Ctx, Name, Opts).
 
-start(recording, _Ctx, Name, #{kind := Kind, attributes := Attributes}) ->
+%% The process that gets the steps of a span of this process: itself when
+%% it records, else the process that records every process, if any.
+destination() ->
+    case get(?MODULE) of
+        recording -> self();
+        _ -> persistent_term:get({?MODULE, sink}, none)
+    end.
+
+start(none, Ctx, Name, Opts) ->
+    otel_tracer_noop:start_span(Ctx, {otel_tracer_noop, []}, Name, Opts);
+start(Destination, _Ctx, Name, #{kind := Kind, attributes := Attributes}) ->
     Id = erlang:unique_integer([positive]),
-    self() ! {?MODULE, Id, {started, Name, Kind, Attributes}},
+    Destination ! {?MODULE, Id, {started, Name, Kind, Attributes}},
     #span_ctx{trace_id = 1, span_id = Id, trace_flags = 1, is_valid = true,
-              is_recording = true, span_sdk = {?MODULE, Id}};
-start(_NotRecording, Ctx, Name, Opts) ->
-    otel_tracer_noop:start_span(Ctx, {otel_tracer_noop, []}, Name, Opts).
+              is_recording = true, span_sdk = {?MODULE, {Id, Destination}}}.
 
 with_span(Ctx, Tracer, Name, Opts, Fun) ->
     Fun(start_span(Ctx, Tracer, Name, Opts)).
 
 %% The span callbacks (span_sdk).
-set_attribute(#span_ctx{span_sdk = {?MODULE, Id}}, Key, Value) ->
-    self() ! {?MODULE, Id, {attributes, #{Key => Value}}},
+set_attribute(#span_ctx{span_sdk = {?MODULE, {Id, Destination}}}, Key, Value) ->
+    Destination ! {?MODULE, Id, {attributes, #{Key => Value}}},
     true.
 
-set_attributes(#span_ctx{span_sdk = {?MODULE, Id}}, Attributes) ->
-    self() ! {?MODULE, Id, {attributes, Attributes}},
+set_attributes(#span_ctx{span_sdk = {?MODULE, {Id, Destination}}}, Attributes) ->
+    Destination ! {?MODULE, Id, {attributes, Attributes}},
     true.
 
 add_event(_SpanCtx, _Name, _Attributes) -> true.
 
 add_events(_SpanCtx, _Events) -> true.
 
-set_status(#span_ctx{span_sdk = {?MODULE, Id}}, #status{code = Code}) ->
-    self() ! {?MODULE, Id, {status, Code}},
+set_status(#span_ctx{span_sdk = {?MODULE, {Id, Destination}}}, #status{code = Code}) ->
+    Destination ! {?MODULE, Id, {status, Code}},
     true.
 
 update_name(_SpanCtx, _Name) -> true.
 
-end_span(#span_ctx{span_sdk = {?MODULE, Id}} = SpanCtx) ->
-    self() ! {?MODULE, Id, ended},
+end_span(#span_ctx{span_sdk = {?MODULE, {Id, Destination}}} = SpanCtx) ->
+    Destination ! {?MODULE, Id, ended},
     SpanCtx#span_ctx{is_recording = false}.
 
 end_span(SpanCtx, _Timestamp) ->

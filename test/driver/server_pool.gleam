@@ -244,6 +244,8 @@ pub type ProxiedPool {
   ProxiedPool(
     pool: Pool(Nil),
     proxy: Proxy,
+    /// The port of the proxy, which the pool's connections connect to.
+    proxy_port: Int,
     control: Connection,
     events: Subject(ConnectionEvent),
     pool_events: Subject(PoolEvent),
@@ -264,6 +266,7 @@ pub fn start_proxied_pool(
     Ok(ProxiedPool(
       pool: session.pool,
       proxy:,
+      proxy_port: port,
       control: session.control,
       events: session.events,
       pool_events: session.pool_events,

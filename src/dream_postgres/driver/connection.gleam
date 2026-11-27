@@ -994,9 +994,11 @@ pub fn run(
   deadline_milliseconds: Int,
 ) -> Result(Outcome, DriverError) {
   use <- traced(connection, statement, Some(statement.sql), _, outcome_ending)
-  request(
+  run_without_span(
     connection,
-    run_request(statement.sql, parameters, result_formats, _),
+    statement.sql,
+    parameters,
+    result_formats,
     deadline_milliseconds,
   )
 }
@@ -1024,7 +1026,82 @@ pub fn run_script(
   // recorded (database-spans.md: "Non-parameterized query text SHOULD NOT
   // be collected by default unless there is sanitization").
   use <- traced(connection, statement, None, _, script_ending)
-  request(connection, ScriptRequest(statement.sql, _), deadline_milliseconds)
+  run_script_without_span(connection, statement.sql, deadline_milliseconds)
+}
+
+/// Runs a statement that the driver sends for its own housekeeping, from
+/// its own processes, with no span: for example the catalog load. A span
+/// records a call that the app made; a statement of the driver's own has
+/// no caller span to nest under.
+///
+/// ## Parameters
+///
+/// - `connection`: the connection
+/// - `sql`: the statement
+/// - `parameters`: one cell for each parameter
+/// - `result_formats`: the format of the result columns
+/// - `deadline_milliseconds`: the longest time to wait for the result
+///
+/// ## Returns
+///
+/// The result of `run`.
+pub fn run_housekeeping(
+  connection: Connection,
+  sql: String,
+  parameters: List(Cell),
+  result_formats: List(Format),
+  deadline_milliseconds: Int,
+) -> Result(Outcome, DriverError) {
+  run_without_span(
+    connection,
+    sql,
+    parameters,
+    result_formats,
+    deadline_milliseconds,
+  )
+}
+
+/// Runs a script that the driver sends for its own housekeeping, from its
+/// own processes, with no span: for example a pool member's ROLLBACK and
+/// health check, and a listener's LISTEN and UNLISTEN.
+///
+/// ## Parameters
+///
+/// - `connection`: the connection
+/// - `sql`: the script
+/// - `deadline_milliseconds`: the longest time to wait for all results
+///
+/// ## Returns
+///
+/// The result of `run_script`.
+pub fn run_housekeeping_script(
+  connection: Connection,
+  sql: String,
+  deadline_milliseconds: Int,
+) -> Result(List(Outcome), DriverError) {
+  run_script_without_span(connection, sql, deadline_milliseconds)
+}
+
+fn run_without_span(
+  connection: Connection,
+  sql: String,
+  parameters: List(Cell),
+  result_formats: List(Format),
+  deadline_milliseconds: Int,
+) -> Result(Outcome, DriverError) {
+  request(
+    connection,
+    run_request(sql, parameters, result_formats, _),
+    deadline_milliseconds,
+  )
+}
+
+fn run_script_without_span(
+  connection: Connection,
+  sql: String,
+  deadline_milliseconds: Int,
+) -> Result(List(Outcome), DriverError) {
+  request(connection, ScriptRequest(sql, _), deadline_milliseconds)
 }
 
 /// The transaction status after the last request.

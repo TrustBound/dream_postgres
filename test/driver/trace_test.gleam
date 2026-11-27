@@ -3,27 +3,41 @@
 //// on a failure, and that no parameter value is ever recorded. A test
 //// tracer records the spans of the test's own process only.
 
+import dream_postgres/driver/catalog
 import dream_postgres/driver/connection.{
   type Connection, type DriverError, CopyNotRunning, ScriptFailed,
   ServerEndedConnection, ServerRefused, copy_from, copy_to, error_name, named,
   prepare, run, run_script, statement,
 }
+import dream_postgres/driver/listener.{type Listener}
 import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
+import dream_postgres/driver/pool
 import dream_postgres/driver/trace.{SpanQuery, SpanTarget, Worked}
 import dream_postgres/internal/cell.{Idle, Text}
+import dream_test/context
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit
 import dream_test/unit_context.{describe, it}
+import driver/proxy.{type Proxy, start_proxy, stop_proxy}
 import driver/server_connection.{connection_setup}
+import driver/server_listener.{start_listener, subscribe_to}
+import driver/server_pool.{
+  type ProxiedPool, health_check_config, start_proxied_pool, stop_proxied_pool,
+  wait_for_member_free_count,
+}
 import driver/servers.{database, first_driver_server}
 import driver/test_tracer.{
-  RecordedSpan, install_test_tracer, next_span, record_spans_here,
+  type RecordedSpan, RecordedSpan, install_test_tracer, next_span,
+  record_every_process_here, record_spans_here, spans_now, spans_on_ports,
+  stop_recording_every_process,
 }
 import fixtures/copy_callbacks.{collect_row, send_then_fail}
 import fixtures/expected_failure.{expect_failure}
 import fixtures/server_report.{server_report}
+import gleam/erlang/process
+import gleam/int.{to_string}
 import gleam/option.{None}
 import gleam/result.{map_error, try}
 import gleam/string.{inspect}
@@ -38,7 +52,99 @@ pub fn tests() -> TestSuite {
     copy_tests(),
     span_tests(),
     error_name_tests(),
+    housekeeping_tests(),
   ])
+}
+
+// The driver's own statements: one act -----------------------------------------
+
+/// The spans of every process while a proxied pool runs health checks, a
+/// proxied listener subscribes, the pool loads its catalog, and a caller
+/// runs one statement through the pool. The proxies' ports tell these
+/// spans from those of the tests that run at the same time.
+type Housekeeping {
+  Housekeeping(
+    proxied: ProxiedPool,
+    listener: Listener,
+    listener_proxy: Proxy,
+    spans: List(RecordedSpan),
+  )
+}
+
+fn watch_housekeeping() -> Result(Housekeeping, String) {
+  record_every_process_here()
+  use proxied <- try(
+    start_proxied_pool(first_driver_server, health_check_config(_, 20, 5000)),
+  )
+  use #(listener_port, listener_proxy) <- try(start_proxy(
+    first_driver_server.port,
+  ))
+  use listener <- try(start_listener(listener_port, "svc828_listener", 10))
+  use _subscription <- try(subscribe_to(
+    listener,
+    "svc828_channel",
+    process.new_subject(),
+  ))
+  use Nil <- try(wait_for_member_free_count(proxied.pool_events, 3))
+  use types <- try(pool.catalog(proxied.pool) |> map_error(inspect))
+  use _int4 <- try(
+    pool.hold(proxied.pool, 5000, catalog.describe(types, _, 23, 5000))
+    |> map_error(inspect)
+    |> result.map(map_error(_, inspect))
+    |> result.flatten,
+  )
+  use _outcome <- try(
+    pool.hold(proxied.pool, 5000, run(_, statement("SELECT 1"), [], [], 5000))
+    |> map_error(inspect)
+    |> result.map(map_error(_, inspect))
+    |> result.flatten,
+  )
+  stop_recording_every_process()
+  let ports = [to_string(proxied.proxy_port), to_string(listener_port)]
+  Ok(Housekeeping(
+    proxied:,
+    listener:,
+    listener_proxy:,
+    spans: spans_on_ports(spans_now(), ports),
+  ))
+}
+
+fn stop_housekeeping(outcome: Housekeeping) -> Result(Nil, String) {
+  listener.stop(outcome.listener)
+  stop_proxy(outcome.listener_proxy)
+  stop_proxied_pool(outcome.proxied)
+}
+
+fn housekeeping_tests() -> TestSuite {
+  describe(
+    "of the driver's own statements",
+    context.setup(setup: watch_housekeeping, teardown: stop_housekeeping),
+    [
+      it(
+        "leaves only the caller's statement with a span",
+        fn(outcome: Housekeeping) {
+          outcome.spans
+          |> should
+          |> be_equal([
+            RecordedSpan(
+              name: database,
+              kind: "client",
+              attributes: [
+                #("db.namespace", database),
+                #("db.operation.name", "SELECT"),
+                #("db.query.text", "SELECT 1"),
+                #("db.system.name", "postgresql"),
+                #("server.address", "localhost"),
+                #("server.port", to_string(outcome.proxied.proxy_port)),
+              ],
+              failed: False,
+            ),
+          ])
+          |> or_fail_with("Expected one span, of the caller's statement")
+        },
+      ),
+    ],
+  )
 }
 
 fn error_name_tests() -> TestSuite {

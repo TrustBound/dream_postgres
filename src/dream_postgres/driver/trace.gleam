@@ -7,6 +7,15 @@
 //// (open-telemetry/semantic-conventions, docs/db/postgresql.md and
 //// docs/db/database-spans.md). No parameter value is ever recorded.
 ////
+//// A span records a call that the app made through `prepare`, `run`,
+//// `run_script`, `copy_from` or `copy_to`. The statements that the driver
+//// sends for its own housekeeping, from its own processes, make no span:
+//// a pool member's ROLLBACK and health check, a listener's LISTEN and
+//// UNLISTEN, and the catalog load go through `run_housekeeping` and
+//// `run_housekeeping_script`, which no span wraps. They have no caller
+//// span to nest under, and would be a root span for each idle connection
+//// at each health check.
+////
 //// This module is internal to dream_postgres.
 
 import gleam/int
