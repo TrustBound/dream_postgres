@@ -61,7 +61,7 @@ import dream_postgres/driver/transaction.{
 }
 import dream_postgres/driver/transport.{
   type TransportConfig, type TransportError, BytesReceived, NotThisSocket,
-  SocketClosed, SocketEnded, SocketFailed,
+  SocketClosed, SocketEnded,
 }
 import dream_postgres/internal/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
@@ -185,6 +185,18 @@ pub type Violation {
   UnexpectedIdleMessage(message: BackendMessage)
 }
 
+/// Why a connection was lost.
+pub type LossReason {
+  /// The socket closed or failed.
+  SocketFailed(error: TransportError)
+  /// The deadline of the running request passed and its cancel did not
+  /// end it in time, so the process closed the connection. The request
+  /// whose deadline passed gets `DeadlinePassed(cancelled: False)`. The
+  /// requests that waited behind it, and the ones that come while the
+  /// process connects again, get this reason.
+  ClosedAfterDeadline
+}
+
 /// Why a request failed.
 pub type DriverError {
   /// The server refused the statement. The connection stays usable.
@@ -198,8 +210,8 @@ pub type DriverError {
   /// The deadline passed before the result came. `cancelled` says whether
   /// the server confirmed a cancel.
   DeadlinePassed(cancelled: Bool)
-  /// The socket closed or failed.
-  ConnectionLost(reason: TransportError)
+  /// The connection is gone. `reason` says why.
+  ConnectionLost(reason: LossReason)
   /// The server ended the session with a FATAL or PANIC error, for example
   /// `57P01` when an administrator stops it.
   ServerEndedConnection(report: ServerReport)
@@ -614,7 +626,7 @@ fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
   State(
     config:,
     subject:,
-    link: Lost(ConnectionLost(SocketClosed)),
+    link: Lost(ConnectionLost(SocketFailed(SocketClosed))),
     parameters: dict.new(),
     tracker: new_tracker(),
     running: None,
@@ -1437,7 +1449,7 @@ fn write_failed(
   error: TransportError,
 ) -> State {
   read_messages_with(state, transport.received_bytes(socket))
-  |> lose_if_connected(socket, ConnectionLost(error))
+  |> lose_if_connected(socket, ConnectionLost(SocketFailed(error)))
 }
 
 fn lose_if_connected(
@@ -1507,8 +1519,10 @@ fn socket_event(
       State(..state, link: Connected(socket, <<bytes:bits, more:bits>>))
       |> read_messages
       |> receive_next
-    SocketEnded -> lose(state, socket, ConnectionLost(SocketClosed))
-    SocketFailed(error) -> lose(state, socket, ConnectionLost(error))
+    SocketEnded ->
+      lose(state, socket, ConnectionLost(SocketFailed(SocketClosed)))
+    transport.SocketFailed(error) ->
+      lose(state, socket, ConnectionLost(SocketFailed(error)))
     NotThisSocket -> state
   }
 }
@@ -2395,8 +2409,20 @@ fn lose(
   socket: transport.Connection,
   error: DriverError,
 ) -> State {
+  end_link(state, socket, running_error: error, error:)
+}
+
+/// Ends the link. The running request, and a COPY that runs, fail with
+/// `running_error`. The waiting requests, the subscriber, the reconnect
+/// and the requests that come while the link is lost get `error`.
+fn end_link(
+  state: State,
+  socket: transport.Connection,
+  running_error running_error: DriverError,
+  error error: DriverError,
+) -> State {
   transport.close(socket)
-  option.map(state.running, refuse_running(_, error))
+  option.map(state.running, refuse_running(_, running_error))
   list.each(reverse(state.waiting), refuse_ticket(_, error))
   tell(state, Disconnected(error))
   schedule_reconnect(state, error, 0)
@@ -2406,7 +2432,7 @@ fn lose(
     running: None,
     waiting: [],
     tracker: new_tracker(),
-    copy: lost_copy(state, error),
+    copy: lost_copy(state, running_error),
   )
 }
 
@@ -2615,7 +2641,7 @@ fn start_cancel(
       process.send_after(state.subject, delay, CancelOver(current.id))
       state
     }
-    None -> lose(state, socket, DeadlinePassed(cancelled: False))
+    None -> lose_at_deadline(state, socket, current)
   }
 }
 
@@ -2678,12 +2704,19 @@ fn mark_cancel_done(
   |> next_request
 }
 
+/// The request whose deadline passed fails with `DeadlinePassed`. The
+/// others fail because the process closed the connection after it.
 fn lose_at_deadline(
   state: State,
   socket: transport.Connection,
   _current: Current,
 ) -> State {
-  lose(state, socket, DeadlinePassed(cancelled: False))
+  end_link(
+    state,
+    socket,
+    running_error: DeadlinePassed(cancelled: False),
+    error: ConnectionLost(ClosedAfterDeadline),
+  )
 }
 
 /// Opens a new connection with the same settings, sends the CancelRequest,

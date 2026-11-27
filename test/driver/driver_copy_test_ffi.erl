@@ -1,6 +1,6 @@
 -module(driver_copy_test_ffi).
 -export([memory_of/1, send_stray_down/1, wait_for_message/3,
-         wait_for_reset/2]).
+         wait_for_mailbox_length/3, wait_for_reset/2]).
 
 %% What a process holds now, for the COPY memory tests: its own memory
 %% (heap, stack and mailbox) plus the bytes of every binary that it
@@ -35,6 +35,17 @@ is_tagged(Message, Atoms) when is_tuple(Message), tuple_size(Message) > 0 ->
     lists:member(element(1, Message), Atoms);
 is_tagged(_Message, _Atoms) ->
     false.
+
+%% Waits until at least Length messages wait in the mailbox of Pid. It
+%% asks again each time, at most Attempts times: no sleep. Gives whether
+%% they came.
+wait_for_mailbox_length(Pid, Length, Attempts) ->
+    wait_for(fun() -> mailbox_length(Pid) >= Length end, Attempts).
+
+mailbox_length(Pid) ->
+    {message_queue_len, MessageCount} =
+        erlang:process_info(Pid, message_queue_len),
+    MessageCount.
 
 %% Waits until the TCP socket of Pid has no peer any more: the reset of
 %% the peer reached it. Gives whether it did.

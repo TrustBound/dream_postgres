@@ -5,7 +5,7 @@
 
 import dream_postgres/driver/connection.{
   type Connection, type CopyError, type CopySender, type DriverError,
-  type Outcome, AppFailed, ConnectionLost,
+  type Outcome, AppFailed, ConnectionLost, SocketFailed,
 }
 import dream_postgres/driver/transport.{SocketClosed}
 import dream_postgres/internal/cell.{type TransactionStatus}
@@ -65,7 +65,7 @@ fn count_rows(
 }
 
 fn no_answer() -> DriverError {
-  ConnectionLost(SocketClosed)
+  ConnectionLost(SocketFailed(SocketClosed))
 }
 
 /// Three rows in two chunks. The end of the first chunk is in the middle
@@ -868,7 +868,7 @@ fn twice_name(
   case error {
     AppFailed(#(first, next)) -> {
       let next_name =
-        result.unwrap_error(next, ConnectionLost(SocketClosed))
+        result.unwrap_error(next, ConnectionLost(SocketFailed(SocketClosed)))
         |> driver_error_name
       "app " <> driver_error_name(first) <> ", then " <> next_name
     }

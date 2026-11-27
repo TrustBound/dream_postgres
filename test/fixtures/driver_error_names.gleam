@@ -5,7 +5,7 @@
 import dream_postgres/driver/connection.{
   type CopyError, type DriverError, AppFailed, ConnectionLost, CopyNotRunning,
   CopyNotStarted, DeadlinePassed, DriverFailed, InvalidRequest,
-  ProtocolViolation, ServerEndedConnection, ServerRefused,
+  ProtocolViolation, ServerEndedConnection, ServerRefused, SocketFailed,
 }
 import dream_postgres/driver/transport.{
   ConnectionReset, SendTimedOut, SocketClosed,
@@ -18,9 +18,9 @@ pub fn driver_error_name(error: DriverError) -> String {
   case error {
     ServerRefused(report, _) -> report.code
     ServerEndedConnection(report) -> "ended " <> report.code
-    ConnectionLost(SocketClosed) -> "lost closed"
-    ConnectionLost(ConnectionReset) -> "lost reset"
-    ConnectionLost(SendTimedOut) -> "lost send timeout"
+    ConnectionLost(SocketFailed(SocketClosed)) -> "lost closed"
+    ConnectionLost(SocketFailed(ConnectionReset)) -> "lost reset"
+    ConnectionLost(SocketFailed(SendTimedOut)) -> "lost send timeout"
     ConnectionLost(_other) -> "lost"
     ProtocolViolation(_) -> "violation"
     DeadlinePassed(cancelled: True) -> "deadline cancelled"

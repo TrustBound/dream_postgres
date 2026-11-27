@@ -6,11 +6,11 @@
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
   type ConnectionEvent, type DriverError, type Outcome, type StatementCaching,
-  Backoff, CacheStatements, ConnectionConfig, ConnectionLost,
-  ConnectionProcessDown, CopyStatementRefused, DeadlinePassed, Disconnected,
-  InvalidRequest, LoginRefused, ProtocolViolation, ReconnectFailed, Reconnected,
-  ScriptFailed, ServerEndedConnection, ServerRefused, SetupTimedOut,
-  TransportRefused, UndecodableMessage, UnexpectedIdleMessage,
+  Backoff, CacheStatements, ClosedAfterDeadline, ConnectionConfig,
+  ConnectionLost, ConnectionProcessDown, CopyStatementRefused, DeadlinePassed,
+  Disconnected, InvalidRequest, LoginRefused, ProtocolViolation, ReconnectFailed,
+  Reconnected, ScriptFailed, ServerEndedConnection, ServerRefused, SetupTimedOut,
+  SocketFailed, TransportRefused, UndecodableMessage, UnexpectedIdleMessage,
   UnexpectedServerMessage, UnnamedStatements,
 }
 import dream_postgres/driver/login.{PreferChannelBinding, ServerRejectedLogin}
@@ -31,6 +31,7 @@ import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/servers.{type Server, driver_servers}
+import fixtures/driver_session.{wait_for_mailbox_length, wait_for_message}
 import gleam/bit_array
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int.{to_string}
@@ -113,7 +114,7 @@ fn config(
 ) -> Result(ConnectionConfig, DriverError) {
   use address <- try(
     transport.address("localhost", port)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   use login_config <- try(
     login.new(
@@ -124,7 +125,7 @@ fn config(
       channel_binding: PreferChannelBinding,
       protocol_version: Protocol30,
     )
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   Ok(ConnectionConfig(
     transport: TransportConfig(address, NoTls, 5000, 500),
@@ -153,7 +154,7 @@ fn with_started(
 ) -> Result(value, DriverError) {
   use connection <- try(
     connection.start(settings)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   let value = body(connection)
   connection.stop(connection)
@@ -209,7 +210,7 @@ fn backend_pid(connection: Connection) -> Result(String, DriverError) {
   use outcome <- try(run(connection, "SELECT pg_backend_pid()::text", []))
   case rows(outcome) {
     [[Text(pid)]] -> Ok(bit_array_text(pid))
-    _ -> Error(ConnectionLost(SocketClosed))
+    _ -> Error(ConnectionLost(SocketFailed(SocketClosed)))
   }
 }
 
@@ -494,7 +495,7 @@ fn start_tests() {
         use settings <- try(config(port, "dream", "dream", 10, None))
         use started <- try(
           connection.start(settings)
-          |> result.replace_error(ConnectionLost(SocketClosed)),
+          |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
         )
         let watch = watch_client_end(proxy)
         connection.stop(started)
@@ -519,7 +520,7 @@ fn start_tests() {
         ))
         use started <- try(
           connection.start(settings)
-          |> result.replace_error(ConnectionLost(SocketClosed)),
+          |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
         )
         connection.stop(started)
         connection.transaction_status(started)
@@ -725,9 +726,10 @@ fn event_code(event: ConnectionEvent) -> String {
   case event {
     Disconnected(ServerEndedConnection(report)) ->
       "disconnected " <> report.code
-    Disconnected(ConnectionLost(SocketClosed)) -> "lost closed"
-    Disconnected(ConnectionLost(ConnectionReset)) -> "lost reset"
-    Disconnected(ConnectionLost(SendTimedOut)) -> "lost send timeout"
+    Disconnected(ConnectionLost(SocketFailed(SocketClosed))) -> "lost closed"
+    Disconnected(ConnectionLost(SocketFailed(ConnectionReset))) -> "lost reset"
+    Disconnected(ConnectionLost(SocketFailed(SendTimedOut))) ->
+      "lost send timeout"
     Disconnected(ProtocolViolation(UndecodableMessage(UnknownMessageType(_)))) ->
       "violation undecodable"
     Disconnected(ProtocolViolation(UnexpectedIdleMessage(BindComplete))) ->
@@ -736,7 +738,7 @@ fn event_code(event: ConnectionEvent) -> String {
       "violation running"
     ReconnectFailed(LoginRefused(ServerRejectedLogin(report))) ->
       "reconnect failed " <> report.code
-    Disconnected(DeadlinePassed(cancelled: False)) -> "lost at deadline"
+    Disconnected(ConnectionLost(ClosedAfterDeadline)) -> "lost at deadline"
     Reconnected -> "reconnected"
     _ -> "another event"
   }
@@ -804,7 +806,7 @@ fn check_send_timeout() {
   // Assert
   answer
   |> should
-  |> be_equal(Ok(Error(ConnectionLost(SendTimedOut))))
+  |> be_equal(Ok(Error(ConnectionLost(SocketFailed(SendTimedOut)))))
   |> or_fail_with("Expected the loss by a send timeout")
 }
 
@@ -908,7 +910,7 @@ fn wait_for_lock_waiter(
   use outcomes <- try(script(control, lock_waiters(key, "count(*)::text")))
   case map(outcomes, rows), attempts {
     [[[Text(<<"1">>)]]], _ -> Ok(Nil)
-    _, 0 -> Error(ConnectionLost(SocketClosed))
+    _, 0 -> Error(ConnectionLost(SocketFailed(SocketClosed)))
     _, _ -> wait_for_lock_waiter(control, key, attempts - 1)
   }
 }
@@ -930,7 +932,7 @@ fn backend_pid_from_control(
   use outcomes <- try(script(control, lock_waiters(key, "pid::text")))
   case map(outcomes, rows) {
     [[[Text(pid)]]] -> Ok(bit_array_text(pid))
-    _ -> Error(ConnectionLost(SocketClosed))
+    _ -> Error(ConnectionLost(SocketFailed(SocketClosed)))
   }
 }
 
@@ -1240,7 +1242,7 @@ fn more_tests() {
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(ConnectionLost(SocketClosed))))
+      |> be_equal(Ok(Error(ConnectionLost(SocketFailed(SocketClosed)))))
       |> or_fail_with("Expected the error of the loss")
     }),
     it(
@@ -1360,7 +1362,7 @@ fn wait_for_parameter(
   use name <- try(connection.server_parameter(connection, "application_name"))
   case name == Some(value), attempts {
     True, _ -> Ok(Nil)
-    False, 0 -> Error(ConnectionLost(SocketClosed))
+    False, 0 -> Error(ConnectionLost(SocketFailed(SocketClosed)))
     False, _ -> wait_for_parameter(connection, value, attempts - 1)
   }
 }
@@ -1438,7 +1440,7 @@ fn check_running_lost(kind: CallerKind, caching: Caching) {
   // Assert
   answer
   |> should
-  |> be_equal(Ok(Ok(Error(ConnectionLost(SocketClosed)))))
+  |> be_equal(Ok(Ok(Error(ConnectionLost(SocketFailed(SocketClosed))))))
   |> or_fail_with("Expected the loss for the running request")
 }
 
@@ -1533,7 +1535,7 @@ fn wait_for_table_waiter(
   ))
   case map(outcomes, rows), attempts {
     [[[Text(<<"1">>)]]], _ -> Ok(Nil)
-    _, 0 -> Error(ConnectionLost(SocketClosed))
+    _, 0 -> Error(ConnectionLost(SocketFailed(SocketClosed)))
     _, _ -> wait_for_table_waiter(control, table, attempts - 1)
   }
 }
@@ -1877,7 +1879,7 @@ fn protocol_32_config(port: Int) -> Result(ConnectionConfig, DriverError) {
       channel_binding: PreferChannelBinding,
       protocol_version: message.Protocol32,
     )
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   Ok(
     ConnectionConfig(..settings, login: login_config)
@@ -2061,7 +2063,7 @@ fn more_deadline_tests() {
       // Assert
       answer
       |> should
-      |> be_equal(Ok(Error(ConnectionLost(SocketClosed))))
+      |> be_equal(Ok(Error(ConnectionLost(SocketFailed(SocketClosed)))))
       |> or_fail_with("Expected the error of the loss")
     }),
     it("closes the connection when the cancel never gets an answer", fn() {
@@ -2095,6 +2097,74 @@ fn more_deadline_tests() {
       |> should
       |> be_equal(Ok(Error(DeadlinePassed(cancelled: False))))
       |> or_fail_with("Expected DeadlinePassed with no cancel")
+    }),
+    it(
+      "gives a waiting request ClosedAfterDeadline after a deadline loss",
+      fn() {
+        // Arrange
+        let login_answer = <<"R", 8:32, 0:32, "Z", 5:32, "I">>
+        let #(port, _server) = start_fake_server(Answer(login_answer))
+        let first_answers = process.new_subject()
+
+        // Act
+        let answers = {
+          use settings <- try(
+            config(port, "dream", "dream", 60_000, None)
+            |> result.map(with_timeouts(_, 5000, 200)),
+          )
+          use connection <- with_started(settings)
+          let pid = pid_of(connection)
+          suspend(pid)
+          process.spawn_unlinked(fn() {
+            process.send(
+              first_answers,
+              connection.run(connection, "SELECT 1", [], [], 100),
+            )
+          })
+          let first_came = wait_for_message(pid, ["request"], 1_000_000)
+          let waiting = start_caller(connection, "SELECT 2")
+          let both_came = wait_for_mailbox_length(pid, 2, 1_000_000)
+          resume(pid)
+          Ok(#(first_came, both_came, process.receive(waiting.answers, 5000)))
+        }
+
+        // Assert
+        answers
+        |> should
+        |> be_equal(
+          Ok(#(True, True, Ok(Error(ConnectionLost(ClosedAfterDeadline))))),
+        )
+        |> or_fail_with(
+          "Expected the request behind the deadline to get ClosedAfterDeadline",
+        )
+      },
+    ),
+    it("gives a later request ClosedAfterDeadline after a deadline loss", fn() {
+      // Arrange
+      let login_answer = <<"R", 8:32, 0:32, "Z", 5:32, "I">>
+      let #(port, _server) = start_fake_server(Answer(login_answer))
+
+      // Act
+      let answer = {
+        use settings <- try(
+          config(port, "dream", "dream", 60_000, None)
+          |> result.map(with_timeouts(_, 5000, 200)),
+        )
+        use connection <- with_started(settings)
+        let _at_deadline = connection.run(connection, "SELECT 1", [], [], 100)
+        Ok(
+          connection.run(connection, "SELECT 1", [], [], 5000)
+          |> result.replace(Nil),
+        )
+      }
+
+      // Assert
+      answer
+      |> should
+      |> be_equal(Ok(Error(ConnectionLost(ClosedAfterDeadline))))
+      |> or_fail_with(
+        "Expected ClosedAfterDeadline while the process reconnects",
+      )
     }),
     it("ends a waiting request at its deadline", fn() {
       // Act
@@ -2195,7 +2265,7 @@ fn options_config(
       channel_binding: PreferChannelBinding,
       protocol_version: Protocol30,
     )
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   Ok(ConnectionConfig(..settings, login: login_config))
 }

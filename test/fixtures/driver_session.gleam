@@ -7,6 +7,7 @@
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionConfig, type ConnectionEvent, type DriverError,
   type Outcome, Backoff, CacheStatements, ConnectionConfig, ConnectionLost,
+  SocketFailed,
 }
 import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
@@ -76,6 +77,10 @@ pub fn send_stray_down(pid: Pid) -> Nil
 @external(erlang, "driver_copy_test_ffi", "wait_for_message")
 pub fn wait_for_message(pid: Pid, tags: List(String), attempts: Int) -> Bool
 
+/// Waits until at least `length` messages wait in the mailbox of `pid`.
+@external(erlang, "driver_copy_test_ffi", "wait_for_mailbox_length")
+pub fn wait_for_mailbox_length(pid: Pid, length: Int, attempts: Int) -> Bool
+
 /// Waits until the reset of the peer reached the TCP socket of `pid`.
 @external(erlang, "driver_copy_test_ffi", "wait_for_reset")
 pub fn wait_for_reset(pid: Pid, attempts: Int) -> Bool
@@ -103,7 +108,7 @@ pub fn config(
 ) -> Result(ConnectionConfig, DriverError) {
   use address <- try(
     transport.address("localhost", port)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   use login_config <- try(
     login.new(
@@ -114,7 +119,7 @@ pub fn config(
       channel_binding: PreferChannelBinding,
       protocol_version: Protocol30,
     )
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   Ok(ConnectionConfig(
     transport: TransportConfig(address, NoTls, 5000, 500),
@@ -136,7 +141,7 @@ pub fn with_connection(
   use settings <- try(config(port, None))
   use connection <- try(
     connection.start(settings)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   let value = body(connection)
   connection.stop(connection)
@@ -175,7 +180,7 @@ fn with_setup_over(
   )
   use connection <- try(
     connection.start(settings)
-    |> result.replace_error(ConnectionLost(SocketClosed)),
+    |> result.replace_error(ConnectionLost(SocketFailed(SocketClosed))),
   )
   let value = {
     use control <- with_connection(server.port)
@@ -271,7 +276,7 @@ pub fn wait_until_idle(
   use states <- try(backend_state(control, pid))
   case states, attempts {
     ["idle"], _ -> Ok(Nil)
-    _, 0 -> Error(ConnectionLost(SocketClosed))
+    _, 0 -> Error(ConnectionLost(SocketFailed(SocketClosed)))
     _, _ -> wait_until_idle(control, pid, attempts - 1)
   }
 }
