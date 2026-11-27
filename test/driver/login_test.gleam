@@ -38,8 +38,8 @@ import dream_postgres/internal/cell.{Idle, ServerReport}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
+import driver/stored_password.{store_password, stored_password}
 import gleam/dict
-import gleam/dynamic.{type Dynamic}
 import gleam/list.{map}
 import gleam/option.{type Option, None, Some}
 import matchers/extract_login_run.{type LoginRun, LoginRun, extract_login_run}
@@ -49,12 +49,6 @@ import matchers/extract_printed.{extract_printed}
 import matchers/extract_startup_message.{extract_startup_message}
 import matchers/extract_state_after.{extract_state_after}
 import matchers/not_contain_text.{not_contain_text}
-
-@external(erlang, "erlang", "put")
-fn put_stored_password(key: String, value: String) -> Dynamic
-
-@external(erlang, "erlang", "get")
-fn get_stored_password(key: String) -> String
 
 /// The tests of the login.
 pub fn tests() -> TestSuite {
@@ -964,14 +958,14 @@ fn unexpected_cases() -> List(LoginCase) {
 fn password_read_again_test() {
   it("is checked again when the server asks", fn() {
     // Arrange
-    let _previous = put_stored_password("password", "pencil")
+    store_password("password", "pencil")
     let config =
       build(config_with(
-        FunctionPassword(fn() { get_stored_password("password") }),
+        FunctionPassword(fn() { stored_password("password") }),
         PreferChannelBinding,
         Protocol30,
       ))
-    let _previous = put_stored_password("password", "pen\u{0000}cil")
+    store_password("password", "pen\u{0000}cil")
 
     // Act and Assert
     config

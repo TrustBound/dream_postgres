@@ -27,9 +27,11 @@ import driver/fake_server.{
 import driver/servers.{
   type Server, driver_servers, first_driver_server, server_without_tls,
 }
+import driver/test_files.{read_pem_certificate}
+import driver/transport_reason.{reason_name}
 import fixtures/driver_tls.{certificate_authority, transport_config, verify_full}
 import fixtures/transport_connect.{connect_with_minute_deadline}
-import gleam/erlang/atom.{type Atom}
+import gleam/erlang/atom
 import gleam/int.{to_string}
 import gleam/list.{map}
 import gleam/option.{None, Some}
@@ -43,12 +45,6 @@ import matchers/extract_receive_result.{extract_receive_result}
 import matchers/extract_send_result.{extract_send_result}
 import matchers/extract_server_certificate.{extract_server_certificate}
 import matchers/extract_startup_answer.{extract_startup_answer}
-
-@external(erlang, "dream_postgres_transport_ffi", "reason_name")
-fn reason_name(reason: #(Atom, Atom)) -> Atom
-
-@external(erlang, "driver_file_ffi", "read_pem_certificate")
-fn read_pem_certificate(path: String) -> Result(BitArray, String)
 
 /// The tests of the transport.
 pub fn tests() -> TestSuite {

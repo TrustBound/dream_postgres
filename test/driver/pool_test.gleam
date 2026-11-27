@@ -18,9 +18,10 @@ import dream_postgres/driver/connection.{
 }
 import dream_postgres/driver/pool.{
   type HoldError, type Pool, type PoolConfig, type PoolEvent, type PoolStatus,
-  ConnectFailed, HoldDeadlinePassed, InvalidHealthCheckInterval, InvalidSize,
-  MemberConnected, MemberDisconnected, MemberFree, MemberReplacing, PoolStatus,
-  PoolStopped,
+  ConnectFailed, HoldDeadlinePassed, HoldRefused, HoldWaiting,
+  InvalidHealthCheckInterval, InvalidSize, MemberConnected, MemberDisconnected,
+  MemberFree, MemberHeld, MemberReplacing, MemberReturned, PoolStatus,
+  PoolStopped, PoolStopping,
 }
 import dream_postgres/driver/transport.{ConnectRefused, SocketClosed}
 import dream_postgres/internal/cell.{type TransactionStatus, Idle, InTransaction}
@@ -48,8 +49,8 @@ import driver/server_pool.{
   exit_after_supervisor_kill, exit_holder_in_transaction, health_check_config,
   held_backend_pid, held_transaction_status, hold_connection, hold_pool_lock,
   hold_until_back, kill_and_hold_again, kill_holder, kill_member,
-  kill_named_manager, leave_transaction_open, named_pool_setup, pool_act_setup,
-  pool_events_until_free, pool_session_setup, pool_status,
+  kill_named_manager, leave_transaction_open, named_pool_setup, next_pool_event,
+  pool_act_setup, pool_events_until_free, pool_session_setup, pool_status,
   proxied_pool_act_setup, proxied_pool_setup, query_in_hold, release_holder,
   release_pool_lock, rollback_deadline_config, script_in_hold,
   slow_reconnect_config, start_holder, start_idle_holder, start_owned_pool,
@@ -58,8 +59,8 @@ import driver/server_pool.{
   start_test_proxied_pool_configured, stop_named_pool, stop_on_backend,
   stop_pool_after_error, stop_pool_inside, stop_pool_session, stop_proxied_pool,
   unchanged_config, user_pool_config, wait_for_disconnect,
-  wait_for_failed_reconnect, wait_for_held_count, wait_for_last_query,
-  wait_for_refusal, wait_for_waiting_count, while_holding,
+  wait_for_failed_reconnect, wait_for_last_query, wait_for_pool_event,
+  while_holding,
 }
 import driver/servers.{
   type Server, driver_servers, first_driver_server, password,
@@ -91,6 +92,7 @@ pub fn tests() -> TestSuite {
     late_rollback_tests(),
     drain_tests(),
     replacement_tests(),
+    hold_event_tests(),
   ])
 }
 
@@ -225,7 +227,10 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
                 session.lock_key,
               ))
               process.kill(caller.pid)
-              use _reset <- try(wait_for_held_count(session.pool, 0))
+              use Nil <- try(wait_for_pool_event(
+                session.pool_events,
+                MemberReturned(0),
+              ))
               use _unlocked <- try(release_pool_lock(session))
               held_transaction_status(session.pool)
             }
@@ -349,7 +354,10 @@ fn checkout_tests() -> ContextNode(PoolSession) {
           use holder <- try(start_idle_holder(session.pool))
           let waiter =
             start_caller(query_in_hold(session.pool, "SELECT 'served'"))
-          use _waiting <- try(wait_for_waiting_count(session.pool, 1))
+          use Nil <- try(wait_for_pool_event(
+            session.pool_events,
+            HoldWaiting(1),
+          ))
           use _released <- try(release_holder(holder))
           caller_answer(waiter)
         }
@@ -1110,7 +1118,7 @@ fn drain_running_hold(session: PoolSession) -> Result(Drain, String) {
     ))
   use _waited <- try(wait_for_lock_waiter(session.control, session.lock_key))
   let stopper = start_caller(fn() { pool.stop(session.pool, 5000) })
-  use _refusing <- try(wait_for_refusal(session.pool))
+  use Nil <- try(wait_for_pool_event(session.pool_events, PoolStopping))
   let refused = pool.hold(session.pool, 5000, backend_pid)
   use _unlocked <- try(release_pool_lock(session))
   let finished = caller_answer(running)
@@ -1220,18 +1228,22 @@ fn replacement_tests() -> TestSuite {
         },
       ),
       it(
-        "tells the loss, the replacement, the new connection and MemberFree",
+        "tells the hold, the loss, the replacement and MemberFree",
         fn(shared: ActOutcome(ProxiedPool, Replacement)) {
           shared.outcome.replace_events
           |> should
           |> be_ok
           |> be_equal([
+            MemberHeld(0),
             MemberDisconnected(0, ConnectionLost(SocketFailed(SocketClosed))),
+            MemberReturned(0),
             MemberReplacing(0),
             MemberConnected(0),
             MemberFree(0),
           ])
-          |> or_fail_with("Expected the four pool events of a replacement")
+          |> or_fail_with(
+            "Expected the pool events of a hold and a replacement",
+          )
         },
       ),
       it(
@@ -1255,6 +1267,85 @@ fn replacement_tests() -> TestSuite {
           |> be_ok
           |> be_different_parts
           |> or_fail_with("Expected a new backend after the replacement")
+        },
+      ),
+    ],
+  )
+}
+
+// The events of holds and a stop: one act ------------------------------------
+
+/// A pool of one connection: a hold takes the connection, a second hold
+/// waits and passes its deadline, a stop starts while the first hold runs,
+/// a hold after the stop is refused, and the first hold ends.
+type HoldsAndStop {
+  HoldsAndStop(
+    events: List(PoolEvent),
+    timed_out: Result(Result(String, String), HoldError),
+    after_stop: Result(Result(String, String), HoldError),
+  )
+}
+
+fn walk_holds_and_stop(session: PoolSession) -> Result(HoldsAndStop, String) {
+  use Nil <- try(wait_for_pool_event(session.pool_events, MemberFree(0)))
+  use holder <- try(start_idle_holder(session.pool))
+  use held <- try(next_pool_event(session.pool_events))
+  let timed_out = pool.hold(session.pool, 50, backend_pid)
+  use waiting <- try(next_pool_event(session.pool_events))
+  use refused <- try(next_pool_event(session.pool_events))
+  let stopper = start_caller(fn() { pool.stop(session.pool, 5000) })
+  use stopping <- try(next_pool_event(session.pool_events))
+  let after_stop = pool.hold(session.pool, 5000, backend_pid)
+  use late_refused <- try(next_pool_event(session.pool_events))
+  use Nil <- try(release_holder(holder))
+  use returned <- try(next_pool_event(session.pool_events))
+  use Nil <- try(caller_answer(stopper) |> map_error(inspect))
+  Ok(HoldsAndStop(
+    events: [held, waiting, refused, stopping, late_refused, returned],
+    timed_out:,
+    after_stop:,
+  ))
+}
+
+fn hold_event_tests() -> TestSuite {
+  describe(
+    "the events of holds and a stop",
+    pool_act_setup(first_driver_server, walk_holds_and_stop),
+    [
+      it(
+        "tells each hold, wait, refusal, stop and return, in order",
+        fn(shared: ActOutcome(PoolSession, HoldsAndStop)) {
+          shared.outcome.events
+          |> should
+          |> be_equal([
+            MemberHeld(0),
+            HoldWaiting(1),
+            HoldRefused(HoldDeadlinePassed),
+            PoolStopping,
+            HoldRefused(PoolStopped),
+            MemberReturned(0),
+          ])
+          |> or_fail_with("Expected the pool events in their order")
+        },
+      ),
+      it(
+        "refuses the waiting hold at its deadline",
+        fn(shared: ActOutcome(PoolSession, HoldsAndStop)) {
+          shared.outcome.timed_out
+          |> should
+          |> be_error
+          |> be_equal(HoldDeadlinePassed)
+          |> or_fail_with("Expected HoldDeadlinePassed")
+        },
+      ),
+      it(
+        "refuses a hold after the stop",
+        fn(shared: ActOutcome(PoolSession, HoldsAndStop)) {
+          shared.outcome.after_stop
+          |> should
+          |> be_error
+          |> be_equal(PoolStopped)
+          |> or_fail_with("Expected PoolStopped")
         },
       ),
     ],
