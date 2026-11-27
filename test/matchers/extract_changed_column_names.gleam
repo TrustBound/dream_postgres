@@ -1,6 +1,6 @@
 //// Extracts the column names of the new description of a changed statement.
 
-import dream_postgres/driver/connection.{type DriverError, StatementChanged}
+import dream_postgres/driver/connection.{type RunError, RunStatementChanged}
 import dream_postgres/internal/cell.{type ColumnDescription}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -10,7 +10,7 @@ import gleam/option.{Some}
 import gleam/string.{inspect}
 
 /// Gives the column names, in column order, of the new description that a
-/// `StatementChanged` error carries. Fails for other errors.
+/// `RunStatementChanged` error carries. Fails for other errors.
 ///
 /// ```gleam
 /// run(connection, "SELECT * FROM changing", [], [], 5000)
@@ -18,10 +18,10 @@ import gleam/string.{inspect}
 /// |> be_error
 /// |> extract_changed_column_names
 /// |> be_equal(["a", "b"])
-/// |> or_fail_with("Expected StatementChanged with both columns")
+/// |> or_fail_with("Expected RunStatementChanged with both columns")
 /// ```
 pub fn extract_changed_column_names(
-  result: MatchResult(DriverError),
+  result: MatchResult(RunError),
 ) -> MatchResult(List(String)) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
@@ -29,9 +29,9 @@ pub fn extract_changed_column_names(
   }
 }
 
-fn changed_column_names_of(error: DriverError) -> MatchResult(List(String)) {
+fn changed_column_names_of(error: RunError) -> MatchResult(List(String)) {
   case error {
-    StatementChanged(description) ->
+    RunStatementChanged(description) ->
       MatchOk(map(description.columns, column_name))
     _other ->
       MatchFailed(AssertionFailure(
@@ -39,7 +39,7 @@ fn changed_column_names_of(error: DriverError) -> MatchResult(List(String)) {
         message: "",
         payload: Some(CustomMatcherFailure(
           actual: inspect(error),
-          description: "Expected StatementChanged",
+          description: "Expected RunStatementChanged",
         )),
       ))
   }

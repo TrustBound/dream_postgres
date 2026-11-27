@@ -41,8 +41,8 @@ import gleam/option.{None}
 import gleam/otp/static_supervisor
 import gleam/result.{map_error, try}
 import gleam/string.{inspect}
-import matchers/extract_driver_error_code.{extract_driver_error_code}
 import matchers/extract_load_failure.{extract_load_failure}
+import matchers/extract_run_refusal_code.{extract_run_refusal_code}
 import matchers/extract_type_kind.{extract_type_kind}
 
 /// A type OID that no server of the tests has.
@@ -488,7 +488,7 @@ fn failed_load_tests() {
           |> should
           |> be_error
           |> extract_load_failure
-          |> extract_driver_error_code
+          |> extract_run_refusal_code
           |> be_equal("25P02")
           |> or_fail_with("Expected 25P02 from the load")
         },
@@ -511,7 +511,7 @@ fn failed_load_tests() {
         division
         |> should
         |> be_error
-        |> extract_driver_error_code
+        |> extract_run_refusal_code
         |> be_equal("22012")
         |> or_fail_with("Expected 22012 from the division by zero")
       },

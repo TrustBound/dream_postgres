@@ -1,6 +1,6 @@
 //// Extracts the transaction status that a refused statement left.
 
-import dream_postgres/driver/connection.{type DriverError, ServerRefused}
+import dream_postgres/driver/connection.{type RunError, RunRefused}
 import dream_postgres/internal/cell.{type TransactionStatus}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -8,7 +8,7 @@ import dream_test/types.{
 import gleam/option.{Some}
 import gleam/string.{inspect}
 
-/// Gives the transaction status of a `ServerRefused` error. Fails for
+/// Gives the transaction status of a `RunRefused` error. Fails for
 /// other errors.
 ///
 /// ```gleam
@@ -20,7 +20,7 @@ import gleam/string.{inspect}
 /// |> or_fail_with("Expected a failed transaction")
 /// ```
 pub fn extract_refusal_status(
-  result: MatchResult(DriverError),
+  result: MatchResult(RunError),
 ) -> MatchResult(TransactionStatus) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
@@ -28,16 +28,16 @@ pub fn extract_refusal_status(
   }
 }
 
-fn refusal_status_of(error: DriverError) -> MatchResult(TransactionStatus) {
+fn refusal_status_of(error: RunError) -> MatchResult(TransactionStatus) {
   case error {
-    ServerRefused(_report, status) -> MatchOk(status)
+    RunRefused(_report, status) -> MatchOk(status)
     _other ->
       MatchFailed(AssertionFailure(
         operator: "extract_refusal_status",
         message: "",
         payload: Some(CustomMatcherFailure(
           actual: inspect(error),
-          description: "Expected ServerRefused",
+          description: "Expected RunRefused",
         )),
       ))
   }

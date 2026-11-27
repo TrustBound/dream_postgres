@@ -733,7 +733,7 @@ fn server_error_tests() {
       |> be_equal(
         Finished(
           Outcome(
-            result: Error(ServerError(syntax_error)),
+            result: Error(syntax_error),
             status: InFailedTransaction,
             asynchronous_messages: [],
           ),
@@ -761,7 +761,7 @@ fn server_error_tests() {
       |> be_equal(
         Finished(
           Outcome(
-            result: Error(ServerError(unique_violation())),
+            result: Error(unique_violation()),
             status: Idle,
             asynchronous_messages: [],
           ),

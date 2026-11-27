@@ -1,7 +1,7 @@
 //// Extracts the reason of a lost connection.
 
 import dream_postgres/driver/connection.{
-  type DriverError, type LossReason, ConnectionLost,
+  type LossReason, type RequestFailure, ConnectionLost,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -21,7 +21,7 @@ import gleam/string.{inspect}
 /// |> or_fail_with("Expected the loss of the connection")
 /// ```
 pub fn extract_loss_reason(
-  result: MatchResult(DriverError),
+  result: MatchResult(RequestFailure),
 ) -> MatchResult(LossReason) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
@@ -29,7 +29,7 @@ pub fn extract_loss_reason(
   }
 }
 
-fn reason_of(value: DriverError) -> MatchResult(LossReason) {
+fn reason_of(value: RequestFailure) -> MatchResult(LossReason) {
   case value {
     ConnectionLost(reason) -> MatchOk(reason)
     _other ->

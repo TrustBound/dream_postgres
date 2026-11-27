@@ -2,8 +2,8 @@
 //// step that it cuts short, and a reconnect that it ends.
 
 import dream_postgres/driver/connection.{
-  ConnectionConfig, ConnectionLost, Disconnected, ReconnectFailed, SetupExited,
-  SetupTimedOut, SocketFailed, start_failure,
+  ConnectionConfig, ConnectionLost, Disconnected, ReconnectFailed,
+  ScriptRequestFailed, SetupExited, SetupTimedOut, SocketFailed, start_failure,
 }
 import dream_postgres/driver/deadline.{
   bounded_wait, from_now, has_passed, time_left,
@@ -305,7 +305,9 @@ fn reconnect_tests(name: String, second: reconnect_server.SecondConnection) {
         outcome.waiting_answer
         |> should
         |> be_error
-        |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+        |> be_equal(
+          ScriptRequestFailed(ConnectionLost(SocketFailed(SocketClosed))),
+        )
         |> or_fail_with("Expected the loss as the answer, after the reconnect")
       },
     ),

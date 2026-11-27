@@ -5,16 +5,15 @@
 
 import dream_postgres/driver/catalog
 import dream_postgres/driver/connection.{
-  type Connection, type DriverError, CopyNotRunning, ScriptFailed,
-  ServerEndedConnection, ServerRefused, copy_from, copy_to, error_name, named,
-  prepare, run, run_script, statement,
+  type Connection, copy_from, copy_to, named, prepare, run, run_script,
+  statement,
 }
 import dream_postgres/driver/listener.{type Listener}
 import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
 import dream_postgres/driver/pool
 import dream_postgres/driver/trace.{SpanQuery, SpanTarget, Worked}
-import dream_postgres/internal/cell.{Idle, Text}
+import dream_postgres/internal/cell.{Text}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -35,7 +34,6 @@ import driver/test_tracer.{
 }
 import fixtures/copy_callbacks.{collect_row, send_then_fail}
 import fixtures/expected_failure.{expect_failure}
-import fixtures/server_report.{server_report}
 import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/option.{None}
@@ -51,7 +49,6 @@ pub fn tests() -> TestSuite {
     statement_tests(),
     copy_tests(),
     span_tests(),
-    error_name_tests(),
     housekeeping_tests(),
   ])
 }
@@ -145,25 +142,6 @@ fn housekeeping_tests() -> TestSuite {
       ),
     ],
   )
-}
-
-fn error_name_tests() -> TestSuite {
-  let report = server_report("ERROR", "42P01", "no such table")
-  unit.describe("the name of an error", [
-    error_name_test(ServerRefused(report, Idle), "ServerRefused"),
-    error_name_test(ScriptFailed([], report, Idle), "ScriptFailed"),
-    error_name_test(ServerEndedConnection(report), "ServerEndedConnection"),
-    error_name_test(CopyNotRunning, "CopyNotRunning"),
-  ])
-}
-
-fn error_name_test(error: DriverError, name: String) {
-  unit.it("is " <> name <> " for " <> inspect(error), fn() {
-    error_name(error)
-    |> should
-    |> be_equal(name)
-    |> or_fail_with("Expected the constructor's name")
-  })
 }
 
 const port = "5441"
@@ -382,7 +360,7 @@ fn statement_tests() -> TestSuite {
               #("db.namespace", database),
               #("db.query.text", "SELECT '\u{0000}'"),
               #("db.system.name", "postgresql"),
-              #("error.type", "InvalidRequest"),
+              #("error.type", "PrepareUnencodable"),
               #("server.address", "localhost"),
               #("server.port", port),
             ],

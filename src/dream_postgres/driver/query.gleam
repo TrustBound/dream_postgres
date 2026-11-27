@@ -419,7 +419,7 @@ pub fn step_prepare(
   state: PrepareState,
   message: BackendMessage,
 ) -> Result(
-  Step(PrepareState, Outcome(StatementDescription, Failure)),
+  Step(PrepareState, Outcome(StatementDescription, ServerReport)),
   UnexpectedMessage,
 ) {
   receive(state.machine, message)
@@ -854,12 +854,21 @@ fn copy_outcome(
   |> outcome(machine, status, _)
 }
 
+/// A prepare step fails only with the server's error: none of its phases
+/// takes the start of a COPY, so it never refuses one.
 fn prepare_outcome(
   machine: Machine,
   status: TransactionStatus,
-) -> Outcome(StatementDescription, Failure) {
-  StatementDescription(parameters: machine.parameters, columns: machine.columns)
-  |> step_result(machine, _)
+) -> Outcome(StatementDescription, ServerReport) {
+  let description =
+    StatementDescription(
+      parameters: machine.parameters,
+      columns: machine.columns,
+    )
+  case machine.error {
+    Some(report) -> Error(report)
+    None -> Ok(description)
+  }
   |> outcome(machine, status, _)
 }
 

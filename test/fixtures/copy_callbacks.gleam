@@ -4,9 +4,9 @@
 //// before a test.
 
 import dream_postgres/driver/connection.{
-  type Connection, type CopyError, type CopySender, type DriverError,
-  type Outcome, ConnectionLost, SocketFailed, copy_from, copy_to, run_script,
-  send_chunk,
+  type ChunkError, type Connection, type CopyError, type CopySender,
+  type Outcome, type ScriptError, ChunkFailed, ConnectionLost, SocketFailed,
+  copy_from, copy_to, run_script, send_chunk,
 }
 import dream_postgres/driver/transport.{SocketClosed}
 import driver/proxy.{type Proxy, close_client, inject}
@@ -27,8 +27,8 @@ pub type MemoryPeak {
 }
 
 /// The error of a produce function or a fold whose wait got no answer.
-fn no_answer() -> DriverError {
-  ConnectionLost(SocketFailed(SocketClosed))
+fn no_answer() -> ChunkError {
+  ChunkFailed(ConnectionLost(SocketFailed(SocketClosed)))
 }
 
 // Data ------------------------------------------------------------------------
@@ -43,13 +43,13 @@ pub fn binary_copy() -> BitArray {
 
 /// Three rows in two chunks. The end of the first chunk is in the middle
 /// of a row.
-pub fn send_three_rows(sender: CopySender) -> Result(Nil, DriverError) {
+pub fn send_three_rows(sender: CopySender) -> Result(Nil, ChunkError) {
   use Nil <- try(send_chunk(sender, <<"1\tone\n2\ttw":utf8>>))
   send_chunk(sender, <<"o\n3\tthree\n":utf8>>)
 }
 
 /// Sends nothing.
-pub fn send_nothing(_sender: CopySender) -> Result(Nil, DriverError) {
+pub fn send_nothing(_sender: CopySender) -> Result(Nil, ChunkError) {
   Ok(Nil)
 }
 
@@ -62,13 +62,13 @@ pub fn send_then_fail(sender: CopySender) -> Result(Nil, String) {
 }
 
 /// Sends a row whose id is not an integer.
-pub fn send_bad_row(sender: CopySender) -> Result(Nil, DriverError) {
+pub fn send_bad_row(sender: CopySender) -> Result(Nil, ChunkError) {
   send_chunk(sender, <<"x\tbad\n":utf8>>)
 }
 
 /// Sends a row that is not valid, then valid rows until the server's
 /// error comes back.
-pub fn send_until_refused(sender: CopySender) -> Result(Nil, DriverError) {
+pub fn send_until_refused(sender: CopySender) -> Result(Nil, ChunkError) {
   use Nil <- try(send_bad_row(sender))
   send_until_error(sender, <<"2\ttwo\n":utf8>>, 1_000_000)
 }
@@ -79,7 +79,7 @@ pub fn send_until_error(
   sender: CopySender,
   chunk: BitArray,
   attempts: Int,
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   case send_chunk(sender, chunk), attempts {
     Ok(Nil), 0 -> Ok(Nil)
     Ok(Nil), _ -> send_until_error(sender, chunk, attempts - 1)
@@ -88,12 +88,12 @@ pub fn send_until_error(
 }
 
 /// Sends the binary COPY data of `binary_copy`.
-pub fn send_binary(sender: CopySender) -> Result(Nil, DriverError) {
+pub fn send_binary(sender: CopySender) -> Result(Nil, ChunkError) {
   send_chunk(sender, binary_copy())
 }
 
 /// Sends two csv rows.
-pub fn send_csv(sender: CopySender) -> Result(Nil, DriverError) {
+pub fn send_csv(sender: CopySender) -> Result(Nil, ChunkError) {
   send_chunk(sender, <<"1,a\n2,\"b,c\"\n":utf8>>)
 }
 
@@ -103,10 +103,13 @@ pub fn send_after_end(
   sender: CopySender,
   control: Connection,
   pid: String,
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   use Nil <- try(send_chunk(sender, <<"1\tone\n":utf8>>))
   let sql = "SELECT pg_terminate_backend(" <> pid <> ", 5000)"
-  use _terminated <- try(run_script(control, connection.statement(sql), 5000))
+  use _terminated <- try(
+    run_script(control, connection.statement(sql), 5000)
+    |> result.replace_error(no_answer()),
+  )
   send_chunk(sender, <<"2\ttwo\n":utf8>>)
 }
 
@@ -115,7 +118,7 @@ pub fn send_after_idle(
   sender: CopySender,
   control: Connection,
   pid: String,
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   use Nil <- try(watch_until_idle(control, pid) |> await_idle)
   send_chunk(sender, <<"1\tone\n":utf8>>)
 }
@@ -125,7 +128,7 @@ pub fn send_after_idle(
 pub fn send_across_close(
   sender: CopySender,
   proxy: Proxy,
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   use Nil <- try(send_chunk(sender, <<"1\tone\n":utf8>>))
   close_client(proxy)
   send_until_error(sender, <<"2\ttwo\n":utf8>>, 1_000_000)
@@ -136,7 +139,7 @@ pub fn send_across_close(
 pub fn send_across_violation(
   sender: CopySender,
   proxy: Proxy,
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   use Nil <- try(send_chunk(sender, <<"1\tone\n":utf8>>))
   inject(proxy, <<"2", 4:32>>)
   send_until_error(sender, <<"2\ttwo\n":utf8>>, 1_000_000)
@@ -147,7 +150,7 @@ pub fn send_across_violation(
 /// refusal and the answer to that chunk.
 pub fn send_twice_after_error(
   sender: CopySender,
-) -> Result(Nil, #(DriverError, Result(Nil, DriverError))) {
+) -> Result(Nil, #(ChunkError, Result(Nil, ChunkError))) {
   use Nil <- try(
     send_chunk(sender, <<"1\tone\n":utf8>>)
     |> result.map_error(with_no_next),
@@ -156,16 +159,14 @@ pub fn send_twice_after_error(
   |> result.map_error(with_next_send(_, sender))
 }
 
-fn with_no_next(
-  error: DriverError,
-) -> #(DriverError, Result(Nil, DriverError)) {
+fn with_no_next(error: ChunkError) -> #(ChunkError, Result(Nil, ChunkError)) {
   #(error, Ok(Nil))
 }
 
 fn with_next_send(
-  error: DriverError,
+  error: ChunkError,
   sender: CopySender,
-) -> #(DriverError, Result(Nil, DriverError)) {
+) -> #(ChunkError, Result(Nil, ChunkError)) {
   #(error, send_chunk(sender, <<"3\tthree\n":utf8>>))
 }
 
@@ -176,7 +177,7 @@ pub fn copy_inside(
   connection: Connection,
 ) -> Result(
   Nil,
-  #(Result(List(Outcome), DriverError), Result(Int, CopyError(DriverError))),
+  #(Result(List(Outcome), ScriptError), Result(Int, CopyError(ChunkError))),
 ) {
   let inner_script =
     run_script(connection, connection.statement("SELECT 1"), 50)
@@ -190,11 +191,24 @@ pub fn copy_inside(
   Error(#(inner_script, inner_copy))
 }
 
+/// Stops the connection of the COPY, then sends a row, tells `told` the
+/// answer of that send, and gives it.
+pub fn stop_then_send(
+  sender: CopySender,
+  stopped: Connection,
+  told: Subject(Result(Nil, ChunkError)),
+) -> Result(Nil, ChunkError) {
+  connection.stop(stopped)
+  let sent = send_chunk(sender, <<"1\tone\n":utf8>>)
+  process.send(told, sent)
+  sent
+}
+
 /// Sends `sender` to `senders`, and sends nothing.
 pub fn keep_sender(
   sender: CopySender,
   senders: Subject(CopySender),
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   process.send(senders, sender)
   Ok(Nil)
 }
@@ -210,7 +224,7 @@ pub fn kept_sender(senders: Subject(CopySender)) -> Result(CopySender, String) {
 pub fn send_after_go(
   sender: CopySender,
   started: Subject(Subject(Nil)),
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   use Nil <- try(send_chunk(sender, <<"1\tone\n":utf8>>))
   let go = process.new_subject()
   process.send(started, go)
@@ -267,7 +281,7 @@ pub fn read_until_idle(
   _row: BitArray,
   control: Connection,
   pid: String,
-) -> Result(Bool, DriverError) {
+) -> Result(Bool, ChunkError) {
   use <- bool.guard(waited, Ok(True))
   watch_until_idle(control, pid) |> await_idle |> result.replace(True)
 }
@@ -277,7 +291,7 @@ pub fn close_at_first_row(
   closed: Bool,
   _row: BitArray,
   proxy: Proxy,
-) -> Result(Bool, DriverError) {
+) -> Result(Bool, ChunkError) {
   use <- bool.guard(closed, Ok(True))
   close_client(proxy)
   Ok(True)
@@ -300,7 +314,7 @@ fn tell_when_idle(
   process.send(idle, wait_for_idle_backend(control, pid))
 }
 
-fn await_idle(idle: Subject(Result(Nil, String))) -> Result(Nil, DriverError) {
+fn await_idle(idle: Subject(Result(Nil, String))) -> Result(Nil, ChunkError) {
   process.receive(idle, 10_000)
   |> result.replace_error("no answer")
   |> result.flatten
@@ -400,7 +414,7 @@ pub fn caller_told(caller: CopyCaller(told)) -> Result(told, Nil) {
 pub fn hang_after_rows(
   connection: Connection,
   started: Subject(String),
-) -> Result(Int, CopyError(DriverError)) {
+) -> Result(Int, CopyError(ChunkError)) {
   copy_from(
     connection,
     connection.statement("COPY hung FROM STDIN"),
@@ -412,7 +426,7 @@ pub fn hang_after_rows(
 fn send_and_hang(
   sender: CopySender,
   started: Subject(String),
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   use Nil <- try(send_three_rows(sender))
   process.send(started, "sent")
   process.receive_forever(process.new_subject())
@@ -422,8 +436,8 @@ fn send_and_hang(
 /// one, tells the answer of that send, and waits forever.
 pub fn hang_after_refusal(
   connection: Connection,
-  started: Subject(Result(Nil, DriverError)),
-) -> Result(Int, CopyError(DriverError)) {
+  started: Subject(Result(Nil, ChunkError)),
+) -> Result(Int, CopyError(ChunkError)) {
   copy_from(
     connection,
     connection.statement("COPY hung FROM STDIN"),
@@ -434,8 +448,8 @@ pub fn hang_after_refusal(
 
 fn refuse_and_hang(
   sender: CopySender,
-  started: Subject(Result(Nil, DriverError)),
-) -> Result(Nil, DriverError) {
+  started: Subject(Result(Nil, ChunkError)),
+) -> Result(Nil, ChunkError) {
   process.send(started, send_until_refused(sender))
   process.receive_forever(process.new_subject())
 }

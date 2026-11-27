@@ -1,7 +1,7 @@
 //// Extracts the outcomes of the statements that ran before a statement of a script failed.
 
 import dream_postgres/driver/connection.{
-  type DriverError, type Outcome, ScriptFailed,
+  type Outcome, type ScriptError, ScriptFailed,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -22,7 +22,7 @@ import gleam/string.{inspect}
 /// |> or_fail_with("Expected the statement before the failure")
 /// ```
 pub fn extract_script_failure_outcomes(
-  result: MatchResult(DriverError),
+  result: MatchResult(ScriptError),
 ) -> MatchResult(List(Outcome)) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
@@ -30,7 +30,7 @@ pub fn extract_script_failure_outcomes(
   }
 }
 
-fn completed_of(error: DriverError) -> MatchResult(List(Outcome)) {
+fn completed_of(error: ScriptError) -> MatchResult(List(Outcome)) {
   case error {
     ScriptFailed(completed, _report, _status) -> MatchOk(completed)
     _other ->

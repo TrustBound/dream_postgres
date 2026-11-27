@@ -2,7 +2,7 @@
 //// on.
 
 import dream_postgres/driver/connection.{
-  type DriverError, type Violation, ProtocolViolation,
+  type RequestFailure, type Violation, ProtocolViolation,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -22,7 +22,7 @@ import gleam/string.{inspect}
 /// |> or_fail_with("Expected the violation")
 /// ```
 pub fn extract_protocol_violation(
-  result: MatchResult(DriverError),
+  result: MatchResult(RequestFailure),
 ) -> MatchResult(Violation) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
@@ -30,7 +30,7 @@ pub fn extract_protocol_violation(
   }
 }
 
-fn violation_of(value: DriverError) -> MatchResult(Violation) {
+fn violation_of(value: RequestFailure) -> MatchResult(Violation) {
   case value {
     ProtocolViolation(violation) -> MatchOk(violation)
     _other ->

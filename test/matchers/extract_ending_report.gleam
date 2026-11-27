@@ -1,6 +1,8 @@
 //// Extracts the report of a session that the server ended.
 
-import dream_postgres/driver/connection.{type DriverError, ServerEndedConnection}
+import dream_postgres/driver/connection.{
+  type RequestFailure, ServerEndedConnection,
+}
 import dream_postgres/internal/cell.{type ServerReport}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -22,7 +24,7 @@ import gleam/string.{inspect}
 /// |> or_fail_with("Expected the server to end the session")
 /// ```
 pub fn extract_ending_report(
-  result: MatchResult(DriverError),
+  result: MatchResult(RequestFailure),
 ) -> MatchResult(ServerReport) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
@@ -30,7 +32,7 @@ pub fn extract_ending_report(
   }
 }
 
-fn report_of(error: DriverError) -> MatchResult(ServerReport) {
+fn report_of(error: RequestFailure) -> MatchResult(ServerReport) {
   case error {
     ServerEndedConnection(report) -> MatchOk(report)
     _other ->

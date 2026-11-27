@@ -156,7 +156,8 @@ pub type ConnectionEvent {
   /// failed. The next one follows after the reconnect backoff.
   ConnectFailed(error: ConnectError)
   /// The connection is lost. The process connects again after the backoff.
-  Disconnected(error: DriverError)
+  /// `error` is never `ConnectionProcessDown` or `DeadlinePassed`.
+  Disconnected(error: RequestFailure)
   /// An attempt to connect again failed. The next one follows after the
   /// backoff.
   ReconnectFailed(error: ConnectError)
@@ -224,30 +225,126 @@ pub type LossReason {
   ClosedAfterDeadline
 }
 
-/// Why a request failed.
-pub type DriverError {
+/// A failure that any request can meet on its connection: the process is
+/// gone, the deadline passed, or the connection broke.
+pub type RequestFailure {
+  /// The connection process is gone, for example after `stop`.
+  ConnectionProcessDown
+  /// The deadline passed before the result came. `cancelled` says whether
+  /// the server confirmed a cancel. A request that waited behind another
+  /// one, or a caller that got no answer in time, gets `False`.
+  DeadlinePassed(cancelled: Bool)
+  /// The connection is gone. `reason` says why. The process connects
+  /// again.
+  ConnectionLost(reason: LossReason)
+  /// The server ended the session with a FATAL or PANIC error, for example
+  /// `57P01` when an administrator stops it. The process connects again.
+  ServerEndedConnection(report: ServerReport)
+  /// The server broke the protocol. The process connects again.
+  ProtocolViolation(violation: Violation)
+}
+
+/// Why `transaction_status`, `aborted_by` or `server_parameter` failed.
+/// They read the state of the process only, so only the process can fail
+/// them.
+pub type ConnectionStateError {
+  /// The connection process is gone.
+  ProcessGone
+  /// The connection process did not answer in time, for example because
+  /// it is suspended.
+  NoAnswerInTime
+}
+
+/// Why `settled_transaction_status` failed.
+pub type SettleError {
+  /// The request failed on its connection.
+  SettleFailed(failure: RequestFailure)
+  /// A supervised process has not connected yet. `error` is why its last
+  /// attempt failed. It tries again after the reconnect backoff.
+  SettleNotConnected(error: ConnectError)
+}
+
+/// Why `prepare` failed.
+pub type PrepareError {
+  /// The request failed on its connection.
+  PrepareFailed(failure: RequestFailure)
+  /// A supervised process has not connected yet. `error` is why its last
+  /// attempt failed. It tries again after the reconnect backoff.
+  PrepareNotConnected(error: ConnectError)
+  /// The statement cannot be written, for example SQL with a zero byte.
+  /// No byte went to the server.
+  PrepareUnencodable(error: EncodeError)
   /// The server refused the statement. The connection stays usable.
-  ServerRefused(report: ServerReport, transaction_status: TransactionStatus)
-  /// A statement of a script failed, after the ones in `completed` ran.
+  PrepareRefused(report: ServerReport, transaction_status: TransactionStatus)
+}
+
+/// Why `run` or `run_housekeeping` failed.
+pub type RunError {
+  /// The request failed on its connection.
+  RunFailed(failure: RequestFailure)
+  /// A supervised process has not connected yet. `error` is why its last
+  /// attempt failed. It tries again after the reconnect backoff.
+  RunNotConnected(error: ConnectError)
+  /// The statement cannot be written, for example SQL with a zero byte.
+  /// No byte went to the server.
+  RunUnencodable(error: EncodeError)
+  /// The server refused the statement. The connection stays usable.
+  RunRefused(report: ServerReport, transaction_status: TransactionStatus)
+  /// The statement is a COPY. COPY goes through `copy_from` and `copy_to`.
+  /// The driver ended it, and the connection stays usable.
+  RunCopyRefused
+  /// The server made the driver prepare the statement again (SQLSTATE
+  /// 0A000 or 26000, outside a transaction), and its description is not
+  /// the cached one any more, for example after `ALTER TABLE`. The
+  /// statement did not run: check it against `description` and run it
+  /// again.
+  RunStatementChanged(description: StatementDescription)
+}
+
+/// Why `run_script` or `run_housekeeping_script` failed.
+pub type ScriptError {
+  /// The request failed on its connection.
+  ScriptRequestFailed(failure: RequestFailure)
+  /// A supervised process has not connected yet. `error` is why its last
+  /// attempt failed. It tries again after the reconnect backoff.
+  ScriptNotConnected(error: ConnectError)
+  /// The script cannot be written, for example SQL with a zero byte. No
+  /// byte went to the server.
+  ScriptUnencodable(error: EncodeError)
+  /// The server refused the first statement of the script, so no
+  /// statement ran. The connection stays usable.
+  ScriptRefused(report: ServerReport, transaction_status: TransactionStatus)
+  /// A later statement of the script failed, after the ones in
+  /// `completed` ran. `completed` is never empty: a failure of the first
+  /// statement is `ScriptRefused`.
   ScriptFailed(
     completed: List(Outcome),
     report: ServerReport,
     transaction_status: TransactionStatus,
   )
-  /// The deadline passed before the result came. `cancelled` says whether
-  /// the server confirmed a cancel.
-  DeadlinePassed(cancelled: Bool)
-  /// The connection is gone. `reason` says why.
-  ConnectionLost(reason: LossReason)
-  /// The server ended the session with a FATAL or PANIC error, for example
-  /// `57P01` when an administrator stops it.
-  ServerEndedConnection(report: ServerReport)
-  /// The server broke the protocol. The process connects again.
-  ProtocolViolation(violation: Violation)
-  /// A COPY statement went to `run` or `run_script`. COPY goes through
-  /// `copy_from` and `copy_to`. `completed` holds the statements of a
-  /// script that ran before it.
-  CopyStatementRefused(completed: List(Outcome))
+  /// A statement of the script is a COPY. COPY goes through `copy_from`
+  /// and `copy_to`. `completed` holds the statements that ran before it.
+  ScriptCopyRefused(completed: List(Outcome))
+}
+
+/// Why a `copy_from` or a `copy_to` failed.
+pub type CopyError(reason) {
+  /// The app's function failed with `reason`. The driver ended the COPY: a
+  /// `COPY ... FROM STDIN` got a CopyFail, so the server stored no row of
+  /// it, and the rest of a `COPY ... TO STDOUT` was read and dropped. The
+  /// connection stays usable.
+  AppFailed(reason: reason)
+  /// The request failed on its connection.
+  CopyFailed(failure: RequestFailure)
+  /// A supervised process has not connected yet. `error` is why its last
+  /// attempt failed. It tries again after the reconnect backoff.
+  CopyNotConnected(error: ConnectError)
+  /// The statement cannot be written, for example SQL with a zero byte.
+  /// No byte went to the server.
+  CopyUnencodable(error: EncodeError)
+  /// The server refused the COPY or a row of it, for example a row that
+  /// is not valid. The connection stays usable.
+  CopyRefused(report: ServerReport, transaction_status: TransactionStatus)
   /// The SQL of `copy_from` did not start a `COPY ... FROM STDIN`, or the
   /// SQL of `copy_to` did not start a `COPY ... TO STDOUT`. `completed`
   /// says what ran:
@@ -261,34 +358,19 @@ pub type DriverError {
   ///   it with CopyFail, so the server stored no row. Inside a transaction,
   ///   the transaction failed.
   CopyNotStarted(completed: Option(Outcome))
-  /// A chunk or an end came for a COPY that does not run: its `copy_from`
-  /// returned already.
-  CopyNotRunning
-  /// The request cannot be written, for example SQL with a zero byte.
-  InvalidRequest(error: EncodeError)
-  /// The connection process is gone.
-  ConnectionProcessDown
-  /// The server made the driver prepare the statement again (SQLSTATE
-  /// 0A000 or 26000, outside a transaction), and its description is not
-  /// the cached one any more, for example after `ALTER TABLE`. The
-  /// statement did not run: check it against `description` and run it
-  /// again.
-  StatementChanged(description: StatementDescription)
-  /// A supervised process has not connected yet. `error` is why its last
-  /// attempt failed. It tries again after the reconnect backoff.
-  NotConnected(error: ConnectError)
 }
 
-/// Why a `copy_from` or a `copy_to` failed.
-pub type CopyError(reason) {
-  /// The app's function failed with `reason`. The driver ended the COPY: a
-  /// `COPY ... FROM STDIN` got a CopyFail, so the server stored no row of
-  /// it, and the rest of a `COPY ... TO STDOUT` was read and dropped. The
-  /// connection stays usable.
-  AppFailed(reason: reason)
-  /// The COPY failed in the driver or on the server, for example with the
-  /// server's error for a row that is not valid.
-  DriverFailed(error: DriverError)
+/// Why `send_chunk` failed. The server takes no more data: give `Error`
+/// from the function of `copy_from`.
+pub type ChunkError {
+  /// The request failed on its connection, or the deadline of the COPY
+  /// passed.
+  ChunkFailed(failure: RequestFailure)
+  /// The COPY of the sender does not take data: it ended, for example
+  /// because its `copy_from` returned already.
+  ChunkCopyNotRunning
+  /// The server refused the COPY, for example a row that is not valid.
+  ChunkRefused(report: ServerReport, transaction_status: TransactionStatus)
 }
 
 /// What the function of `copy_from` sends its chunks with, while its COPY
@@ -341,6 +423,31 @@ type CallFailure {
   CallDeadlinePassed
 }
 
+/// Why the process refuses a request that it does not run: the link is
+/// down, or the deadline of the request passed while it waited.
+type Refusal {
+  RefusedWithFailure(failure: RequestFailure)
+  RefusedNotConnected(error: ConnectError)
+}
+
+/// Why a COPY that the process ran gave no row count: what its caller
+/// gets with its start, its calls, or its end.
+type CopyFault {
+  CopyFaultFailed(failure: RequestFailure)
+  CopyFaultRefused(report: ServerReport, transaction_status: TransactionStatus)
+  CopyFaultNotStarted(completed: Option(Outcome))
+}
+
+/// Why the start of a COPY failed.
+type CopyStartError {
+  /// The process refused the request before it ran.
+  StartRefused(refusal: Refusal)
+  /// The statement cannot be written.
+  StartUnencodable(error: EncodeError)
+  /// The COPY ended before it started.
+  StartEnded(fault: CopyFault)
+}
+
 type Message {
   Request(request: Request, deadline_milliseconds: Int)
   /// The deadline of the request `id` passed.
@@ -352,7 +459,7 @@ type Message {
   SnapshotRequest(reply: ReplyTo(Snapshot))
   StopRequest(reply: ReplyTo(Nil))
   SocketMessage(message: Dynamic)
-  ReconnectNow(error: DriverError, attempt: Int)
+  ReconnectNow(attempt: Int)
   ExitSignal(exit: ExitMessage)
   /// A call of the caller of the COPY `id`.
   CopyCall(id: Reference, call: CopyCall)
@@ -371,11 +478,11 @@ type Message {
 type CopyCall {
   /// Send this chunk of a `COPY ... FROM STDIN`. The answer comes when the
   /// chunk went to the socket.
-  SendChunk(chunk: BitArray, reply: ReplyTo(Result(Nil, DriverError)))
+  SendChunk(chunk: BitArray, reply: ReplyTo(Result(Nil, ChunkError)))
   /// Give the next row of a `COPY ... TO STDOUT`, or its end.
-  ReadRow(reply: ReplyTo(Result(CopyRead, DriverError)))
+  ReadRow(reply: ReplyTo(Result(CopyRead, CopyFault)))
   /// End the COPY, and give its row count when it ended.
-  EndCopy(ending: CopyEnding, reply: ReplyTo(Result(Int, DriverError)))
+  EndCopy(ending: CopyEnding, reply: ReplyTo(Result(Int, CopyFault)))
   /// The caller stopped waiting, or its process ended: the COPY is
   /// abandoned, and no one gets an answer.
   CallerLeft
@@ -403,7 +510,7 @@ type CopySession {
     /// The monitor of the caller's process.
     monitor: Monitor,
     /// The caller waits for the start of the COPY.
-    start: Option(ReplyTo(Result(Nil, DriverError))),
+    start: Option(ReplyTo(Result(Nil, CopyStartError))),
     /// The call of the caller that waits for the server.
     call: Option(CopyCall),
     /// A row of a `COPY ... TO STDOUT` that the caller did not take yet.
@@ -416,22 +523,22 @@ type CopySession {
 /// The connection serves no other request until the caller does, or until
 /// its process ends.
 type EndedCopy {
-  EndedCopy(id: Reference, monitor: Monitor, result: Result(Int, DriverError))
+  EndedCopy(id: Reference, monitor: Monitor, result: Result(Int, CopyFault))
 }
 
 /// A request that goes to the server.
 type Request {
   StatementRequest(statement: StatementRequest)
   /// The transaction status after every request before it.
-  SettledStatusRequest(reply: ReplyTo(Result(TransactionStatus, DriverError)))
-  ScriptRequest(sql: String, reply: ReplyTo(Result(List(Outcome), DriverError)))
+  SettledStatusRequest(reply: ReplyTo(Result(TransactionStatus, SettleError)))
+  ScriptRequest(sql: String, reply: ReplyTo(Result(List(Outcome), ScriptError)))
   /// A COPY. The answer comes when the server started it.
   CopyRequest(
     id: Reference,
     direction: CopyDirection,
     sql: String,
     caller: Pid,
-    reply: ReplyTo(Result(Nil, DriverError)),
+    reply: ReplyTo(Result(Nil, CopyStartError)),
   )
 }
 
@@ -439,7 +546,7 @@ type Request {
 type StatementRequest {
   PrepareStatement(
     sql: String,
-    reply: ReplyTo(Result(StatementDescription, DriverError)),
+    reply: ReplyTo(Result(StatementDescription, PrepareError)),
   )
   RunStatement(details: RunDetails)
 }
@@ -452,7 +559,7 @@ type RunDetails {
     sql: String,
     parameters: List(Cell),
     result_formats: List(Format),
-    reply: ReplyTo(Result(Outcome, DriverError)),
+    reply: ReplyTo(Result(Outcome, RunError)),
     previous: Option(StatementDescription),
   )
 }
@@ -462,16 +569,16 @@ type Running {
   /// A prepare of the unnamed statement, with no cache.
   RunningPrepare(
     state: PrepareState,
-    reply: ReplyTo(Result(StatementDescription, DriverError)),
+    reply: ReplyTo(Result(StatementDescription, PrepareError)),
   )
   /// A run in one round trip on the unnamed statement, with no cache.
   RunningRun(
     state: PrepareAndRunState,
-    reply: ReplyTo(Result(Outcome, DriverError)),
+    reply: ReplyTo(Result(Outcome, RunError)),
   )
   RunningScript(
     state: SimpleQueryState,
-    reply: ReplyTo(Result(List(Outcome), DriverError)),
+    reply: ReplyTo(Result(List(Outcome), ScriptError)),
   )
   /// A prepare under a new name, for the cache.
   RunningNamedPrepare(
@@ -496,8 +603,9 @@ type Finisher(outcome) =
 type Link {
   /// Connected and logged in. `bytes` are read but not decoded yet.
   Open(socket: transport.Connection, bytes: BitArray)
-  /// Lost. Requests fail with `error` until the process connects again.
-  Lost(error: DriverError)
+  /// Lost. Requests are refused with `refusal` until the process connects
+  /// again.
+  Lost(refusal: Refusal)
 }
 
 type State {
@@ -660,8 +768,8 @@ pub fn start_failure(error: actor.StartError) -> ConnectError {
 /// not wait for the server: the process connects after it, and a failed
 /// attempt is tried again after the reconnect backoff, so a server that is
 /// down never fails the supervisor. Until the first login, requests fail
-/// with `NotConnected` and the subscriber gets `ConnectFailed` for each
-/// failed attempt. The supervisor's shutdown makes the process send
+/// as not connected, for example with `RunNotConnected`, and the
+/// subscriber gets `ConnectFailed` for each failed attempt. The supervisor's shutdown makes the process send
 /// Terminate before it stops.
 ///
 /// db_connection does the same: its `init` returns at once and connects
@@ -708,7 +816,7 @@ fn initialise(
 }
 
 /// A first open of a supervised process. A failed one leaves the process
-/// up, refusing requests with `NotConnected`, and tries again after the
+/// up, refusing requests as not connected, and tries again after the
 /// reconnect backoff.
 fn attempt_first_open(state: State, attempt: Int) -> State {
   case open_session(state.config) {
@@ -721,7 +829,7 @@ fn attempt_first_open(state: State, attempt: Int) -> State {
       tell(state, ConnectFailed(error))
       let delay = backoff_delay(state.config.reconnect, attempt)
       process.send_after(state.subject, delay, OpenAttempt(attempt + 1))
-      State(..state, link: Lost(NotConnected(error)))
+      State(..state, link: Lost(RefusedNotConnected(error)))
     }
   }
 }
@@ -750,7 +858,7 @@ fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
   State(
     config:,
     subject:,
-    link: Lost(ConnectionLost(SocketFailed(SocketClosed))),
+    link: Lost(RefusedWithFailure(ConnectionLost(SocketFailed(SocketClosed)))),
     parameters: dict.new(),
     tracker: new_tracker(),
     running: None,
@@ -863,27 +971,32 @@ fn traced(
   result
 }
 
-fn statement_ending(result: Result(value, DriverError)) -> SpanEnd {
+fn prepare_ending(result: Result(value, PrepareError)) -> SpanEnd {
   case result {
     Ok(_value) -> Worked(operation: None)
-    Error(error) -> failed_ending(error)
+    Error(error) ->
+      failed_ending(prepare_error_name(error), prepare_report(error))
   }
 }
 
-fn outcome_ending(result: Result(Outcome, DriverError)) -> SpanEnd {
+fn outcome_ending(result: Result(Outcome, RunError)) -> SpanEnd {
   case result {
-    Ok(outcome) ->
-      Worked(operation: Some(trace.operation_of_tag(outcome.result.tag)))
-    Error(error) -> failed_ending(error)
+    Ok(outcome) -> worked_ending(outcome)
+    Error(error) -> failed_ending(run_error_name(error), run_report(error))
   }
+}
+
+fn worked_ending(outcome: Outcome) -> SpanEnd {
+  Worked(operation: Some(trace.operation_of_tag(outcome.result.tag)))
 }
 
 /// A script names its operation only when it ran exactly one statement.
-fn script_ending(result: Result(List(Outcome), DriverError)) -> SpanEnd {
+fn script_ending(result: Result(List(Outcome), ScriptError)) -> SpanEnd {
   case result {
-    Ok([outcome]) -> outcome_ending(Ok(outcome))
+    Ok([outcome]) -> worked_ending(outcome)
     Ok(_several_or_none) -> Worked(operation: None)
-    Error(error) -> failed_ending(error)
+    Error(error) ->
+      failed_ending(script_error_name(error), script_report(error))
   }
 }
 
@@ -892,8 +1005,7 @@ fn script_ending(result: Result(List(Outcome), DriverError)) -> SpanEnd {
 fn copy_ending(result: Result(value, CopyError(reason))) -> SpanEnd {
   case result {
     Ok(_value) -> Worked(operation: Some("COPY"))
-    Error(AppFailed(..)) -> Failed(error_type: "AppFailed", status_code: None)
-    Error(DriverFailed(error)) -> failed_ending(error)
+    Error(error) -> failed_ending(copy_error_name(error), copy_report(error))
   }
 }
 
@@ -901,52 +1013,121 @@ fn copy_ending(result: Result(value, CopyError(reason))) -> SpanEnd {
 /// error's name (OTel database-spans: `error.type` "SHOULD match the
 /// `db.response.status_code` returned by the database or the client
 /// library, or the canonical name of exception that occurred").
-fn failed_ending(error: DriverError) -> SpanEnd {
-  case error {
-    ServerRefused(report:, ..)
-    | ScriptFailed(report:, ..)
-    | ServerEndedConnection(report:) ->
+fn failed_ending(name: String, report: Option(ServerReport)) -> SpanEnd {
+  case report {
+    Some(report) ->
       Failed(error_type: report.code, status_code: Some(report.code))
-    DeadlinePassed(..)
-    | ConnectionLost(..)
-    | ProtocolViolation(..)
-    | CopyStatementRefused(..)
-    | CopyNotStarted(..)
-    | CopyNotRunning
-    | InvalidRequest(..)
-    | ConnectionProcessDown
-    | StatementChanged(..)
-    | NotConnected(..) ->
-      Failed(error_type: error_name(error), status_code: None)
+    None -> Failed(error_type: name, status_code: None)
   }
 }
 
-/// The canonical name of an error: its constructor's name, for example
-/// `ConnectionLost`, as a span's `error.type` gives it. Each variant is
-/// listed, so a new one cannot be left out.
-///
-/// ## Parameters
-///
-/// - `error`: the error
-///
-/// ## Returns
-///
-/// The name of its constructor.
-pub fn error_name(error: DriverError) -> String {
-  case error {
-    ServerRefused(..) -> "ServerRefused"
-    ScriptFailed(..) -> "ScriptFailed"
+/// The name of a request failure: its constructor's name.
+fn failure_name(failure: RequestFailure) -> String {
+  case failure {
+    ConnectionProcessDown -> "ConnectionProcessDown"
     DeadlinePassed(..) -> "DeadlinePassed"
     ConnectionLost(..) -> "ConnectionLost"
     ServerEndedConnection(..) -> "ServerEndedConnection"
     ProtocolViolation(..) -> "ProtocolViolation"
-    CopyStatementRefused(..) -> "CopyStatementRefused"
+  }
+}
+
+fn failure_report(failure: RequestFailure) -> Option(ServerReport) {
+  case failure {
+    ServerEndedConnection(report:) -> Some(report)
+    ConnectionProcessDown
+    | DeadlinePassed(..)
+    | ConnectionLost(..)
+    | ProtocolViolation(..) -> None
+  }
+}
+
+/// The name of a prepare error: its constructor's name, or the name of the
+/// request failure that it holds.
+fn prepare_error_name(error: PrepareError) -> String {
+  case error {
+    PrepareFailed(failure) -> failure_name(failure)
+    PrepareNotConnected(..) -> "PrepareNotConnected"
+    PrepareUnencodable(..) -> "PrepareUnencodable"
+    PrepareRefused(..) -> "PrepareRefused"
+  }
+}
+
+fn prepare_report(error: PrepareError) -> Option(ServerReport) {
+  case error {
+    PrepareFailed(failure) -> failure_report(failure)
+    PrepareRefused(report:, ..) -> Some(report)
+    PrepareNotConnected(..) | PrepareUnencodable(..) -> None
+  }
+}
+
+/// The name of a run error: its constructor's name, or the name of the
+/// request failure that it holds.
+fn run_error_name(error: RunError) -> String {
+  case error {
+    RunFailed(failure) -> failure_name(failure)
+    RunNotConnected(..) -> "RunNotConnected"
+    RunUnencodable(..) -> "RunUnencodable"
+    RunRefused(..) -> "RunRefused"
+    RunCopyRefused -> "RunCopyRefused"
+    RunStatementChanged(..) -> "RunStatementChanged"
+  }
+}
+
+fn run_report(error: RunError) -> Option(ServerReport) {
+  case error {
+    RunFailed(failure) -> failure_report(failure)
+    RunRefused(report:, ..) -> Some(report)
+    RunNotConnected(..)
+    | RunUnencodable(..)
+    | RunCopyRefused
+    | RunStatementChanged(..) -> None
+  }
+}
+
+/// The name of a script error: its constructor's name, or the name of the
+/// request failure that it holds.
+fn script_error_name(error: ScriptError) -> String {
+  case error {
+    ScriptRequestFailed(failure) -> failure_name(failure)
+    ScriptNotConnected(..) -> "ScriptNotConnected"
+    ScriptUnencodable(..) -> "ScriptUnencodable"
+    ScriptRefused(..) -> "ScriptRefused"
+    ScriptFailed(..) -> "ScriptFailed"
+    ScriptCopyRefused(..) -> "ScriptCopyRefused"
+  }
+}
+
+fn script_report(error: ScriptError) -> Option(ServerReport) {
+  case error {
+    ScriptRequestFailed(failure) -> failure_report(failure)
+    ScriptRefused(report:, ..) | ScriptFailed(report:, ..) -> Some(report)
+    ScriptNotConnected(..) | ScriptUnencodable(..) | ScriptCopyRefused(..) ->
+      None
+  }
+}
+
+/// The name of a COPY error: its constructor's name, or the name of the
+/// request failure that it holds.
+fn copy_error_name(error: CopyError(reason)) -> String {
+  case error {
+    AppFailed(..) -> "AppFailed"
+    CopyFailed(failure) -> failure_name(failure)
+    CopyNotConnected(..) -> "CopyNotConnected"
+    CopyUnencodable(..) -> "CopyUnencodable"
+    CopyRefused(..) -> "CopyRefused"
     CopyNotStarted(..) -> "CopyNotStarted"
-    CopyNotRunning -> "CopyNotRunning"
-    InvalidRequest(..) -> "InvalidRequest"
-    ConnectionProcessDown -> "ConnectionProcessDown"
-    StatementChanged(..) -> "StatementChanged"
-    NotConnected(..) -> "NotConnected"
+  }
+}
+
+fn copy_report(error: CopyError(reason)) -> Option(ServerReport) {
+  case error {
+    CopyFailed(failure) -> failure_report(failure)
+    CopyRefused(report:, ..) -> Some(report)
+    AppFailed(..)
+    | CopyNotConnected(..)
+    | CopyUnencodable(..)
+    | CopyNotStarted(..) -> None
   }
 }
 
@@ -961,14 +1142,23 @@ pub fn error_name(error: DriverError) -> String {
 /// ## Returns
 ///
 /// - `Ok(StatementDescription)`: the parameter types and the result columns
-/// - `Error(DriverError)`: the server refused it, or the request failed
+/// - `Error(PrepareRefused(report, status))`: the server refused it
+/// - `Error(PrepareUnencodable(error))`: the SQL cannot be written
+/// - `Error(PrepareNotConnected(error))`: a supervised process has not
+///   connected yet
+/// - `Error(PrepareFailed(failure))`: the request failed on its connection
 pub fn prepare(
   connection: Connection,
   statement: Statement,
   deadline_milliseconds: Int,
-) -> Result(StatementDescription, DriverError) {
-  use <- traced(connection, statement, Some(statement.sql), _, statement_ending)
-  request(connection, prepare_request(statement.sql, _), deadline_milliseconds)
+) -> Result(StatementDescription, PrepareError) {
+  use <- traced(connection, statement, Some(statement.sql), _, prepare_ending)
+  request(
+    connection,
+    prepare_request(statement.sql, _),
+    deadline_milliseconds,
+    PrepareFailed,
+  )
 }
 
 /// Runs a statement with its parameters. Each cell carries its own format.
@@ -985,14 +1175,22 @@ pub fn prepare(
 /// ## Returns
 ///
 /// - `Ok(Outcome)`: the columns, the rows of cells, the tag and the count
-/// - `Error(DriverError)`: the server refused it, or the request failed
+/// - `Error(RunRefused(report, status))`: the server refused it
+/// - `Error(RunCopyRefused)`: the statement is a COPY
+/// - `Error(RunStatementChanged(description))`: the statement changed on
+///   the server since the driver cached it, and did not run
+/// - `Error(RunUnencodable(error))`: the SQL or a parameter cannot be
+///   written
+/// - `Error(RunNotConnected(error))`: a supervised process has not
+///   connected yet
+/// - `Error(RunFailed(failure))`: the request failed on its connection
 pub fn run(
   connection: Connection,
   statement: Statement,
   parameters: List(Cell),
   result_formats: List(Format),
   deadline_milliseconds: Int,
-) -> Result(Outcome, DriverError) {
+) -> Result(Outcome, RunError) {
   use <- traced(connection, statement, Some(statement.sql), _, outcome_ending)
   run_without_span(
     connection,
@@ -1015,13 +1213,21 @@ pub fn run(
 /// ## Returns
 ///
 /// - `Ok(outcomes)`: one outcome for each statement, in order
-/// - `Error(DriverError)`: a statement failed (`ScriptFailed` keeps the
-///   ones before it), or the request failed
+/// - `Error(ScriptRefused(report, status))`: the server refused the first
+///   statement, so none ran
+/// - `Error(ScriptFailed(completed, report, status))`: a later statement
+///   failed, after the ones in `completed` ran
+/// - `Error(ScriptCopyRefused(completed))`: a statement is a COPY
+/// - `Error(ScriptUnencodable(error))`: the script cannot be written
+/// - `Error(ScriptNotConnected(error))`: a supervised process has not
+///   connected yet
+/// - `Error(ScriptRequestFailed(failure))`: the request failed on its
+///   connection
 pub fn run_script(
   connection: Connection,
   statement: Statement,
   deadline_milliseconds: Int,
-) -> Result(List(Outcome), DriverError) {
+) -> Result(List(Outcome), ScriptError) {
   // A script is not parameterized, so its text may hold values: it is not
   // recorded (database-spans.md: "Non-parameterized query text SHOULD NOT
   // be collected by default unless there is sanitization").
@@ -1044,14 +1250,14 @@ pub fn run_script(
 ///
 /// ## Returns
 ///
-/// The result of `run`.
+/// The result of `run`, with the same errors.
 pub fn run_housekeeping(
   connection: Connection,
   sql: String,
   parameters: List(Cell),
   result_formats: List(Format),
   deadline_milliseconds: Int,
-) -> Result(Outcome, DriverError) {
+) -> Result(Outcome, RunError) {
   run_without_span(
     connection,
     sql,
@@ -1073,12 +1279,12 @@ pub fn run_housekeeping(
 ///
 /// ## Returns
 ///
-/// The result of `run_script`.
+/// The result of `run_script`, with the same errors.
 pub fn run_housekeeping_script(
   connection: Connection,
   sql: String,
   deadline_milliseconds: Int,
-) -> Result(List(Outcome), DriverError) {
+) -> Result(List(Outcome), ScriptError) {
   run_script_without_span(connection, sql, deadline_milliseconds)
 }
 
@@ -1088,11 +1294,12 @@ fn run_without_span(
   parameters: List(Cell),
   result_formats: List(Format),
   deadline_milliseconds: Int,
-) -> Result(Outcome, DriverError) {
+) -> Result(Outcome, RunError) {
   request(
     connection,
     run_request(sql, parameters, result_formats, _),
     deadline_milliseconds,
+    RunFailed,
   )
 }
 
@@ -1100,8 +1307,13 @@ fn run_script_without_span(
   connection: Connection,
   sql: String,
   deadline_milliseconds: Int,
-) -> Result(List(Outcome), DriverError) {
-  request(connection, ScriptRequest(sql, _), deadline_milliseconds)
+) -> Result(List(Outcome), ScriptError) {
+  request(
+    connection,
+    ScriptRequest(sql, _),
+    deadline_milliseconds,
+    ScriptRequestFailed,
+  )
 }
 
 /// The transaction status after the last request.
@@ -1113,10 +1325,11 @@ fn run_script_without_span(
 /// ## Returns
 ///
 /// - `Ok(TransactionStatus)`: idle, in a transaction, or in a failed one
-/// - `Error(ConnectionProcessDown)`: the process is gone
+/// - `Error(ProcessGone)`: the process is gone
+/// - `Error(NoAnswerInTime)`: the process did not answer in time
 pub fn transaction_status(
   connection: Connection,
-) -> Result(TransactionStatus, DriverError) {
+) -> Result(TransactionStatus, ConnectionStateError) {
   snapshot(connection) |> result.map(snapshot_status)
 }
 
@@ -1133,13 +1346,15 @@ pub fn transaction_status(
 /// ## Returns
 ///
 /// - `Ok(TransactionStatus)`: idle, in a transaction, or in a failed one
-/// - `Error(DriverError)`: the connection is lost, the process is gone, or
-///   the deadline passed
+/// - `Error(SettleNotConnected(error))`: a supervised process has not
+///   connected yet
+/// - `Error(SettleFailed(failure))`: the connection is lost, the process
+///   is gone, or the deadline passed
 pub fn settled_transaction_status(
   connection: Connection,
   deadline_milliseconds: Int,
-) -> Result(TransactionStatus, DriverError) {
-  request(connection, SettledStatusRequest, deadline_milliseconds)
+) -> Result(TransactionStatus, SettleError) {
+  request(connection, SettledStatusRequest, deadline_milliseconds, SettleFailed)
 }
 
 fn snapshot_status(snapshot: Snapshot) -> TransactionStatus {
@@ -1158,10 +1373,11 @@ fn snapshot_status(snapshot: Snapshot) -> TransactionStatus {
 ///   `InFailedTransaction`
 /// - `Ok(None)`: in any other status. It clears when the status is idle
 ///   again.
-/// - `Error(ConnectionProcessDown)`: the process is gone
+/// - `Error(ProcessGone)`: the process is gone
+/// - `Error(NoAnswerInTime)`: the process did not answer in time
 pub fn aborted_by(
   connection: Connection,
-) -> Result(Option(ServerReport), DriverError) {
+) -> Result(Option(ServerReport), ConnectionStateError) {
   snapshot(connection) |> result.map(snapshot_aborted_by)
 }
 
@@ -1181,11 +1397,12 @@ fn snapshot_aborted_by(snapshot: Snapshot) -> Option(ServerReport) {
 ///
 /// - `Ok(Some(value))`: the latest value
 /// - `Ok(None)`: the server reported no parameter of that name
-/// - `Error(ConnectionProcessDown)`: the process is gone
+/// - `Error(ProcessGone)`: the process is gone
+/// - `Error(NoAnswerInTime)`: the process did not answer in time
 pub fn server_parameter(
   connection: Connection,
   name: String,
-) -> Result(Option(String), DriverError) {
+) -> Result(Option(String), ConnectionStateError) {
   snapshot(connection) |> result.map(parameter_of(_, name))
 }
 
@@ -1211,7 +1428,7 @@ fn parameter_of(snapshot: Snapshot, name: String) -> Option(String) {
 /// - `deadline_milliseconds`: the longest time for the whole COPY, from
 ///   the moment the connection process takes the request, with the time
 ///   of `produce`. When it passes, the driver ends the COPY on the server,
-///   and each `send_chunk` after it gives `DeadlinePassed`. The driver
+///   and each `send_chunk` after it gives `ChunkFailed(DeadlinePassed)`. The driver
 ///   cannot stop `produce` itself, which runs in the caller's process:
 ///   `copy_from` returns when `produce` returns.
 /// - `produce`: makes the data and sends it in chunks
@@ -1220,10 +1437,15 @@ fn parameter_of(snapshot: Snapshot, name: String) -> Option(String) {
 ///
 /// - `Ok(count)`: the number of rows that the server stored
 /// - `Error(AppFailed(reason))`: `produce` failed; no row is stored
-/// - `Error(DriverFailed(CopyNotStarted(completed)))`: the SQL was not a
+/// - `Error(CopyNotStarted(completed))`: the SQL was not a
 ///   `COPY ... FROM STDIN`; `completed` holds what ran instead
-/// - `Error(DriverFailed(error))`: the server refused the COPY or a row,
-///   the deadline passed, or the request failed
+/// - `Error(CopyRefused(report, status))`: the server refused the COPY or
+///   a row
+/// - `Error(CopyUnencodable(error))`: the SQL cannot be written
+/// - `Error(CopyNotConnected(error))`: a supervised process has not
+///   connected yet
+/// - `Error(CopyFailed(failure))`: the deadline passed, or the request
+///   failed on its connection
 pub fn copy_from(
   connection: Connection,
   statement: Statement,
@@ -1239,7 +1461,7 @@ pub fn copy_from(
     deadline_milliseconds,
   ))
   case produce(sender) {
-    Ok(Nil) -> end_copy(sender, CompleteCopy) |> map_error(DriverFailed)
+    Ok(Nil) -> end_copy(sender, CompleteCopy)
     Error(reason) -> end_copy(sender, AbandonCopy) |> abandoned(reason)
   }
 }
@@ -1256,18 +1478,25 @@ pub fn copy_from(
 /// ## Returns
 ///
 /// - `Ok(Nil)`: the chunk went to the socket
-/// - `Error(DriverError)`: the COPY failed, for example with the server's
-///   error for a row, or its deadline passed. The server takes no more
-///   data: give `Error` from `produce`.
+/// - `Error(ChunkRefused(report, status))`: the server refused the COPY,
+///   for example a row that is not valid
+/// - `Error(ChunkCopyNotRunning)`: the COPY ended, for example because
+///   its `copy_from` returned already
+/// - `Error(ChunkFailed(failure))`: the deadline of the COPY passed, or the
+///   request failed on its connection
+///
+/// After an error the server takes no more data: give `Error` from
+/// `produce`.
 pub fn send_chunk(
   sender: CopySender,
   chunk: BitArray,
-) -> Result(Nil, DriverError) {
+) -> Result(Nil, ChunkError) {
   call(
     sender.connection,
     chunk_message(sender.id, chunk, _),
     sender.wait_milliseconds,
   )
+  |> map_error(ChunkFailed)
   |> result.flatten
 }
 
@@ -1287,7 +1516,7 @@ pub fn send_chunk(
 ///   the moment the connection process takes the request, with the time
 ///   of `fold` and of reading the rest after `fold` failed. When it
 ///   passes, the driver cancels the COPY on the server, and the next row
-///   gives `DeadlinePassed`. The driver cannot stop `fold` itself, which
+///   gives `CopyFailed(DeadlinePassed)`. The driver cannot stop `fold` itself, which
 ///   runs in the caller's process.
 /// - `initial`: the first value of the fold
 /// - `fold`: takes the value and the bytes of one row, in the format of
@@ -1297,10 +1526,14 @@ pub fn send_chunk(
 ///
 /// - `Ok(value)`: the value after the last row
 /// - `Error(AppFailed(reason))`: `fold` failed
-/// - `Error(DriverFailed(CopyNotStarted(completed)))`: the SQL was not a
+/// - `Error(CopyNotStarted(completed))`: the SQL was not a
 ///   `COPY ... TO STDOUT`; `completed` holds what ran instead
-/// - `Error(DriverFailed(error))`: the server refused the COPY, the
-///   deadline passed, or the request failed
+/// - `Error(CopyRefused(report, status))`: the server refused the COPY
+/// - `Error(CopyUnencodable(error))`: the SQL cannot be written
+/// - `Error(CopyNotConnected(error))`: a supervised process has not
+///   connected yet
+/// - `Error(CopyFailed(failure))`: the deadline passed, or the request
+///   failed on its connection
 pub fn copy_to(
   connection: Connection,
   statement: Statement,
@@ -1338,19 +1571,63 @@ fn start_copy(
   deadline_milliseconds: Int,
 ) -> Result(Nil, CopyError(reason)) {
   let caller = process.self()
-  request(
+  call(
     sender.connection,
-    CopyRequest(sender.id, direction, sql, caller, _),
-    deadline_milliseconds,
+    request_message(
+      CopyRequest(sender.id, direction, sql, caller, _),
+      deadline_milliseconds,
+      _,
+    ),
+    deadline_milliseconds + sender.connection.reply_margin_milliseconds,
   )
+  |> copy_started
   |> map_error(leave_copy(sender, _))
+}
+
+fn copy_started(
+  called: Result(Result(Nil, CopyStartError), RequestFailure),
+) -> Result(Nil, CopyError(reason)) {
+  case called {
+    Ok(started) -> map_error(started, copy_start_error)
+    Error(failure) -> Error(CopyFailed(failure))
+  }
+}
+
+fn copy_start_error(error: CopyStartError) -> CopyError(reason) {
+  case error {
+    StartRefused(RefusedWithFailure(failure)) -> CopyFailed(failure)
+    StartRefused(RefusedNotConnected(error)) -> CopyNotConnected(error)
+    StartUnencodable(error) -> CopyUnencodable(error)
+    StartEnded(fault) -> copy_fault_error(fault)
+  }
+}
+
+fn copy_fault_error(fault: CopyFault) -> CopyError(reason) {
+  case fault {
+    CopyFaultFailed(failure) -> CopyFailed(failure)
+    CopyFaultRefused(report, status) -> CopyRefused(report, status)
+    CopyFaultNotStarted(completed) -> CopyNotStarted(completed)
+  }
+}
+
+/// The answer to a row read or an end of a COPY.
+fn copy_answer(
+  called: Result(Result(value, CopyFault), RequestFailure),
+) -> Result(value, CopyError(reason)) {
+  case called {
+    Ok(answer) -> map_error(answer, copy_fault_error)
+    Error(failure) -> Error(CopyFailed(failure))
+  }
 }
 
 /// The caller stops: the connection process ends the COPY, if it still
 /// runs, and answers no one.
-fn leave_copy(sender: CopySender, error: DriverError) -> CopyError(reason) {
+fn leave_copy(
+  sender: CopySender,
+  error: CopyError(reason),
+) -> CopyError(reason) {
   process.send(sender.connection.subject, CopyCall(sender.id, CallerLeft))
-  DriverFailed(error)
+  error
 }
 
 fn read_rows(
@@ -1377,46 +1654,50 @@ fn fold_row(
 }
 
 /// The app's function failed, and the driver ended the COPY. A server
-/// error is the server's answer to the CopyFail, or the error that made
+/// refusal is the server's answer to the CopyFail, or the error that made
 /// the function fail; any other error is a failure of the connection.
 fn abandoned(
-  ended: Result(Int, DriverError),
+  ended: Result(Int, CopyError(reason)),
   reason: reason,
 ) -> Result(value, CopyError(reason)) {
   case ended {
-    Ok(_count) | Error(ServerRefused(..)) -> Error(AppFailed(reason))
-    Error(error) -> Error(DriverFailed(error))
+    Ok(_count) | Error(CopyRefused(..)) -> Error(AppFailed(reason))
+    Error(AppFailed(..) as error)
+    | Error(CopyFailed(..) as error)
+    | Error(CopyNotConnected(..) as error)
+    | Error(CopyUnencodable(..) as error)
+    | Error(CopyNotStarted(..) as error) -> Error(error)
   }
 }
 
-fn read_row(sender: CopySender) -> Result(CopyRead, DriverError) {
+fn read_row(sender: CopySender) -> Result(CopyRead, CopyError(reason)) {
   call(sender.connection, row_message(sender.id, _), sender.wait_milliseconds)
-  |> result.flatten
+  |> copy_answer
 }
 
 fn end_copy(
   sender: CopySender,
   ending: CopyEnding,
-) -> Result(Int, DriverError) {
+) -> Result(Int, CopyError(reason)) {
   call(
     sender.connection,
     end_message(sender.id, ending, _),
     sender.wait_milliseconds,
   )
-  |> result.flatten
+  |> copy_answer
 }
 
 fn chunk_message(
   id: Reference,
   chunk: BitArray,
-  reply_to: ReplyTo(Result(Nil, DriverError)),
+  reply_to: ReplyTo(Result(Nil, ChunkError)),
 ) -> Message {
   CopyCall(id, SendChunk(chunk, reply_to))
 }
 
 fn row_message(
   id: Reference,
-  reply_to: ReplyTo(Result(CopyRead, DriverError)),
+  reply_to: ReplyTo(Result(CopyRead, CopyFault)),
 ) -> Message {
   CopyCall(id, ReadRow(reply_to))
 }
@@ -1424,14 +1705,14 @@ fn row_message(
 fn end_message(
   id: Reference,
   ending: CopyEnding,
-  reply_to: ReplyTo(Result(Int, DriverError)),
+  reply_to: ReplyTo(Result(Int, CopyFault)),
 ) -> Message {
   CopyCall(id, EndCopy(ending, reply_to))
 }
 
 fn prepare_request(
   sql: String,
-  reply_to: ReplyTo(Result(StatementDescription, DriverError)),
+  reply_to: ReplyTo(Result(StatementDescription, PrepareError)),
 ) -> Request {
   StatementRequest(PrepareStatement(sql, reply_to))
 }
@@ -1440,31 +1721,51 @@ fn run_request(
   sql: String,
   parameters: List(Cell),
   result_formats: List(Format),
-  reply_to: ReplyTo(Result(Outcome, DriverError)),
+  reply_to: ReplyTo(Result(Outcome, RunError)),
 ) -> Request {
   StatementRequest(
     RunStatement(RunDetails(sql, parameters, result_formats, reply_to, None)),
   )
 }
 
-fn snapshot(connection: Connection) -> Result(Snapshot, DriverError) {
-  call(connection, SnapshotRequest, 5000)
+/// Reads the state of the process. Only the process can fail it: it is
+/// gone, or it did not answer in time. The process answers at once, unless
+/// it connects again, which takes up to the setup timeout: the caller waits
+/// the reply margin, which is longer.
+fn snapshot(connection: Connection) -> Result(Snapshot, ConnectionStateError) {
+  call_process(
+    connection.pid,
+    send_request(connection, SnapshotRequest, _),
+    connection.reply_margin_milliseconds,
+  )
+  |> map_error(state_error)
 }
 
+fn state_error(failure: CallFailure) -> ConnectionStateError {
+  case failure {
+    CallProcessDown -> ProcessGone
+    CallDeadlinePassed -> NoAnswerInTime
+  }
+}
+
+/// Sends a request and waits for its answer. A call that fails gives its
+/// failure to `failed`, which makes the request's own error of it.
 fn request(
   connection: Connection,
-  make: fn(ReplyTo(Result(value, DriverError))) -> Request,
+  make: fn(ReplyTo(Result(value, error))) -> Request,
   deadline_milliseconds: Int,
-) -> Result(value, DriverError) {
+  failed: fn(RequestFailure) -> error,
+) -> Result(value, error) {
   let wait = deadline_milliseconds + connection.reply_margin_milliseconds
   call(connection, request_message(make, deadline_milliseconds, _), wait)
+  |> map_error(failed)
   |> result.flatten
 }
 
 fn request_message(
-  make: fn(ReplyTo(Result(value, DriverError))) -> Request,
+  make: fn(ReplyTo(reply)) -> Request,
   deadline_milliseconds: Int,
-  reply_to: ReplyTo(Result(value, DriverError)),
+  reply_to: ReplyTo(reply),
 ) -> Message {
   Request(make(reply_to), deadline_milliseconds)
 }
@@ -1473,9 +1774,9 @@ fn call(
   connection: Connection,
   make: fn(ReplyTo(reply)) -> Message,
   timeout: Int,
-) -> Result(reply, DriverError) {
+) -> Result(reply, RequestFailure) {
   call_process(connection.pid, send_request(connection, make, _), timeout)
-  |> map_error(call_error)
+  |> map_error(call_failure)
 }
 
 fn send_request(
@@ -1486,7 +1787,7 @@ fn send_request(
   process.send(connection.subject, make(reply_to))
 }
 
-fn call_error(failure: CallFailure) -> DriverError {
+fn call_failure(failure: CallFailure) -> RequestFailure {
   case failure {
     CallProcessDown -> ConnectionProcessDown
     CallDeadlinePassed -> DeadlinePassed(cancelled: False)
@@ -1514,8 +1815,7 @@ fn handle_message(
     ExitSignal(_exit) -> stop_process(state, None)
     SocketMessage(socket_message) ->
       actor.continue(socket_message_received(state, socket_message))
-    ReconnectNow(error:, attempt:) ->
-      actor.continue(reconnect(state, error, attempt))
+    ReconnectNow(attempt:) -> actor.continue(reconnect(state, attempt))
     CopyCall(id:, call:) -> actor.continue(copy_call(state, id, call))
     CallerDown(down:) -> actor.continue(caller_down(state, down))
     OpenRequest(reply_to) -> open_first(state, reply_to)
@@ -1589,8 +1889,8 @@ fn accept_request(state: State, ticket: Ticket) -> State {
     }
     Some(_in_progress), _, _ | _, Some(_copy), _ ->
       State(..state, waiting: [ticket, ..state.waiting])
-    None, None, Lost(error:) -> {
-      refuse_ticket(ticket, error)
+    None, None, Lost(refusal:) -> {
+      refuse_ticket(ticket, refusal)
       state
     }
   }
@@ -1608,7 +1908,7 @@ fn begin(
         socket,
         query.start_simple_query(sql),
         RunningScript(_, reply_to),
-        refuse(request, _),
+        script_unencodable(reply_to, _),
       )
     StatementRequest(statement) -> begin_statement(state, socket, statement)
     SettledStatusRequest(reply: reply_to) -> {
@@ -1646,7 +1946,7 @@ fn begin_unnamed(
         socket,
         query.start_prepare("", sql, []),
         RunningPrepare(_, reply_to),
-        refuse_statement(statement, _),
+        statement_unencodable(statement, _),
       )
     RunStatement(details) ->
       start_step(
@@ -1659,7 +1959,7 @@ fn begin_unnamed(
           details.result_formats,
         ),
         RunningRun(_, details.reply),
-        refuse_statement(statement, _),
+        statement_unencodable(statement, _),
       )
   }
 }
@@ -1711,7 +2011,7 @@ fn run_cached(
     socket,
     query.start_run(cached.name, details.parameters, details.result_formats),
     RunningCachedRun(_, details, cached),
-    refuse_statement(RunStatement(details), _),
+    statement_unencodable(RunStatement(details), _),
   )
 }
 
@@ -1731,7 +2031,7 @@ fn prepare_named(
     socket,
     query.start_prepare_closing(closing, name, statement_sql(statement), []),
     RunningNamedPrepare(_, statement, name),
-    refuse_statement(statement, _),
+    statement_unencodable(statement, _),
   )
 }
 
@@ -1742,43 +2042,103 @@ fn start_step(
   socket: transport.Connection,
   start: Start(step_state),
   running: fn(step_state) -> Running,
-  fail: fn(DriverError) -> Nil,
+  fail: fn(EncodeError) -> Nil,
 ) -> State {
   case encode_all(start.messages) {
     Ok(bytes) ->
       State(..state, running: Some(running(start.state)))
       |> sent(socket, transport.send(socket, bytes))
     Error(error) -> {
-      fail(InvalidRequest(error))
+      fail(error)
       next_request(state)
     }
   }
 }
 
-fn refuse(request: Request, error: DriverError) -> Nil {
-  case request {
-    StatementRequest(statement) -> refuse_statement(statement, error)
-    SettledStatusRequest(reply: reply_to) -> reply(reply_to, Error(error))
-    ScriptRequest(reply: reply_to, ..) -> reply(reply_to, Error(error))
-    CopyRequest(reply: reply_to, ..) -> reply(reply_to, Error(error))
-  }
+fn script_unencodable(
+  reply_to: ReplyTo(Result(List(Outcome), ScriptError)),
+  error: EncodeError,
+) -> Nil {
+  reply(reply_to, Error(ScriptUnencodable(error)))
 }
 
-fn refuse_statement(statement: StatementRequest, error: DriverError) -> Nil {
+fn statement_unencodable(
+  statement: StatementRequest,
+  error: EncodeError,
+) -> Nil {
   case statement {
-    PrepareStatement(reply: reply_to, ..) -> reply(reply_to, Error(error))
-    RunStatement(details) -> reply(details.reply, Error(error))
+    PrepareStatement(reply: reply_to, ..) ->
+      reply(reply_to, Error(PrepareUnencodable(error)))
+    RunStatement(details) -> reply(details.reply, Error(RunUnencodable(error)))
   }
 }
 
-fn refuse_running(running: Running, error: DriverError) -> Nil {
+/// Refuses a request that the process does not run, with the request's
+/// own error.
+fn refuse(request: Request, refusal: Refusal) -> Nil {
+  case request {
+    StatementRequest(statement) -> refuse_statement(statement, refusal)
+    SettledStatusRequest(reply: reply_to) ->
+      reply(reply_to, Error(settle_refusal(refusal)))
+    ScriptRequest(reply: reply_to, ..) ->
+      reply(reply_to, Error(script_refusal(refusal)))
+    CopyRequest(reply: reply_to, ..) ->
+      reply(reply_to, Error(StartRefused(refusal)))
+  }
+}
+
+fn refuse_statement(statement: StatementRequest, refusal: Refusal) -> Nil {
+  case statement {
+    PrepareStatement(reply: reply_to, ..) ->
+      reply(reply_to, Error(prepare_refusal(refusal)))
+    RunStatement(details) -> reply(details.reply, Error(run_refusal(refusal)))
+  }
+}
+
+fn settle_refusal(refusal: Refusal) -> SettleError {
+  case refusal {
+    RefusedWithFailure(failure) -> SettleFailed(failure)
+    RefusedNotConnected(error) -> SettleNotConnected(error)
+  }
+}
+
+fn script_refusal(refusal: Refusal) -> ScriptError {
+  case refusal {
+    RefusedWithFailure(failure) -> ScriptRequestFailed(failure)
+    RefusedNotConnected(error) -> ScriptNotConnected(error)
+  }
+}
+
+fn prepare_refusal(refusal: Refusal) -> PrepareError {
+  case refusal {
+    RefusedWithFailure(failure) -> PrepareFailed(failure)
+    RefusedNotConnected(error) -> PrepareNotConnected(error)
+  }
+}
+
+fn run_refusal(refusal: Refusal) -> RunError {
+  case refusal {
+    RefusedWithFailure(failure) -> RunFailed(failure)
+    RefusedNotConnected(error) -> RunNotConnected(error)
+  }
+}
+
+/// Fails the request that runs: the connection broke, or its deadline
+/// passed.
+fn refuse_running(running: Running, failure: RequestFailure) -> Nil {
   case running {
-    RunningPrepare(reply: reply_to, ..) -> reply(reply_to, Error(error))
-    RunningRun(reply: reply_to, ..) -> reply(reply_to, Error(error))
-    RunningScript(reply: reply_to, ..) -> reply(reply_to, Error(error))
-    RunningNamedPrepare(request:, ..) -> refuse_statement(request, error)
-    RunningCachedRun(details:, ..) -> reply(details.reply, Error(error))
-    RunningCopy(session:, ..) -> answer_session(session, Error(error))
+    RunningPrepare(reply: reply_to, ..) ->
+      reply(reply_to, Error(PrepareFailed(failure)))
+    RunningRun(reply: reply_to, ..) ->
+      reply(reply_to, Error(RunFailed(failure)))
+    RunningScript(reply: reply_to, ..) ->
+      reply(reply_to, Error(ScriptRequestFailed(failure)))
+    RunningNamedPrepare(request:, ..) ->
+      refuse_statement(request, RefusedWithFailure(failure))
+    RunningCachedRun(details:, ..) ->
+      reply(details.reply, Error(RunFailed(failure)))
+    RunningCopy(session:, ..) ->
+      answer_session(session, Error(CopyFaultFailed(failure)))
   }
 }
 
@@ -1815,7 +2175,7 @@ fn write_failed(
 fn lose_if_connected(
   state: State,
   socket: transport.Connection,
-  error: DriverError,
+  error: RequestFailure,
 ) -> State {
   case state.link {
     Open(..) -> lose(state, socket, error)
@@ -2030,19 +2390,19 @@ fn advance(
 }
 
 fn prepare_finisher(
-  reply_to: ReplyTo(Result(StatementDescription, DriverError)),
-) -> Finisher(query.Outcome(StatementDescription, Failure)) {
+  reply_to: ReplyTo(Result(StatementDescription, PrepareError)),
+) -> Finisher(query.Outcome(StatementDescription, ServerReport)) {
   fn(state, _socket, outcome) { finish_prepare(state, outcome, reply_to) }
 }
 
 fn run_finisher(
-  reply_to: ReplyTo(Result(Outcome, DriverError)),
+  reply_to: ReplyTo(Result(Outcome, RunError)),
 ) -> Finisher(query.Outcome(StatementResult, Failure)) {
   fn(state, _socket, outcome) { finish_run(state, outcome, reply_to) }
 }
 
 fn script_finisher(
-  reply_to: ReplyTo(Result(List(Outcome), DriverError)),
+  reply_to: ReplyTo(Result(List(Outcome), ScriptError)),
 ) -> Finisher(query.Outcome(List(StatementResult), ScriptFailure)) {
   fn(state, _socket, outcome) { finish_script(state, outcome, reply_to) }
 }
@@ -2050,7 +2410,7 @@ fn script_finisher(
 fn named_prepare_finisher(
   request: StatementRequest,
   name: String,
-) -> Finisher(query.Outcome(StatementDescription, Failure)) {
+) -> Finisher(query.Outcome(StatementDescription, ServerReport)) {
   fn(state, socket, outcome) {
     finish_named_prepare(state, socket, outcome, request, name)
   }
@@ -2112,27 +2472,46 @@ fn failed(
   state: State,
   socket: transport.Connection,
   current: Running,
-  error: DriverError,
+  error: RequestFailure,
 ) -> State {
   lose(State(..state, running: Some(current)), socket, error)
 }
 
 fn finish_prepare(
   state: State,
-  outcome: query.Outcome(StatementDescription, Failure),
-  reply_to: ReplyTo(Result(StatementDescription, DriverError)),
+  outcome: query.Outcome(StatementDescription, ServerReport),
+  reply_to: ReplyTo(Result(StatementDescription, PrepareError)),
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
-  let tracker = track_step(state.tracker, outcome)
-  let result = outcome.result |> map_error(step_failure(_, outcome.status, []))
+  let tracker = track_prepare(state.tracker, outcome)
+  let result = outcome.result |> map_error(PrepareRefused(_, outcome.status))
   reply(reply_to, result)
   State(..state, tracker:)
+}
+
+/// A prepare fails only with the server's error.
+fn track_prepare(
+  tracker: TransactionTracker,
+  outcome: query.Outcome(StatementDescription, ServerReport),
+) -> TransactionTracker {
+  track(
+    tracker,
+    outcome.status,
+    option.from_result(result_error(outcome.result)),
+  )
+}
+
+fn result_error(result: Result(value, error)) -> Result(error, Nil) {
+  case result {
+    Ok(_value) -> Error(Nil)
+    Error(error) -> Ok(error)
+  }
 }
 
 fn finish_run(
   state: State,
   outcome: query.Outcome(StatementResult, Failure),
-  reply_to: ReplyTo(Result(Outcome, DriverError)),
+  reply_to: ReplyTo(Result(Outcome, RunError)),
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
   let tracker = track_step(state.tracker, outcome)
@@ -2142,7 +2521,7 @@ fn finish_run(
         take_pending(state, plain_outcome(statement, outcome.status))
       #(state, Ok(single))
     }
-    Error(failure) -> #(state, Error(step_failure(failure, outcome.status, [])))
+    Error(failure) -> #(state, Error(run_failure(failure, outcome.status)))
   }
   reply(reply_to, result)
   State(..state, tracker:)
@@ -2151,7 +2530,7 @@ fn finish_run(
 fn finish_script(
   state: State,
   outcome: query.Outcome(List(StatementResult), ScriptFailure),
-  reply_to: ReplyTo(Result(List(Outcome), DriverError)),
+  reply_to: ReplyTo(Result(List(Outcome), ScriptError)),
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
   let tracker = track_script(state.tracker, outcome)
@@ -2163,7 +2542,7 @@ fn finish_script(
 fn script_result(
   state: State,
   outcome: query.Outcome(List(StatementResult), ScriptFailure),
-) -> #(State, Result(List(Outcome), DriverError)) {
+) -> #(State, Result(List(Outcome), ScriptError)) {
   case outcome.result {
     Ok(statements) -> {
       let #(state, outcomes) = outcomes_of(state, statements, outcome.status)
@@ -2171,7 +2550,7 @@ fn script_result(
     }
     Error(ScriptFailure(completed:, failure:)) -> {
       let #(state, outcomes) = outcomes_of(state, completed, outcome.status)
-      #(state, Error(step_failure(failure, outcome.status, outcomes)))
+      #(state, Error(script_failure(failure, outcome.status, outcomes)))
     }
   }
 }
@@ -2179,12 +2558,12 @@ fn script_result(
 fn finish_named_prepare(
   state: State,
   socket: transport.Connection,
-  outcome: query.Outcome(StatementDescription, Failure),
+  outcome: query.Outcome(StatementDescription, ServerReport),
   request: StatementRequest,
   name: String,
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
-  let state = State(..state, tracker: track_step(state.tracker, outcome))
+  let state = State(..state, tracker: track_prepare(state.tracker, outcome))
   case outcome.result {
     Ok(description) -> {
       let sql = statement_sql(request)
@@ -2196,8 +2575,8 @@ fn finish_named_prepare(
         CachedStatement(name, description),
       )
     }
-    Error(failure) -> {
-      refuse_statement(request, step_failure(failure, outcome.status, []))
+    Error(report) -> {
+      prepare_refused(request, report, outcome.status)
       state
     }
   }
@@ -2229,7 +2608,7 @@ fn run_prepared(
   use <- guard(deadline_passed(state), state)
   case details.previous {
     Some(previous) if previous != cached.description -> {
-      reply(details.reply, Error(StatementChanged(cached.description)))
+      reply(details.reply, Error(RunStatementChanged(cached.description)))
       state
     }
     _ -> run_cached(state, socket, details, cached)
@@ -2255,8 +2634,8 @@ fn finish_cached_run(
     }
     Error(ServerError(report)) ->
       cached_run_refused(state, socket, details, cached, report, outcome.status)
-    Error(failure) -> {
-      reply(details.reply, Error(step_failure(failure, outcome.status, [])))
+    Error(CopyNotSupported(..) as failure) -> {
+      reply(details.reply, Error(run_failure(failure, outcome.status)))
       state
     }
   }
@@ -2289,21 +2668,45 @@ fn cached_run_refused(
         RunStatement(RunDetails(..details, previous: Some(cached.description))),
       )
     _, _, _ -> {
-      reply(details.reply, Error(ServerRefused(report, status)))
+      reply(details.reply, Error(RunRefused(report, status)))
       state
     }
   }
 }
 
-fn step_failure(
+/// The server refused the prepare of a statement: a `prepare` or the first
+/// run of a statement.
+fn prepare_refused(
+  request: StatementRequest,
+  report: ServerReport,
+  status: TransactionStatus,
+) -> Nil {
+  case request {
+    PrepareStatement(reply: reply_to, ..) ->
+      reply(reply_to, Error(PrepareRefused(report, status)))
+    RunStatement(details) ->
+      reply(details.reply, Error(RunRefused(report, status)))
+  }
+}
+
+fn run_failure(failure: Failure, status: TransactionStatus) -> RunError {
+  case failure {
+    ServerError(report) -> RunRefused(report, status)
+    CopyNotSupported(_report) -> RunCopyRefused
+  }
+}
+
+/// The first statement of a script that fails is refused; a later one
+/// fails the script after the ones that ran.
+fn script_failure(
   failure: Failure,
   status: TransactionStatus,
   completed: List(Outcome),
-) -> DriverError {
+) -> ScriptError {
   case failure, completed {
-    ServerError(report), [] -> ServerRefused(report, status)
-    ServerError(report), _ -> ScriptFailed(completed, report, status)
-    CopyNotSupported(_report), _ -> CopyStatementRefused(completed)
+    ServerError(report), [] -> ScriptRefused(report, status)
+    ServerError(report), _ran -> ScriptFailed(completed, report, status)
+    CopyNotSupported(_report), _ran -> ScriptCopyRefused(completed)
   }
 }
 
@@ -2413,7 +2816,7 @@ fn begin_copy(
       running_copy(state, start.state, session)
       |> sent(socket, transport.send(socket, bytes))
     Error(error) -> {
-      answer_session(session, Error(InvalidRequest(error)))
+      option.map(session.start, reply(_, Error(StartUnencodable(error))))
       process.demonitor_process(session.monitor)
       next_request(state)
     }
@@ -2504,29 +2907,29 @@ fn copy_finished(
 fn copy_result(
   state: State,
   outcome: query.Outcome(CopyResult, Failure),
-) -> #(State, Result(Int, DriverError)) {
+) -> #(State, Result(Int, CopyFault)) {
   case outcome.result {
     Ok(CopyCompleted(count:)) -> #(state, Ok(count))
     Ok(NoCopyStarted(result:)) -> {
       let #(state, completed) =
         take_pending(state, Outcome([], result, [], [], outcome.status))
-      #(state, Error(CopyNotStarted(Some(completed))))
+      #(state, Error(CopyFaultNotStarted(Some(completed))))
     }
-    Error(CopyNotSupported(..)) -> #(state, Error(CopyNotStarted(None)))
+    Error(CopyNotSupported(..)) -> #(state, Error(CopyFaultNotStarted(None)))
     Error(ServerError(report)) -> #(
       state,
-      Error(ServerRefused(report, outcome.status)),
+      Error(CopyFaultRefused(report, outcome.status)),
     )
   }
 }
 
 fn deadline_result(
   state: State,
-  ended: Result(Int, DriverError),
-) -> Result(Int, DriverError) {
+  ended: Result(Int, CopyFault),
+) -> Result(Int, CopyFault) {
   case state.current {
     Some(Current(deadline_passed: True, cancel_confirmed:, ..)) ->
-      Error(DeadlinePassed(cancelled: cancel_confirmed))
+      Error(CopyFaultFailed(DeadlinePassed(cancelled: cancel_confirmed)))
     _ -> ended
   }
 }
@@ -2535,19 +2938,17 @@ fn deadline_result(
 /// still has to take it.
 fn settle_copy(
   session: CopySession,
-  ended: Result(Int, DriverError),
+  ended: Result(Int, CopyFault),
 ) -> Option(EndedCopy) {
   answer_session(session, ended)
   close_session(session, ended)
 }
 
 /// Gives the end of the COPY to the caller's start or call that waits.
-fn answer_session(
-  session: CopySession,
-  ended: Result(Int, DriverError),
-) -> Nil {
+fn answer_session(session: CopySession, ended: Result(Int, CopyFault)) -> Nil {
   case session.start, session.call {
-    Some(start), _ -> reply(start, result.replace(ended, Nil))
+    Some(start), _ ->
+      reply(start, result.replace(ended, Nil) |> map_error(StartEnded))
     None, Some(call) -> answer_call(call, ended)
     None, None -> Nil
   }
@@ -2558,7 +2959,7 @@ fn answer_session(
 /// for the caller's next call.
 fn close_session(
   session: CopySession,
-  ended: Result(Int, DriverError),
+  ended: Result(Int, CopyFault),
 ) -> Option(EndedCopy) {
   case session.start, session.call {
     None, None | None, Some(SendChunk(..)) ->
@@ -2570,13 +2971,35 @@ fn close_session(
   }
 }
 
-fn answer_call(call: CopyCall, ended: Result(Int, DriverError)) -> Nil {
+fn answer_call(call: CopyCall, ended: Result(Int, CopyFault)) -> Nil {
   case call {
-    SendChunk(reply: reply_to, ..) ->
-      reply(reply_to, result.replace(ended, Nil))
+    SendChunk(reply: reply_to, ..) -> reply(reply_to, chunk_answer(ended))
     ReadRow(reply: reply_to) -> reply(reply_to, result.map(ended, RowsEnded))
     EndCopy(reply: reply_to, ..) -> reply(reply_to, ended)
     CallerLeft -> Nil
+  }
+}
+
+/// A chunk that met the end of its COPY: the failure or the refusal that
+/// ended it. A COPY that ended with no failure takes no more data.
+fn chunk_answer(ended: Result(Int, CopyFault)) -> Result(Nil, ChunkError) {
+  case ended {
+    Error(CopyFaultFailed(failure)) -> Error(ChunkFailed(failure))
+    Error(CopyFaultRefused(report, status)) ->
+      Error(ChunkRefused(report, status))
+    Ok(_count) | Error(CopyFaultNotStarted(..)) -> Error(ChunkCopyNotRunning)
+  }
+}
+
+/// A call for a COPY that does not run. A chunk gets
+/// `ChunkCopyNotRunning`. A row read or an end gets no answer: `copy_to`
+/// and `copy_from` make them only for their own COPY, which the process
+/// keeps until its caller took its end, and make none after it.
+fn refuse_copy_call(call: CopyCall) -> Nil {
+  case call {
+    SendChunk(reply: reply_to, ..) ->
+      reply(reply_to, Error(ChunkCopyNotRunning))
+    ReadRow(..) | EndCopy(..) | CallerLeft -> Nil
   }
 }
 
@@ -2589,7 +3012,7 @@ fn copy_call(state: State, id: Reference, call: CopyCall) -> State {
     -> running_copy_call(state, socket, copy_state, session, call)
     _, Some(ended), _ if ended.id == id -> ended_copy_call(state, ended, call)
     _, _, _ -> {
-      answer_call(call, Error(CopyNotRunning))
+      refuse_copy_call(call)
       state
     }
   }
@@ -2638,7 +3061,7 @@ fn send_copy_chunk(
   copy_state: CopyState,
   session: CopySession,
   chunk: BitArray,
-  reply_to: ReplyTo(Result(Nil, DriverError)),
+  reply_to: ReplyTo(Result(Nil, ChunkError)),
 ) -> State {
   let waiting =
     running_copy(
@@ -2660,7 +3083,7 @@ fn chunk_sent(
   state: State,
   waiting: State,
   socket: transport.Connection,
-  reply_to: ReplyTo(Result(Nil, DriverError)),
+  reply_to: ReplyTo(Result(Nil, ChunkError)),
   sent: Result(Nil, TransportError),
 ) -> State {
   case sent {
@@ -2678,7 +3101,7 @@ fn read_copy_row(
   state: State,
   copy_state: CopyState,
   session: CopySession,
-  reply_to: ReplyTo(Result(CopyRead, DriverError)),
+  reply_to: ReplyTo(Result(CopyRead, CopyFault)),
 ) -> State {
   case session.held_row {
     Some(row) -> {
@@ -2751,9 +3174,10 @@ fn caller_down(state: State, down: Down) -> State {
 
 /// A COPY that runs when the connection is lost ends with the loss. One
 /// that ended before keeps its own result.
-fn lost_copy(state: State, error: DriverError) -> Option(EndedCopy) {
+fn lost_copy(state: State, failure: RequestFailure) -> Option(EndedCopy) {
   case state.running {
-    Some(RunningCopy(session:, ..)) -> close_session(session, Error(error))
+    Some(RunningCopy(session:, ..)) ->
+      close_session(session, Error(CopyFaultFailed(failure)))
     _ -> state.copy
   }
 }
@@ -2766,7 +3190,7 @@ fn lost_copy(state: State, error: DriverError) -> Option(EndedCopy) {
 fn lose(
   state: State,
   socket: transport.Connection,
-  error: DriverError,
+  error: RequestFailure,
 ) -> State {
   end_link(state, socket, running_error: error, error:)
 }
@@ -2777,17 +3201,17 @@ fn lose(
 fn end_link(
   state: State,
   socket: transport.Connection,
-  running_error running_error: DriverError,
-  error error: DriverError,
+  running_error running_error: RequestFailure,
+  error error: RequestFailure,
 ) -> State {
   transport.close(socket)
   option.map(state.running, refuse_running(_, running_error))
-  list.each(reverse(state.waiting), refuse_ticket(_, error))
+  list.each(reverse(state.waiting), refuse_ticket(_, RefusedWithFailure(error)))
   tell(state, Disconnected(error))
-  schedule_reconnect(state, error, 0)
+  schedule_reconnect(state, 0)
   State(
     ..end_current(state),
-    link: Lost(error),
+    link: Lost(RefusedWithFailure(error)),
     running: None,
     waiting: [],
     tracker: new_tracker(),
@@ -2795,9 +3219,9 @@ fn end_link(
   )
 }
 
-fn refuse_ticket(ticket: Ticket, error: DriverError) -> Nil {
+fn refuse_ticket(ticket: Ticket, refusal: Refusal) -> Nil {
   process.cancel_timer(ticket.timer)
-  refuse(ticket.request, error)
+  refuse(ticket.request, refusal)
 }
 
 fn tell(state: State, event: ConnectionEvent) -> Nil {
@@ -2805,9 +3229,9 @@ fn tell(state: State, event: ConnectionEvent) -> Nil {
   Nil
 }
 
-fn schedule_reconnect(state: State, error: DriverError, attempt: Int) -> Nil {
+fn schedule_reconnect(state: State, attempt: Int) -> Nil {
   let delay = backoff_delay(state.config.reconnect, attempt)
-  process.send_after(state.subject, delay, ReconnectNow(error, attempt))
+  process.send_after(state.subject, delay, ReconnectNow(attempt))
   Nil
 }
 
@@ -2830,7 +3254,7 @@ pub fn backoff_delay(backoff: Backoff, attempt: Int) -> Int {
 
 /// Each `ReconnectNow` comes from one loss or one failed attempt, while
 /// the link is lost, so the process connects only when it has no socket.
-fn reconnect(state: State, error: DriverError, attempt: Int) -> State {
+fn reconnect(state: State, attempt: Int) -> State {
   case open_session(state.config) {
     Ok(session) -> {
       tell(state, Reconnected)
@@ -2838,7 +3262,7 @@ fn reconnect(state: State, error: DriverError, attempt: Int) -> State {
     }
     Error(connect_error) -> {
       tell(state, ReconnectFailed(connect_error))
-      schedule_reconnect(state, error, attempt + 1)
+      schedule_reconnect(state, attempt + 1)
       state
     }
   }
@@ -3033,7 +3457,10 @@ fn start_cancel(
 
 fn end_waiting(state: State, id: Int) -> State {
   let #(ended, waiting) = list.partition(state.waiting, has_id(_, id))
-  list.each(ended, refuse_ticket(_, DeadlinePassed(cancelled: False)))
+  list.each(ended, refuse_ticket(
+    _,
+    RefusedWithFailure(DeadlinePassed(cancelled: False)),
+  ))
   State(..state, waiting:)
 }
 

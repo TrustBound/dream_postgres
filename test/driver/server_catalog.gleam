@@ -13,7 +13,7 @@ import dream_postgres/driver/catalog.{
   type Catalog, type CatalogError, type CatalogEvent, UnknownType,
 }
 import dream_postgres/driver/connection.{
-  type Connection, type DriverError, type Outcome, run_script, stop,
+  type Connection, type Outcome, type ScriptError, run_script, stop,
 }
 import dream_postgres/internal/cell.{type TypeDescription}
 import dream_test/context.{type Context}
@@ -334,7 +334,7 @@ pub type BlockedConnection {
     control: Connection,
     blocked: Connection,
     key: Int,
-    blocker: Caller(Result(List(Outcome), DriverError)),
+    blocker: Caller(Result(List(Outcome), ScriptError)),
   )
 }
 

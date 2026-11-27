@@ -9,7 +9,7 @@
 //// test.
 
 import dream_postgres/driver/connection.{
-  Backoff, InvalidRequest, Notification, TransportRefused,
+  Backoff, Notification, ScriptUnencodable, TransportRefused,
 }
 import dream_postgres/driver/listener.{
   type Listener, type ListenerConfig, type ListenerMessage, ChannelTooLong,
@@ -327,7 +327,9 @@ fn subscribe_tests() {
         answer
         |> should
         |> be_error
-        |> be_equal(SubscribeFailed(InvalidRequest(ZeroByteInString("query"))))
+        |> be_equal(
+          SubscribeFailed(ScriptUnencodable(ZeroByteInString("query"))),
+        )
         |> or_fail_with("Expected SubscribeFailed with the zero byte")
       },
     ),
@@ -806,7 +808,7 @@ fn late_server_tests() -> TestSuite {
           |> be_ok
           |> be_equal(ListenFailed(
             "svc827_late\u{0000}zero",
-            InvalidRequest(ZeroByteInString("query")),
+            ScriptUnencodable(ZeroByteInString("query")),
           ))
           |> or_fail_with("Expected ListenFailed with the zero byte")
         },

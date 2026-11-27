@@ -38,7 +38,7 @@
 import dream_postgres/driver/catalog_table.{
   type CatalogTable, type RowError, find, find_underlying,
 }
-import dream_postgres/driver/connection.{type Connection, type DriverError}
+import dream_postgres/driver/connection.{type Connection, type RunError}
 import dream_postgres/internal/cell.{type TypeDescription}
 import gleam/erlang/process.{type Down, type Pid, type Subject}
 import gleam/option.{type Option, None, Some}
@@ -66,7 +66,7 @@ pub type CatalogError {
   /// caused.
   UnknownType(type_id: Int)
   /// The catalog query failed on the caller's connection.
-  LoadFailed(error: DriverError)
+  LoadFailed(error: RunError)
   /// The rows of the catalog query do not make a table.
   UnreadableCatalog(error: RowError)
   /// The catalog process is gone.

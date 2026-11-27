@@ -15,8 +15,8 @@
 //// stop.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionConfig, type ConnectionEvent, type DriverError,
-  type Outcome, type StatementCaching, Backoff, CacheStatements, Connected,
+  type Connection, type ConnectionConfig, type ConnectionEvent, type Outcome,
+  type ScriptError, type StatementCaching, Backoff, CacheStatements, Connected,
   ConnectionConfig, LoginRefused, Outcome, ReconnectFailed, Reconnected, run,
   run_script, server_parameter, start, stop, supervised, transaction_status,
 }
@@ -683,7 +683,7 @@ pub fn release_advisory_lock(
 /// proxied connection, for `start_caller`.
 pub fn lock_request(
   proxied: ProxiedConnection,
-) -> fn() -> Result(List(Outcome), DriverError) {
+) -> fn() -> Result(List(Outcome), ScriptError) {
   fn() {
     run_script(
       proxied.connection,
@@ -940,7 +940,7 @@ pub fn lock_waiter_pid(
 }
 
 fn single_text(
-  answer: Result(List(Outcome), DriverError),
+  answer: Result(List(Outcome), ScriptError),
 ) -> Result(String, String) {
   case answer {
     Ok([Outcome(result: CommandResult(rows: [[Text(bytes)]], ..), ..)]) ->
@@ -1172,7 +1172,7 @@ pub fn caller_answer(caller: Caller(answer)) -> Result(answer, String) {
 /// The outcomes of a caller of a script, with an error when the caller
 /// gave no answer or the script failed: for a step of a setup.
 pub fn caller_outcomes(
-  caller: Caller(Result(List(Outcome), DriverError)),
+  caller: Caller(Result(List(Outcome), ScriptError)),
 ) -> Result(List(Outcome), String) {
   use answer <- try(caller_answer(caller))
   answer

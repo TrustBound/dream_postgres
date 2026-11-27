@@ -4,7 +4,7 @@
 //// deadline on a reconnect.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionEvent, type DriverError, Backoff,
+  type Connection, type ConnectionEvent, type ScriptError, Backoff,
   ConnectFailed, ConnectionConfig,
 }
 import dream_test/context.{type Context}
@@ -86,7 +86,7 @@ pub type BadReconnect {
     /// of the reconnect.
     events: List(ConnectionEvent),
     /// The answer of a request that came while the reconnect ran.
-    waiting_answer: Result(Nil, DriverError),
+    waiting_answer: Result(Nil, ScriptError),
   )
 }
 

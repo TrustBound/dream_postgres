@@ -1,7 +1,7 @@
 //// Extracts the driver error of a failed catalog load.
 
 import dream_postgres/driver/catalog.{type CatalogError, LoadFailed}
-import dream_postgres/driver/connection.{type DriverError}
+import dream_postgres/driver/connection.{type RunError}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -22,14 +22,14 @@ import gleam/string.{inspect}
 /// ```
 pub fn extract_load_failure(
   result: MatchResult(CatalogError),
-) -> MatchResult(DriverError) {
+) -> MatchResult(RunError) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(error) -> load_failure_of(error)
   }
 }
 
-fn load_failure_of(error: CatalogError) -> MatchResult(DriverError) {
+fn load_failure_of(error: CatalogError) -> MatchResult(RunError) {
   case error {
     LoadFailed(driver_error) -> MatchOk(driver_error)
     _other ->

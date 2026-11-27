@@ -12,9 +12,9 @@
 
 import dream_postgres/driver/catalog.{CatalogProcessDown}
 import dream_postgres/driver/connection.{
-  type ConnectionEvent, type DriverError, type Outcome, Connected,
-  ConnectionLost, ConnectionProcessDown, Disconnected, SocketFailed,
-  TransportRefused,
+  type ConnectionEvent, type Outcome, type ScriptError, Connected,
+  ConnectionLost, ConnectionProcessDown, Disconnected, ScriptRequestFailed,
+  SocketFailed, TransportRefused,
 }
 import dream_postgres/driver/pool.{
   type HoldError, type Pool, type PoolConfig, type PoolEvent,
@@ -625,7 +625,7 @@ fn stop_tests() -> ContextNode(PoolSession) {
         |> be_ok
         |> be_ok
         |> be_error
-        |> be_equal(ConnectionProcessDown)
+        |> be_equal(ScriptRequestFailed(ConnectionProcessDown))
         |> or_fail_with("Expected the hold's command to end with the pool")
       }),
     ]),
@@ -1214,7 +1214,7 @@ type Drain {
   Drain(
     refused: Result(Result(String, String), HoldError),
     finished: Result(
-      Result(Result(List(Outcome), DriverError), HoldError),
+      Result(Result(List(Outcome), ScriptError), HoldError),
       String,
     ),
     stopped: Result(Nil, String),

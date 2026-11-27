@@ -9,10 +9,11 @@
 //// caller.
 
 import dream_postgres/driver/connection.{
-  type Connection, type CopyError, type DriverError, type Outcome,
-  ConnectionLost, CopyNotRunning, CopyNotStarted, DeadlinePassed, InvalidRequest,
-  Outcome, SocketFailed, copy_from, copy_to, run_script, send_chunk,
-  transaction_status,
+  type ChunkError, type Connection, type CopyError, type Outcome,
+  type ScriptError, AppFailed, ChunkCopyNotRunning, ChunkFailed, ConnectionLost,
+  ConnectionProcessDown, CopyFailed, CopyNotStarted, CopyUnencodable,
+  DeadlinePassed, Outcome, ScriptRequestFailed, SocketFailed, copy_from, copy_to,
+  run_script, send_chunk, transaction_status,
 }
 import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{SendTimedOut, SocketClosed}
@@ -48,7 +49,7 @@ import fixtures/copy_callbacks.{
   send_across_violation, send_after_end, send_after_go, send_after_idle,
   send_bad_row, send_binary, send_csv, send_then_fail, send_three_rows,
   send_twice_after_error, send_until_error, send_until_refused,
-  start_copy_caller,
+  start_copy_caller, stop_then_send,
 }
 import fixtures/driver_tls.{verify_full}
 import gleam/bit_array
@@ -59,10 +60,11 @@ import gleam/option.{None, Some}
 import gleam/result.{map_error, try}
 import gleam/string.{repeat}
 import matchers/extract_app_failure.{extract_app_failure}
+import matchers/extract_chunk_refusal_code.{extract_chunk_refusal_code}
 import matchers/extract_command_result.{extract_command_result}
 import matchers/extract_command_rows.{extract_command_rows}
-import matchers/extract_copy_driver_error.{extract_copy_driver_error}
-import matchers/extract_driver_error_code.{extract_driver_error_code}
+import matchers/extract_copy_failure.{extract_copy_failure}
+import matchers/extract_copy_refusal_code.{extract_copy_refusal_code}
 import matchers/extract_ending_report.{extract_ending_report}
 import matchers/extract_first.{extract_first}
 import matchers/extract_first_of_pair.{extract_first_of_pair}
@@ -71,6 +73,7 @@ import matchers/extract_outcome_tags.{extract_outcome_tags}
 import matchers/extract_protocol_violation.{extract_protocol_violation}
 import matchers/extract_report_code.{extract_report_code}
 import matchers/extract_sampled_peak.{extract_sampled_peak}
+import matchers/extract_script_request_failure.{extract_script_request_failure}
 import matchers/extract_second_of_pair.{extract_second_of_pair}
 import matchers/within_memory.{within_memory}
 
@@ -89,6 +92,7 @@ pub fn tests() -> TestSuite {
     slow_fold_tests(),
     cut_off_fold_tests(),
     copy_inside_tests(),
+    copy_stopping_tests(),
     rows_caller_tests(),
     refusal_caller_tests(),
     row_caller_tests(),
@@ -489,7 +493,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
           |> should
           |> be_error
           |> extract_app_failure
-          |> extract_driver_error_code
+          |> extract_chunk_refusal_code
           |> be_equal("22P02")
           |> or_fail_with("Expected the app's failure with 22P02")
         },
@@ -541,8 +545,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
           refused
           |> should
           |> be_error
-          |> extract_copy_driver_error
-          |> extract_driver_error_code
+          |> extract_copy_refusal_code
           |> be_equal("22P02")
           |> or_fail_with("Expected the server's 22P02")
         },
@@ -577,8 +580,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
         refused
         |> should
         |> be_error
-        |> extract_copy_driver_error
-        |> extract_driver_error_code
+        |> extract_copy_refusal_code
         |> be_equal("42P01")
         |> or_fail_with("Expected 42P01")
       },
@@ -699,7 +701,6 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
       select
       |> should
       |> be_error
-      |> extract_copy_driver_error
       |> be_equal(
         CopyNotStarted(
           Some(Outcome(
@@ -733,7 +734,6 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
           out
           |> should
           |> be_error
-          |> extract_copy_driver_error
           |> be_equal(
             CopyNotStarted(
               Some(Outcome(
@@ -765,7 +765,6 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
           into
           |> should
           |> be_error
-          |> extract_copy_driver_error
           |> be_equal(CopyNotStarted(None))
           |> or_fail_with("Expected no outcome for the refused COPY")
         },
@@ -920,8 +919,8 @@ fn caller_tests() -> List(ContextNode(Connection)) {
         |> should
         |> be_ok
         |> be_error
-        |> be_equal(CopyNotRunning)
-        |> or_fail_with("Expected CopyNotRunning")
+        |> be_equal(ChunkCopyNotRunning)
+        |> or_fail_with("Expected ChunkCopyNotRunning")
       }),
     ]),
     group("a COPY that a CHECK constraint refuses", [
@@ -946,7 +945,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
           |> be_error
           |> extract_app_failure
           |> extract_first_of_pair
-          |> extract_driver_error_code
+          |> extract_chunk_refusal_code
           |> be_equal("23514")
           |> or_fail_with("Expected 23514 for the refused row")
         },
@@ -970,7 +969,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
           |> extract_app_failure
           |> extract_second_of_pair
           |> be_error
-          |> extract_driver_error_code
+          |> extract_chunk_refusal_code
           |> be_equal("23514")
           |> or_fail_with("Expected 23514 for the chunk after the error")
         },
@@ -992,9 +991,8 @@ fn caller_tests() -> List(ContextNode(Connection)) {
         refused
         |> should
         |> be_error
-        |> extract_copy_driver_error
-        |> be_equal(InvalidRequest(ZeroByteInString("query")))
-        |> or_fail_with("Expected InvalidRequest")
+        |> be_equal(CopyUnencodable(ZeroByteInString("query")))
+        |> or_fail_with("Expected CopyUnencodable")
       },
     ),
   ]
@@ -1031,7 +1029,7 @@ fn session_end_tests(server: Server) -> ContextNode(ControlledConnection) {
         ended
         |> should
         |> be_error
-        |> extract_copy_driver_error
+        |> extract_copy_failure
         |> extract_ending_report
         |> extract_report_code
         |> be_equal("57P01")
@@ -1087,7 +1085,9 @@ fn proxied_tests() -> TestSuite {
           |> should
           |> be_ok
           |> be_error
-          |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+          |> be_equal(
+            ScriptRequestFailed(ConnectionLost(SocketFailed(SocketClosed))),
+          )
           |> or_fail_with("Expected the loss by the closed socket")
         },
       ),
@@ -1113,7 +1113,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
           )
           |> should
           |> be_error
-          |> extract_copy_driver_error
+          |> extract_copy_failure
           |> extract_loss_reason
           |> or_fail_with("Expected the loss of the connection")
         },
@@ -1134,12 +1134,38 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
           )
           |> should
           |> be_error
-          |> extract_copy_driver_error
+          |> extract_copy_failure
           |> extract_protocol_violation
           |> or_fail_with("Expected the violation")
         },
       ),
     ]),
+    it(
+      "refuses a chunk after the server ended its COPY",
+      fn(proxied: ProxiedConnection) {
+        // Arrange
+        answer_next_request(proxied.proxy, <<
+          "1", 4:32, "2", 4:32, "G", 7:32, 0, 0:16, "C", 11:32, "COPY 0":utf8, 0,
+          "Z", 5:32, "I":utf8,
+        >>)
+
+        // Act
+        let refused =
+          copy_from(
+            proxied.connection,
+            connection.statement("COPY ended FROM STDIN"),
+            5000,
+            send_bad_row,
+          )
+
+        // Assert
+        refused
+        |> should
+        |> be_error
+        |> be_equal(AppFailed(ChunkCopyNotRunning))
+        |> or_fail_with("Expected the chunk to meet the end of the COPY")
+      },
+    ),
     it(
       "loses the connection when a chunk cannot be sent in time",
       fn(proxied: ProxiedConnection) {
@@ -1162,7 +1188,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         lost
         |> should
         |> be_error
-        |> extract_copy_driver_error
+        |> extract_copy_failure
         |> be_equal(ConnectionLost(SocketFailed(SendTimedOut)))
         |> or_fail_with("Expected the loss by a send timeout")
       },
@@ -1181,7 +1207,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         )
         |> should
         |> be_error
-        |> extract_copy_driver_error
+        |> extract_copy_failure
         |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
         |> or_fail_with("Expected the loss of the connection")
       },
@@ -1221,6 +1247,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
         |> should
         |> be_ok
         |> be_error
+        |> extract_script_request_failure
         |> extract_ending_report
         |> extract_report_code
         |> be_equal("57P01")
@@ -1268,7 +1295,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
           |> should
           |> be_ok
           |> be_error
-          |> extract_copy_driver_error
+          |> extract_copy_failure
           |> extract_ending_report
           |> extract_report_code
           |> be_equal("57P01")
@@ -1285,7 +1312,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
 type CopyAndNext(value, error) {
   CopyAndNext(
     copied: Result(value, error),
-    next: Result(List(Outcome), DriverError),
+    next: Result(List(Outcome), ScriptError),
   )
 }
 
@@ -1299,7 +1326,7 @@ type ControlledCopy(value, error) =
 /// milliseconds ends it, and the count of its table after it.
 fn copy_past_deadline(
   connection: Connection,
-) -> Result(CopyAndNext(Int, CopyError(DriverError)), String) {
+) -> Result(CopyAndNext(Int, CopyError(ChunkError)), String) {
   use Nil <- try(run_control_script(
     connection,
     "CREATE TEMP TABLE late (id int, name text)",
@@ -1328,18 +1355,18 @@ fn late_copy_tests() -> TestSuite {
     [
       it(
         "ends a COPY FROM STDIN at its deadline while the app sends",
-        fn(shared: DirectCopy(Int, CopyError(DriverError))) {
+        fn(shared: DirectCopy(Int, CopyError(ChunkError))) {
           shared.outcome.copied
           |> should
           |> be_error
-          |> extract_copy_driver_error
+          |> extract_copy_failure
           |> be_equal(DeadlinePassed(cancelled: True))
           |> or_fail_with("Expected DeadlinePassed(True)")
         },
       ),
       it(
         "stores no row of a COPY FROM STDIN that passed its deadline",
-        fn(shared: DirectCopy(Int, CopyError(DriverError))) {
+        fn(shared: DirectCopy(Int, CopyError(ChunkError))) {
           shared.outcome.next
           |> should
           |> be_ok
@@ -1359,7 +1386,7 @@ fn late_copy_tests() -> TestSuite {
 /// it.
 fn copy_slowly(
   controlled: ControlledConnection,
-) -> Result(CopyAndNext(Int, CopyError(DriverError)), String) {
+) -> Result(CopyAndNext(Int, CopyError(ChunkError)), String) {
   use Nil <- try(run_control_script(
     controlled.connection,
     "CREATE TEMP TABLE idle (id int, name text)",
@@ -1387,18 +1414,18 @@ fn slow_produce_tests() -> TestSuite {
     [
       it(
         "cuts off a slow produce function at its deadline",
-        fn(shared: ControlledCopy(Int, CopyError(DriverError))) {
+        fn(shared: ControlledCopy(Int, CopyError(ChunkError))) {
           shared.outcome.copied
           |> should
           |> be_error
-          |> extract_copy_driver_error
+          |> extract_copy_failure
           |> be_equal(DeadlinePassed(cancelled: True))
           |> or_fail_with("Expected the end of the COPY at the deadline")
         },
       ),
       it(
         "stores no row of a slow produce function",
-        fn(shared: ControlledCopy(Int, CopyError(DriverError))) {
+        fn(shared: ControlledCopy(Int, CopyError(ChunkError))) {
           shared.outcome.next
           |> should
           |> be_ok
@@ -1417,7 +1444,7 @@ fn slow_produce_tests() -> TestSuite {
 /// idle, past the deadline of 300 milliseconds, and a script after it.
 fn read_slowly(
   controlled: ControlledConnection,
-) -> Result(CopyAndNext(Bool, CopyError(DriverError)), String) {
+) -> Result(CopyAndNext(Bool, CopyError(ChunkError)), String) {
   let copied =
     copy_to(
       controlled.connection,
@@ -1442,18 +1469,18 @@ fn slow_fold_tests() -> TestSuite {
     [
       it(
         "cuts off a slow fold at its deadline",
-        fn(shared: ControlledCopy(Bool, CopyError(DriverError))) {
+        fn(shared: ControlledCopy(Bool, CopyError(ChunkError))) {
           shared.outcome.copied
           |> should
           |> be_error
-          |> extract_copy_driver_error
+          |> extract_copy_failure
           |> be_equal(DeadlinePassed(cancelled: True))
           |> or_fail_with("Expected DeadlinePassed(True)")
         },
       ),
       it(
         "stays usable after a slow fold passed its deadline",
-        fn(shared: ControlledCopy(Bool, CopyError(DriverError))) {
+        fn(shared: ControlledCopy(Bool, CopyError(ChunkError))) {
           shared.outcome.next
           |> should
           |> be_ok
@@ -1497,7 +1524,7 @@ fn cut_off_fold_tests() -> TestSuite {
           shared.outcome.copied
           |> should
           |> be_error
-          |> extract_copy_driver_error
+          |> extract_copy_failure
           |> be_equal(DeadlinePassed(cancelled: True))
           |> or_fail_with(
             "Expected the deadline to end the reading of the rest",
@@ -1522,7 +1549,7 @@ fn cut_off_fold_tests() -> TestSuite {
 /// The answers of a script and of a COPY that the produce function of a
 /// COPY runs on the same connection.
 type InnerAnswers =
-  #(Result(List(Outcome), DriverError), Result(Int, CopyError(DriverError)))
+  #(Result(List(Outcome), ScriptError), Result(Int, CopyError(ChunkError)))
 
 type InsideCopy =
   ActOutcome(Connection, Result(Int, CopyError(InnerAnswers)))
@@ -1560,7 +1587,7 @@ fn copy_inside_tests() -> TestSuite {
           |> extract_app_failure
           |> extract_first_of_pair
           |> be_error
-          |> be_equal(DeadlinePassed(cancelled: False))
+          |> be_equal(ScriptRequestFailed(DeadlinePassed(cancelled: False)))
           |> or_fail_with("Expected the inner script to wait to its deadline")
         },
       ),
@@ -1573,9 +1600,69 @@ fn copy_inside_tests() -> TestSuite {
           |> extract_app_failure
           |> extract_second_of_pair
           |> be_error
-          |> extract_copy_driver_error
+          |> extract_copy_failure
           |> be_equal(DeadlinePassed(cancelled: False))
           |> or_fail_with("Expected the inner COPY to wait to its deadline")
+        },
+      ),
+    ],
+  )
+}
+
+/// The answer of a COPY whose produce function stopped its connection, and
+/// the answer of the chunk that the function sent after the stop.
+type StoppedAnswers =
+  #(Result(Int, CopyError(ChunkError)), Result(Result(Nil, ChunkError), Nil))
+
+type StoppedInside =
+  ActOutcome(Connection, StoppedAnswers)
+
+/// A COPY FROM STDIN whose produce function stops the connection, then
+/// sends a row.
+fn copy_stopping_its_connection(
+  connection: Connection,
+) -> Result(StoppedAnswers, String) {
+  use Nil <- try(run_control_script(
+    connection,
+    "CREATE TEMP TABLE stopped (id int, name text)",
+  ))
+  let told = process.new_subject()
+  let copied =
+    copy_from(
+      connection,
+      connection.statement("COPY stopped FROM STDIN"),
+      5000,
+      stop_then_send(_, connection, told),
+    )
+  Ok(#(copied, process.receive(told, 0)))
+}
+
+fn copy_stopping_tests() -> TestSuite {
+  describe(
+    "a COPY whose function stops its connection",
+    connection_act_setup(first_driver_server, copy_stopping_its_connection),
+    [
+      it(
+        "gives the chunk after the stop ChunkFailed(ConnectionProcessDown)",
+        fn(shared: StoppedInside) {
+          shared.outcome
+          |> should
+          |> extract_second_of_pair
+          |> be_ok
+          |> be_error
+          |> be_equal(ChunkFailed(ConnectionProcessDown))
+          |> or_fail_with("Expected the chunk to find the process gone")
+        },
+      ),
+      it(
+        "gives the COPY CopyFailed(ConnectionProcessDown) at its end",
+        fn(shared: StoppedInside) {
+          shared.outcome
+          |> should
+          |> extract_first_of_pair
+          |> be_error
+          |> be_equal(CopyFailed(ConnectionProcessDown))
+          |> or_fail_with("Expected the end to find the process gone")
         },
       ),
     ],
@@ -1593,7 +1680,7 @@ type HungCopy(told) {
 /// What the function of the caller told before the caller was killed, and
 /// what the next request on the connection gave after it.
 type CallerEnd(told) {
-  CallerEnd(told: Result(told, Nil), next: Result(List(Outcome), DriverError))
+  CallerEnd(told: Result(told, Nil), next: Result(List(Outcome), ScriptError))
 }
 
 type EndedCaller(told) =
@@ -1690,19 +1777,19 @@ fn refusal_caller_tests() -> TestSuite {
     [
       it(
         "tells the caller the server's refusal of its row",
-        fn(shared: EndedCaller(Result(Nil, DriverError))) {
+        fn(shared: EndedCaller(Result(Nil, ChunkError))) {
           shared.outcome.told
           |> should
           |> be_ok
           |> be_error
-          |> extract_driver_error_code
+          |> extract_chunk_refusal_code
           |> be_equal("22P02")
           |> or_fail_with("Expected the refusal")
         },
       ),
       it(
         "drops the end of a COPY when its caller ends before it took it",
-        fn(shared: EndedCaller(Result(Nil, DriverError))) {
+        fn(shared: EndedCaller(Result(Nil, ChunkError))) {
           shared.outcome.next
           |> should
           |> be_ok

@@ -1,13 +1,18 @@
 //// Proves a supervised connection whose server is down when it starts: it
-//// stays up, refuses requests with `NotConnected`, and connects once the
-//// server listens.
+//// stays up, refuses each kind of request as not connected, and connects
+//// once the server listens.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionEvent, type DriverError, Backoff,
-  ConnectFailed, Connected, ConnectionConfig, NotConnected, TransportRefused,
-  supervised,
+  type ChunkError, type Connection, type ConnectionEvent, type CopyError,
+  type Outcome, type PrepareError, type RunError, type ScriptError,
+  type SettleError, Backoff, ConnectFailed, Connected, ConnectionConfig,
+  CopyNotConnected, PrepareNotConnected, RunNotConnected, ScriptNotConnected,
+  SettleNotConnected, TransportRefused, supervised,
 }
 import dream_postgres/driver/transport.{ConnectRefused}
+import dream_postgres/internal/cell.{
+  type StatementDescription, type TransactionStatus,
+}
 import dream_test/context.{type Context}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -18,9 +23,10 @@ import driver/reconnect_server.{
 }
 import driver/server_connection.{connection_config, next_event, stop_connection}
 import driver/servers.{first_driver_server}
+import fixtures/copy_callbacks.{send_nothing}
 import gleam/erlang/process
 import gleam/option.{Some}
-import gleam/result.{map_error, replace, try}
+import gleam/result.{map_error, try}
 import gleam/string.{inspect}
 
 /// The tests of a supervised connection that starts with its server down.
@@ -34,14 +40,58 @@ pub fn tests() -> TestSuite {
       |> or_fail_with("Expected ConnectFailed")
     }),
     it(
-      "refuses a request with NotConnected before its first login",
+      "refuses a script with ScriptNotConnected before its first login",
       fn(outcome: LateServer) {
         // Assert
-        outcome.early_request
+        outcome.early_script
         |> should
         |> be_error
-        |> be_equal(NotConnected(TransportRefused(ConnectRefused)))
-        |> or_fail_with("Expected NotConnected")
+        |> be_equal(ScriptNotConnected(TransportRefused(ConnectRefused)))
+        |> or_fail_with("Expected ScriptNotConnected")
+      },
+    ),
+    it(
+      "refuses a prepare with PrepareNotConnected before its first login",
+      fn(outcome: LateServer) {
+        // Assert
+        outcome.early_prepare
+        |> should
+        |> be_error
+        |> be_equal(PrepareNotConnected(TransportRefused(ConnectRefused)))
+        |> or_fail_with("Expected PrepareNotConnected")
+      },
+    ),
+    it(
+      "refuses a run with RunNotConnected before its first login",
+      fn(outcome: LateServer) {
+        // Assert
+        outcome.early_run
+        |> should
+        |> be_error
+        |> be_equal(RunNotConnected(TransportRefused(ConnectRefused)))
+        |> or_fail_with("Expected RunNotConnected")
+      },
+    ),
+    it(
+      "refuses a settled status with SettleNotConnected before its first login",
+      fn(outcome: LateServer) {
+        // Assert
+        outcome.early_settle
+        |> should
+        |> be_error
+        |> be_equal(SettleNotConnected(TransportRefused(ConnectRefused)))
+        |> or_fail_with("Expected SettleNotConnected")
+      },
+    ),
+    it(
+      "refuses a COPY with CopyNotConnected before its first login",
+      fn(outcome: LateServer) {
+        // Assert
+        outcome.early_copy
+        |> should
+        |> be_error
+        |> be_equal(CopyNotConnected(TransportRefused(ConnectRefused)))
+        |> or_fail_with("Expected CopyNotConnected")
       },
     ),
     it("tells Connected once the server listens", fn(outcome: LateServer) {
@@ -66,9 +116,13 @@ type LateServer {
   LateServer(
     connection: Connection,
     first_event: Result(ConnectionEvent, Nil),
-    early_request: Result(Nil, DriverError),
+    early_script: Result(List(Outcome), ScriptError),
+    early_prepare: Result(StatementDescription, PrepareError),
+    early_run: Result(Outcome, RunError),
+    early_settle: Result(TransactionStatus, SettleError),
+    early_copy: Result(Int, CopyError(ChunkError)),
     connected_event: Result(ConnectionEvent, Nil),
-    late_request: Result(Nil, DriverError),
+    late_request: Result(List(Outcome), ScriptError),
   )
 }
 
@@ -100,18 +154,32 @@ fn watch_late_server(
   events: process.Subject(ConnectionEvent),
 ) -> Result(LateServer, String) {
   let first_event = next_event(events)
-  let early_request =
+  let early_script =
     connection.run_script(connection, connection.statement("SELECT 1"), 5000)
-    |> replace(Nil)
+  let early_prepare =
+    connection.prepare(connection, connection.statement("SELECT 1"), 5000)
+  let early_run =
+    connection.run(connection, connection.statement("SELECT 1"), [], [], 5000)
+  let early_settle = connection.settled_transaction_status(connection, 5000)
+  let early_copy =
+    connection.copy_from(
+      connection,
+      connection.statement("COPY items FROM STDIN"),
+      5000,
+      send_nothing,
+    )
   use Nil <- try(start_forwarder(port, first_driver_server.port))
   let connected_event = next_event_after_failed_connects(events)
   let late_request =
     connection.run_script(connection, connection.statement("SELECT 1"), 5000)
-    |> replace(Nil)
   Ok(LateServer(
     connection:,
     first_event:,
-    early_request:,
+    early_script:,
+    early_prepare:,
+    early_run:,
+    early_settle:,
+    early_copy:,
     connected_event:,
     late_request:,
   ))

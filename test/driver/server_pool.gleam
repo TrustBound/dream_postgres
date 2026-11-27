@@ -13,7 +13,7 @@
 //// has a stop.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionEvent, type DriverError, type Outcome, Backoff,
+  type Connection, type ConnectionEvent, type Outcome, type ScriptError, Backoff,
   Connected, ConnectionConfig, Disconnected, ReconnectFailed, run_script, stop,
   transaction_status,
 }
@@ -489,7 +489,7 @@ pub fn query_in_hold(
 pub fn script_in_hold(
   pool: Pool(attachment),
   sql: String,
-) -> fn() -> Result(Result(List(Outcome), DriverError), HoldError) {
+) -> fn() -> Result(Result(List(Outcome), ScriptError), HoldError) {
   fn() { pool.hold(pool, 5000, run_script(_, connection.statement(sql), 5000)) }
 }
 

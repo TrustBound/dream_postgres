@@ -28,6 +28,7 @@ import matchers/extract_notice_texts.{extract_notice_texts}
 import matchers/extract_notifications.{extract_notifications}
 import matchers/extract_outcome_result.{extract_outcome_result}
 import matchers/extract_parameter_changes.{extract_parameter_changes}
+import matchers/extract_report_code.{extract_report_code}
 import matchers/extract_script_tracker.{extract_script_tracker}
 import matchers/extract_session_step.{extract_session_step}
 import matchers/extract_statement_tags.{extract_statement_tags}
@@ -153,7 +154,7 @@ fn server_tests(server: Server) {
       |> extract_step_outcome
       |> extract_outcome_result
       |> be_error
-      |> extract_failure_code
+      |> extract_report_code
       |> be_equal("42P01")
       |> or_fail_with("Expected 42P01")
     }),

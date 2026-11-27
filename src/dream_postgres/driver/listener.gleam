@@ -31,9 +31,11 @@
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type DriverError, type Notification, Connected,
-  ConnectionConfig, ConnectionLost, Disconnected, NotConnected,
-  ProtocolViolation, ReconnectFailed, Reconnected, ServerEndedConnection,
+  type ConnectionEvent, type Notification, type ScriptError, Connected,
+  ConnectionConfig, ConnectionLost, ConnectionProcessDown, DeadlinePassed,
+  Disconnected, ProtocolViolation, ReconnectFailed, Reconnected,
+  ScriptCopyRefused, ScriptFailed, ScriptNotConnected, ScriptRefused,
+  ScriptRequestFailed, ScriptUnencodable, ServerEndedConnection,
 }
 import gleam/bit_array.{byte_size}
 import gleam/dict.{type Dict}
@@ -77,7 +79,7 @@ pub type ListenerMessage {
   /// The `LISTEN` for the channel failed on a session that is up, so the
   /// session does not listen on it. The listener tries again after the
   /// next reconnect.
-  ListenFailed(channel: String, error: DriverError)
+  ListenFailed(channel: String, error: ScriptError)
 }
 
 /// Why a subscribe or an unsubscribe failed.
@@ -91,7 +93,7 @@ pub type ListenerError {
   /// The server refused the `LISTEN`, or it could not be written, so the
   /// subscription is not kept. A connection that is not up is not a
   /// failure: the subscription is kept and gets `NotListening`.
-  SubscribeFailed(error: DriverError)
+  SubscribeFailed(error: ScriptError)
   /// The listener process is gone.
   ListenerProcessDown
 }
@@ -153,7 +155,7 @@ type Admission {
   /// Adds the subscriber. With `listening` `False`, it gets `NotListening`.
   Admit(listening: Bool)
   /// Refuses the subscriber with the error of its `LISTEN`.
-  Refuse(error: DriverError)
+  Refuse(error: ScriptError)
 }
 
 type State {
@@ -454,14 +456,19 @@ fn admission(state: State, channel: String) -> Admission {
 
 /// A `LISTEN` that failed because the connection is not up is kept: the
 /// connection process connects, and the listener listens then.
-fn listen_admission(listened: Result(Nil, DriverError)) -> Admission {
+fn listen_admission(listened: Result(Nil, ScriptError)) -> Admission {
   case listened {
     Ok(Nil) -> Admit(True)
-    Error(ConnectionLost(_))
-    | Error(NotConnected(_))
-    | Error(ServerEndedConnection(_))
-    | Error(ProtocolViolation(_)) -> Admit(False)
-    Error(error) -> Refuse(error)
+    Error(ScriptRequestFailed(ConnectionLost(_)))
+    | Error(ScriptNotConnected(_))
+    | Error(ScriptRequestFailed(ServerEndedConnection(_)))
+    | Error(ScriptRequestFailed(ProtocolViolation(_))) -> Admit(False)
+    Error(ScriptRequestFailed(ConnectionProcessDown) as error)
+    | Error(ScriptRequestFailed(DeadlinePassed(..)) as error)
+    | Error(ScriptUnencodable(..) as error)
+    | Error(ScriptRefused(..) as error)
+    | Error(ScriptFailed(..) as error)
+    | Error(ScriptCopyRefused(..) as error) -> Refuse(error)
   }
 }
 
@@ -508,11 +515,11 @@ fn unlisten(state: State, channel: String) -> State {
   }
 }
 
-fn listen(state: State, channel: String) -> Result(Nil, DriverError) {
+fn listen(state: State, channel: String) -> Result(Nil, ScriptError) {
   run(state, "LISTEN " <> quoted(channel))
 }
 
-fn run(state: State, sql: String) -> Result(Nil, DriverError) {
+fn run(state: State, sql: String) -> Result(Nil, ScriptError) {
   connection.run_housekeeping_script(
     state.connection,
     sql,
@@ -599,7 +606,7 @@ fn listen_on_session(state: State, channel: String) -> State {
 
 fn listen_result_message(
   channel: String,
-  result: Result(Nil, DriverError),
+  result: Result(Nil, ScriptError),
 ) -> ListenerMessage {
   case result {
     Ok(Nil) -> Listening(channel)

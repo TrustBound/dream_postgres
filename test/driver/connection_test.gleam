@@ -9,14 +9,17 @@
 //// every connection.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionConfig, type ConnectionEvent, type DriverError,
-  type Outcome, Backoff, CacheStatements, ClosedAfterDeadline, ConnectionConfig,
-  ConnectionLost, ConnectionProcessDown, CopyStatementRefused, DeadlinePassed,
-  InvalidRequest, LoginUndecodable, ProtocolViolation, Reconnected,
-  SetupTimedOut, SocketFailed, TransportRefused, UndecodableMessage,
-  UnexpectedIdleMessage, UnnamedStatements, aborted_by, prepare, run, run_script,
-  server_parameter, settled_transaction_status, start, stop, supervised,
-  transaction_status,
+  type Connection, type ConnectionConfig, type ConnectionEvent,
+  type ConnectionStateError, type Outcome, type RequestFailure, type RunError,
+  type ScriptError, type SettleError, Backoff, CacheStatements,
+  ClosedAfterDeadline, ConnectionConfig, ConnectionLost, ConnectionProcessDown,
+  CopyFailed, DeadlinePassed, LoginUndecodable, NoAnswerInTime, PrepareFailed,
+  PrepareUnencodable, ProcessGone, ProtocolViolation, Reconnected,
+  RunCopyRefused, RunFailed, RunUnencodable, ScriptRequestFailed,
+  ScriptUnencodable, SettleFailed, SetupTimedOut, SocketFailed, TransportRefused,
+  UndecodableMessage, UnexpectedIdleMessage, UnnamedStatements, aborted_by,
+  copy_from, prepare, run, run_script, server_parameter,
+  settled_transaction_status, start, stop, supervised, transaction_status,
 }
 import dream_postgres/driver/message.{
   BindComplete, Protocol32, TooManyItems, UnknownMessageType, ZeroByteInString,
@@ -69,6 +72,7 @@ import driver/server_connection.{
   watched_config,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
+import fixtures/copy_callbacks.{send_nothing}
 import fixtures/driver_tls.{verify_full}
 import gleam/bit_array
 import gleam/erlang/process
@@ -84,7 +88,6 @@ import matchers/extract_command_result.{extract_command_result}
 import matchers/extract_command_rows.{extract_command_rows}
 import matchers/extract_command_tag.{extract_command_tag}
 import matchers/extract_disconnect_error.{extract_disconnect_error}
-import matchers/extract_driver_error_code.{extract_driver_error_code}
 import matchers/extract_ending_report.{extract_ending_report}
 import matchers/extract_first.{extract_first}
 import matchers/extract_login_refusal_code.{extract_login_refusal_code}
@@ -93,12 +96,17 @@ import matchers/extract_notice_messages.{extract_notice_messages}
 import matchers/extract_outcome_notices.{extract_outcome_notices}
 import matchers/extract_outcome_notifications.{extract_outcome_notifications}
 import matchers/extract_outcome_tags.{extract_outcome_tags}
+import matchers/extract_prepare_refusal_code.{extract_prepare_refusal_code}
 import matchers/extract_reconnect_error.{extract_reconnect_error}
 import matchers/extract_refusal_status.{extract_refusal_status}
 import matchers/extract_refused_copy_outcomes.{extract_refused_copy_outcomes}
 import matchers/extract_report_code.{extract_report_code}
 import matchers/extract_result_columns.{extract_result_columns}
+import matchers/extract_run_refusal_code.{extract_run_refusal_code}
+import matchers/extract_script_failure_code.{extract_script_failure_code}
 import matchers/extract_script_failure_outcomes.{extract_script_failure_outcomes}
+import matchers/extract_script_refusal_code.{extract_script_refusal_code}
+import matchers/extract_script_request_failure.{extract_script_request_failure}
 import matchers/extract_unexpected_server_message.{
   extract_unexpected_server_message,
 }
@@ -184,8 +192,24 @@ fn connection_tests() -> TestSuite {
             answer
             |> should
             |> be_error
-            |> be_equal(DeadlinePassed(cancelled: False))
+            |> be_equal(RunFailed(DeadlinePassed(cancelled: False)))
             |> or_fail_with("Expected DeadlinePassed from the caller's wait")
+          },
+        ),
+        it(
+          "gives NoAnswerInTime when the process does not answer a state read",
+          fn(connection) {
+            // Act
+            suspend_connection(connection)
+            let status = transaction_status(connection)
+            resume_connection(connection)
+
+            // Assert
+            status
+            |> should
+            |> be_error
+            |> be_equal(NoAnswerInTime)
+            |> or_fail_with("Expected NoAnswerInTime from the state read")
           },
         ),
       ]),
@@ -342,7 +366,7 @@ fn failed_transaction_tests() -> ContextNode(Connection) {
       failed
       |> should
       |> be_error
-      |> extract_driver_error_code
+      |> extract_run_refusal_code
       |> be_equal("22012")
       |> or_fail_with("Expected 22012")
     }),
@@ -446,7 +470,7 @@ fn transaction_status_tests() -> ContextNode(Connection) {
 fn first_server_tests() -> List(ContextNode(Connection)) {
   [
     before_each(start_test_connection(first_driver_server)),
-    it("gives ConnectionProcessDown after it stopped", fn(connection) {
+    it("gives ProcessGone for its state after it stopped", fn(connection) {
       // Act
       stop(connection)
       let status = transaction_status(connection)
@@ -455,8 +479,39 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       status
       |> should
       |> be_error
-      |> be_equal(ConnectionProcessDown)
-      |> or_fail_with("Expected ConnectionProcessDown")
+      |> be_equal(ProcessGone)
+      |> or_fail_with("Expected ProcessGone")
+    }),
+    it("gives PrepareFailed for a prepare after it stopped", fn(connection) {
+      // Act
+      stop(connection)
+      let described =
+        prepare(connection, connection.statement("SELECT 1"), 5000)
+
+      // Assert
+      described
+      |> should
+      |> be_error
+      |> be_equal(PrepareFailed(ConnectionProcessDown))
+      |> or_fail_with("Expected PrepareFailed(ConnectionProcessDown)")
+    }),
+    it("gives CopyFailed for a COPY after it stopped", fn(connection) {
+      // Act
+      stop(connection)
+      let copied =
+        copy_from(
+          connection,
+          connection.statement("COPY items FROM STDIN"),
+          5000,
+          send_nothing,
+        )
+
+      // Assert
+      copied
+      |> should
+      |> be_error
+      |> be_equal(CopyFailed(ConnectionProcessDown))
+      |> or_fail_with("Expected CopyFailed(ConnectionProcessDown)")
     }),
     it("refuses SQL with a zero byte before it sends anything", fn(connection) {
       // Act
@@ -467,8 +522,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       answer
       |> should
       |> be_error
-      |> be_equal(InvalidRequest(ZeroByteInString("query")))
-      |> or_fail_with("Expected InvalidRequest")
+      |> be_equal(RunUnencodable(ZeroByteInString("query")))
+      |> or_fail_with("Expected RunUnencodable")
     }),
     it("refuses a prepare with a zero byte", fn(connection) {
       // Act
@@ -479,8 +534,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       answer
       |> should
       |> be_error
-      |> be_equal(InvalidRequest(ZeroByteInString("query")))
-      |> or_fail_with("Expected InvalidRequest for the prepare")
+      |> be_equal(PrepareUnencodable(ZeroByteInString("query")))
+      |> or_fail_with("Expected PrepareUnencodable for the prepare")
     }),
     it("refuses a script with a zero byte", fn(connection) {
       // Act
@@ -491,8 +546,8 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       answer
       |> should
       |> be_error
-      |> be_equal(InvalidRequest(ZeroByteInString("query")))
-      |> or_fail_with("Expected InvalidRequest for the script")
+      |> be_equal(ScriptUnencodable(ZeroByteInString("query")))
+      |> or_fail_with("Expected ScriptUnencodable for the script")
     }),
     it("refuses a COPY statement with the statement before it", fn(connection) {
       // Act
@@ -543,6 +598,22 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       |> or_fail_with("Expected the completed statement")
     }),
     it(
+      "gives ScriptRefused when the first statement of a script fails",
+      fn(connection) {
+        // Act
+        let answer =
+          run_script(connection, connection.statement("SELECT 1/0"), 5000)
+
+        // Assert
+        answer
+        |> should
+        |> be_error
+        |> extract_script_refusal_code
+        |> be_equal("22012")
+        |> or_fail_with("Expected ScriptRefused with 22012")
+      },
+    ),
+    it(
       "gives ScriptFailed with the code of the failed statement",
       fn(connection) {
         // Act
@@ -557,7 +628,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
         answer
         |> should
         |> be_error
-        |> extract_driver_error_code
+        |> extract_script_failure_code
         |> be_equal("22012")
         |> or_fail_with("Expected 22012")
       },
@@ -575,7 +646,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       answer
       |> should
       |> be_error
-      |> extract_driver_error_code
+      |> extract_prepare_refusal_code
       |> be_equal("42P01")
       |> or_fail_with("Expected 42P01")
     }),
@@ -605,12 +676,11 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
 
       // Act
       let name = {
-        use _outcomes <- try(run_script(
-          connection,
-          connection.statement(sql),
-          5000,
-        ))
-        server_parameter(connection, "application_name")
+        use _outcomes <- try(
+          run_script(connection, connection.statement(sql), 5000)
+          |> map_error(inspect),
+        )
+        server_parameter(connection, "application_name") |> map_error(inspect)
       }
 
       // Assert
@@ -638,7 +708,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
         refused
         |> should
         |> be_error
-        |> be_equal(CopyStatementRefused([]))
+        |> be_equal(RunCopyRefused)
         |> or_fail_with("Expected the refusal with no statement before it")
       }),
       group("after the refused COPY", [
@@ -963,7 +1033,7 @@ fn running_run_lost_test(name: String) -> ContextNode(ProxiedConnection) {
     |> should
     |> be_ok
     |> be_error
-    |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+    |> be_equal(RunFailed(ConnectionLost(SocketFailed(SocketClosed))))
     |> or_fail_with("Expected the loss for the running run")
   })
 }
@@ -1004,7 +1074,7 @@ fn running_prepare_lost_tests(
       |> should
       |> be_ok
       |> be_error
-      |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+      |> be_equal(PrepareFailed(ConnectionLost(SocketFailed(SocketClosed))))
       |> or_fail_with("Expected the loss for the running prepare")
     }),
   ])
@@ -1013,7 +1083,7 @@ fn running_prepare_lost_tests(
 fn loss_event_test(
   name: String,
   breaking: fn(Proxy) -> Nil,
-  expected: DriverError,
+  expected: RequestFailure,
 ) -> ContextNode(ProxiedConnection) {
   it("tells of " <> name, fn(proxied: ProxiedConnection) {
     // Act
@@ -1050,7 +1120,9 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
           answer
           |> should
           |> be_error
-          |> extract_driver_error_code
+          |> extract_script_request_failure
+          |> extract_ending_report
+          |> extract_report_code
           |> be_equal("57P01")
           |> or_fail_with("Expected the error of the loss")
         },
@@ -1069,7 +1141,7 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
           answer
           |> should
           |> be_error
-          |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+          |> be_equal(PrepareFailed(ConnectionLost(SocketFailed(SocketClosed))))
           |> or_fail_with("Expected the error of the loss")
         },
       ),
@@ -1083,7 +1155,7 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
           settled
           |> should
           |> be_error
-          |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+          |> be_equal(SettleFailed(ConnectionLost(SocketFailed(SocketClosed))))
           |> or_fail_with("Expected the error of the loss")
         },
       ),
@@ -1108,7 +1180,9 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
         answer
         |> should
         |> be_error
-        |> be_equal(ConnectionLost(SocketFailed(SendTimedOut)))
+        |> be_equal(
+          ScriptRequestFailed(ConnectionLost(SocketFailed(SendTimedOut))),
+        )
         |> or_fail_with("Expected the loss by a send timeout")
       },
     ),
@@ -1198,6 +1272,7 @@ fn lock_tests() -> ContextNode(ProxiedConnection) {
         |> should
         |> be_ok
         |> be_error
+        |> extract_script_request_failure
         |> extract_unexpected_server_message
         |> be_equal(BindComplete)
         |> or_fail_with("Expected a protocol violation for the running request")
@@ -1254,7 +1329,9 @@ fn lock_tests() -> ContextNode(ProxiedConnection) {
         |> should
         |> be_ok
         |> be_error
-        |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+        |> be_equal(
+          ScriptRequestFailed(ConnectionLost(SocketFailed(SocketClosed))),
+        )
         |> or_fail_with("Expected the loss for the running request")
       },
     ),
@@ -1268,7 +1345,7 @@ type LossAndReconnect {
   LossAndReconnect(
     lost: Result(ConnectionEvent, Nil),
     back: Result(ConnectionEvent, Nil),
-    outcomes: Result(List(Outcome), DriverError),
+    outcomes: Result(List(Outcome), ScriptError),
   )
 }
 
@@ -1434,8 +1511,8 @@ fn refused_reconnect_tests() -> TestSuite {
 
 type RequestsAtLoss {
   RequestsAtLoss(
-    running: Result(Result(List(Outcome), DriverError), String),
-    waiting: Result(Result(List(Outcome), DriverError), String),
+    running: Result(Result(List(Outcome), ScriptError), String),
+    waiting: Result(Result(List(Outcome), ScriptError), String),
   )
 }
 
@@ -1471,7 +1548,9 @@ fn requests_at_loss_tests() -> TestSuite {
           |> should
           |> be_ok
           |> be_error
-          |> extract_driver_error_code
+          |> extract_script_request_failure
+          |> extract_ending_report
+          |> extract_report_code
           |> be_equal("57P01")
           |> or_fail_with("Expected the loss for the running request")
         },
@@ -1483,7 +1562,9 @@ fn requests_at_loss_tests() -> TestSuite {
           |> should
           |> be_ok
           |> be_error
-          |> extract_driver_error_code
+          |> extract_script_request_failure
+          |> extract_ending_report
+          |> extract_report_code
           |> be_equal("57P01")
           |> or_fail_with("Expected the loss for the waiting request")
         },
@@ -1496,8 +1577,8 @@ fn requests_at_loss_tests() -> TestSuite {
 
 type TwoRequests {
   TwoRequests(
-    first: Result(Result(List(Outcome), DriverError), String),
-    second: Result(Result(List(Outcome), DriverError), String),
+    first: Result(Result(List(Outcome), ScriptError), String),
+    second: Result(Result(List(Outcome), ScriptError), String),
   )
 }
 
@@ -1565,8 +1646,8 @@ type GatedDeadline {
   GatedDeadline(
     connection: Connection,
     gate: CancelGate,
-    first: Result(Outcome, DriverError),
-    second: Result(Result(List(Outcome), DriverError), String),
+    first: Result(Outcome, RunError),
+    second: Result(Result(List(Outcome), ScriptError), String),
     events: List(GateEvent),
   )
 }
@@ -1642,7 +1723,7 @@ fn gated_deadline_tests(server: Server) -> TestSuite {
           shared.first
           |> should
           |> be_error
-          |> be_equal(DeadlinePassed(cancelled: False))
+          |> be_equal(RunFailed(DeadlinePassed(cancelled: False)))
           |> or_fail_with("Expected DeadlinePassed for the first request")
         },
       ),
@@ -1669,9 +1750,9 @@ type CancelAtDeadline {
   CancelAtDeadline(
     connection: Connection,
     control: Connection,
-    late: Result(Outcome, DriverError),
-    state: Result(List(Outcome), DriverError),
-    next: Result(Outcome, DriverError),
+    late: Result(Outcome, RunError),
+    state: Result(List(Outcome), ScriptError),
+    next: Result(Outcome, RunError),
   )
 }
 
@@ -1746,7 +1827,7 @@ fn cancel_at_deadline_tests(server: Server) -> TestSuite {
           shared.late
           |> should
           |> be_error
-          |> be_equal(DeadlinePassed(cancelled: True))
+          |> be_equal(RunFailed(DeadlinePassed(cancelled: True)))
           |> or_fail_with("Expected the cancel at the deadline")
         },
       ),
@@ -1780,7 +1861,7 @@ type LostCancel {
   LostCancel(
     connection: Connection,
     proxy: Proxy,
-    answer: Result(Outcome, DriverError),
+    answer: Result(Outcome, RunError),
     event: Result(ConnectionEvent, Nil),
   )
 }
@@ -1841,7 +1922,7 @@ fn lost_cancel_tests(
           shared.answer
           |> should
           |> be_error
-          |> be_equal(DeadlinePassed(cancelled: False))
+          |> be_equal(RunFailed(DeadlinePassed(cancelled: False)))
           |> or_fail_with(answer_message)
         },
       ),
@@ -1895,7 +1976,7 @@ fn keyless_session_tests() -> TestSuite {
           answer
           |> should
           |> be_error
-          |> be_equal(DeadlinePassed(cancelled: False))
+          |> be_equal(RunFailed(DeadlinePassed(cancelled: False)))
           |> or_fail_with("Expected DeadlinePassed with no cancel")
         },
       ),
@@ -1931,7 +2012,7 @@ fn keyless_session_tests() -> TestSuite {
           |> should
           |> be_ok
           |> be_error
-          |> be_equal(ConnectionLost(ClosedAfterDeadline))
+          |> be_equal(ScriptRequestFailed(ConnectionLost(ClosedAfterDeadline)))
           |> or_fail_with(
             "Expected the request behind the deadline to get ClosedAfterDeadline",
           )
@@ -1950,7 +2031,7 @@ fn keyless_session_tests() -> TestSuite {
             answer
             |> should
             |> be_error
-            |> be_equal(ConnectionLost(ClosedAfterDeadline))
+            |> be_equal(RunFailed(ConnectionLost(ClosedAfterDeadline)))
             |> or_fail_with(
               "Expected ClosedAfterDeadline while the process reconnects",
             )
@@ -1965,8 +2046,8 @@ fn keyless_session_tests() -> TestSuite {
 
 type WaitingAtDeadline {
   WaitingAtDeadline(
-    waiting: Result(List(Outcome), DriverError),
-    first: Result(Result(List(Outcome), DriverError), String),
+    waiting: Result(List(Outcome), ScriptError),
+    first: Result(Result(List(Outcome), ScriptError), String),
   )
 }
 
@@ -1995,7 +2076,7 @@ fn waiting_at_deadline_tests() -> TestSuite {
           shared.outcome.waiting
           |> should
           |> be_error
-          |> be_equal(DeadlinePassed(cancelled: False))
+          |> be_equal(ScriptRequestFailed(DeadlinePassed(cancelled: False)))
           |> or_fail_with("Expected the waiting request to end")
         },
       ),
@@ -2019,8 +2100,8 @@ fn waiting_at_deadline_tests() -> TestSuite {
 
 type WaitingStatus {
   WaitingStatus(
-    quick: Result(TransactionStatus, DriverError),
-    settled: Result(TransactionStatus, DriverError),
+    quick: Result(TransactionStatus, ConnectionStateError),
+    settled: Result(TransactionStatus, SettleError),
   )
 }
 
@@ -2238,7 +2319,7 @@ fn cache_tests(server: Server) -> ContextNode(Connection) {
             refused
             |> should
             |> be_error
-            |> be_equal(InvalidRequest(TooManyItems("parameters", 65_536)))
+            |> be_equal(RunUnencodable(TooManyItems("parameters", 65_536)))
             |> or_fail_with("Expected TooManyItems for the Bind")
           },
         ),
@@ -2254,18 +2335,16 @@ fn cache_tests(server: Server) -> ContextNode(Connection) {
         fn(connection) {
           // Act
           let statements = {
-            use _c <- try(run(
-              connection,
-              connection.statement("SELECT 'c'"),
-              [],
-              [],
-              5000,
-            ))
+            use _c <- try(
+              run(connection, connection.statement("SELECT 'c'"), [], [], 5000)
+              |> map_error(inspect),
+            )
             run_script(
               connection,
               connection.statement(prepared_statements),
               5000,
             )
+            |> map_error(inspect)
           }
 
           // Assert
@@ -2294,25 +2373,20 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
       fn(connection) {
         // Act
         let statements = {
-          use _first <- try(run(
-            connection,
-            connection.statement("SELECT 41 + 1"),
-            [],
-            [],
-            5000,
-          ))
-          use _second <- try(run(
-            connection,
-            connection.statement("SELECT 41 + 1"),
-            [],
-            [],
-            5000,
-          ))
+          use _first <- try(
+            run(connection, connection.statement("SELECT 41 + 1"), [], [], 5000)
+            |> map_error(inspect),
+          )
+          use _second <- try(
+            run(connection, connection.statement("SELECT 41 + 1"), [], [], 5000)
+            |> map_error(inspect),
+          )
           run_script(
             connection,
             connection.statement(prepared_statements),
             5000,
           )
+          |> map_error(inspect)
         }
 
         // Assert
@@ -2329,17 +2403,16 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
     it("prepares a statement one time for two prepares", fn(connection) {
       // Act
       let statements = {
-        use _first <- try(prepare(
-          connection,
-          connection.statement("SELECT 1"),
-          5000,
-        ))
-        use _second <- try(prepare(
-          connection,
-          connection.statement("SELECT 1"),
-          5000,
-        ))
+        use _first <- try(
+          prepare(connection, connection.statement("SELECT 1"), 5000)
+          |> map_error(inspect),
+        )
+        use _second <- try(
+          prepare(connection, connection.statement("SELECT 1"), 5000)
+          |> map_error(inspect),
+        )
         run_script(connection, connection.statement(prepared_statements), 5000)
+        |> map_error(inspect)
       }
 
       // Assert
@@ -2458,7 +2531,7 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
         failed
         |> should
         |> be_error
-        |> extract_driver_error_code
+        |> extract_run_refusal_code
         |> be_equal("0A000")
         |> or_fail_with("Expected 0A000 in the transaction")
       }),
@@ -2502,8 +2575,8 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
         refused
         |> should
         |> be_error
-        |> be_equal(InvalidRequest(ZeroByteInString("query")))
-        |> or_fail_with("Expected InvalidRequest for the prepare")
+        |> be_equal(PrepareUnencodable(ZeroByteInString("query")))
+        |> or_fail_with("Expected PrepareUnencodable for the prepare")
       },
     ),
     it("refuses a run with a zero byte with UnnamedStatements", fn(connection) {
@@ -2515,8 +2588,8 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
       refused
       |> should
       |> be_error
-      |> be_equal(InvalidRequest(ZeroByteInString("query")))
-      |> or_fail_with("Expected InvalidRequest for the run")
+      |> be_equal(RunUnencodable(ZeroByteInString("query")))
+      |> or_fail_with("Expected RunUnencodable for the run")
     }),
     it(
       "gives the server's error for a run with UnnamedStatements",
@@ -2529,7 +2602,7 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
         refused
         |> should
         |> be_error
-        |> extract_driver_error_code
+        |> extract_run_refusal_code
         |> be_equal("22012")
         |> or_fail_with("Expected 22012")
       },
@@ -2537,19 +2610,16 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
     it("prepares no named statement with UnnamedStatements", fn(connection) {
       // Act
       let statements = {
-        use _first <- try(run(
-          connection,
-          connection.statement("SELECT 1"),
-          [],
-          [],
-          5000,
-        ))
-        use _second <- try(prepare(
-          connection,
-          connection.statement("SELECT 1"),
-          5000,
-        ))
+        use _first <- try(
+          run(connection, connection.statement("SELECT 1"), [], [], 5000)
+          |> map_error(inspect),
+        )
+        use _second <- try(
+          prepare(connection, connection.statement("SELECT 1"), 5000)
+          |> map_error(inspect),
+        )
         run_script(connection, connection.statement(prepared_statements), 5000)
+        |> map_error(inspect)
       }
 
       // Assert

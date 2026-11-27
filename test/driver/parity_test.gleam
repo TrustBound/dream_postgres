@@ -57,8 +57,8 @@ import gleam/bit_array
 import gleam/int.{to_string}
 import gleam/list.{append, map, try_map}
 import gleam/option.{None}
-import gleam/result.{try}
-import gleam/string.{join}
+import gleam/result.{map_error, try}
+import gleam/string.{inspect, join}
 import matchers/be_different_parts.{be_different_parts}
 import matchers/extract_changed_column_names.{extract_changed_column_names}
 import matchers/extract_client_closed.{extract_client_closed}
@@ -66,7 +66,6 @@ import matchers/extract_column_names.{extract_column_names}
 import matchers/extract_command_result.{extract_command_result}
 import matchers/extract_command_rows.{extract_command_rows}
 import matchers/extract_command_tag.{extract_command_tag}
-import matchers/extract_driver_error_code.{extract_driver_error_code}
 import matchers/extract_ending_report.{extract_ending_report}
 import matchers/extract_first.{extract_first}
 import matchers/extract_login_refusal_code.{extract_login_refusal_code}
@@ -77,6 +76,8 @@ import matchers/extract_report_code.{extract_report_code}
 import matchers/extract_report_message.{extract_report_message}
 import matchers/extract_report_severity.{extract_report_severity}
 import matchers/extract_result_columns.{extract_result_columns}
+import matchers/extract_run_failure.{extract_run_failure}
+import matchers/extract_run_refusal_code.{extract_run_refusal_code}
 import matchers/not_contain_text.{not_contain_text}
 
 /// The longest time of each request.
@@ -181,6 +182,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
           answer
           |> should
           |> be_error
+          |> extract_run_failure
           |> extract_ending_report
           |> extract_report_code
           |> be_equal("57P01")
@@ -425,7 +427,7 @@ fn parameter_count_tests() -> List(ContextNode(Connection)) {
         answer
         |> should
         |> be_error
-        |> extract_driver_error_code
+        |> extract_run_refusal_code
         |> be_equal("08P01")
         |> or_fail_with("Expected 08P01 for no parameter")
       },
@@ -445,7 +447,7 @@ fn parameter_count_tests() -> List(ContextNode(Connection)) {
       answer
       |> should
       |> be_error
-      |> extract_driver_error_code
+      |> extract_run_refusal_code
       |> be_equal("08P01")
       |> or_fail_with("Expected 08P01 for two parameters")
     }),
@@ -488,7 +490,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
         answer
         |> should
         |> be_error
-        |> extract_driver_error_code
+        |> extract_run_refusal_code
         |> be_equal("08P01")
         |> or_fail_with("Expected 08P01 for the parameter")
       },
@@ -1181,7 +1183,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
         )
         |> should
         |> be_error
-        |> extract_driver_error_code
+        |> extract_run_refusal_code
         |> be_equal("0A000")
         |> or_fail_with("Expected 0A000")
       },
@@ -1194,7 +1196,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
           run(connection, connection.statement("SELECT 1"), [], [], deadline)
           |> should
           |> be_error
-          |> extract_driver_error_code
+          |> extract_run_refusal_code
           |> be_equal("25P02")
           |> or_fail_with("Expected 25P02")
         },
@@ -1354,18 +1356,22 @@ fn reconnected_tests() -> ContextNode(ProxiedConnection) {
       fn(proxied: ProxiedConnection) {
         // Act
         let outcomes = {
-          use _again <- try(run(
-            proxied.connection,
-            connection.statement("SELECT 42"),
-            [],
-            [],
-            deadline,
-          ))
+          use _again <- try(
+            run(
+              proxied.connection,
+              connection.statement("SELECT 42"),
+              [],
+              [],
+              deadline,
+            )
+            |> map_error(inspect),
+          )
           run_script(
             proxied.connection,
             connection.statement(prepared_statements),
             deadline,
           )
+          |> map_error(inspect)
         }
 
         // Assert

@@ -21,7 +21,7 @@
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type DriverError, ConnectFailed, Connected,
+  type ConnectionEvent, type RequestFailure, ConnectFailed, Connected,
   ConnectionConfig, Disconnected, ReconnectFailed, Reconnected,
 }
 import dream_postgres/internal/cell.{Idle}
@@ -62,7 +62,7 @@ pub type MemberReport {
   MemberReady(slot: Int)
   /// The connection lost its session with the server, for `error`. Its
   /// process connects again.
-  SessionLost(slot: Int, error: DriverError)
+  SessionLost(slot: Int, error: RequestFailure)
   /// The connection connected and logged in again after a loss.
   SessionBack(slot: Int)
   /// A start of a connection process, or a reconnect of the connection,

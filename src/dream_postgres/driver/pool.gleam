@@ -42,7 +42,7 @@
 
 import dream_postgres/driver/catalog.{type Catalog}
 import dream_postgres/driver/connection.{
-  type ConnectError, type Connection, type ConnectionConfig, type DriverError,
+  type ConnectError, type Connection, type ConnectionConfig, type RequestFailure,
 }
 import dream_postgres/driver/pool_member.{
   type Member, type MemberReport, MemberConfig, MemberReady, MemberStarted,
@@ -105,7 +105,7 @@ pub type PoolEvent {
   MemberConnected(slot: Int)
   /// The member's connection lost its session, for `error`. Its process
   /// connects again.
-  MemberDisconnected(slot: Int, error: DriverError)
+  MemberDisconnected(slot: Int, error: RequestFailure)
   /// The member's connection connected and logged in again after a loss.
   MemberReconnected(slot: Int)
   /// A start or a reconnect of the member's connection failed.

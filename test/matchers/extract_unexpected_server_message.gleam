@@ -1,7 +1,7 @@
 //// Extracts the message of a protocol violation during a request.
 
 import dream_postgres/driver/connection.{
-  type DriverError, ProtocolViolation, UnexpectedServerMessage,
+  type RequestFailure, ProtocolViolation, UnexpectedServerMessage,
 }
 import dream_postgres/driver/message.{type BackendMessage}
 import dream_test/types.{
@@ -22,7 +22,7 @@ import gleam/string.{inspect}
 /// |> or_fail_with("Expected a BindComplete that broke the protocol")
 /// ```
 pub fn extract_unexpected_server_message(
-  result: MatchResult(DriverError),
+  result: MatchResult(RequestFailure),
 ) -> MatchResult(BackendMessage) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
@@ -30,7 +30,7 @@ pub fn extract_unexpected_server_message(
   }
 }
 
-fn message_of(error: DriverError) -> MatchResult(BackendMessage) {
+fn message_of(error: RequestFailure) -> MatchResult(BackendMessage) {
   case error {
     ProtocolViolation(UnexpectedServerMessage(unexpected)) ->
       MatchOk(unexpected.message)

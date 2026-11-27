@@ -299,7 +299,7 @@ The change list of the fork has the sections 2 (errors), 3 (connection), 7 (stat
 
 | Change | Test |
 |---|---|
-| E1. Tagged errors | The typed errors of `transport.TransportError` and `connection.DriverError`, in each row of `errors_SUITE` above |
+| E1. Tagged errors | The typed errors of `transport.TransportError` and the error types of `connection` (`RequestFailure`, `RunError` and the others), in each row of `errors_SUITE` above |
 | E2. A checkout returns the connect error | parity_test.gleam: with no setup › on each driver server › PostgreSQL 16 to 19 › login errors › gives the FATAL 28P01 of the server for a wrong password. `connection.start` gives the error. The pool: pool_test.gleam: connect errors › with a wrong password › gives the connect error of a wrong password; connect errors › with a server that is down › gives the connect error of a server that is down |
 | E3. econnreset stays a socket error | parity_test.gleam: with a proxied connection of its own › on each driver server › PostgreSQL 16 to 19 › sessions that the server ends › tells of a reset by the network as ConnectionReset |
 | E4. A failed DNS lookup is dns_failed | parity_test.gleam: with no setup › addresses › gives DnsLookupFailed for a host with no address |
