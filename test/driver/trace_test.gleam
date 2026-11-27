@@ -156,6 +156,10 @@ const warning_sql = "DO $$BEGIN RAISE WARNING 'late'; END$$"
 const several_warnings_sql =
   "DO $$BEGIN RAISE WARNING 'first' USING ERRCODE = '01003'; RAISE WARNING 'second' USING ERRCODE = '01004'; RAISE NOTICE 'plain'; END$$"
 
+/// A statement that raises a warning, then fails.
+const warns_then_fails_sql =
+  "DO $$BEGIN RAISE WARNING 'disk almost full'; RAISE EXCEPTION 'boom'; END$$"
+
 /// A statement that raises a notice of the code 00000 only.
 const notice_sql = "DO $$BEGIN RAISE NOTICE 'plain'; END$$"
 
@@ -260,6 +264,34 @@ fn statement_tests() -> TestSuite {
         |> extract_span_attribute(key: "db.response.status_code")
         |> be_equal(None)
         |> or_fail_with("Expected no status code for the code 00000")
+      },
+    ),
+    it(
+      "records no warning of a failed statement on the next statement",
+      fn(connection: Connection) {
+        {
+          record_spans_here()
+          use Nil <- try(
+            expect_failure(run(
+              connection,
+              statement(warns_then_fails_sql),
+              [],
+              [],
+              5000,
+            )),
+          )
+          use _outcome <- try(
+            run(connection, statement("SELECT 1"), [], [], 5000)
+            |> map_error(inspect),
+          )
+          use _failed_span <- try(next_span())
+          next_span()
+        }
+        |> should
+        |> be_ok
+        |> extract_span_attribute(key: "db.response.status_code")
+        |> be_equal(None)
+        |> or_fail_with("Expected no status code on the SELECT")
       },
     ),
     it("records no parameter value", fn(connection: Connection) {

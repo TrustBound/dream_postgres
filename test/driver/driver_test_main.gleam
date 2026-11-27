@@ -22,6 +22,7 @@ import driver/housekeeping_sql_test
 import driver/listener_test
 import driver/login_server_test
 import driver/login_test
+import driver/notices_test
 import driver/parity_test
 import driver/pool_test
 import driver/query_copy_test
@@ -71,6 +72,7 @@ pub fn suites() -> List(TestSuite) {
     supervised_connection_test.tests(),
     trace_test.tests(),
     backoff_test.tests(),
+    notices_test.tests(),
   ]
 }
 

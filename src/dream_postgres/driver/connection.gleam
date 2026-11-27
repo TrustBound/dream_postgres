@@ -83,7 +83,7 @@ import gleam/erlang/process.{
 }
 import gleam/erlang/reference.{type Reference}
 import gleam/int.{min}
-import gleam/list.{append, filter_map, fold, reverse, try_map}
+import gleam/list.{filter_map, fold, reverse, try_map}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification}
@@ -143,6 +143,13 @@ pub type ConnectionConfig {
     /// also while the connection is idle, for example to the listener.
     /// With `None`, each notification goes with the next outcome.
     notifications: Option(Subject(Notification)),
+    /// Where the process sends each notice at once, as it arrives: during
+    /// the login, during any request, and while the connection is idle.
+    /// An outcome holds only the notices of its own request, so a notice
+    /// of a prepare, a COPY, a failed statement, a housekeeping statement
+    /// or of idle time reaches the app only here. With `None`, those go
+    /// to no one.
+    notices: Option(Subject(ServerReport)),
     statements: StatementCaching,
   )
 }
@@ -221,7 +228,9 @@ pub type Outcome {
     /// The result columns, for the client's decoders.
     columns: List(ColumnDescription),
     result: CommandResult,
-    /// Each notice since the last outcome, in order.
+    /// Each notice that arrived during the request of this outcome, in
+    /// order. The last outcome of a script holds the notices of the whole
+    /// script.
     notices: List(ServerReport),
     /// Each notification since the last outcome, in order. An app that
     /// wants notifications uses the listener, which has its own connection.
@@ -964,7 +973,7 @@ fn attempt_first_open(
     Ok(session) -> {
       let state = connected_state(state, session)
       tell(state, Connected)
-      state
+      read_messages(state)
     }
     Error(error) -> {
       tell(state, ConnectFailed(error))
@@ -991,7 +1000,7 @@ fn open_first(
       let state = connected_state(state, session)
       tell(state, Connected)
       reply(reply_to, Ok(Nil))
-      actor.continue(state)
+      actor.continue(read_messages(state))
     }
     Error(error) -> {
       reply(reply_to, Error(error))
@@ -1029,8 +1038,11 @@ fn new_cache(config: ConnectionConfig) -> StatementCache {
   }
 }
 
+/// The state of a session that just logged in. Bytes that came after the
+/// login's ReadyForQuery wait in the buffer, for `read_messages` after
+/// the process told of the login.
 fn connected_state(state: State, session: Session) -> State {
-  let notices = reverse(session.outcome.notices) |> list.map(Notice)
+  list.each(session.outcome.notices, send_notice(state, _))
   State(
     ..state,
     link: Open(session.socket, session.bytes),
@@ -1038,7 +1050,7 @@ fn connected_state(state: State, session: Session) -> State {
     tracker: track(new_tracker(), session.outcome.transaction_status, None),
     cache: new_cache(state.config),
     cancel_key: session.outcome.cancel_key,
-    pending: append(notices, state.pending),
+    pending: state.pending,
   )
 }
 
@@ -2124,7 +2136,12 @@ fn accept_request(state: State, ticket: Ticket) -> State {
   case state.current, state.copy, state.link {
     None, None, Open(socket:, ..) -> {
       let current = Current(ticket.id, ticket.timer, False, False, False)
-      begin(State(..state, current: Some(current)), socket, ticket.request)
+      State(
+        ..state,
+        current: Some(current),
+        pending: list.filter(state.pending, is_notification),
+      )
+      |> begin(socket, ticket.request)
     }
     Some(_in_progress), _, _ | _, Some(_copy), _ ->
       State(..state, waiting: [ticket, ..state.waiting])
@@ -2621,8 +2638,7 @@ fn idle_message(
   case message {
     ParameterStatus(name:, value:) ->
       State(..state, parameters: dict.insert(state.parameters, name, value))
-    NoticeResponse(report) ->
-      State(..state, pending: [Notice(report), ..state.pending])
+    NoticeResponse(report) -> keep_asynchronous(state, Notice(report))
     NotificationResponse(process_id:, channel:, payload:) ->
       keep_asynchronous(state, query.Notification(process_id, channel, payload))
     ErrorResponse(report) -> lose(state, socket, ServerEndedConnection(report))
@@ -3098,16 +3114,36 @@ fn after_message(state: State, message: AsynchronousMessage) -> State {
   }
 }
 
-/// Keeps a notice for the next outcome. A notification goes at once to the
-/// notifications subscriber when there is one, in the order the server
-/// sent it, and is kept for the next outcome otherwise.
+/// Sends a notice to the notices subscriber, if any, and keeps it for the
+/// outcome of the request that runs: the next request drops the notices
+/// that no outcome took, so none goes with a later request. A
+/// notification goes at once to the notifications subscriber when there
+/// is one, in the order the server sent it, and is kept for the next
+/// outcome otherwise.
 fn keep_asynchronous(state: State, message: AsynchronousMessage) -> State {
   case message, state.config.notifications {
     query.Notification(process_id:, channel:, payload:), Some(subscriber) -> {
       process.send(subscriber, Notification(process_id:, channel:, payload:))
       state
     }
-    _other, _subscriber -> State(..state, pending: [message, ..state.pending])
+    Notice(report:), _subscriber -> {
+      send_notice(state, report)
+      State(..state, pending: [message, ..state.pending])
+    }
+    query.Notification(..), None | ParameterChanged(..), _subscriber ->
+      State(..state, pending: [message, ..state.pending])
+  }
+}
+
+fn send_notice(state: State, report: ServerReport) -> Nil {
+  option.map(state.config.notices, process.send(_, report))
+  Nil
+}
+
+fn is_notification(message: AsynchronousMessage) -> Bool {
+  case message {
+    query.Notification(..) -> True
+    Notice(..) | ParameterChanged(..) -> False
   }
 }
 
@@ -3656,7 +3692,7 @@ fn reconnect(
   case open_session(state.config) {
     Ok(session) -> {
       tell(state, Reconnected)
-      connected_state(state, session)
+      connected_state(state, session) |> read_messages
     }
     Error(connect_error) -> {
       tell(state, ReconnectFailed(connect_error))

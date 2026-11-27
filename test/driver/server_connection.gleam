@@ -61,6 +61,7 @@ pub fn user_config(
     reconnect: Backoff(10, 60_000, capped_delay),
     events: None,
     notifications: None,
+    notices: None,
     statements: CacheStatements(default_limit),
   ))
 }
