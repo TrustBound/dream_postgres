@@ -13,9 +13,10 @@ import dream_postgres/driver/connection.{
 }
 import dream_postgres/driver/listener.{
   type Listener, type ListenerConfig, type ListenerMessage, ChannelTooLong,
-  ConnectFailed, ListenFailed, ListenerNotStarted, ListenerProcessDown,
-  Listening, NotListening, NotificationArrived, SubscribeFailed,
-  SubscriberHasNoProcess, start, stop, subscribe, supervised, unsubscribe,
+  ConnectFailed, ListenFailed, ListenerGone, ListenerNotStarted,
+  ListenerProcessDown, Listening, NotListening, NotificationArrived,
+  SubscribeFailed, SubscriberHasNoProcess, start, stop, subscribe, supervised,
+  unsubscribe,
 }
 import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{ConnectRefused}
@@ -630,7 +631,7 @@ fn subscription_tests() -> TestSuite {
       },
     ),
     it(
-      "gives ListenerProcessDown to an unsubscribe after the stop",
+      "gives ListenerGone to an unsubscribe after the stop",
       fn(subscribed: SubscribedListener) {
         // Act
         stop(subscribed.listener)
@@ -640,8 +641,8 @@ fn subscription_tests() -> TestSuite {
         answer
         |> should
         |> be_error
-        |> be_equal(ListenerProcessDown)
-        |> or_fail_with("Expected ListenerProcessDown")
+        |> be_equal(ListenerGone)
+        |> or_fail_with("Expected ListenerGone")
       },
     ),
   ])

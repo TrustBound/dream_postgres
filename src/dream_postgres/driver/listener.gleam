@@ -82,7 +82,7 @@ pub type ListenerMessage {
   ListenFailed(channel: String, error: ScriptError)
 }
 
-/// Why a subscribe or an unsubscribe failed.
+/// Why a subscribe failed.
 pub type ListenerError {
   /// The channel name has more than 63 bytes. PostgreSQL cuts such a name
   /// short, so its notifications would come with another name.
@@ -96,6 +96,12 @@ pub type ListenerError {
   SubscribeFailed(error: ScriptError)
   /// The listener process is gone.
   ListenerProcessDown
+}
+
+/// Why an unsubscribe failed.
+pub type UnsubscribeError {
+  /// The listener process is gone.
+  ListenerGone
 }
 
 /// Why a listener did not start.
@@ -354,6 +360,7 @@ pub fn subscribe(
     subject_owner(subscriber) |> replace_error(SubscriberHasNoProcess),
   )
   call(listener, SubscribeRequest(channel, subscriber, owner, _))
+  |> replace_error(ListenerProcessDown)
   |> result.flatten
 }
 
@@ -375,21 +382,22 @@ fn check_channel(channel: String) -> Result(Nil, ListenerError) {
 /// ## Returns
 ///
 /// - `Ok(Nil)`: the subscription is ended, also when it was ended already
-/// - `Error(ListenerProcessDown)`: the listener is gone
+/// - `Error(ListenerGone)`: the listener is gone
 pub fn unsubscribe(
   listener: Listener,
   subscription: Subscription,
-) -> Result(Nil, ListenerError) {
+) -> Result(Nil, UnsubscribeError) {
   call(listener, UnsubscribeRequest(subscription, _))
+  |> replace_error(ListenerGone)
 }
 
-/// Waits for the answer until it comes or the listener is gone.
+/// Waits for the answer until it comes, or gives `Error(Nil)` when the
+/// listener is gone.
 fn call(
   listener: Listener,
   make: fn(ReplyTo(reply)) -> Message,
-) -> Result(reply, ListenerError) {
+) -> Result(reply, Nil) {
   call_process(listener.pid, send_request(listener, make, _))
-  |> replace_error(ListenerProcessDown)
 }
 
 fn send_request(
