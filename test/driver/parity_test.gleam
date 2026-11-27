@@ -6,7 +6,7 @@ import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
   type ConnectionEvent, type DriverError, type Outcome, type StatementCaching,
   Backoff, CacheStatements, ConnectionConfig, ConnectionLost, Disconnected,
-  LoginRefused, Reconnected, ServerEndedConnection, ServerRefused,
+  LoginRefused, Reconnected, ServerEndedConnection, ServerRefused, SocketFailed,
   StatementChanged, TransportRefused, UnnamedStatements,
 }
 import dream_postgres/driver/login.{
@@ -636,7 +636,7 @@ fn check_network_loss(
   // Assert
   event
   |> should
-  |> be_equal(Ok(Disconnected(ConnectionLost(expected))))
+  |> be_equal(Ok(Disconnected(ConnectionLost(SocketFailed(expected)))))
   |> or_fail_with("Expected the loss with its typed error")
 }
 
