@@ -45,11 +45,17 @@ init(Caller, Ready, ServerPort) ->
     loop(#{server_port => ServerPort, main => none, held => [],
            recording => false, events => []}).
 
+%% The loop ends when the gate ends, because that closes the listening
+%% socket.
 accept_loop(Listen, Gate) ->
-    {ok, Client} = gen_tcp:accept(Listen),
-    ok = gen_tcp:controlling_process(Client, Gate),
-    Gate ! {accepted, Client},
-    accept_loop(Listen, Gate).
+    case gen_tcp:accept(Listen) of
+        {ok, Client} ->
+            ok = gen_tcp:controlling_process(Client, Gate),
+            Gate ! {accepted, Client},
+            accept_loop(Listen, Gate);
+        {error, closed} ->
+            ok
+    end.
 
 loop(State = #{main := none, server_port := ServerPort}) ->
     receive
