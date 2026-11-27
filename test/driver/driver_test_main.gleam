@@ -36,6 +36,7 @@ import driver/scram_test
 import driver/server_test
 import driver/setup_deadline_test
 import driver/sink_test
+import driver/span_text_test
 import driver/statement_cache_test
 import driver/supervised_connection_test
 import driver/trace_test
@@ -76,6 +77,7 @@ pub fn suites() -> List(TestSuite) {
     connection_events_test.tests(),
     supervised_connection_test.tests(),
     trace_test.tests(),
+    span_text_test.tests(),
     backoff_test.tests(),
     notices_test.tests(),
     sink_test.tests(),
