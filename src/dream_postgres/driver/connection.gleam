@@ -38,10 +38,13 @@ import dream_postgres/driver/message.{
 }
 import dream_postgres/driver/query.{
   type AsynchronousMessage, type Failure, type PrepareAndRunState,
-  type PrepareState, type ScriptFailure, type SimpleQueryState, type Start,
-  type StatementResult, type Step, type UnexpectedMessage, ConnectionEnded,
-  CopyNotSupported, Finished, Notice, ParameterChanged, ScriptFailure, Send,
-  ServerError, Wait,
+  type PrepareState, type RunState, type ScriptFailure, type SimpleQueryState,
+  type Start, type StatementResult, type Step, type UnexpectedMessage,
+  ConnectionEnded, CopyNotSupported, Finished, Notice, ParameterChanged,
+  ScriptFailure, Send, ServerError, Wait,
+}
+import dream_postgres/driver/statement_cache.{
+  type CachedStatement, type StatementCache, CachedStatement,
 }
 import dream_postgres/driver/transaction.{
   type TransactionTracker, aborting_error, new_tracker, track, track_script,
@@ -53,7 +56,7 @@ import dream_postgres/driver/transport.{
 }
 import dream_postgres/internal/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
-  type ServerReport, type StatementDescription, type TransactionStatus,
+  type ServerReport, type StatementDescription, type TransactionStatus, Idle,
 }
 import gleam/bit_array.{concat}
 import gleam/dict.{type Dict}
@@ -86,7 +89,24 @@ pub type ConnectionConfig {
     /// Where the process tells of each loss and each reconnect, for
     /// example to its pool.
     events: Option(Subject(ConnectionEvent)),
+    /// Where the process sends each notification at once, as it arrives,
+    /// also while the connection is idle, for example to the listener.
+    /// With `None`, each notification goes with the next outcome.
+    notifications: Option(Subject(Notification)),
+    statements: StatementCaching,
   )
+}
+
+/// How the process prepares statements.
+pub type StatementCaching {
+  /// Each statement is prepared one time under a name, and runs again by
+  /// that name. The cache keeps at most `limit` statements; the least
+  /// recently used one is closed on the server.
+  CacheStatements(limit: Int)
+  /// Each statement is prepared again on the unnamed statement, for a
+  /// pooler such as PgBouncer in transaction mode, where the next
+  /// transaction may run on another server session.
+  UnnamedStatements
 }
 
 /// What the process tells its subscriber about the connection.
@@ -176,6 +196,12 @@ pub type DriverError {
   InvalidRequest(error: EncodeError)
   /// The connection process is gone.
   ConnectionProcessDown
+  /// The server made the driver prepare the statement again (SQLSTATE
+  /// 0A000 or 26000, outside a transaction), and its description is not
+  /// the cached one any more, for example after `ALTER TABLE`. The
+  /// statement did not run: check it against `description` and run it
+  /// again.
+  StatementChanged(description: StatementDescription)
 }
 
 /// A connection process.
@@ -212,25 +238,40 @@ type Message {
 
 /// A request that goes to the server.
 type Request {
-  PrepareRequest(
+  StatementRequest(statement: StatementRequest)
+  ScriptRequest(sql: String, reply: ReplyTo(Result(List(Outcome), DriverError)))
+}
+
+/// A request about one statement, which the statement cache serves.
+type StatementRequest {
+  PrepareStatement(
     sql: String,
     reply: ReplyTo(Result(StatementDescription, DriverError)),
   )
-  RunRequest(
+  RunStatement(details: RunDetails)
+}
+
+/// What a run needs. `previous` is the description of a statement that
+/// the server made the driver prepare again: the run goes on only when
+/// the new description is the same.
+type RunDetails {
+  RunDetails(
     sql: String,
     parameters: List(Cell),
     result_formats: List(Format),
     reply: ReplyTo(Result(Outcome, DriverError)),
+    previous: Option(StatementDescription),
   )
-  ScriptRequest(sql: String, reply: ReplyTo(Result(List(Outcome), DriverError)))
 }
 
 /// The request that runs, with the state of its step.
 type Running {
+  /// A prepare of the unnamed statement, with no cache.
   RunningPrepare(
     state: PrepareState,
     reply: ReplyTo(Result(StatementDescription, DriverError)),
   )
+  /// A run in one round trip on the unnamed statement, with no cache.
   RunningRun(
     state: PrepareAndRunState,
     reply: ReplyTo(Result(Outcome, DriverError)),
@@ -239,7 +280,24 @@ type Running {
     state: SimpleQueryState,
     reply: ReplyTo(Result(List(Outcome), DriverError)),
   )
+  /// A prepare under a new name, for the cache.
+  RunningNamedPrepare(
+    state: PrepareState,
+    request: StatementRequest,
+    name: String,
+  )
+  /// A run of a statement of the cache.
+  RunningCachedRun(
+    state: RunState,
+    details: RunDetails,
+    statement: CachedStatement,
+  )
 }
+
+/// What finishes a step: the state, the socket for a next step of the
+/// same request, and the step's outcome.
+type Finisher(outcome) =
+  fn(State, transport.Connection, outcome) -> State
 
 type Link {
   /// Connected and logged in. `bytes` are read but not decoded yet.
@@ -260,6 +318,8 @@ type State {
     waiting: List(Request),
     /// The notices and notifications since the last outcome, newest first.
     pending: List(AsynchronousMessage),
+    /// The named statements of this session.
+    cache: StatementCache,
   )
 }
 
@@ -380,7 +440,15 @@ fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
     running: None,
     waiting: [],
     pending: [],
+    cache: new_cache(config),
   )
+}
+
+fn new_cache(config: ConnectionConfig) -> StatementCache {
+  case config.statements {
+    CacheStatements(limit:) -> statement_cache.new(limit)
+    UnnamedStatements -> statement_cache.new(1)
+  }
 }
 
 fn connected_state(state: State, session: Session) -> State {
@@ -390,6 +458,7 @@ fn connected_state(state: State, session: Session) -> State {
     link: Connected(session.socket, session.bytes),
     parameters: session.outcome.parameters,
     tracker: track(new_tracker(), session.outcome.transaction_status, None),
+    cache: new_cache(state.config),
     pending: append(notices, state.pending),
   )
 }
@@ -438,7 +507,7 @@ pub fn prepare(
   sql: String,
   deadline_milliseconds: Int,
 ) -> Result(StatementDescription, DriverError) {
-  request(connection, PrepareRequest(sql, _), deadline_milliseconds)
+  request(connection, prepare_request(sql, _), deadline_milliseconds)
 }
 
 /// Runs a statement with its parameters. Each cell carries its own format.
@@ -465,7 +534,7 @@ pub fn run(
 ) -> Result(Outcome, DriverError) {
   request(
     connection,
-    RunRequest(sql, parameters, result_formats, _),
+    run_request(sql, parameters, result_formats, _),
     deadline_milliseconds,
   )
 }
@@ -557,6 +626,24 @@ pub fn server_parameter(
 
 fn parameter_of(snapshot: Snapshot, name: String) -> Option(String) {
   dict.get(snapshot.parameters, name) |> option.from_result
+}
+
+fn prepare_request(
+  sql: String,
+  reply_to: ReplyTo(Result(StatementDescription, DriverError)),
+) -> Request {
+  StatementRequest(PrepareStatement(sql, reply_to))
+}
+
+fn run_request(
+  sql: String,
+  parameters: List(Cell),
+  result_formats: List(Format),
+  reply_to: ReplyTo(Result(Outcome, DriverError)),
+) -> Request {
+  StatementRequest(
+    RunStatement(RunDetails(sql, parameters, result_formats, reply_to, None)),
+  )
 }
 
 fn snapshot(connection: Connection) -> Result(Snapshot, DriverError) {
@@ -672,22 +759,6 @@ fn begin(
   request: Request,
 ) -> State {
   case request {
-    PrepareRequest(sql:, reply: reply_to) ->
-      start_step(
-        state,
-        socket,
-        query.start_prepare("", sql, []),
-        RunningPrepare(_, reply_to),
-        refuse(request, _),
-      )
-    RunRequest(sql:, parameters:, result_formats:, reply: reply_to) ->
-      start_step(
-        state,
-        socket,
-        query.start_prepare_and_run(sql, [], parameters, result_formats),
-        RunningRun(_, reply_to),
-        refuse(request, _),
-      )
     ScriptRequest(sql:, reply: reply_to) ->
       start_step(
         state,
@@ -696,7 +767,120 @@ fn begin(
         RunningScript(_, reply_to),
         refuse(request, _),
       )
+    StatementRequest(statement) -> begin_statement(state, socket, statement)
   }
+}
+
+fn begin_statement(
+  state: State,
+  socket: transport.Connection,
+  statement: StatementRequest,
+) -> State {
+  case state.config.statements {
+    UnnamedStatements -> begin_unnamed(state, socket, statement)
+    CacheStatements(_) -> look_up(state, socket, statement)
+  }
+}
+
+fn begin_unnamed(
+  state: State,
+  socket: transport.Connection,
+  statement: StatementRequest,
+) -> State {
+  case statement {
+    PrepareStatement(sql:, reply: reply_to) ->
+      start_step(
+        state,
+        socket,
+        query.start_prepare("", sql, []),
+        RunningPrepare(_, reply_to),
+        refuse_statement(statement, _),
+      )
+    RunStatement(details) ->
+      start_step(
+        state,
+        socket,
+        query.start_prepare_and_run(
+          details.sql,
+          [],
+          details.parameters,
+          details.result_formats,
+        ),
+        RunningRun(_, details.reply),
+        refuse_statement(statement, _),
+      )
+  }
+}
+
+fn look_up(
+  state: State,
+  socket: transport.Connection,
+  statement: StatementRequest,
+) -> State {
+  let sql = statement_sql(statement)
+  let #(cache, found) = statement_cache.lookup(state.cache, sql)
+  let state = State(..state, cache:)
+  case found {
+    Some(cached) -> serve_cached(state, socket, statement, cached)
+    None -> prepare_named(state, socket, statement)
+  }
+}
+
+fn statement_sql(statement: StatementRequest) -> String {
+  case statement {
+    PrepareStatement(sql:, ..) -> sql
+    RunStatement(details) -> details.sql
+  }
+}
+
+fn serve_cached(
+  state: State,
+  socket: transport.Connection,
+  statement: StatementRequest,
+  cached: CachedStatement,
+) -> State {
+  case statement {
+    PrepareStatement(reply: reply_to, ..) -> {
+      reply(reply_to, Ok(cached.description))
+      next_request(state)
+    }
+    RunStatement(details) -> run_cached(state, socket, details, cached)
+  }
+}
+
+fn run_cached(
+  state: State,
+  socket: transport.Connection,
+  details: RunDetails,
+  cached: CachedStatement,
+) -> State {
+  start_step(
+    state,
+    socket,
+    query.start_run(cached.name, details.parameters, details.result_formats),
+    RunningCachedRun(_, details, cached),
+    refuse_statement(RunStatement(details), _),
+  )
+}
+
+/// Prepares the statement under a new name. On a full cache, the least
+/// recently used statement leaves it first, and each statement that left
+/// the cache is closed on the server in the same round trip.
+fn prepare_named(
+  state: State,
+  socket: transport.Connection,
+  statement: StatementRequest,
+) -> State {
+  let cache = statement_cache.make_room(state.cache)
+  let #(cache, name) = statement_cache.new_name(cache)
+  let #(cache, closing) = statement_cache.take_stale(cache)
+  start_step(
+    State(..state, cache:),
+    socket,
+    query.start_prepare_closing(closing, name, statement_sql(statement), []),
+    RunningNamedPrepare(_, statement, name),
+    refuse_statement(statement, _),
+  )
 }
 
 /// Sends the first messages of a step. A message that cannot be written
@@ -721,9 +905,15 @@ fn start_step(
 
 fn refuse(request: Request, error: DriverError) -> Nil {
   case request {
-    PrepareRequest(reply: reply_to, ..) -> reply(reply_to, Error(error))
-    RunRequest(reply: reply_to, ..) -> reply(reply_to, Error(error))
+    StatementRequest(statement) -> refuse_statement(statement, error)
     ScriptRequest(reply: reply_to, ..) -> reply(reply_to, Error(error))
+  }
+}
+
+fn refuse_statement(statement: StatementRequest, error: DriverError) -> Nil {
+  case statement {
+    PrepareStatement(reply: reply_to, ..) -> reply(reply_to, Error(error))
+    RunStatement(details) -> reply(details.reply, Error(error))
   }
 }
 
@@ -732,6 +922,8 @@ fn refuse_running(running: Running, error: DriverError) -> Nil {
     RunningPrepare(reply: reply_to, ..) -> reply(reply_to, Error(error))
     RunningRun(reply: reply_to, ..) -> reply(reply_to, Error(error))
     RunningScript(reply: reply_to, ..) -> reply(reply_to, Error(error))
+    RunningNamedPrepare(request:, ..) -> refuse_statement(request, error)
+    RunningCachedRun(details:, ..) -> reply(details.reply, Error(error))
   }
 }
 
@@ -752,12 +944,12 @@ fn sent(
   }
 }
 
-/// Starts the oldest waiting request, if any.
+/// Starts the oldest waiting request, if no request runs and one waits.
 fn next_request(state: State) -> State {
-  case reverse(state.waiting) {
-    [] -> state
-    [oldest, ..others] ->
+  case state.running, reverse(state.waiting) {
+    None, [oldest, ..others] ->
       accept_request(State(..state, waiting: reverse(others)), oldest)
+    _, _ -> state
   }
 }
 
@@ -850,10 +1042,7 @@ fn idle_message(
     NoticeResponse(report) ->
       State(..state, pending: [Notice(report), ..state.pending])
     NotificationResponse(process_id:, channel:, payload:) ->
-      State(..state, pending: [
-        query.Notification(process_id, channel, payload),
-        ..state.pending
-      ])
+      keep_asynchronous(state, query.Notification(process_id, channel, payload))
     ErrorResponse(report) -> lose(state, socket, ServerEndedConnection(report))
     _other ->
       lose(state, socket, ProtocolViolation(UnexpectedIdleMessage(message)))
@@ -896,25 +1085,61 @@ fn advance(
         script_finisher(reply_to),
         running,
       )
+    RunningNamedPrepare(state: step_state, request:, name:) ->
+      follow(
+        state,
+        socket,
+        query.step_prepare(step_state, message),
+        RunningNamedPrepare(_, request, name),
+        named_prepare_finisher(request, name),
+        running,
+      )
+    RunningCachedRun(state: step_state, details:, statement:) ->
+      follow(
+        state,
+        socket,
+        query.step_run(step_state, message),
+        RunningCachedRun(_, details, statement),
+        cached_run_finisher(details, statement),
+        running,
+      )
   }
 }
 
 fn prepare_finisher(
   reply_to: ReplyTo(Result(StatementDescription, DriverError)),
-) -> fn(State, query.Outcome(StatementDescription, Failure)) -> State {
-  fn(state, outcome) { finish_prepare(state, outcome, reply_to) }
+) -> Finisher(query.Outcome(StatementDescription, Failure)) {
+  fn(state, _socket, outcome) { finish_prepare(state, outcome, reply_to) }
 }
 
 fn run_finisher(
   reply_to: ReplyTo(Result(Outcome, DriverError)),
-) -> fn(State, query.Outcome(StatementResult, Failure)) -> State {
-  fn(state, outcome) { finish_run(state, outcome, reply_to) }
+) -> Finisher(query.Outcome(StatementResult, Failure)) {
+  fn(state, _socket, outcome) { finish_run(state, outcome, reply_to) }
 }
 
 fn script_finisher(
   reply_to: ReplyTo(Result(List(Outcome), DriverError)),
-) -> fn(State, query.Outcome(List(StatementResult), ScriptFailure)) -> State {
-  fn(state, outcome) { finish_script(state, outcome, reply_to) }
+) -> Finisher(query.Outcome(List(StatementResult), ScriptFailure)) {
+  fn(state, _socket, outcome) { finish_script(state, outcome, reply_to) }
+}
+
+fn named_prepare_finisher(
+  request: StatementRequest,
+  name: String,
+) -> Finisher(query.Outcome(StatementDescription, Failure)) {
+  fn(state, socket, outcome) {
+    finish_named_prepare(state, socket, outcome, request, name)
+  }
+}
+
+fn cached_run_finisher(
+  details: RunDetails,
+  statement: CachedStatement,
+) -> Finisher(query.Outcome(CommandResult, Failure)) {
+  fn(state, socket, outcome) {
+    finish_cached_run(state, socket, outcome, details, statement)
+  }
 }
 
 /// Goes on with a step: sends what it asks, waits, or finishes it.
@@ -923,7 +1148,7 @@ fn follow(
   socket: transport.Connection,
   step: Result(Step(step_state, outcome), UnexpectedMessage),
   running: fn(step_state) -> Running,
-  finish: fn(State, outcome) -> State,
+  finish: Finisher(outcome),
   current: Running,
 ) -> State {
   case step {
@@ -931,7 +1156,7 @@ fn follow(
     Ok(Send(bytes, step_state)) ->
       State(..state, running: Some(running(step_state)))
       |> sent(socket, transport.send(socket, bytes))
-    Ok(Finished(outcome)) -> finish(state, outcome) |> next_request
+    Ok(Finished(outcome)) -> finish(state, socket, outcome) |> next_request
     Ok(ConnectionEnded(report, messages)) ->
       ended(state, socket, current, report, messages)
     Error(unexpected) ->
@@ -951,7 +1176,7 @@ fn ended(
   report: ServerReport,
   messages: List(AsynchronousMessage),
 ) -> State {
-  let state = State(..state, pending: append(reverse(messages), state.pending))
+  let state = fold(messages, state, keep_asynchronous)
   failed(state, socket, current, ServerEndedConnection(report))
 }
 
@@ -1025,6 +1250,124 @@ fn script_result(
   }
 }
 
+fn finish_named_prepare(
+  state: State,
+  socket: transport.Connection,
+  outcome: query.Outcome(StatementDescription, Failure),
+  request: StatementRequest,
+  name: String,
+) -> State {
+  let state = after_step(state, outcome.asynchronous_messages)
+  let state = State(..state, tracker: track_step(state.tracker, outcome))
+  case outcome.result {
+    Ok(description) -> {
+      let sql = statement_sql(request)
+      let cache = statement_cache.insert(state.cache, sql, name, description)
+      prepared(
+        State(..state, cache:),
+        socket,
+        request,
+        CachedStatement(name, description),
+      )
+    }
+    Error(failure) -> {
+      refuse_statement(request, step_failure(failure, outcome.status, []))
+      state
+    }
+  }
+}
+
+fn prepared(
+  state: State,
+  socket: transport.Connection,
+  request: StatementRequest,
+  cached: CachedStatement,
+) -> State {
+  case request {
+    PrepareStatement(reply: reply_to, ..) -> {
+      reply(reply_to, Ok(cached.description))
+      state
+    }
+    RunStatement(details) -> run_prepared(state, socket, details, cached)
+  }
+}
+
+/// A run after a prepare goes on, unless the server made the driver
+/// prepare again and the description changed.
+fn run_prepared(
+  state: State,
+  socket: transport.Connection,
+  details: RunDetails,
+  cached: CachedStatement,
+) -> State {
+  case details.previous {
+    Some(previous) if previous != cached.description -> {
+      reply(details.reply, Error(StatementChanged(cached.description)))
+      state
+    }
+    _ -> run_cached(state, socket, details, cached)
+  }
+}
+
+fn finish_cached_run(
+  state: State,
+  socket: transport.Connection,
+  outcome: query.Outcome(CommandResult, Failure),
+  details: RunDetails,
+  cached: CachedStatement,
+) -> State {
+  let state = after_step(state, outcome.asynchronous_messages)
+  let state = State(..state, tracker: track_step(state.tracker, outcome))
+  case outcome.result {
+    Ok(command) -> {
+      let outcome =
+        Outcome(cached.description.columns, command, [], [], outcome.status)
+      let #(state, single) = take_pending(state, outcome)
+      reply(details.reply, Ok(single))
+      state
+    }
+    Error(ServerError(report)) ->
+      cached_run_refused(state, socket, details, cached, report, outcome.status)
+    Error(failure) -> {
+      reply(details.reply, Error(step_failure(failure, outcome.status, [])))
+      state
+    }
+  }
+}
+
+/// SQLSTATE 0A000 (the cached plan must not change its result type) and
+/// 26000 (no such prepared statement) mean that the cached statement is
+/// stale: it leaves the cache. Outside a transaction, the run prepares the
+/// statement again and runs one more time. Inside one, the error goes to
+/// the caller, because the transaction failed.
+fn cached_run_refused(
+  state: State,
+  socket: transport.Connection,
+  details: RunDetails,
+  cached: CachedStatement,
+  report: ServerReport,
+  status: TransactionStatus,
+) -> State {
+  let stale = report.code == "0A000" || report.code == "26000"
+  let state = case stale {
+    True ->
+      State(..state, cache: statement_cache.forget(state.cache, details.sql))
+    False -> state
+  }
+  case stale, details.previous, status {
+    True, None, Idle ->
+      look_up(
+        state,
+        socket,
+        RunStatement(RunDetails(..details, previous: Some(cached.description))),
+      )
+    _, _, _ -> {
+      reply(details.reply, Error(ServerRefused(report, status)))
+      state
+    }
+  }
+}
+
 fn step_failure(
   failure: Failure,
   status: TransactionStatus,
@@ -1047,8 +1390,20 @@ fn after_message(state: State, message: AsynchronousMessage) -> State {
   case message {
     ParameterChanged(name:, value:) ->
       State(..state, parameters: dict.insert(state.parameters, name, value))
-    _notice_or_notification ->
-      State(..state, pending: [message, ..state.pending])
+    _notice_or_notification -> keep_asynchronous(state, message)
+  }
+}
+
+/// Keeps a notice for the next outcome. A notification goes at once to the
+/// notifications subscriber when there is one, in the order the server
+/// sent it, and is kept for the next outcome otherwise.
+fn keep_asynchronous(state: State, message: AsynchronousMessage) -> State {
+  case message, state.config.notifications {
+    query.Notification(process_id:, channel:, payload:), Some(subscriber) -> {
+      process.send(subscriber, Notification(process_id:, channel:, payload:))
+      state
+    }
+    _other, _subscriber -> State(..state, pending: [message, ..state.pending])
   }
 }
 

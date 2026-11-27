@@ -13,7 +13,7 @@ import dream_postgres/driver/catalog.{
 }
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionConfig, type DriverError, type Outcome,
-  Backoff, ConnectionConfig, ServerRefused,
+  Backoff, CacheStatements, ConnectionConfig, ServerRefused,
 }
 import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
@@ -81,6 +81,8 @@ fn config(port: Int) -> Result(ConnectionConfig, TestFailure) {
     setup_timeout_milliseconds: 5000,
     reconnect: Backoff(10, 60_000),
     events: None,
+    notifications: None,
+    statements: CacheStatements(512),
   ))
 }
 
