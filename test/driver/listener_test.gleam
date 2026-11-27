@@ -23,7 +23,9 @@ import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit
-import dream_test/unit_context.{after_each, before_each, describe, group, it}
+import dream_test/unit_context.{
+  type ContextNode, after_each, before_each, describe, group, it,
+}
 import driver/fake_server.{free_port}
 import driver/listener_gate.{
   answer_first_query, break_gate, cut_first_query, hold_first_query, open_gate,
@@ -827,18 +829,24 @@ fn late_server_tests() -> TestSuite {
   )
 }
 
-// A LISTEN that meets a loss after a reconnect: one act, one test ----------------
+// A LISTEN after a reconnect: one act, one test for each message --------------
+
+/// The two messages that a subscriber gets after the gate cut its
+/// connection: the one of the loss, and the one after the reconnect.
+type ReconnectMessages {
+  ReconnectMessages(lost: ListenerMessage, next: ListenerMessage)
+}
 
 /// What the subscriber got after the gate cut its connection and then
 /// cut the first `LISTEN` after the reconnect.
 fn lose_listen_after_reconnect(
   gated: GatedListener,
-) -> Result(#(ListenerMessage, ListenerMessage), String) {
+) -> Result(ReconnectMessages, String) {
   use _first <- try(subscribe_to(gated.listener, "svc895_cut", gated.first))
   cut_first_query(gated.gate)
   use lost <- try(receive_message(gated.first))
   use next <- try(receive_message(gated.first))
-  Ok(#(lost, next))
+  Ok(ReconnectMessages(lost:, next:))
 }
 
 fn cut_query_tests() -> TestSuite {
@@ -846,13 +854,14 @@ fn cut_query_tests() -> TestSuite {
     "a LISTEN that meets a loss after a reconnect",
     gated_act_setup(first_driver_server, lose_listen_after_reconnect),
     [
+      not_listening_at_loss_test(),
       it(
         "gives no ListenFailed, only Listening after the next reconnect",
-        fn(shared: GatedOutcome(#(ListenerMessage, ListenerMessage))) {
-          shared.outcome
+        fn(shared: GatedOutcome(ReconnectMessages)) {
+          shared.outcome.next
           |> should
-          |> be_equal(#(NotListening, Listening("svc895_cut")))
-          |> or_fail_with("Expected NotListening, then Listening")
+          |> be_equal(Listening("svc895_cut"))
+          |> or_fail_with("Expected Listening")
         },
       ),
     ],
@@ -865,12 +874,12 @@ fn cut_query_tests() -> TestSuite {
 /// the first `LISTEN` after the reconnect with a refusal.
 fn refuse_listen_after_reconnect(
   gated: GatedListener,
-) -> Result(#(ListenerMessage, ListenerMessage), String) {
+) -> Result(ReconnectMessages, String) {
   use _first <- try(subscribe_to(gated.listener, "svc895_refused", gated.first))
   answer_first_query(gated.gate, refusal_bytes())
   use lost <- try(receive_message(gated.first))
   use next <- try(receive_message(gated.first))
-  Ok(#(lost, next))
+  Ok(ReconnectMessages(lost:, next:))
 }
 
 /// What the subscriber got after the gate cut its connection and kept the
@@ -878,12 +887,12 @@ fn refuse_listen_after_reconnect(
 /// 100 milliseconds passed.
 fn hold_listen_after_reconnect(
   gated: GatedListener,
-) -> Result(#(ListenerMessage, ListenerMessage), String) {
+) -> Result(ReconnectMessages, String) {
   use _first <- try(subscribe_to(gated.listener, "svc895_held", gated.first))
   hold_first_query(gated.gate)
   use lost <- try(receive_message(gated.first))
   use next <- try(receive_message(gated.first))
-  Ok(#(lost, next))
+  Ok(ReconnectMessages(lost:, next:))
 }
 
 /// What the subscriber got after the gate cut its connection, kept the
@@ -891,7 +900,7 @@ fn hold_listen_after_reconnect(
 /// stopped while the listener waited for that `LISTEN`.
 fn stop_connection_in_listen_after_reconnect(
   gated: GatedListener,
-) -> Result(#(ListenerMessage, ListenerMessage), String) {
+) -> Result(ReconnectMessages, String) {
   use _first <- try(subscribe_to(gated.listener, "svc895_down", gated.first))
   let connection = listener_connection_pid(gated.listener)
   hold_first_query(gated.gate)
@@ -899,7 +908,20 @@ fn stop_connection_in_listen_after_reconnect(
   wait_held(gated.gate)
   stop_connection_process(connection)
   use next <- try(receive_message(gated.first))
-  Ok(#(lost, next))
+  Ok(ReconnectMessages(lost:, next:))
+}
+
+/// The first message of each act after a reconnect: the loss.
+fn not_listening_at_loss_test() -> ContextNode(GatedOutcome(ReconnectMessages)) {
+  it(
+    "gives NotListening at the loss",
+    fn(shared: GatedOutcome(ReconnectMessages)) {
+      shared.outcome.lost
+      |> should
+      |> be_equal(NotListening)
+      |> or_fail_with("Expected NotListening")
+    },
+  )
 }
 
 fn reconnect_listen_failure_tests() -> TestSuite {
@@ -908,22 +930,20 @@ fn reconnect_listen_failure_tests() -> TestSuite {
       "a refused LISTEN after a reconnect",
       gated_act_setup(first_driver_server, refuse_listen_after_reconnect),
       [
+        not_listening_at_loss_test(),
         it(
-          "gives NotListening, then ListenRefused with the report",
-          fn(shared: GatedOutcome(#(ListenerMessage, ListenerMessage))) {
-            shared.outcome
+          "gives ListenRefused with the report after the reconnect",
+          fn(shared: GatedOutcome(ReconnectMessages)) {
+            shared.outcome.next
             |> should
-            |> be_equal(#(
-              NotListening,
-              ListenFailed(
-                "svc895_refused",
-                ListenRefused(
-                  server_report("ERROR", "42501", "permission denied"),
-                  Idle,
-                ),
+            |> be_equal(ListenFailed(
+              "svc895_refused",
+              ListenRefused(
+                server_report("ERROR", "42501", "permission denied"),
+                Idle,
               ),
             ))
-            |> or_fail_with("Expected NotListening, then ListenRefused")
+            |> or_fail_with("Expected ListenRefused")
           },
         ),
       ],
@@ -932,19 +952,17 @@ fn reconnect_listen_failure_tests() -> TestSuite {
       "a LISTEN with no answer after a reconnect",
       short_gated_act_setup(first_driver_server, hold_listen_after_reconnect),
       [
+        not_listening_at_loss_test(),
         it(
-          "gives NotListening, then ListenDeadlinePassed",
-          fn(shared: GatedOutcome(#(ListenerMessage, ListenerMessage))) {
-            shared.outcome
+          "gives ListenDeadlinePassed after the reconnect",
+          fn(shared: GatedOutcome(ReconnectMessages)) {
+            shared.outcome.next
             |> should
-            |> be_equal(#(
-              NotListening,
-              ListenFailed(
-                "svc895_held",
-                ListenDeadlinePassed(cancelled: False),
-              ),
+            |> be_equal(ListenFailed(
+              "svc895_held",
+              ListenDeadlinePassed(cancelled: False),
             ))
-            |> or_fail_with("Expected NotListening, then ListenDeadlinePassed")
+            |> or_fail_with("Expected ListenDeadlinePassed")
           },
         ),
       ],
@@ -956,18 +974,14 @@ fn reconnect_listen_failure_tests() -> TestSuite {
         stop_connection_in_listen_after_reconnect,
       ),
       [
+        not_listening_at_loss_test(),
         it(
-          "gives NotListening, then ListenerConnectionDown",
-          fn(shared: GatedOutcome(#(ListenerMessage, ListenerMessage))) {
-            shared.outcome
+          "gives ListenerConnectionDown after the reconnect",
+          fn(shared: GatedOutcome(ReconnectMessages)) {
+            shared.outcome.next
             |> should
-            |> be_equal(#(
-              NotListening,
-              ListenFailed("svc895_down", ListenerConnectionDown),
-            ))
-            |> or_fail_with(
-              "Expected NotListening, then ListenerConnectionDown",
-            )
+            |> be_equal(ListenFailed("svc895_down", ListenerConnectionDown))
+            |> or_fail_with("Expected ListenerConnectionDown")
           },
         ),
       ],

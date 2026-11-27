@@ -3,10 +3,12 @@
 //// server or a port with no listener, and the mapping of each OS and TLS
 //// error.
 
-import dream_postgres/driver/message.{AuthenticationOk, AuthenticationSasl}
+import dream_postgres/driver/message.{
+  type BackendMessage, AuthenticationOk, AuthenticationSasl,
+}
 import dream_postgres/driver/transport.{
   type AddressError, type SocketError, type SocketFailure, type Tls,
-  type TransportError, AuthorityCertificates, AuthorityFile, AuthorityFileEmpty,
+  type TransportConfig, type TransportError, AuthorityFile, AuthorityFileEmpty,
   AuthorityFileUnreadable, BytesBeforeTls, CertificateExpired, CheckAuthority,
   CheckAuthorityAndHost, ConnectClosed, ConnectRefused, ConnectReset,
   ConnectTimedOut, ConnectUnlisted, ConnectionReset, DirectNegotiation,
@@ -18,11 +20,13 @@ import dream_postgres/driver/transport.{
   UnknownAuthority, Unlisted, address, close, connect_error, server_certificate,
   socket_error,
 }
+import dream_test/context
 import dream_test/matchers.{
   be_equal, be_error, be_ok, be_true, or_fail_with, should,
 }
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
+import dream_test/unit_context
 import driver/fake_server.{
   type FakeBehavior, Answer, NotTls, Reset, Tls, free_port, next_message,
   next_socket_message, send_bad_record, start_fake_server,
@@ -33,8 +37,12 @@ import driver/servers.{
 }
 import driver/test_files.{read_pem_certificate}
 import driver/transport_reason.{reason_name, socket_failure}
-import fixtures/driver_tls.{certificate_authority, transport_config, verify_full}
-import fixtures/transport_connect.{connect_with_minute_deadline}
+import fixtures/driver_tls.{
+  certificate_authority, der_authority_config, transport_config, verify_full,
+}
+import fixtures/transport_connect.{
+  type StartupAnswer, connect_and_answer, connect_with_minute_deadline,
+}
 import gleam/dynamic
 import gleam/erlang/atom
 import gleam/int.{to_string}
@@ -53,16 +61,28 @@ import matchers/extract_startup_answer.{extract_startup_answer}
 
 /// The tests of the transport.
 pub fn tests() -> TestSuite {
-  describe("dream_postgres/driver/transport", [
-    group("addresses", address_tests()),
-    group(
-      "each TLS setting on each driver server",
-      map(driver_servers(), server_tests),
+  suite.group("dream_postgres/driver/transport", [
+    describe("the transport", [
+      group("addresses", address_tests()),
+      group(
+        "each TLS setting on each driver server",
+        map(driver_servers(), server_tests),
+      ),
+      group("servers that refuse or misbehave", refusal_tests()),
+      group("connect failures", connect_failure_tests()),
+      group("reading and writing", socket_tests()),
+      group("the error of each OS reason", reason_tests()),
+    ]),
+    suite.group(
+      "a login with each TLS setting on each driver server",
+      map(driver_servers(), login_tests),
     ),
-    group("servers that refuse or misbehave", refusal_tests()),
-    group("connect failures", connect_failure_tests()),
-    group("reading and writing", socket_tests()),
-    group("the error of each OS reason", reason_tests()),
+    login_test(
+      "a login that goes on over plain TCP with PreferTls when the server says N",
+      fn() { transport_config("localhost", server_without_tls, PreferTls) },
+      AuthenticationSasl(["SCRAM-SHA-256"]),
+      False,
+    ),
   ])
 }
 
@@ -124,111 +144,6 @@ fn address_error_test(
 
 fn server_tests(server: Server) {
   group("PostgreSQL " <> to_string(server.version), [
-    it("logs in over plain TCP with NoTls", fn() {
-      // Arrange
-      let config = transport_config("localhost", server.port, NoTls)
-
-      // Act
-      let connected = try(config, connect_with_minute_deadline)
-
-      // Assert
-      connected
-      |> should
-      |> extract_startup_answer
-      |> be_ok
-      |> be_equal(#(AuthenticationOk, False))
-      |> or_fail_with("Expected AuthenticationOk over plain TCP")
-    }),
-    it("logs in over TLS with PreferTls", fn() {
-      // Arrange
-      let config = transport_config("localhost", server.port, PreferTls)
-
-      // Act
-      let connected = try(config, connect_with_minute_deadline)
-
-      // Assert
-      connected
-      |> should
-      |> extract_startup_answer
-      |> be_ok
-      |> be_equal(#(AuthenticationOk, True))
-      |> or_fail_with("Expected AuthenticationOk over TLS")
-    }),
-    it("logs in over TLS with no certificate check", fn() {
-      // Arrange
-      let tls = RequireTls(NoCertificateCheck, PostgresNegotiation)
-      let config = transport_config("localhost", server.port, tls)
-
-      // Act
-      let connected = try(config, connect_with_minute_deadline)
-
-      // Assert
-      connected
-      |> should
-      |> extract_startup_answer
-      |> be_ok
-      |> be_equal(#(AuthenticationOk, True))
-      |> or_fail_with("Expected AuthenticationOk over TLS")
-    }),
-    it("checks the CA but not the host name with CheckAuthority", fn() {
-      // Arrange
-      let tls =
-        RequireTls(
-          CheckAuthority(AuthorityFile(certificate_authority)),
-          PostgresNegotiation,
-        )
-      let config = transport_config("127.0.0.1", server.port, tls)
-
-      // Act
-      let connected = try(config, connect_with_minute_deadline)
-
-      // Assert
-      connected
-      |> should
-      |> extract_startup_answer
-      |> be_ok
-      |> be_equal(#(AuthenticationOk, True))
-      |> or_fail_with("Expected AuthenticationOk over TLS")
-    }),
-    it("checks the CA and the host name with CheckAuthorityAndHost", fn() {
-      // Arrange
-      let config = transport_config("localhost", server.port, verify_full())
-
-      // Act
-      let connected = try(config, connect_with_minute_deadline)
-
-      // Assert
-      connected
-      |> should
-      |> extract_startup_answer
-      |> be_ok
-      |> be_equal(#(AuthenticationOk, True))
-      |> or_fail_with("Expected AuthenticationOk over TLS")
-    }),
-    it("takes the CA certificates as DER bytes", fn() {
-      // Act
-      let connected = {
-        use certificate <- result.map(read_pem_certificate(
-          certificate_authority,
-        ))
-        let authorities = AuthorityCertificates([certificate])
-        let tls =
-          RequireTls(CheckAuthorityAndHost(authorities), PostgresNegotiation)
-        try(
-          transport_config("localhost", server.port, tls),
-          connect_with_minute_deadline,
-        )
-      }
-
-      // Assert
-      connected
-      |> should
-      |> be_ok
-      |> extract_startup_answer
-      |> be_ok
-      |> be_equal(#(AuthenticationOk, True))
-      |> or_fail_with("Expected AuthenticationOk over TLS")
-    }),
     it("refuses a host name that the certificate does not name", fn() {
       // Arrange
       let config = transport_config("127.0.0.1", server.port, verify_full())
@@ -264,7 +179,6 @@ fn server_tests(server: Server) {
       |> be_equal(TlsFailed(UnknownAuthority))
       |> or_fail_with("Expected the connect error")
     }),
-    direct_tls_test(server),
     it("gives the server's certificate for channel binding", fn() {
       // Arrange
       let config = transport_config("localhost", server.port, verify_full())
@@ -287,6 +201,7 @@ fn server_tests(server: Server) {
       |> be_equal_parts
       |> or_fail_with("Expected the DER bytes of server.crt")
     }),
+    ..direct_tls_refusal_tests(server)
   ])
 }
 
@@ -297,11 +212,12 @@ fn direct_tls() -> Tls {
   )
 }
 
-/// PostgreSQL 17 and later accept direct TLS. PostgreSQL 16 reads the TLS
-/// hello as a startup packet and closes the connection.
-fn direct_tls_test(server: Server) {
+/// PostgreSQL 17 and later accept direct TLS (see `login_tests`).
+/// PostgreSQL 16 reads the TLS hello as a startup packet and closes the
+/// connection.
+fn direct_tls_refusal_tests(server: Server) {
   case server.version {
-    16 ->
+    16 -> [
       it("closes a direct TLS connection on PostgreSQL 16", fn() {
         // Arrange
         let config = transport_config("localhost", server.port, direct_tls())
@@ -316,24 +232,122 @@ fn direct_tls_test(server: Server) {
         |> be_error
         |> be_equal(ConnectClosed)
         |> or_fail_with("Expected the connect error")
-      })
-    _ ->
-      it("logs in over direct TLS", fn() {
-        // Arrange
-        let config = transport_config("localhost", server.port, direct_tls())
-
-        // Act
-        let connected = try(config, connect_with_minute_deadline)
-
-        // Assert
-        connected
-        |> should
-        |> extract_startup_answer
-        |> be_ok
-        |> be_equal(#(AuthenticationOk, True))
-        |> or_fail_with("Expected AuthenticationOk over TLS")
-      })
+      }),
+    ]
+    _ -> []
   }
+}
+
+/// A login that works with each TLS setting. PostgreSQL 17 and later also
+/// take direct TLS.
+fn login_tests(server: Server) -> TestSuite {
+  let port = server.port
+  suite.group("PostgreSQL " <> to_string(server.version), [
+    login_test(
+      "a login over plain TCP with NoTls",
+      fn() { transport_config("localhost", port, NoTls) },
+      AuthenticationOk,
+      False,
+    ),
+    login_test(
+      "a login over TLS with PreferTls",
+      fn() { transport_config("localhost", port, PreferTls) },
+      AuthenticationOk,
+      True,
+    ),
+    login_test(
+      "a login over TLS with no certificate check",
+      fn() {
+        transport_config(
+          "localhost",
+          port,
+          RequireTls(NoCertificateCheck, PostgresNegotiation),
+        )
+      },
+      AuthenticationOk,
+      True,
+    ),
+    login_test(
+      "a login that checks the CA but not the host name with CheckAuthority",
+      fn() {
+        transport_config(
+          "127.0.0.1",
+          port,
+          RequireTls(
+            CheckAuthority(AuthorityFile(certificate_authority)),
+            PostgresNegotiation,
+          ),
+        )
+      },
+      AuthenticationOk,
+      True,
+    ),
+    login_test(
+      "a login that checks the CA and the host name with CheckAuthorityAndHost",
+      fn() { transport_config("localhost", port, verify_full()) },
+      AuthenticationOk,
+      True,
+    ),
+    login_test(
+      "a login that takes the CA certificates as DER bytes",
+      fn() { der_authority_config("localhost", port) },
+      AuthenticationOk,
+      True,
+    ),
+    ..direct_tls_login_tests(server)
+  ])
+}
+
+fn direct_tls_login_tests(server: Server) -> List(TestSuite) {
+  case server.version {
+    16 -> []
+    _ -> [
+      login_test(
+        "a login over direct TLS",
+        fn() { transport_config("localhost", server.port, direct_tls()) },
+        AuthenticationOk,
+        True,
+      ),
+    ]
+  }
+}
+
+/// One login, the shared act of two tests: the first answer of the
+/// server, and whether the connection is TLS.
+fn login_test(
+  name: String,
+  config: fn() -> Result(TransportConfig, error),
+  answer: BackendMessage,
+  encrypted: Bool,
+) -> TestSuite {
+  let kind = case encrypted {
+    True -> "TLS"
+    False -> "plain TCP"
+  }
+  unit_context.describe(
+    name,
+    context.setup(
+      setup: fn() { connect_and_answer(config()) },
+      teardown: fn(_closed) { Ok(Nil) },
+    ),
+    [
+      unit_context.it(
+        "gets " <> inspect(answer) <> " first",
+        fn(login: StartupAnswer) {
+          login.message
+          |> should
+          |> be_equal(answer)
+          |> or_fail_with("Expected the first answer of the server")
+        },
+      ),
+      unit_context.it("runs over " <> kind, fn(login: StartupAnswer) {
+        login.encrypted
+        |> should
+        |> be_equal(encrypted)
+        |> or_fail_with("Expected the TLS of the connection")
+      }),
+    ],
+  )
 }
 
 // Refusals --------------------------------------------------------------------
@@ -359,21 +373,6 @@ fn refusal_tests() {
         |> or_fail_with("Expected ServerRefusedTls")
       },
     ),
-    it("goes on over plain TCP with PreferTls when the server says N", fn() {
-      // Arrange
-      let config = transport_config("localhost", server_without_tls, PreferTls)
-
-      // Act
-      let connected = try(config, connect_with_minute_deadline)
-
-      // Assert
-      connected
-      |> should
-      |> extract_startup_answer
-      |> be_ok
-      |> be_equal(#(AuthenticationSasl(["SCRAM-SHA-256"]), False))
-      |> or_fail_with("Expected the plain login request of the server")
-    }),
     fake_error_test(
       "gives the typed error for an unknown answer byte",
       Answer(<<"X">>),
