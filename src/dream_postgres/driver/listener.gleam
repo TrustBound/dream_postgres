@@ -1,20 +1,31 @@
-//// A listener: one gleam_otp actor that owns its own connection process,
-//// outside any pool, and gives the notifications of `NOTIFY` to the
-//// processes that subscribe to a channel.
+//// A listener: it gives the notifications of `NOTIFY` to the processes
+//// that subscribe to a channel, from a connection process of its own,
+//// outside any pool.
 ////
-//// The first subscriber of a channel makes the listener send `LISTEN` for
-//// it, and when the last one goes, by `unsubscribe` or because its process
-//// stopped, the listener sends `UNLISTEN`. Channel names are exact: the
-//// listener quotes them, so `Jobs` and `jobs` are two channels.
+//// A listener is two gleam_otp actors:
 ////
-//// The connection process sends each notification to the listener as it
-//// arrives, and the listener sends it on to each subscriber of its channel,
-//// in the order the server sent them.
+//// - The registry keeps the subscriptions: the channel, the subscriber
+////   subject, and a monitor on the subscriber's process. It does no I/O.
+////   Each call of this module goes to it. It decides when a channel needs
+////   `LISTEN` or `UNLISTEN`, and asks the session to send it.
+//// - The session owns the connection process. It sends each `LISTEN` and
+////   `UNLISTEN` that the registry asks for, and passes each notification
+////   and each change of the connection to the registry.
+////
+//// The first subscriber of a channel makes the registry ask for `LISTEN`,
+//// and when the last one goes, by `unsubscribe` or because its process
+//// stopped, the registry asks for `UNLISTEN`. Channel names are exact: the
+//// session quotes them, so `Jobs` and `jobs` are two channels.
+////
+//// The connection process sends each notification to the session as it
+//// arrives, the session passes it to the registry, and the registry sends
+//// it on to each subscriber of its channel, in the order the server sent
+//// them.
 ////
 //// A subscriber hears whether its session listens. When the connection is
 //// lost, each subscriber gets `NotListening` at once, and the connection
 //// process connects again. The new session listens on nothing, so the
-//// listener sends `LISTEN` again for each channel, and each subscriber
+//// registry asks for `LISTEN` again for each channel, and each subscriber
 //// gets `Listening`, or `ListenFailed` when that `LISTEN` failed. The
 //// server keeps no notification for a session that is gone, so the
 //// notifications between `NotListening` and `Listening` may be missed. A
@@ -22,10 +33,25 @@
 //// under a supervisor, is kept the same way: the subscriber gets
 //// `NotListening` at once, and `Listening` once the session is up.
 ////
-//// A call to the listener has no timeout: the listener answers each one
-//// after at most its own `LISTEN` or `UNLISTEN`, and a listener that is gone
-//// gives `ListenerProcessDown`. So a subscription never exists without the
-//// handle that ends it.
+//// A crash of the session is a loss too. Under a supervisor
+//// (`supervised`), the registry and the session are the two children of a
+//// small supervisor with the strategy rest_for_one. When the session
+//// stops, each subscriber that listened gets `NotListening`, and the
+//// supervisor starts a new session. The new session tells the registry
+//// when its connection is up, the registry asks it for `LISTEN` on each
+//// channel, and each subscriber gets `Listening` or `ListenFailed`, with
+//// no new subscribe. A crash of the registry ends every subscription: the
+//// supervisor starts the registry and the session again, with no
+//// subscriber. A subscriber sees that crash with `monitor_registry`.
+////
+//// A listener from `start` has no supervisor: the registry is linked to
+//// the caller, and the session to the registry. A crash of its session
+//// stops the registry too.
+////
+//// A call to the listener has no timeout: the registry answers each one
+//// after at most one `LISTEN` or `UNLISTEN` of its session, and a listener
+//// that is gone gives `ListenerProcessDown`. So a subscription never exists
+//// without the handle that ends it.
 ////
 //// This module is internal to dream_postgres.
 
@@ -39,12 +65,15 @@ import dream_postgres/driver/connection.{
 import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{byte_size}
 import gleam/dict.{type Dict}
+import gleam/dynamic.{type Dynamic}
+import gleam/erlang/atom
 import gleam/erlang/process.{
   type Down, type Monitor, type Name, type Pid, type Subject, subject_owner,
 }
 import gleam/list.{any, each, filter, unique}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
+import gleam/otp/static_supervisor.{AnySignificant, RestForOne}
 import gleam/otp/supervision.{type ChildSpecification, Transient}
 import gleam/result.{map_error, replace, replace_error, try}
 import gleam/string.{replace as replace_text}
@@ -54,7 +83,7 @@ import gleam/string.{replace as replace_text}
 /// Everything a listener needs.
 pub type ListenerConfig {
   ListenerConfig(
-    /// The connection of the listener. The listener sets its `events` and
+    /// The connection of the listener. The session sets its `events` and
     /// its `notifications` to its own subjects.
     connection: ConnectionConfig,
     /// The longest time that each `LISTEN` and `UNLISTEN` can take.
@@ -67,24 +96,24 @@ pub type ListenerMessage {
   /// A notification on the channel of the subscription.
   NotificationArrived(notification: Notification)
   /// The session does not listen on the channel of the subscription: the
-  /// connection is not up yet, or it is lost. `Listening` or
-  /// `ListenFailed` follows once the listener sent `LISTEN` on a session
-  /// that is up.
+  /// connection is not up yet, it is lost, or the session stopped.
+  /// `Listening` or `ListenFailed` follows once the session sent `LISTEN`
+  /// on a connection that is up.
   NotListening
-  /// The listener sent `LISTEN` for the channel on a session that is up:
-  /// the first one, or a new one after a loss. Notifications on the
-  /// channel between the last `NotListening` and this message may be
-  /// missed.
+  /// The session sent `LISTEN` for the channel on a connection that is
+  /// up: the first one, or a new one after a loss or a new session.
+  /// Notifications on the channel between the last `NotListening` and this
+  /// message may be missed.
   Listening(channel: String)
-  /// The `LISTEN` for the channel failed on a session that is up, so the
-  /// session does not listen on it. The listener tries again after the
+  /// The `LISTEN` for the channel failed on a connection that is up, so
+  /// the session does not listen on it. The registry asks again after the
   /// next reconnect. A `LISTEN` that meets a loss gives no message: the
   /// subscriber got `NotListening` already, and `Listening` follows the
   /// next reconnect.
   ListenFailed(channel: String, error: ListenFailure)
 }
 
-/// Why the `LISTEN` for a channel failed on a session that is up.
+/// Why the `LISTEN` for a channel failed on a connection that is up.
 pub type ListenFailure {
   /// The server refused the `LISTEN`. The session stays usable.
   ListenRefused(report: ServerReport, transaction_status: TransactionStatus)
@@ -98,7 +127,7 @@ pub type ListenFailure {
   /// The channel name holds a zero byte, so the `LISTEN` cannot be
   /// written. No byte went to the server.
   ChannelHasZeroByte
-  /// The connection process of the listener is gone, for example because
+  /// The connection process of the session is gone, for example because
   /// an exit signal stopped it.
   ListenerConnectionDown
 }
@@ -111,17 +140,17 @@ pub type ListenerError {
   /// The subscriber subject has no process: it has a name that no process
   /// has.
   SubscriberHasNoProcess
-  /// The `LISTEN` failed on a session that is up, so the subscription is
-  /// not kept. A connection that is not up is not a failure: the
+  /// The `LISTEN` failed on a connection that is up, so the subscription
+  /// is not kept. A connection that is not up is not a failure: the
   /// subscription is kept and gets `NotListening`.
   SubscribeFailed(error: ListenFailure)
-  /// The listener process is gone.
+  /// The registry of the listener is gone.
   ListenerProcessDown
 }
 
 /// Why an unsubscribe failed.
 pub type UnsubscribeError {
-  /// The listener process is gone.
+  /// The registry of the listener is gone.
   ListenerGone
 }
 
@@ -129,11 +158,11 @@ pub type UnsubscribeError {
 pub type StartError {
   /// Its connection could not connect and log in.
   ConnectFailed(error: ConnectError)
-  /// The listener process itself did not start.
+  /// The registry or the session did not start.
   ListenerNotStarted(error: actor.StartError)
 }
 
-/// A listener process, or the name it runs under. Each call finds the
+/// A listener's registry, or the name it runs under. Each call finds the
 /// process that has the subject now, so a handle of `from_name` stays
 /// valid when a supervisor starts the listener again.
 pub opaque type Listener {
@@ -148,8 +177,9 @@ pub opaque type Subscription {
 /// A reply target: an alias of the caller (see the FFI module).
 type ReplyTo(reply)
 
-/// What a listener process receives. A program names a supervised
-/// listener with `process.new_name`, for this type.
+/// What the registry of a listener receives: the calls of this module, and
+/// the reports of its session. A program names a supervised listener with
+/// `process.new_name`, for this type.
 pub opaque type ListenerProcessMessage {
   SubscribeRequest(
     channel: String,
@@ -159,15 +189,46 @@ pub opaque type ListenerProcessMessage {
   )
   UnsubscribeRequest(subscription: Subscription, reply: ReplyTo(Nil))
   StopRequest(reply: ReplyTo(Nil))
+  /// A session started. The registry monitors it, and asks it from now on.
+  SessionStarted(session: Subject(SessionMessage), pid: Pid)
+  /// The connection of the session connected, the first time or again.
+  SessionUp
+  /// The connection of the session lost its session.
+  SessionLost
+  /// An attempt of the connection to connect for the first time failed.
+  SessionConnectFailed(error: ConnectError)
+  /// A notification that the connection of the session got.
   NotificationReceived(notification: Notification)
-  ConnectionEventReceived(event: ConnectionEvent)
-  SubscriberDown(monitor: Monitor)
+  /// A process that the registry monitors stopped: a subscriber's or the
+  /// session.
+  MonitoredProcessDown(monitor: Monitor)
+}
+
+/// What the session of a listener receives: the requests of its registry,
+/// and what its connection process sends.
+type SessionMessage {
+  ListenRequest(channel: String, reply: ReplyTo(Listened))
+  UnlistenRequest(channel: String, reply: ReplyTo(Nil))
+  /// Closes the connection, and stops the session.
+  CloseRequest(reply: ReplyTo(Nil))
+  ConnectionNotified(notification: Notification)
+  ConnectionChanged(event: ConnectionEvent)
 }
 
 /// What the starter of `start` waits for.
 type Opening {
   Opened(result: Result(Nil, ConnectError))
   ListenerDown(reason: process.ExitReason)
+}
+
+/// Where a registry runs.
+type Placement {
+  /// Started by `start`: the registry starts its session, linked to it,
+  /// and answers the starter after the first attempt of the connection.
+  Linked(starter: Subject(Result(Nil, ConnectError)))
+  /// A child of the listener's supervisor, under the name: the supervisor
+  /// starts the session.
+  Named(name: Name(ListenerProcessMessage))
 }
 
 /// A subscriber of one channel. `listening` says whether the session
@@ -185,10 +246,11 @@ type Subscriber {
 type Listened {
   /// The session listens on the channel.
   ListenWorked
-  /// The session is not up: it is lost, or a supervised connection did not
-  /// connect yet. The listener listens after the next reconnect.
+  /// The connection is not up: it is lost, a supervised connection did not
+  /// connect yet, or the session is gone. The registry asks again after the
+  /// next reconnect or the next session.
   ListenLost
-  /// The `LISTEN` failed on a session that is up.
+  /// The `LISTEN` failed on a connection that is up.
   ListenNotDone(failure: ListenFailure)
 }
 
@@ -200,15 +262,32 @@ type Admission {
   Refuse(failure: ListenFailure)
 }
 
-type State {
-  State(
-    connection: Connection,
+/// The session that the registry asks, and the registry's monitor of it.
+type SessionLink {
+  SessionLink(subject: Subject(SessionMessage), pid: Pid, monitor: Monitor)
+}
+
+type RegistryState {
+  RegistryState(
+    /// The session that runs now. A registry has none until its session
+    /// started, and none from the end of a session until the next one
+    /// started.
+    session: Option(SessionLink),
     /// The starter of `start`, until the first attempt of the connection
     /// ended. A supervised listener has none.
     starter: Option(Subject(Result(Nil, ConnectError))),
-    deadline_milliseconds: Int,
     /// Each subscription, by the monitor of its subscriber's process.
     subscriptions: Dict(Monitor, Subscriber),
+  )
+}
+
+type SessionState {
+  SessionState(
+    connection: Connection,
+    /// The process ID of the registry, looked up once when the session
+    /// started.
+    registry: Pid,
+    deadline_milliseconds: Int,
   )
 }
 
@@ -224,10 +303,21 @@ fn call_process(
 @external(erlang, "dream_postgres_listener_ffi", "reply")
 fn reply(to: ReplyTo(reply), value: reply) -> Nil
 
+/// Sends a message to the registry's process ID, tagged for its selector.
+/// A send to a process that is gone does nothing.
+@external(erlang, "dream_postgres_listener_ffi", "deliver")
+fn send_to_registry(registry: Pid, message: ListenerProcessMessage) -> Nil
+
+/// The message inside a message of `send_to_registry`.
+@external(erlang, "dream_postgres_listener_ffi", "request_of")
+fn request_of(message: Dynamic) -> ListenerProcessMessage
+
 // Starting and stopping -------------------------------------------------------
 
 /// Starts a listener, linked to the caller, and waits until its connection
-/// connected and logged in.
+/// connected and logged in. The registry is linked to the caller, and the
+/// session to the registry. No supervisor starts the session again: a
+/// crash of the session stops the listener.
 ///
 /// ## Parameters
 ///
@@ -241,15 +331,16 @@ fn reply(to: ReplyTo(reply), value: reply) -> Nil
 pub fn start(config: ListenerConfig) -> Result(Listener, StartError) {
   let opened = process.new_subject()
   use started <- try(
-    start_process(config, Some(opened), None) |> map_error(ListenerNotStarted),
+    start_registry(config, Linked(opened)) |> map_error(ListenerNotStarted),
   )
   wait_until_opened(started, opened)
 }
 
 /// Waits for the end of the first attempt of the connection, or for the
-/// end of the listener, with no timer: the connection ends its attempt by
+/// end of the registry, with no timer: the connection ends its attempt by
 /// its own setup deadline. After a failed attempt it also waits for the
-/// end of the listener, which stops at once, so no process stays.
+/// end of the registry, which stops at once after its session, so no
+/// process stays.
 fn wait_until_opened(
   started: actor.Started(Listener),
   opened: Subject(Result(Nil, ConnectError)),
@@ -276,34 +367,72 @@ fn listener_down(down: Down) -> Opening {
   ListenerDown(down.reason)
 }
 
-/// The listener as a child of a gleam_otp supervisor, with its process
-/// registered under `name`. When the supervisor starts the listener
-/// again, the new process takes the name, so a handle of `from_name` stays
-/// valid. The name must come from `process.new_name`, made once when the
-/// program starts.
+/// The listener as a child of a gleam_otp supervisor: a supervisor of its
+/// own, with the strategy rest_for_one and two children. The first is the
+/// registry, registered under `name`. The second is the session. When the
+/// supervisor starts the registry again, the new registry takes the name,
+/// so a handle of `from_name` stays valid. The name must come from
+/// `process.new_name`, made once when the program starts.
 ///
 /// ## Parameters
 ///
 /// - `config`: the connection and the deadline of each `LISTEN`
-/// - `name`: the name of the listener process
+/// - `name`: the name of the registry
 ///
 /// ## Returns
 ///
-/// A transient worker child: the supervisor starts it again after an
+/// A transient supervisor child: the supervisor starts it again after an
 /// abnormal exit, and not after `stop`. The start does not wait for the
 /// server: the connection connects after it and tries again after its
 /// backoff, so a server that is down never fails the supervisor. Until the
-/// connection is up, each subscriber gets `NotListening`. The supervisor's
-/// shutdown stops the listener, and its connection sends Terminate before
-/// it stops. A new listener has no subscriber: each subscriber of the
-/// listener before it gets `ListenerProcessDown` from its next call and
-/// subscribes again.
+/// connection is up, each subscriber gets `NotListening`.
+///
+/// A crash of the session keeps the subscriptions: each subscriber that
+/// listened gets `NotListening`, the new session listens on each channel,
+/// and each subscriber gets `Listening` or `ListenFailed`. A crash of the
+/// registry, or a new start of the whole child, ends each subscription:
+/// each subscriber gets `ListenerProcessDown` from its next call, sees the
+/// `Down` of `monitor_registry`, and subscribes again.
+///
+/// The supervisor's shutdown stops the session, and its connection sends
+/// Terminate before it stops. `stop` makes the listener's own supervisor
+/// stop with the reason `shutdown`, so the process that starts this child
+/// must be a supervisor, or a process that traps exits.
 pub fn supervised(
   config: ListenerConfig,
   name: Name(ListenerProcessMessage),
 ) -> ChildSpecification(Listener) {
-  supervision.worker(fn() { start_process(config, None, Some(name)) })
+  supervision.supervisor(fn() { start_supervisor(config, name) })
   |> supervision.restart(Transient)
+}
+
+/// The registry is significant: its normal end after `stop` shuts the
+/// supervisor down. Both children are transient: the session ends normally
+/// only when the registry closed it.
+fn start_supervisor(
+  config: ListenerConfig,
+  name: Name(ListenerProcessMessage),
+) -> Result(actor.Started(Listener), actor.StartError) {
+  let registry =
+    supervision.worker(fn() { start_registry(config, Named(name)) })
+    |> supervision.restart(Transient)
+    |> supervision.significant(True)
+  let session =
+    supervision.worker(fn() { start_named_session(config, name) })
+    |> supervision.restart(Transient)
+  static_supervisor.new(RestForOne)
+  |> static_supervisor.auto_shutdown(AnySignificant)
+  |> static_supervisor.add(registry)
+  |> static_supervisor.add(session)
+  |> static_supervisor.start
+  |> result.map(started_listener(_, name))
+}
+
+fn started_listener(
+  started: actor.Started(static_supervisor.Supervisor),
+  name: Name(ListenerProcessMessage),
+) -> actor.Started(Listener) {
+  actor.Started(pid: started.pid, data: from_name(name))
 }
 
 /// The listener that runs, or will run, under a name. It makes the handle
@@ -317,41 +446,133 @@ pub fn supervised(
 ///
 /// ## Returns
 ///
-/// A handle of the listener. While no listener has the name, each call
+/// A handle of the listener. While no registry has the name, each call
 /// with it gives `ListenerProcessDown`, and `stop` gives `Nil`.
 pub fn from_name(name: Name(ListenerProcessMessage)) -> Listener {
   Listener(subject: process.named_subject(name))
 }
 
-/// The start of the listener does no I/O: its connection process starts
-/// supervised, and connects after it.
-fn start_process(
+/// A monitor of the listener's registry: the process that keeps the
+/// subscriptions. The end of the registry ends each subscription, so a
+/// subscriber that must know it monitors the registry. A crash of the
+/// session alone keeps the registry, and gives no `Down`.
+///
+/// The caller adds the `Down` to the selector that it receives its
+/// `ListenerMessage`s with: `process.select_specific_monitor(selector,
+/// monitor, mapping)`, where `mapping` makes a message of the caller's own
+/// type from the `Down`. After the `Down`, the caller takes the monitor off
+/// the selector with `process.deselect_specific_monitor`, subscribes
+/// again through a handle of `from_name`, and monitors the new registry.
+///
+/// ## Parameters
+///
+/// - `listener`: the listener
+///
+/// ## Returns
+///
+/// - `Ok(Monitor)`: a monitor of the registry that runs now, owned by the
+///   caller. A registry that stops at once gives its `Down` at once.
+/// - `Error(ListenerProcessDown)`: no registry runs
+pub fn monitor_registry(listener: Listener) -> Result(Monitor, ListenerError) {
+  subject_owner(listener.subject)
+  |> result.map(process.monitor)
+  |> replace_error(ListenerProcessDown)
+}
+
+/// The start of the registry does no I/O. A registry of `start` also
+/// starts its session, which connects after it.
+fn start_registry(
   config: ListenerConfig,
-  starter: Option(Subject(Result(Nil, ConnectError))),
-  name: Option(Name(ListenerProcessMessage)),
+  placement: Placement,
 ) -> Result(actor.Started(Listener), actor.StartError) {
   let timeout = config.connection.setup_timeout_milliseconds
-  actor.new_with_initialiser(timeout, initialise(_, config, starter))
-  |> actor.on_message(handle_message)
-  |> with_name(name)
+  actor.new_with_initialiser(timeout, initialise_registry(_, config, placement))
+  |> actor.on_message(handle_registry_message)
+  |> with_name(placement)
   |> actor.start
 }
 
 fn with_name(
-  builder: actor.Builder(State, ListenerProcessMessage, Listener),
-  name: Option(Name(ListenerProcessMessage)),
-) -> actor.Builder(State, ListenerProcessMessage, Listener) {
-  case name {
-    Some(name) -> actor.named(builder, name)
-    None -> builder
+  builder: actor.Builder(RegistryState, ListenerProcessMessage, Listener),
+  placement: Placement,
+) -> actor.Builder(RegistryState, ListenerProcessMessage, Listener) {
+  case placement {
+    Named(name) -> actor.named(builder, name)
+    Linked(_starter) -> builder
   }
 }
 
-fn initialise(
+fn initialise_registry(
   subject: Subject(ListenerProcessMessage),
   config: ListenerConfig,
+  placement: Placement,
+) -> Result(
+  actor.Initialised(RegistryState, ListenerProcessMessage, Listener),
+  String,
+) {
+  case placement {
+    Linked(starter) ->
+      start_session(config, process.self())
+      |> replace(registry_initialised(subject, Some(starter)))
+      |> replace_error("the session did not start")
+    Named(_name) -> Ok(registry_initialised(subject, None))
+  }
+}
+
+fn registry_initialised(
+  subject: Subject(ListenerProcessMessage),
   starter: Option(Subject(Result(Nil, ConnectError))),
-) -> Result(actor.Initialised(State, ListenerProcessMessage, Listener), String) {
+) -> actor.Initialised(RegistryState, ListenerProcessMessage, Listener) {
+  let state = RegistryState(session: None, starter:, subscriptions: dict.new())
+  let selector =
+    process.new_selector()
+    |> process.select_record(
+      atom.create("dream_postgres_listener_request"),
+      1,
+      request_of,
+    )
+    |> process.select_monitors(monitored_process_down)
+  actor.initialised(state)
+  |> actor.selecting(selector)
+  |> actor.returning(Listener(subject:))
+}
+
+fn monitored_process_down(down: Down) -> ListenerProcessMessage {
+  MonitoredProcessDown(down.monitor)
+}
+
+/// Finds the registry by its name once, so the session sends to its
+/// process ID. The supervisor starts the session after the registry, so
+/// the name has a process.
+fn start_named_session(
+  config: ListenerConfig,
+  name: Name(ListenerProcessMessage),
+) -> Result(actor.Started(Subject(SessionMessage)), actor.StartError) {
+  process.named(name)
+  |> replace_error(actor.InitFailed("the registry of the listener is gone"))
+  |> try(start_session(config, _))
+}
+
+/// The start of the session does no I/O: its connection process starts
+/// supervised, and connects after it.
+fn start_session(
+  config: ListenerConfig,
+  registry: Pid,
+) -> Result(actor.Started(Subject(SessionMessage)), actor.StartError) {
+  let timeout = config.connection.setup_timeout_milliseconds
+  actor.new_with_initialiser(timeout, initialise_session(_, config, registry))
+  |> actor.on_message(handle_session_message)
+  |> actor.start
+}
+
+fn initialise_session(
+  subject: Subject(SessionMessage),
+  config: ListenerConfig,
+  registry: Pid,
+) -> Result(
+  actor.Initialised(SessionState, SessionMessage, Subject(SessionMessage)),
+  String,
+) {
   let notifications = process.new_subject()
   let events = process.new_subject()
   let connection_config =
@@ -362,38 +583,42 @@ fn initialise(
       notices: None,
     )
   connection.supervised(connection_config).start()
-  |> result.map(initialised(subject, config, _, starter, notifications, events))
+  |> result.map(session_initialised(
+    subject,
+    config,
+    registry,
+    _,
+    notifications,
+    events,
+  ))
   |> replace_error("the connection process did not start")
 }
 
-fn initialised(
-  subject: Subject(ListenerProcessMessage),
+/// Tells the registry that the session started, before any event of its
+/// connection, so the registry knows the session before its first report.
+fn session_initialised(
+  subject: Subject(SessionMessage),
   config: ListenerConfig,
+  registry: Pid,
   started: actor.Started(Connection),
-  starter: Option(Subject(Result(Nil, ConnectError))),
   notifications: Subject(Notification),
   events: Subject(ConnectionEvent),
-) -> actor.Initialised(State, ListenerProcessMessage, Listener) {
+) -> actor.Initialised(SessionState, SessionMessage, Subject(SessionMessage)) {
+  send_to_registry(registry, SessionStarted(subject, process.self()))
   let state =
-    State(
+    SessionState(
       connection: started.data,
-      starter:,
+      registry:,
       deadline_milliseconds: config.deadline_milliseconds,
-      subscriptions: dict.new(),
     )
   let selector =
     process.new_selector()
     |> process.select(subject)
-    |> process.select_map(notifications, NotificationReceived)
-    |> process.select_map(events, ConnectionEventReceived)
-    |> process.select_monitors(down_message)
+    |> process.select_map(notifications, ConnectionNotified)
+    |> process.select_map(events, ConnectionChanged)
   actor.initialised(state)
   |> actor.selecting(selector)
-  |> actor.returning(Listener(subject:))
-}
-
-fn down_message(down: Down) -> ListenerProcessMessage {
-  SubscriberDown(down.monitor)
+  |> actor.returning(subject)
 }
 
 /// Stops the listener and its connection.
@@ -404,8 +629,9 @@ fn down_message(down: Down) -> ListenerProcessMessage {
 ///
 /// ## Returns
 ///
-/// `Nil`, also when the listener is gone already. Its subscribers get no
-/// message.
+/// `Nil` once the connection closed, also when the listener is gone
+/// already. Its subscribers get no message. A supervised listener's
+/// supervisor then stops, and is not started again.
 pub fn stop(listener: Listener) -> Nil {
   call(listener, StopRequest) |> result.unwrap(Nil)
 }
@@ -413,8 +639,8 @@ pub fn stop(listener: Listener) -> Nil {
 // Subscribing -----------------------------------------------------------------
 
 /// Subscribes a subject to a channel. The first subscription of a channel
-/// sends `LISTEN`. The listener monitors the subject's process and ends the
-/// subscription when that process stops.
+/// makes the session send `LISTEN`. The registry monitors the subject's
+/// process and ends the subscription when that process stops.
 ///
 /// ## Parameters
 ///
@@ -428,7 +654,7 @@ pub fn stop(listener: Listener) -> Nil {
 /// - `Ok(Subscription)`: the session listens on the channel, or the
 ///   connection is not up and the subscriber got `NotListening`
 /// - `Error(ListenerError)`: the name is too long, the subject has no
-///   process, the `LISTEN` failed with a `ListenFailure`, or the listener
+///   process, the `LISTEN` failed with a `ListenFailure`, or the registry
 ///   is gone
 pub fn subscribe(
   listener: Listener,
@@ -452,7 +678,7 @@ fn check_channel(channel: String) -> Result(Nil, ListenerError) {
 }
 
 /// Ends a subscription. When it was the last one of its channel, the
-/// listener sends `UNLISTEN`.
+/// session sends `UNLISTEN`.
 ///
 /// ## Parameters
 ///
@@ -462,7 +688,7 @@ fn check_channel(channel: String) -> Result(Nil, ListenerError) {
 /// ## Returns
 ///
 /// - `Ok(Nil)`: the subscription is ended, also when it was ended already
-/// - `Error(ListenerGone)`: the listener is gone
+/// - `Error(ListenerGone)`: the registry is gone
 pub fn unsubscribe(
   listener: Listener,
   subscription: Subscription,
@@ -471,30 +697,30 @@ pub fn unsubscribe(
   |> replace_error(ListenerGone)
 }
 
-/// Waits for the answer until it comes, or gives `Error(Nil)` when the
-/// listener is gone.
+/// Waits for the answer of the registry until it comes, or gives
+/// `Error(Nil)` when the registry is gone.
 fn call(
   listener: Listener,
   make: fn(ReplyTo(reply)) -> ListenerProcessMessage,
 ) -> Result(reply, Nil) {
-  use pid <- try(process.subject_owner(listener.subject))
-  call_process(pid, send_request(listener, make, _))
+  use registry <- try(subject_owner(listener.subject))
+  call_process(registry, send_request(registry, make, _))
 }
 
 fn send_request(
-  listener: Listener,
+  registry: Pid,
   make: fn(ReplyTo(reply)) -> ListenerProcessMessage,
   reply_to: ReplyTo(reply),
 ) -> Nil {
-  process.send(listener.subject, make(reply_to))
+  send_to_registry(registry, make(reply_to))
 }
 
-// The process -----------------------------------------------------------------
+// The registry ----------------------------------------------------------------
 
-fn handle_message(
-  state: State,
+fn handle_registry_message(
+  state: RegistryState,
   message: ListenerProcessMessage,
-) -> actor.Next(State, ListenerProcessMessage) {
+) -> actor.Next(RegistryState, ListenerProcessMessage) {
   case message {
     SubscribeRequest(channel:, subscriber:, owner:, reply: reply_to) ->
       actor.continue(add_subscriber(state, channel, subscriber, owner, reply_to))
@@ -504,27 +730,32 @@ fn handle_message(
       actor.continue(state)
     }
     StopRequest(reply: reply_to) -> {
-      connection.stop(state.connection)
+      close_session(state)
       reply(reply_to, Nil)
       actor.stop()
     }
+    SessionStarted(session:, pid:) ->
+      actor.continue(session_started(state, session, pid))
+    SessionUp -> actor.continue(session_up(state))
+    SessionLost -> actor.continue(lost(state))
+    SessionConnectFailed(error) -> first_connect_failed(state, error)
     NotificationReceived(notification) -> {
       deliver(state, notification)
       actor.continue(state)
     }
-    ConnectionEventReceived(event) -> connection_event(state, event)
-    SubscriberDown(monitor) -> actor.continue(remove_subscriber(state, monitor))
+    MonitoredProcessDown(monitor) ->
+      actor.continue(monitored_process_ended(state, monitor))
   }
 }
 
 /// Adds a subscriber, or refuses it.
 fn add_subscriber(
-  state: State,
+  state: RegistryState,
   channel: String,
   subject: Subject(ListenerMessage),
   owner: Pid,
   reply_to: ReplyTo(Result(Subscription, ListenerError)),
-) -> State {
+) -> RegistryState {
   let #(state, answer) = case admission(state, channel) {
     Admit(listening:) ->
       added(state, Subscriber(channel, subject, listening), owner)
@@ -536,7 +767,7 @@ fn add_subscriber(
 
 /// Only the first subscriber of a channel needs a `LISTEN`. A later one
 /// listens when the others do.
-fn admission(state: State, channel: String) -> Admission {
+fn admission(state: RegistryState, channel: String) -> Admission {
   case subscribers_on(state, channel) {
     [] -> listen(state, channel) |> listen_admission
     subscribers -> Admit(any(subscribers, is_listening))
@@ -544,7 +775,7 @@ fn admission(state: State, channel: String) -> Admission {
 }
 
 /// A `LISTEN` that failed because the connection is not up is kept: the
-/// connection process connects, and the listener listens then.
+/// connection process connects, and the registry asks for `LISTEN` then.
 fn listen_admission(listened: Listened) -> Admission {
   case listened {
     ListenWorked -> Admit(True)
@@ -554,130 +785,165 @@ fn listen_admission(listened: Listened) -> Admission {
 }
 
 fn added(
-  state: State,
+  state: RegistryState,
   subscriber: Subscriber,
   owner: Pid,
-) -> #(State, Result(Subscription, ListenerError)) {
+) -> #(RegistryState, Result(Subscription, ListenerError)) {
   let monitor = process.monitor(owner)
   let subscriptions = dict.insert(state.subscriptions, monitor, subscriber)
   case subscriber.listening {
     True -> Nil
     False -> process.send(subscriber.subject, NotListening)
   }
-  #(State(..state, subscriptions:), Ok(Subscription(monitor)))
+  #(RegistryState(..state, subscriptions:), Ok(Subscription(monitor)))
 }
 
 /// Removes the subscriber of a monitor, if it is still there. When it was
-/// the last one of its channel, the listener sends `UNLISTEN`.
-fn remove_subscriber(state: State, monitor: Monitor) -> State {
+/// the last one of its channel, the session sends `UNLISTEN`.
+fn remove_subscriber(state: RegistryState, monitor: Monitor) -> RegistryState {
   case dict.get(state.subscriptions, monitor) {
     Ok(subscriber) -> removed(state, monitor, subscriber.channel)
     Error(Nil) -> state
   }
 }
 
-fn removed(state: State, monitor: Monitor, channel: String) -> State {
+fn removed(
+  state: RegistryState,
+  monitor: Monitor,
+  channel: String,
+) -> RegistryState {
   process.demonitor_process(monitor)
   let state =
-    State(..state, subscriptions: dict.delete(state.subscriptions, monitor))
+    RegistryState(
+      ..state,
+      subscriptions: dict.delete(state.subscriptions, monitor),
+    )
   case has_subscribers(state, channel) {
     True -> state
     False -> unlisten(state, channel)
   }
 }
 
-/// Sends `UNLISTEN`. Its result changes nothing: after a loss the new
-/// session does not listen on the channel, because the channel has no
-/// subscriber to listen again for, and after a refusal the notifications
-/// of the channel reach no subscriber.
-fn unlisten(state: State, channel: String) -> State {
-  case run(state, "UNLISTEN " <> quoted(channel)) {
-    Ok(Nil) | Error(_loss_or_refusal) -> state
-  }
+/// Asks the session for `UNLISTEN`. Its result changes nothing: with no
+/// session, or after a loss, the next session does not listen on the
+/// channel, because the channel has no subscriber to listen again for, and
+/// after a refusal the notifications of the channel reach no subscriber.
+fn unlisten(state: RegistryState, channel: String) -> RegistryState {
+  call_session(state, UnlistenRequest(channel, _)) |> result.unwrap(Nil)
+  state
 }
 
-fn listen(state: State, channel: String) -> Listened {
-  run(state, "LISTEN " <> quoted(channel)) |> listened
+/// Asks the session for `LISTEN`. With no session, or a session that
+/// stops before it answers, the connection is not up: the next session
+/// listens.
+fn listen(state: RegistryState, channel: String) -> Listened {
+  call_session(state, ListenRequest(channel, _)) |> result.unwrap(ListenLost)
 }
 
-/// The SQL is one `LISTEN` in one Query message. Its only encode failure
-/// is the zero byte: the message is far below the 2 GiB limit, because
-/// the channel has at most 63 bytes. A PostgreSQL server answers it with
-/// one result or one error, so `ScriptFailed` and `ScriptCopyRefused` come
-/// only from a server that breaks the protocol.
-fn listened(result: Result(Nil, ScriptError)) -> Listened {
-  case result {
-    Ok(Nil) -> ListenWorked
-    Error(ScriptRequestFailed(ConnectionEnded(_)))
-    | Error(ScriptNotConnected(_)) -> ListenLost
-    Error(ScriptRequestFailed(ConnectionProcessDown)) ->
-      ListenNotDone(ListenerConnectionDown)
-    Error(ScriptRequestFailed(DeadlinePassed(cancelled:))) ->
-      ListenNotDone(ListenDeadlinePassed(cancelled))
-    Error(ScriptUnencodable(_zero_byte)) -> ListenNotDone(ChannelHasZeroByte)
-    Error(ScriptRefused(report:, transaction_status:)) ->
-      ListenNotDone(ListenRefused(report, transaction_status))
-    Error(ScriptFailed(..)) | Error(ScriptCopyRefused(..)) ->
-      ListenNotDone(ListenAnswerUnexpected)
-  }
+/// Closes the connection of the session, which then stops. With no
+/// session there is nothing to close.
+fn close_session(state: RegistryState) -> Nil {
+  call_session(state, CloseRequest) |> result.unwrap(Nil)
 }
 
-fn run(state: State, sql: String) -> Result(Nil, ScriptError) {
-  connection.run_listener_script(
-    state.connection,
-    sql,
-    state.deadline_milliseconds,
+/// Waits for the answer of the session until it comes, or gives
+/// `Error(Nil)` when the registry has no session or the session is gone.
+/// The session never waits for the registry, so the two never wait for
+/// each other.
+fn call_session(
+  state: RegistryState,
+  make: fn(ReplyTo(reply)) -> SessionMessage,
+) -> Result(reply, Nil) {
+  use session <- try(option.to_result(state.session, Nil))
+  call_process(session.pid, send_to_session(session, make, _))
+}
+
+fn send_to_session(
+  session: SessionLink,
+  make: fn(ReplyTo(reply)) -> SessionMessage,
+  reply_to: ReplyTo(reply),
+) -> Nil {
+  process.send(session.subject, make(reply_to))
+}
+
+// Sessions, notifications and reconnects --------------------------------------
+
+/// A new session listens on nothing. A subscriber that still listens
+/// listened on an earlier session whose end the registry did not see yet,
+/// so it gets `NotListening`.
+fn session_started(
+  state: RegistryState,
+  subject: Subject(SessionMessage),
+  pid: Pid,
+) -> RegistryState {
+  let monitor = process.monitor(pid)
+  lost(
+    RegistryState(..state, session: Some(SessionLink(subject:, pid:, monitor:))),
   )
-  |> replace(Nil)
 }
 
-/// The channel as a quoted identifier, so its name stays exact.
-fn quoted(channel: String) -> String {
-  "\"" <> replace_text(channel, "\"", "\"\"") <> "\""
+/// Once the connection is up, the first time or again, the registry asks
+/// the session for `LISTEN` on each channel and tells its subscribers the
+/// result. The first one of a listener from `start` also answers its
+/// starter.
+fn session_up(state: RegistryState) -> RegistryState {
+  let state = answer_starter(state)
+  list.fold(channels(state), state, listen_on_session)
 }
 
-// Notifications and reconnects ------------------------------------------------
+fn answer_starter(state: RegistryState) -> RegistryState {
+  case state.starter {
+    Some(starter) -> process.send(starter, Ok(Nil))
+    None -> Nil
+  }
+  RegistryState(..state, starter: None)
+}
 
-fn deliver(state: State, notification: Notification) -> Nil {
+/// A failed first attempt of a listener from `start` answers its starter
+/// and stops the listener. Under a supervisor the connection process tries
+/// again by itself.
+fn first_connect_failed(
+  state: RegistryState,
+  error: ConnectError,
+) -> actor.Next(RegistryState, ListenerProcessMessage) {
+  case state.starter {
+    Some(starter) -> {
+      process.send(starter, Error(error))
+      close_session(state)
+      actor.stop()
+    }
+    None -> actor.continue(state)
+  }
+}
+
+/// The end of the session is a loss: the next session listens again. Any
+/// other monitor is a subscriber's.
+fn monitored_process_ended(
+  state: RegistryState,
+  monitor: Monitor,
+) -> RegistryState {
+  case option.map(state.session, monitor_of) == Some(monitor) {
+    True -> lost(RegistryState(..state, session: None))
+    False -> remove_subscriber(state, monitor)
+  }
+}
+
+fn monitor_of(session: SessionLink) -> Monitor {
+  session.monitor
+}
+
+fn deliver(state: RegistryState, notification: Notification) -> Nil {
   subscribers_of(state, notification.channel)
   |> each(process.send(_, NotificationArrived(notification)))
 }
 
-/// A loss tells each subscriber that listens. Once the session is up, the
-/// first one or a new one after a loss, the listener sends `LISTEN` for
-/// each channel and tells its subscribers the result. A failed attempt
-/// needs nothing: the connection process tries again by itself. The first
-/// attempt of a listener from `start` also answers its starter, and a
-/// failed one stops the listener.
-fn connection_event(
-  state: State,
-  event: ConnectionEvent,
-) -> actor.Next(State, ListenerProcessMessage) {
-  case event, state.starter {
-    Connected, Some(starter) -> {
-      process.send(starter, Ok(Nil))
-      actor.continue(State(..state, starter: None))
-    }
-    Connected, None | Reconnected, _ ->
-      actor.continue(list.fold(channels(state), state, listen_on_session))
-    connection.ConnectFailed(error), Some(starter) -> {
-      process.send(starter, Error(error))
-      connection.stop(state.connection)
-      actor.stop()
-    }
-    connection.ConnectFailed(_error), None | ReconnectFailed(_error), _ ->
-      actor.continue(state)
-    Disconnected(_error), _ -> actor.continue(lost(state))
-  }
-}
-
 /// Only the subscribers that listen get `NotListening`: one that came
 /// while the connection was not up got it already.
-fn lost(state: State) -> State {
+fn lost(state: RegistryState) -> RegistryState {
   dict.values(state.subscriptions)
   |> filter(is_listening)
   |> each(tell_lost)
-  State(
+  RegistryState(
     ..state,
     subscriptions: dict.map_values(state.subscriptions, not_listening),
   )
@@ -691,7 +957,7 @@ fn not_listening(_monitor: Monitor, subscriber: Subscriber) -> Subscriber {
   Subscriber(..subscriber, listening: False)
 }
 
-fn listen_on_session(state: State, channel: String) -> State {
+fn listen_on_session(state: RegistryState, channel: String) -> RegistryState {
   let listened = listen(state, channel)
   case listen_message(channel, listened) {
     Some(message) ->
@@ -699,7 +965,7 @@ fn listen_on_session(state: State, channel: String) -> State {
     None -> Nil
   }
   let listening = listened == ListenWorked
-  State(
+  RegistryState(
     ..state,
     subscriptions: dict.map_values(
       state.subscriptions,
@@ -739,7 +1005,7 @@ fn is_listening(subscriber: Subscriber) -> Bool {
   subscriber.listening
 }
 
-fn channels(state: State) -> List(String) {
+fn channels(state: RegistryState) -> List(String) {
   dict.values(state.subscriptions) |> list.map(channel_of) |> unique
 }
 
@@ -747,12 +1013,12 @@ fn channel_of(subscriber: Subscriber) -> String {
   subscriber.channel
 }
 
-fn has_subscribers(state: State, channel: String) -> Bool {
+fn has_subscribers(state: RegistryState, channel: String) -> Bool {
   subscribers_on(state, channel) != []
 }
 
 fn subscribers_of(
-  state: State,
+  state: RegistryState,
   channel: String,
 ) -> List(Subject(ListenerMessage)) {
   subscribers_on(state, channel) |> list.map(subject_of)
@@ -762,10 +1028,102 @@ fn subject_of(subscriber: Subscriber) -> Subject(ListenerMessage) {
   subscriber.subject
 }
 
-fn subscribers_on(state: State, channel: String) -> List(Subscriber) {
+fn subscribers_on(state: RegistryState, channel: String) -> List(Subscriber) {
   dict.values(state.subscriptions) |> filter(on_channel(_, channel))
 }
 
 fn on_channel(subscriber: Subscriber, channel: String) -> Bool {
   subscriber.channel == channel
+}
+
+// The session -----------------------------------------------------------------
+
+fn handle_session_message(
+  state: SessionState,
+  message: SessionMessage,
+) -> actor.Next(SessionState, SessionMessage) {
+  case message {
+    ListenRequest(channel:, reply: reply_to) -> {
+      reply(reply_to, run_listen(state, channel))
+      actor.continue(state)
+    }
+    UnlistenRequest(channel:, reply: reply_to) -> {
+      run_unlisten(state, channel)
+      reply(reply_to, Nil)
+      actor.continue(state)
+    }
+    CloseRequest(reply: reply_to) -> {
+      connection.stop(state.connection)
+      reply(reply_to, Nil)
+      actor.stop()
+    }
+    ConnectionNotified(notification) -> {
+      send_to_registry(state.registry, NotificationReceived(notification))
+      actor.continue(state)
+    }
+    ConnectionChanged(event) -> {
+      report(state, event)
+      actor.continue(state)
+    }
+  }
+}
+
+/// Tells the registry what changed. A failed reconnect needs nothing: the
+/// connection process tries again by itself, and the registry told each
+/// subscriber at the loss.
+fn report(state: SessionState, event: ConnectionEvent) -> Nil {
+  case event {
+    Connected | Reconnected -> send_to_registry(state.registry, SessionUp)
+    connection.ConnectFailed(error) ->
+      send_to_registry(state.registry, SessionConnectFailed(error))
+    ReconnectFailed(_error) -> Nil
+    Disconnected(_error) -> send_to_registry(state.registry, SessionLost)
+  }
+}
+
+/// Sends `UNLISTEN`. Its result changes nothing (see `unlisten`).
+fn run_unlisten(state: SessionState, channel: String) -> Nil {
+  case run(state, "UNLISTEN " <> quoted(channel)) {
+    Ok(Nil) | Error(_loss_or_refusal) -> Nil
+  }
+}
+
+fn run_listen(state: SessionState, channel: String) -> Listened {
+  run(state, "LISTEN " <> quoted(channel)) |> listened
+}
+
+/// The SQL is one `LISTEN` in one Query message. Its only encode failure
+/// is the zero byte: the message is far below the 2 GiB limit, because
+/// the channel has at most 63 bytes. A PostgreSQL server answers it with
+/// one result or one error, so `ScriptFailed` and `ScriptCopyRefused` come
+/// only from a server that breaks the protocol.
+fn listened(result: Result(Nil, ScriptError)) -> Listened {
+  case result {
+    Ok(Nil) -> ListenWorked
+    Error(ScriptRequestFailed(ConnectionEnded(_)))
+    | Error(ScriptNotConnected(_)) -> ListenLost
+    Error(ScriptRequestFailed(ConnectionProcessDown)) ->
+      ListenNotDone(ListenerConnectionDown)
+    Error(ScriptRequestFailed(DeadlinePassed(cancelled:))) ->
+      ListenNotDone(ListenDeadlinePassed(cancelled))
+    Error(ScriptUnencodable(_zero_byte)) -> ListenNotDone(ChannelHasZeroByte)
+    Error(ScriptRefused(report:, transaction_status:)) ->
+      ListenNotDone(ListenRefused(report, transaction_status))
+    Error(ScriptFailed(..)) | Error(ScriptCopyRefused(..)) ->
+      ListenNotDone(ListenAnswerUnexpected)
+  }
+}
+
+fn run(state: SessionState, sql: String) -> Result(Nil, ScriptError) {
+  connection.run_listener_script(
+    state.connection,
+    sql,
+    state.deadline_milliseconds,
+  )
+  |> replace(Nil)
+}
+
+/// The channel as a quoted identifier, so its name stays exact.
+fn quoted(channel: String) -> String {
+  "\"" <> replace_text(channel, "\"", "\"\"") <> "\""
 }

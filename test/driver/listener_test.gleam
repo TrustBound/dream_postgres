@@ -10,12 +10,12 @@
 
 import dream_postgres/driver/connection.{Backoff, Notification, TransportRefused}
 import dream_postgres/driver/listener.{
-  type Listener, type ListenerConfig, type ListenerMessage, ChannelHasZeroByte,
-  ChannelTooLong, ConnectFailed, ListenAnswerUnexpected, ListenDeadlinePassed,
-  ListenFailed, ListenRefused, ListenerConnectionDown, ListenerGone,
-  ListenerNotStarted, ListenerProcessDown, Listening, NotListening,
-  NotificationArrived, SubscribeFailed, SubscriberHasNoProcess, start, stop,
-  subscribe, supervised, unsubscribe,
+  type ListenerConfig, type ListenerMessage, ChannelHasZeroByte, ChannelTooLong,
+  ConnectFailed, ListenAnswerUnexpected, ListenDeadlinePassed, ListenFailed,
+  ListenRefused, ListenerConnectionDown, ListenerGone, ListenerNotStarted,
+  ListenerProcessDown, Listening, NotListening, NotificationArrived,
+  SubscribeFailed, SubscriberHasNoProcess, start, stop, subscribe, supervised,
+  unsubscribe,
 }
 import dream_postgres/driver/transport.{ConnectRefused}
 import dream_postgres/internal/cell.{Idle}
@@ -53,6 +53,10 @@ import driver/server_listener.{
   subscribe_second, subscribe_second_to_other, subscribe_to, subscribed_setup,
   suspend_listener_connection, wait_for_first_message, wait_for_statement,
 }
+import driver/server_named_listener.{
+  type NamedListener, start_configured_named_listener, stop_named_listener,
+  stop_named_listener_after_error,
+}
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/backoff_strategies.{capped_delay}
 import fixtures/server_report.{server_report}
@@ -62,7 +66,7 @@ import gleam/list.{map}
 import gleam/otp/actor
 import gleam/otp/static_supervisor
 import gleam/result.{flatten, map_error, replace_error, try}
-import gleam/string.{inspect, repeat}
+import gleam/string.{repeat}
 import matchers/extract_arrived_notification.{extract_arrived_notification}
 import matchers/extract_channel_and_payload.{extract_channel_and_payload}
 
@@ -732,7 +736,7 @@ fn start_tests() -> TestSuite {
 /// be written. Both subscribed before the server listened.
 type LateListener {
   LateListener(
-    listener: Listener,
+    named: NamedListener,
     plain_first: Result(ListenerMessage, String),
     plain_after: Result(ListenerMessage, String),
     zero_byte_first: Result(ListenerMessage, String),
@@ -747,21 +751,16 @@ fn start_listener_before_server() -> Result(LateListener, String) {
     "svc827_late",
     Backoff(10, 100, capped_delay),
   ))
-  use started <- try(
-    supervised(config, process.new_name("svc827_late_listener")).start()
-    |> map_error(inspect),
-  )
-  watch_late_listener(started.data, port)
-  |> map_error(fn(error) {
-    stop(started.data)
-    error
-  })
+  use named <- try(start_configured_named_listener(config))
+  watch_late_listener(named, port)
+  |> map_error(stop_named_listener_after_error(named, _))
 }
 
 fn watch_late_listener(
-  listener: Listener,
+  named: NamedListener,
   port: Int,
 ) -> Result(LateListener, String) {
+  let listener = named.handle
   let plain = process.new_subject()
   let zero_byte = process.new_subject()
   use _plain_subscription <- try(subscribe_to(listener, "svc827_late", plain))
@@ -776,7 +775,7 @@ fn watch_late_listener(
   let plain_after = receive_message(plain)
   let zero_byte_after = receive_message(zero_byte)
   Ok(LateListener(
-    listener:,
+    named:,
     plain_first:,
     plain_after:,
     zero_byte_first:,
@@ -785,7 +784,7 @@ fn watch_late_listener(
 }
 
 fn stop_late_listener(outcome: LateListener) -> Result(Nil, String) {
-  Ok(stop(outcome.listener))
+  stop_named_listener(outcome.named)
 }
 
 fn late_server_tests() -> TestSuite {
