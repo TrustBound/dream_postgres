@@ -1162,7 +1162,6 @@ fn terminate(socket: transport.Connection) -> Nil {
   }
 }
 
-/// A request runs at once when no other runs, and waits otherwise.
 /// Gives the request its number and starts its deadline timer.
 fn new_request(state: State, request: Request, deadline: Int) -> State {
   let id = state.next_id
@@ -1170,15 +1169,18 @@ fn new_request(state: State, request: Request, deadline: Int) -> State {
   accept_request(State(..state, next_id: id + 1), Ticket(id:, request:, timer:))
 }
 
-/// A request waits while another runs, and while the caller of an ended
-/// COPY did not take its end.
+/// A request runs at once when no request is in progress and no ended
+/// COPY waits for its caller. A request is in progress from its start
+/// until `next_request` ends it: while a step runs, and also after its
+/// step ended while the cancel of its deadline is not done yet, so that
+/// cancel can never reach the next request.
 fn accept_request(state: State, ticket: Ticket) -> State {
-  case state.running, state.copy, state.link {
+  case state.current, state.copy, state.link {
     None, None, Connected(socket:, ..) -> {
       let current = Current(ticket.id, ticket.timer, False, False, False)
       begin(State(..state, current: Some(current)), socket, ticket.request)
     }
-    Some(_running), _, _ | _, Some(_copy), _ ->
+    Some(_in_progress), _, _ | _, Some(_copy), _ ->
       State(..state, waiting: [ticket, ..state.waiting])
     None, None, Lost(error:) -> {
       refuse_ticket(ticket, error)
