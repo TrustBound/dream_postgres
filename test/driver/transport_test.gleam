@@ -13,8 +13,8 @@ import dream_postgres/driver/transport.{
   NoCertificateCheck, NoTls, OtherTlsFailure, PostgresNegotiation, PreferTls,
   ReceiveTimedOut, RequireTls, SendTimedOut, ServerRefusedTls, SocketClosed,
   SystemAuthorities, TlsFailed, TlsRequestAnsweredWithError, TransportConfig,
-  UnexpectedTlsAnswer, UnknownAuthority, Unlisted, address, connect,
-  connect_error, send_error, socket_error, tls_error,
+  UnexpectedTlsAnswer, UnknownAuthority, Unlisted, address, close, connect,
+  connect_error, send_error, server_certificate, socket_error, tls_error,
 }
 import dream_test/matchers.{
   be_equal, be_error, be_ok, be_true, or_fail_with, should,
@@ -25,12 +25,14 @@ import driver/fake_server.{
   type FakeBehavior, Answer, NotTls, Reset, Tls, free_port, start_fake_server,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
-import fixtures/driver_tls.{certificate_authority, verify_full}
+import fixtures/driver_tls.{verify_full}
 import gleam/erlang/atom.{type Atom}
 import gleam/int.{to_string}
 import gleam/list.{map}
 import gleam/option.{None, Some}
-import gleam/result.{replace_error, try}
+import gleam/result.{map_error, replace_error, try}
+import gleam/string.{inspect}
+import matchers/be_equal_parts.{be_equal_parts}
 import matchers/close_connection.{close_connection}
 import matchers/extract_address_parts.{extract_address_parts}
 import matchers/extract_client_closed.{extract_client_closed}
@@ -43,7 +45,9 @@ import matchers/extract_startup_answer.{extract_startup_answer}
 fn reason_name(reason: #(Atom, Atom)) -> Atom
 
 @external(erlang, "driver_file_ffi", "read_pem_certificate")
-fn read_pem_certificate(path: String) -> BitArray
+fn read_pem_certificate(path: String) -> Result(BitArray, String)
+
+const certificate_authority = "test/fixtures/ssl/ca.crt"
 
 /// The tests of the transport.
 pub fn tests() -> TestSuite {
@@ -200,19 +204,21 @@ fn server_tests(server: Server) {
       |> or_fail_with("Expected AuthenticationOk over TLS")
     }),
     it("takes the CA certificates as DER bytes", fn() {
-      // Arrange
-      let authorities =
-        AuthorityCertificates([read_pem_certificate(certificate_authority)])
-      let tls =
-        RequireTls(CheckAuthorityAndHost(authorities), PostgresNegotiation)
-      let config = transport_config("localhost", server.port, tls)
-
       // Act
-      let connected = try(config, connect)
+      let connected = {
+        use certificate <- result.map(read_pem_certificate(
+          certificate_authority,
+        ))
+        let authorities = AuthorityCertificates([certificate])
+        let tls =
+          RequireTls(CheckAuthorityAndHost(authorities), PostgresNegotiation)
+        try(transport_config("localhost", server.port, tls), connect)
+      }
 
       // Assert
       connected
       |> should
+      |> be_ok
       |> extract_startup_answer
       |> be_ok
       |> be_equal(#(AuthenticationOk, True))
@@ -256,18 +262,22 @@ fn server_tests(server: Server) {
     direct_tls_test(server),
     it("gives the server's certificate for channel binding", fn() {
       // Arrange
-      let expected = read_pem_certificate("test/fixtures/ssl/server.crt")
       let config = transport_config("localhost", server.port, verify_full())
 
       // Act
-      let connected = try(config, connect)
+      let certificates = {
+        use expected <- try(read_pem_certificate("test/fixtures/ssl/server.crt"))
+        use connection <- try(try(config, connect) |> map_error(inspect))
+        let certificate = server_certificate(connection)
+        close(connection)
+        Ok(#(certificate, Some(expected)))
+      }
 
       // Assert
-      connected
+      certificates
       |> should
       |> be_ok
-      |> extract_server_certificate
-      |> be_equal(Some(expected))
+      |> be_equal_parts
       |> or_fail_with("Expected the DER bytes of server.crt")
     }),
   ])
@@ -439,16 +449,16 @@ fn fake_error_test(
   error: TransportError,
 ) {
   it(name, fn() {
-    // Arrange
-    let #(port, _server) = start_fake_server(behavior)
-    let config = transport_config("localhost", port, tls)
-
     // Act
-    let connected = try(config, connect)
+    let connected = {
+      use #(port, _server) <- result.map(start_fake_server(behavior))
+      try(transport_config("localhost", port, tls), connect)
+    }
 
     // Assert
     connected
     |> should
+    |> be_ok
     |> be_error
     |> be_equal(error)
     |> or_fail_with("Expected the typed error")
@@ -457,18 +467,18 @@ fn fake_error_test(
 
 fn fake_closed_test(name: String, behavior: FakeBehavior) {
   it("closes the socket after " <> name, fn() {
-    // Arrange
-    let #(port, server) = start_fake_server(behavior)
-    let config = transport_config("localhost", port, verify_full())
-
     // Act
-    let connected = try(config, connect)
+    let connected = {
+      use #(port, server) <- result.map(start_fake_server(behavior))
+      let config = transport_config("localhost", port, verify_full())
+      #(try(config, connect), server)
+    }
 
     // Assert
     connected
     |> should
-    |> be_error
-    |> extract_client_closed(server)
+    |> be_ok
+    |> extract_client_closed
     |> be_true
     |> or_fail_with("Expected the client to close its socket")
   })
@@ -476,16 +486,16 @@ fn fake_closed_test(name: String, behavior: FakeBehavior) {
 
 fn prefer_reconnects_test(name: String, behavior: FakeBehavior) {
   it("connects again over plain TCP with PreferTls after " <> name, fn() {
-    // Arrange
-    let #(port, _server) = start_fake_server(behavior)
-    let config = transport_config("localhost", port, PreferTls)
-
     // Act
-    let connected = try(config, connect)
+    let connected = {
+      use #(port, _server) <- result.map(start_fake_server(behavior))
+      try(transport_config("localhost", port, PreferTls), connect)
+    }
 
     // Assert
     connected
     |> should
+    |> be_ok
     |> be_ok
     |> extract_server_certificate
     |> be_equal(None)
