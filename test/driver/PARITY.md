@@ -2,13 +2,14 @@
 
 This table maps each Common Test case of the pgo fork (`dream_postgres_driver` at `b8eba57`, the suites in `ct/`) to its place in the driver. The fork runs 278 cases: 273 case functions, and 5 of them run in two groups (`int4_range` and `exceptions` in `basic_SUITE`, the 3 shared cases of `statements_SUITE`). The `domain_socket` group of `basic_SUITE` is not in `all/0`, so it does not run. `ct/dream_postgres_driver_test.erl` holds only EUnit tests in comments.
 
-Each row has one of three places:
+Each row has one of four places:
 
 - A test of `test/driver`: the file, then the path of groups and the test name. "PostgreSQL 16 to 19" means one test for each driver server. A test with a proxy, a fake server or no server breaks the connection the same way on each version. It runs one time.
 - A client codec issue, with the type of the case. The client session builds the codecs. The driver gives the bytes of each cell.
 - "does not apply", with the reason.
+- `pool.supervised` (SVC-826), for the one case that waits for it.
 
-Counts: 50 new tests, 51 existing tests, 157 client codec issues, 20 do not apply. No case waits for the pool (SVC-826). No case waits for COPY (SVC-847), because the fork has no COPY test.
+Counts: 50 new tests, 50 existing tests, 157 client codec issues, 20 do not apply, and 1 waits for pool.supervised (SVC-826). No case waits for COPY (SVC-847), because the fork has no COPY test.
 
 No case fails on the driver, so `test/driver/parity_failing_test.gleam` does not exist.
 
@@ -102,7 +103,7 @@ No case fails on the driver, so `test/driver/parity_failing_test.gleam` does not
 | errors_SUITE | `server_down` | A port with no listener gives connection refused. | connection_test.gleam: starting › gives TransportRefused for a port with no listener (no server) |
 | errors_SUITE | `unknown_host` | A host name with no address gives dns_failed with the host. | parity_test.gleam: addresses › gives DnsLookupFailed for a host with no address. Also transport_test.gleam: connect failures › gives DnsLookupFailed with the host for a name with no address |
 | errors_SUITE | `tls_refused` | TLS to a server with no TLS gives a TLS refusal. | parity_test.gleam: addresses › gives ServerRefusedTls for a server with no TLS (PostgreSQL 16 on port 5436: the driver servers all have TLS on) |
-| errors_SUITE | `pool_busy` | A busy pool with no queue gives none_available_no_queuing. | pool_test.gleam: checkouts › gives CheckoutTimedOut when no connection is free in time (PostgreSQL 16). The pool has no option to refuse at once: a checkout waits in the queue until its deadline. |
+| errors_SUITE | `pool_busy` | A busy pool with no queue gives none_available_no_queuing. | pool_test.gleam: checkouts › gives HoldDeadlinePassed when no connection is free in time (PostgreSQL 16). The pool has no option to refuse at once: a hold waits in the queue until its deadline, then gives HoldDeadlinePassed. |
 | errors_SUITE | `connection_lost_during_query` | A session that the server ended gives a closed error, and the next query runs on a new session. | parity_test.gleam: on each driver server › PostgreSQL 16 to 19 › sessions that the server ends › connects again when the server ends an idle session. The request while lost: connection_test.gleam: losing the connection › fails a request while the connection is lost (PostgreSQL 16, proxy). The pool part: pool_test.gleam: replacing connections › never hands out a connection that the server ended (PostgreSQL 16) |
 | errors_SUITE | `idle_connection_ended_by_server` | An idle session that the server ended is replaced, and the next query runs on a new session. | parity_test.gleam: on each driver server › PostgreSQL 16 to 19 › sessions that the server ends › connects again when the server ends an idle session |
 | errors_SUITE | `server_ends_session` | A query that ends its own session gives an error, and the next query works. | parity_test.gleam: on each driver server › PostgreSQL 16 to 19 › sessions that the server ends › gives the 57P01 of a session that the server ends during a run; runs on a new session after the server ended the last one |
@@ -110,10 +111,10 @@ No case fails on the driver, so `test/driver/parity_failing_test.gleam` does not
 | errors_SUITE | `parameter_encode_failed` | An exception of a parameter codec gives encode_failed with the type name. | client codec issue: text (the encoder refuses an integer) |
 | errors_SUITE | `protocol_error_reply` | A message type that PostgreSQL does not have gives a protocol error. | connection_test.gleam: losing the connection › gives a violation to the running request (proxy) |
 | errors_SUITE | `socket_closed_during_query` | A server that closes during a query gives a closed error. | connection_test.gleam: losing the connection › fails the running request when the network closes (PostgreSQL 16, proxy). Also parity_test.gleam: on each driver server › PostgreSQL 16 to 19 › sessions that the server ends › tells of a close by the network as SocketClosed |
-| extra_SUITE | `extra_reaches_every_connection` | The pool setting extra reaches each connection. | pool_test.gleam: starting › gives the extra value of each pool, and its own settings (PostgreSQL 16). The holder of a connection holds the pool, and pool.extra gives the value. |
-| extra_SUITE | `binary_extra_is_not_changed` | A binary extra stays a binary. | does not apply: extra is a typed Gleam value, and the pool never reads or converts it. The pool test of extra_reaches_every_connection gives the value back unchanged. |
-| extra_SUITE | `extra_defaults_to_undefined` | With no extra, a connection gives undefined. | does not apply: extra is a typed field with no default. A pool with no value uses Nil. |
-| extra_SUITE | `second_start_keeps_extra` | A second start of the same pool keeps the first extra. | does not apply: a pool has no registered name. Each start makes a new pool with its own extra, as the pool test of extra_reaches_every_connection shows with two pools. |
+| extra_SUITE | `extra_reaches_every_connection` | The pool setting extra reaches each connection. | does not apply: the client keeps its own value beside the Pool. The driver pool has no extra value. |
+| extra_SUITE | `binary_extra_is_not_changed` | A binary extra stays a binary. | does not apply: the client keeps its own value beside the Pool. The driver pool has no extra value. |
+| extra_SUITE | `extra_defaults_to_undefined` | With no extra, a connection gives undefined. | does not apply: the client keeps its own value beside the Pool. The driver pool has no extra value. |
+| extra_SUITE | `second_start_keeps_extra` | A second start of the same pool keeps the first extra. | does not apply: the client keeps its own value beside the Pool. The driver pool has no extra value. |
 | geometric_SUITE | `select` | point values decode and encode. | client codec issue: point |
 | geometric_SUITE | `insert` | point values decode and encode. | client codec issue: point |
 | listen_SUITE | `listen_notify` | Each subscriber of a channel gets its notifications, and an unsubscribe stops them. | listener_test.gleam: on each driver server › PostgreSQL 16 to 19 › gives a notification with the channel, payload and sender; sends UNLISTEN when the last subscriber unsubscribes; keeps listening while another subscriber remains. Also listener_test.gleam: subscribing › gives a notification only to the subscribers of its channel |
@@ -168,7 +169,7 @@ No case fails on the driver, so `test/driver/parity_failing_test.gleam` does not
 | query_opts_SUITE | `default_rows_as_maps` | Rows come as maps with binary keys, or atom keys with an option. | parity_test.gleam: on each driver server › PostgreSQL 16 to 19 › requests › names each result column, so a decoder can name it. Maps and atom keys are decode options of the client. |
 | readme_SUITE | `example_config` | The pool of config/example.config starts from the application environment. | does not apply: the driver has no Erlang application environment. The README of the fork is not the README of dream_postgres. |
 | readme_SUITE | `start_pool` | The README example starts a pool and runs a query. | parity_test.gleam: on each driver server › PostgreSQL 16 to 19 › the pool › runs a query on a held connection |
-| readme_SUITE | `child_spec` | The README child spec starts a pool under a supervisor. | does not apply: the pool has no child specification yet. That is an open design question of SVC-826. The child specification of a connection: connection_test.gleam: more paths › starts under a supervisor |
+| readme_SUITE | `child_spec` | The README child spec starts a pool under a supervisor. | waits for pool.supervised (SVC-826), the child specification of the pool that the pool branch adds now. The test name follows at the next merge. The child specification of a connection: connection_test.gleam: more paths › starts under a supervisor |
 | readme_SUITE | `query_and_transaction` | The README query and transaction example works. | connection_test.gleam: on each driver server › PostgreSQL 16 to 19 › runs a script with one outcome for each statement; knows the transaction status after BEGIN |
 | readme_SUITE | `trace` | The README trace example works. | does not apply: OpenTelemetry tracing. The driver has no tracing and cannot add the dependency. |
 | readme_SUITE | `listen_notify` | The README LISTEN example works. | listener_test.gleam: on each driver server › PostgreSQL 16 to 19 › gives a notification with the channel, payload and sender |
@@ -295,7 +296,7 @@ No case fails on the driver, so `test/driver/parity_failing_test.gleam` does not
 
 ## The changes of the fork and their tests
 
-The change list of the fork has the sections 2 (errors), 3 (connection), 7 (statements) and 8 (TLS). Each change has at least one test.
+The change list of the fork has the sections 2 (errors), 3 (connection), 7 (statements) and 8 (TLS). Each change has at least one test, except C5, which does not apply to the driver.
 
 | Change | Test |
 |---|---|
@@ -308,7 +309,7 @@ The change list of the fork has the sections 2 (errors), 3 (connection), 7 (stat
 | C2. A null byte is refused | login_test.gleam: settings that new refuses (the zero byte tests) |
 | C3. The password stays out of the status | parity_test.gleam: the password (2 tests) |
 | C4. The socket closes when the setup fails | parity_test.gleam: closed sockets (3 tests) |
-| C5. The pool setting extra | pool_test.gleam: starting › gives the extra value of each pool, and its own settings |
+| C5. The pool setting extra | Does not apply to the driver: the client keeps its own value beside the Pool. |
 | C6. A closed connection never stays in the pool | parity_test.gleam: sessions that the server ends (6 tests), and the pool › replaces an idle connection whose socket closed. Also pool_test.gleam: replacing connections › never hands out a connection that the server ended |
 | C7. last_connect_error | connection_test.gleam: losing the connection › tells of a failed reconnect, and tries again (the event carries the last connect error). The pool status: pool_test.gleam: connect errors › gives the last connect error when every connection is lost; starting › gives its status |
 | C8. A host or port that connect cannot take | transport_test.gleam: addresses, and parity_test.gleam: addresses › refuses a negative port |

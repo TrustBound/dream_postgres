@@ -1439,24 +1439,20 @@ fn password_tests() {
 
 // The pool ----------------------------------------------------------------------
 
-fn pool_config(
-  connection: ConnectionConfig,
-  extra: extra,
-) -> PoolConfig(extra) {
+fn pool_config(connection: ConnectionConfig) -> PoolConfig {
   PoolConfig(
     connection:,
     health_check_interval_milliseconds: 60_000,
     health_check_deadline_milliseconds: 5000,
     rollback_deadline_milliseconds: 5000,
     shutdown_deadline_milliseconds: 5000,
-    extra:,
   )
 }
 
 fn with_pool(
-  config: Result(PoolConfig(extra), String),
+  config: Result(PoolConfig, String),
   size: Int,
-  body: fn(Pool(extra)) -> Result(value, String),
+  body: fn(Pool) -> Result(value, String),
 ) -> Result(value, String) {
   use settings <- try(config)
   use started <- try(
@@ -1468,7 +1464,7 @@ fn with_pool(
 }
 
 fn held(
-  pool: Pool(extra),
+  pool: Pool,
   body: fn(Connection) -> Result(value, String),
 ) -> Result(value, String) {
   pool.hold(pool, deadline, body)
@@ -1476,7 +1472,7 @@ fn held(
   |> result.flatten
 }
 
-fn held_backend_pid(pool: Pool(extra)) -> Result(String, String) {
+fn held_backend_pid(pool: Pool) -> Result(String, String) {
   held(pool, backend_pid)
 }
 
@@ -1485,7 +1481,7 @@ fn held_one(connection: Connection) -> Result(List(List(String)), String) {
 }
 
 fn held_two(
-  pool: Pool(extra),
+  pool: Pool,
   first: Connection,
 ) -> Result(List(List(String)), String) {
   use first_rows <- try(held_one(first))
@@ -1495,7 +1491,7 @@ fn held_two(
 
 /// Asks for the status until all connections are available: no sleep.
 fn wait_for_available(
-  pool: Pool(extra),
+  pool: Pool,
   wanted: Int,
   attempts: Int,
 ) -> Result(PoolStatus, String) {
@@ -1521,7 +1517,7 @@ fn pool_tests(server: Server) {
 
 fn check_held_query(server: Server) {
   // Arrange
-  let config = dream_config(server.port) |> result.map(pool_config(_, Nil))
+  let config = dream_config(server.port) |> result.map(pool_config)
 
   // Act
   let answer = {
@@ -1538,7 +1534,7 @@ fn check_held_query(server: Server) {
 
 fn check_holds_end(server: Server) {
   // Arrange
-  let config = dream_config(server.port) |> result.map(pool_config(_, Nil))
+  let config = dream_config(server.port) |> result.map(pool_config)
 
   // Act
   let status = {
@@ -1570,7 +1566,7 @@ fn check_idle_socket_closed(server: Server) {
   let config =
     dream_config(port)
     |> result.map(with_events(_, events))
-    |> result.map(pool_config(_, Nil))
+    |> result.map(pool_config)
 
   // Act
   let changed = {
