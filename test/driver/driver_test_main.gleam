@@ -12,6 +12,7 @@ import driver/channel_binding_test
 import driver/connection_test
 import driver/decode_test
 import driver/encode_test
+import driver/listener_test
 import driver/login_server_test
 import driver/login_test
 import driver/query_server_test
@@ -43,6 +44,7 @@ pub fn suites() -> List(TestSuite) {
     transport_test.tests(),
     statement_cache_test.tests(),
     connection_test.tests(),
+    listener_test.tests(),
   ]
 }
 

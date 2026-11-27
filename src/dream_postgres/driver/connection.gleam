@@ -89,6 +89,10 @@ pub type ConnectionConfig {
     /// Where the process tells of each loss and each reconnect, for
     /// example to its pool.
     events: Option(Subject(ConnectionEvent)),
+    /// Where the process sends each notification at once, as it arrives,
+    /// also while the connection is idle, for example to the listener.
+    /// With `None`, each notification goes with the next outcome.
+    notifications: Option(Subject(Notification)),
     statements: StatementCaching,
   )
 }
@@ -1038,10 +1042,7 @@ fn idle_message(
     NoticeResponse(report) ->
       State(..state, pending: [Notice(report), ..state.pending])
     NotificationResponse(process_id:, channel:, payload:) ->
-      State(..state, pending: [
-        query.Notification(process_id, channel, payload),
-        ..state.pending
-      ])
+      keep_asynchronous(state, query.Notification(process_id, channel, payload))
     ErrorResponse(report) -> lose(state, socket, ServerEndedConnection(report))
     _other ->
       lose(state, socket, ProtocolViolation(UnexpectedIdleMessage(message)))
@@ -1175,7 +1176,7 @@ fn ended(
   report: ServerReport,
   messages: List(AsynchronousMessage),
 ) -> State {
-  let state = State(..state, pending: append(reverse(messages), state.pending))
+  let state = fold(messages, state, keep_asynchronous)
   failed(state, socket, current, ServerEndedConnection(report))
 }
 
@@ -1389,8 +1390,20 @@ fn after_message(state: State, message: AsynchronousMessage) -> State {
   case message {
     ParameterChanged(name:, value:) ->
       State(..state, parameters: dict.insert(state.parameters, name, value))
-    _notice_or_notification ->
-      State(..state, pending: [message, ..state.pending])
+    _notice_or_notification -> keep_asynchronous(state, message)
+  }
+}
+
+/// Keeps a notice for the next outcome. A notification goes at once to the
+/// notifications subscriber when there is one, in the order the server
+/// sent it, and is kept for the next outcome otherwise.
+fn keep_asynchronous(state: State, message: AsynchronousMessage) -> State {
+  case message, state.config.notifications {
+    query.Notification(process_id:, channel:, payload:), Some(subscriber) -> {
+      process.send(subscriber, Notification(process_id:, channel:, payload:))
+      state
+    }
+    _other, _subscriber -> State(..state, pending: [message, ..state.pending])
   }
 }
 

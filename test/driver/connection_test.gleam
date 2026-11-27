@@ -126,6 +126,7 @@ fn config(
     setup_timeout_milliseconds: 5000,
     reconnect: Backoff(first_delay, 60_000),
     events:,
+    notifications: None,
     statements: CacheStatements(statement_cache.default_limit),
   ))
 }
