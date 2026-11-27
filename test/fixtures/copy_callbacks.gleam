@@ -11,7 +11,8 @@ import dream_postgres/driver/connection.{
 import dream_postgres/driver/transport.{SocketClosed}
 import driver/proxy.{type Proxy, close_client, inject}
 import driver/server_connection.{
-  memory_of, require_failure, setup_step, wait_for_idle_backend,
+  memory_of, require_failure, setup_step, suspend_connection,
+  wait_for_idle_backend,
 }
 import gleam/bit_array
 import gleam/bool
@@ -191,6 +192,16 @@ pub fn copy_inside(
   Error(#(inner_script, inner_copy))
 }
 
+/// Suspends the connection process of the COPY and sends nothing, so the
+/// end of the COPY never comes while the process is suspended.
+pub fn suspend_and_send_nothing(
+  sender: CopySender,
+  suspended: Connection,
+) -> Result(Nil, ChunkError) {
+  suspend_connection(suspended)
+  send_nothing(sender)
+}
+
 /// Stops the connection of the COPY, then sends a row, tells `told` the
 /// answer of that send, and gives it.
 pub fn stop_then_send(
@@ -273,6 +284,30 @@ pub fn fail_at_second_row(rows: Int, _row: BitArray) -> Result(Int, String) {
 /// Fails with `enough` at the first row.
 pub fn fail_at_first_row(_rows: Int, _row: BitArray) -> Result(Int, String) {
   Error("enough")
+}
+
+/// Stops the connection `stopped` at the first row, so the next row never
+/// comes.
+pub fn stop_at_first_row(
+  waited: Bool,
+  _row: BitArray,
+  stopped: Connection,
+) -> Result(Bool, Nil) {
+  use <- bool.guard(waited, Ok(True))
+  connection.stop(stopped)
+  Ok(True)
+}
+
+/// Suspends the connection process `suspended` at the first row, so the
+/// next row never comes while the process is suspended.
+pub fn suspend_at_first_row(
+  waited: Bool,
+  _row: BitArray,
+  suspended: Connection,
+) -> Result(Bool, Nil) {
+  use <- bool.guard(waited, Ok(True))
+  suspend_connection(suspended)
+  Ok(True)
 }
 
 /// Holds the first row until the backend `pid` is idle.

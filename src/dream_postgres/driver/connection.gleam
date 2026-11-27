@@ -419,8 +419,12 @@ pub opaque type CopySender {
     /// The COPY of this sender. The caller makes it, so it can end the
     /// COPY even before the connection process answered the start.
     id: Reference,
-    /// The longest time that the caller waits for each answer.
+    /// The longest time that the caller waits for each answer or push.
     wait_milliseconds: Int,
+    /// Where the connection process pushes the rows and the end of the
+    /// COPY: a monitor of the connection process that is also an alias of
+    /// the caller. Only the process that made the sender waits on it.
+    pushes: ReplyTo(CopyPush),
   )
 }
 
@@ -499,8 +503,15 @@ type Message {
   SocketMessage(message: Dynamic)
   ReconnectNow(attempt: Int)
   ExitSignal(exit: ExitMessage)
-  /// A call of the caller of the COPY `id`.
-  CopyCall(id: Reference, call: CopyCall)
+  /// A chunk of the COPY `id` from its caller. The process answers each
+  /// chunk: when it went to the socket, or with the end of the COPY.
+  SendChunk(
+    id: Reference,
+    chunk: BitArray,
+    reply: ReplyTo(Result(Nil, ChunkError)),
+  )
+  /// A notice of the caller of the COPY `id`. A notice needs no answer.
+  CopyNotice(id: Reference, notice: CopyNotice)
   /// A process that the connection process watches ended: the caller of a
   /// COPY.
   CallerDown(down: Down)
@@ -512,17 +523,19 @@ type Message {
   OpenAttempt(attempt: Int)
 }
 
-/// What the caller of a COPY asks while its COPY runs.
-type CopyCall {
-  /// Send this chunk of a `COPY ... FROM STDIN`. The answer comes when the
-  /// chunk went to the socket.
-  SendChunk(chunk: BitArray, reply: ReplyTo(Result(Nil, ChunkError)))
-  /// Give the next row of a `COPY ... TO STDOUT`, or its end.
-  ReadRow(reply: ReplyTo(Result(CopyRead, CopyFault)))
-  /// End the COPY, and give its row count when it ended.
-  EndCopy(ending: CopyEnding, reply: ReplyTo(Result(Int, CopyFault)))
+/// What the caller of a COPY tells the process while its COPY runs. No
+/// notice needs an answer: the caller waits only for what the process
+/// pushes, and a notice for a COPY that is gone changes nothing.
+type CopyNotice {
+  /// The caller took the row that the process pushed last. The process
+  /// reads on.
+  RowTaken
+  /// The caller ends its side of the COPY. A COPY that runs ends with
+  /// `ending`, and the process pushes the end when it has it. A COPY that
+  /// ended already lets the process serve the next request.
+  Finish(ending: CopyEnding)
   /// The caller stopped waiting, or its process ended: the COPY is
-  /// abandoned, and no one gets an answer.
+  /// abandoned, and its end is dropped.
   CallerLeft
 }
 
@@ -534,11 +547,15 @@ type CopyEnding {
   AbandonCopy
 }
 
-/// The answer to `ReadRow`.
-type CopyRead {
-  RowRead(row: BitArray)
-  /// The COPY ended after `count` rows.
-  RowsEnded(count: Int)
+/// What the process pushes to the caller of a COPY. The caller waits for
+/// a push or for the end of the process, so each wait ends.
+type CopyPush {
+  /// A row of a `COPY ... TO STDOUT`. The process reads nothing more from
+  /// the socket until the caller sends `RowTaken`.
+  PushedRow(row: BitArray)
+  /// The end of the COPY: its row count, or why there is none. The
+  /// process pushes it once.
+  PushedEnd(result: Result(Int, CopyFault))
 }
 
 /// The caller's side of a COPY that runs.
@@ -549,17 +566,23 @@ type CopySession {
     monitor: Monitor,
     /// The caller waits for the start of the COPY.
     start: Option(ReplyTo(Result(Nil, CopyStartError))),
-    /// The call of the caller that waits for the server.
-    call: Option(CopyCall),
-    /// A row of a `COPY ... TO STDOUT` that the caller did not take yet.
-    /// The process reads nothing more from the socket until it does.
-    held_row: Option(BitArray),
+    /// Where the process pushes the rows and the end.
+    pushes: ReplyTo(CopyPush),
+    /// The chunks that wait for the end of the COPY, which is their
+    /// answer.
+    waiting_chunks: List(ReplyTo(Result(Nil, ChunkError))),
+    /// The caller ended its side of the COPY: it needs the COPY no more
+    /// after the process pushed the end.
+    finished: Bool,
+    /// The process pushed a row that the caller did not take yet. The
+    /// process reads nothing more from the socket until it does.
+    row_pushed: Bool,
   )
 }
 
-/// A COPY that the server ended, whose caller did not take the end yet.
-/// The connection serves no other request until the caller does, or until
-/// its process ends.
+/// A COPY that ended, whose caller did not finish its side yet. The
+/// process pushed the end to the caller already. The connection serves no
+/// other request until the caller finishes, or until its process ends.
 type EndedCopy {
   EndedCopy(id: Reference, monitor: Monitor, result: Result(Int, CopyFault))
 }
@@ -586,6 +609,8 @@ type Request {
     direction: CopyDirection,
     sql: String,
     caller: Pid,
+    /// Where the process pushes the rows and the end of the COPY.
+    pushes: ReplyTo(CopyPush),
     reply: ReplyTo(Result(Nil, CopyStartError)),
   )
 }
@@ -686,7 +711,7 @@ type State {
     pending: List(AsynchronousMessage),
     /// The named statements of this session.
     cache: StatementCache,
-    /// A COPY that ended, until its caller takes the end.
+    /// A COPY that ended, until its caller finishes its side.
     copy: Option(EndedCopy),
   )
 }
@@ -743,6 +768,33 @@ fn call_process_until_answer(
 
 @external(erlang, "dream_postgres_connection_ffi", "reply")
 fn reply(to: ReplyTo(reply), value: reply) -> Nil
+
+/// Makes where the connection process pushes the rows and the end of a
+/// COPY: a monitor of the process that is also an alias of the caller.
+@external(erlang, "dream_postgres_connection_ffi", "open_pushes")
+fn open_pushes(pid: Pid) -> ReplyTo(CopyPush)
+
+/// Waits for the next push, for the end of the connection process, or for
+/// `timeout` milliseconds.
+@external(erlang, "dream_postgres_connection_ffi", "receive_push")
+fn receive_push(
+  pushes: ReplyTo(CopyPush),
+  timeout: Int,
+) -> Result(CopyPush, CallFailure)
+
+/// Waits for the end of a COPY, for the end of the connection process, or
+/// for `timeout` milliseconds. A row is not an end: no row comes after
+/// the caller ended its side.
+@external(erlang, "dream_postgres_connection_ffi", "receive_end")
+fn receive_end(
+  pushes: ReplyTo(CopyPush),
+  timeout: Int,
+) -> Result(Result(Int, CopyFault), CallFailure)
+
+/// Turns the pushes off: a push that comes later is dropped, and the
+/// pushes that wait in the mailbox are taken out.
+@external(erlang, "dream_postgres_connection_ffi", "close_pushes")
+fn close_pushes(pushes: ReplyTo(CopyPush)) -> Nil
 
 // Starting and stopping -------------------------------------------------------
 
@@ -1580,7 +1632,7 @@ pub fn copy_from(
   produce: fn(CopySender) -> Result(Nil, reason),
 ) -> Result(Int, CopyError(reason)) {
   use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
-  let sender = new_sender(connection, deadline_milliseconds)
+  use sender <- with_sender(connection, deadline_milliseconds)
   use Nil <- try(start_copy(
     sender,
     CopyFrom,
@@ -1620,7 +1672,7 @@ pub fn send_chunk(
 ) -> Result(Nil, ChunkError) {
   call(
     sender.connection,
-    chunk_message(sender.id, chunk, _),
+    SendChunk(sender.id, chunk, _),
     sender.wait_milliseconds,
   )
   |> map_error(ChunkFailed)
@@ -1671,7 +1723,7 @@ pub fn copy_to(
   fold: fn(value, BitArray) -> Result(value, reason),
 ) -> Result(value, CopyError(reason)) {
   use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
-  let sender = new_sender(connection, deadline_milliseconds)
+  use sender <- with_sender(connection, deadline_milliseconds)
   use Nil <- try(start_copy(
     sender,
     CopyTo,
@@ -1681,16 +1733,24 @@ pub fn copy_to(
   read_rows(sender, initial, fold)
 }
 
-fn new_sender(
+/// Runs `copy` with a new sender, and turns the sender's pushes off after
+/// it, on every path, so no push stays in the caller's mailbox.
+fn with_sender(
   connection: Connection,
   deadline_milliseconds: Int,
-) -> CopySender {
-  CopySender(
-    connection:,
-    id: reference.new(),
-    wait_milliseconds: deadline_milliseconds
-      + connection.reply_margin_milliseconds,
-  )
+  copy: fn(CopySender) -> Result(value, CopyError(reason)),
+) -> Result(value, CopyError(reason)) {
+  let sender =
+    CopySender(
+      connection:,
+      id: reference.new(),
+      wait_milliseconds: deadline_milliseconds
+        + connection.reply_margin_milliseconds,
+      pushes: open_pushes(connection.pid),
+    )
+  let copied = copy(sender)
+  close_pushes(sender.pushes)
+  copied
 }
 
 fn start_copy(
@@ -1703,7 +1763,7 @@ fn start_copy(
   call(
     sender.connection,
     request_message(
-      CopyRequest(sender.id, direction, sql, caller, _),
+      CopyRequest(sender.id, direction, sql, caller, sender.pushes, _),
       deadline_milliseconds,
       _,
     ),
@@ -1739,47 +1799,69 @@ fn copy_fault_error(fault: CopyFault) -> CopyError(reason) {
   }
 }
 
-/// The answer to a row read or an end of a COPY.
-fn copy_answer(
-  called: Result(Result(value, CopyFault), RequestFailure),
-) -> Result(value, CopyError(reason)) {
-  case called {
-    Ok(answer) -> map_error(answer, copy_fault_error)
-    Error(failure) -> Error(CopyFailed(failure))
-  }
+/// Tells the connection process of the COPY of `sender`. A notice needs
+/// no answer.
+fn notify(sender: CopySender, notice: CopyNotice) -> Nil {
+  process.send(sender.connection.subject, CopyNotice(sender.id, notice))
+}
+
+/// Waits for the next push of the COPY of `sender`. The wait ends with a
+/// push, with the end of the connection process, or after the wait of the
+/// sender.
+fn next_push(sender: CopySender) -> Result(CopyPush, CopyError(reason)) {
+  receive_push(sender.pushes, sender.wait_milliseconds)
+  |> map_error(call_failure)
+  |> map_error(CopyFailed)
 }
 
 /// The caller stops: the connection process ends the COPY, if it still
-/// runs, and answers no one.
+/// runs, and drops its end.
 fn leave_copy(
   sender: CopySender,
   error: CopyError(reason),
 ) -> CopyError(reason) {
-  process.send(sender.connection.subject, CopyCall(sender.id, CallerLeft))
+  notify(sender, CallerLeft)
   error
 }
 
+/// Folds each row that the process pushes, up to the end of the COPY.
 fn read_rows(
   sender: CopySender,
   accumulator: value,
   fold: fn(value, BitArray) -> Result(value, reason),
 ) -> Result(value, CopyError(reason)) {
-  case read_row(sender) {
-    Ok(RowRead(row:)) -> fold_row(sender, fold(accumulator, row), fold)
-    Ok(RowsEnded(..)) -> Ok(accumulator)
+  case next_push(sender) {
+    Ok(PushedRow(row:)) -> fold_row(sender, fold(accumulator, row), fold)
+    Ok(PushedEnd(result:)) ->
+      take_end(sender, result) |> result.replace(accumulator)
     Error(error) -> Error(leave_copy(sender, error))
   }
 }
 
+/// A fold that took its row tells the process, which reads the next row
+/// only then. A fold that failed ends the COPY.
 fn fold_row(
   sender: CopySender,
   folded: Result(value, reason),
   fold: fn(value, BitArray) -> Result(value, reason),
 ) -> Result(value, CopyError(reason)) {
   case folded {
-    Ok(accumulator) -> read_rows(sender, accumulator, fold)
+    Ok(accumulator) -> {
+      notify(sender, RowTaken)
+      read_rows(sender, accumulator, fold)
+    }
     Error(reason) -> end_copy(sender, AbandonCopy) |> abandoned(reason)
   }
+}
+
+/// The caller of a `COPY ... TO STDOUT` has the end: it finishes its side,
+/// so the connection serves the next request.
+fn take_end(
+  sender: CopySender,
+  ended: Result(Int, CopyFault),
+) -> Result(Int, CopyError(reason)) {
+  notify(sender, Finish(CompleteCopy))
+  map_error(ended, copy_fault_error)
 }
 
 /// The app's function failed, and the driver ended the COPY. A server
@@ -1799,44 +1881,19 @@ fn abandoned(
   }
 }
 
-fn read_row(sender: CopySender) -> Result(CopyRead, CopyError(reason)) {
-  call(sender.connection, row_message(sender.id, _), sender.wait_milliseconds)
-  |> copy_answer
-}
-
+/// Ends the caller's side of the COPY, and waits for the end that the
+/// process pushes. The wait ends with the end, with the end of the
+/// connection process, or after the wait of the sender.
 fn end_copy(
   sender: CopySender,
   ending: CopyEnding,
 ) -> Result(Int, CopyError(reason)) {
-  call(
-    sender.connection,
-    end_message(sender.id, ending, _),
-    sender.wait_milliseconds,
-  )
-  |> copy_answer
-}
-
-fn chunk_message(
-  id: Reference,
-  chunk: BitArray,
-  reply_to: ReplyTo(Result(Nil, ChunkError)),
-) -> Message {
-  CopyCall(id, SendChunk(chunk, reply_to))
-}
-
-fn row_message(
-  id: Reference,
-  reply_to: ReplyTo(Result(CopyRead, CopyFault)),
-) -> Message {
-  CopyCall(id, ReadRow(reply_to))
-}
-
-fn end_message(
-  id: Reference,
-  ending: CopyEnding,
-  reply_to: ReplyTo(Result(Int, CopyFault)),
-) -> Message {
-  CopyCall(id, EndCopy(ending, reply_to))
+  notify(sender, Finish(ending))
+  case receive_end(sender.pushes, sender.wait_milliseconds) {
+    Ok(ended) -> map_error(ended, copy_fault_error)
+    Error(failure) ->
+      Error(leave_copy(sender, CopyFailed(call_failure(failure))))
+  }
 }
 
 fn prepare_request(
@@ -1945,7 +2002,9 @@ fn handle_message(
     SocketMessage(socket_message) ->
       actor.continue(socket_message_received(state, socket_message))
     ReconnectNow(attempt:) -> actor.continue(reconnect(state, attempt))
-    CopyCall(id:, call:) -> actor.continue(copy_call(state, id, call))
+    SendChunk(id:, chunk:, reply: reply_to) ->
+      actor.continue(chunk_received(state, id, chunk, reply_to))
+    CopyNotice(id:, notice:) -> actor.continue(copy_notice(state, id, notice))
     CallerDown(down:) -> actor.continue(caller_down(state, down))
     OpenRequest(reply_to) -> open_first(state, reply_to)
     OpenAttempt(attempt:) -> actor.continue(attempt_first_open(state, attempt))
@@ -2058,9 +2117,17 @@ fn begin(
       reply(reply_to, Ok(tracked_status(state.tracker)))
       next_request(state)
     }
-    CopyRequest(id:, direction:, sql:, caller:, reply: reply_to) -> {
+    CopyRequest(id:, direction:, sql:, caller:, pushes:, reply: reply_to) -> {
       let session =
-        CopySession(id, process.monitor(caller), Some(reply_to), None, None)
+        CopySession(
+          id:,
+          monitor: process.monitor(caller),
+          start: Some(reply_to),
+          pushes:,
+          waiting_chunks: [],
+          finished: False,
+          row_pushed: False,
+        )
       begin_copy(state, socket, query.start_copy(sql, direction), session)
     }
   }
@@ -3119,31 +3186,20 @@ fn follow_copy(
   }
 }
 
-/// A row goes to the caller that waits for it. Else the process keeps it,
-/// and reads nothing more until the caller takes it.
+/// A row goes to the caller. The process reads nothing more from the
+/// socket until the caller took it.
 fn copy_row(
   state: State,
   copy_state: CopyState,
   session: CopySession,
   row: BitArray,
 ) -> State {
-  case session.call {
-    Some(ReadRow(reply: reply_to)) -> {
-      reply(reply_to, Ok(RowRead(row)))
-      running_copy(state, copy_state, CopySession(..session, call: None))
-    }
-    _ ->
-      running_copy(
-        state,
-        copy_state,
-        CopySession(..session, held_row: Some(row)),
-      )
-  }
+  reply(session.pushes, PushedRow(row))
+  running_copy(state, copy_state, CopySession(..session, row_pushed: True))
 }
 
-/// The server ended the COPY. Its caller gets the result now, if it waits
-/// for it, or with its next call. After a deadline the result is
-/// `DeadlinePassed`.
+/// The server ended the COPY. Its caller gets the result now: with its
+/// start, or as a push. After a deadline the result is `DeadlinePassed`.
 fn copy_finished(
   state: State,
   session: CopySession,
@@ -3190,8 +3246,8 @@ fn deadline_result(
   }
 }
 
-/// Answers the caller of an ended COPY, and keeps the end while the caller
-/// still has to take it.
+/// Gives the end of the COPY to its caller, and keeps the end while the
+/// caller did not finish its side yet.
 fn settle_copy(
   session: CopySession,
   ended: Result(Int, CopyFault),
@@ -3200,39 +3256,31 @@ fn settle_copy(
   close_session(session, ended)
 }
 
-/// Gives the end of the COPY to the caller's start or call that waits.
+/// Gives the end of the COPY to each chunk that waits for it, and to the
+/// caller: to its start, when it still waits for the start, else as a
+/// push.
 fn answer_session(session: CopySession, ended: Result(Int, CopyFault)) -> Nil {
-  case session.start, session.call {
-    Some(start), _ ->
+  list.each(session.waiting_chunks, reply(_, chunk_answer(ended)))
+  case session.start {
+    Some(start) ->
       reply(start, result.replace(ended, Nil) |> map_error(StartEnded))
-    None, Some(call) -> answer_call(call, ended)
-    None, None -> Nil
+    None -> reply(session.pushes, PushedEnd(ended))
   }
 }
 
-/// The caller took the end of the COPY with its start, with a row read or
-/// with its end, and the process watches it no more. Else the end waits
-/// for the caller's next call.
+/// A caller that got the end with its start, or that finished its side
+/// already, needs the COPY no more, and the process watches it no more.
+/// Else the end waits until the caller finishes its side.
 fn close_session(
   session: CopySession,
   ended: Result(Int, CopyFault),
 ) -> Option(EndedCopy) {
-  case session.start, session.call {
-    None, None | None, Some(SendChunk(..)) ->
-      Some(EndedCopy(session.id, session.monitor, ended))
-    _, _ -> {
+  case session.start, session.finished {
+    None, False -> Some(EndedCopy(session.id, session.monitor, ended))
+    Some(_start), _ | None, True -> {
       process.demonitor_process(session.monitor)
       None
     }
-  }
-}
-
-fn answer_call(call: CopyCall, ended: Result(Int, CopyFault)) -> Nil {
-  case call {
-    SendChunk(reply: reply_to, ..) -> reply(reply_to, chunk_answer(ended))
-    ReadRow(reply: reply_to) -> reply(reply_to, result.map(ended, RowsEnded))
-    EndCopy(reply: reply_to, ..) -> reply(reply_to, ended)
-    CallerLeft -> Nil
   }
 }
 
@@ -3247,65 +3295,86 @@ fn chunk_answer(ended: Result(Int, CopyFault)) -> Result(Nil, ChunkError) {
   }
 }
 
-/// A call for a COPY that does not run. A chunk gets
-/// `ChunkCopyNotRunning`. A row read or an end gets no answer: `copy_to`
-/// and `copy_from` make them only for their own COPY, which the process
-/// keeps until its caller took its end, and make none after it.
-fn refuse_copy_call(call: CopyCall) -> Nil {
-  case call {
-    SendChunk(reply: reply_to, ..) ->
-      reply(reply_to, Error(ChunkCopyNotRunning))
-    ReadRow(..) | EndCopy(..) | CallerLeft -> Nil
-  }
+/// A chunk for a COPY that does not run, and that did not end with a
+/// failure that the process keeps: it gets `ChunkCopyNotRunning`.
+fn refuse_chunk(reply_to: ReplyTo(Result(Nil, ChunkError))) -> Nil {
+  reply(reply_to, Error(ChunkCopyNotRunning))
 }
 
-/// A call of the caller of a COPY: of the COPY that runs, of the one that
-/// waits for its caller to take its end, or of one that is over.
-fn copy_call(state: State, id: Reference, call: CopyCall) -> State {
+/// A chunk of the caller of a COPY: of the COPY that runs, of the one
+/// whose caller did not finish its side yet, or of one that is over. Each
+/// chunk gets an answer.
+fn chunk_received(
+  state: State,
+  id: Reference,
+  chunk: BitArray,
+  reply_to: ReplyTo(Result(Nil, ChunkError)),
+) -> State {
   case state.running, state.copy, state.link {
     Some(RunningCopy(state: copy_state, session:)), _, Open(socket:, ..)
       if session.id == id
-    -> running_copy_call(state, socket, copy_state, session, call)
-    _, Some(ended), _ if ended.id == id -> ended_copy_call(state, ended, call)
+    -> send_copy_chunk(state, socket, copy_state, session, chunk, reply_to)
+    _, Some(ended), _ if ended.id == id -> {
+      reply(reply_to, chunk_answer(ended.result))
+      state
+    }
     _, _, _ -> {
-      refuse_copy_call(call)
+      refuse_chunk(reply_to)
       state
     }
   }
 }
 
-/// The end of an ended COPY goes to the call. A chunk gets the end but
-/// does not take it: the caller still ends the COPY.
-fn ended_copy_call(state: State, ended: EndedCopy, call: CopyCall) -> State {
-  answer_call(call, ended.result)
-  case call {
-    SendChunk(..) -> state
-    _ -> {
-      process.demonitor_process(ended.monitor)
-      next_request(State(..state, copy: None))
-    }
+/// A notice of the caller of the COPY `id`.
+fn copy_notice(state: State, id: Reference, notice: CopyNotice) -> State {
+  case notice {
+    RowTaken -> take_row(state, id)
+    Finish(ending: CompleteCopy) -> finish_side(state, id, query.finish_copy)
+    Finish(ending: AbandonCopy) | CallerLeft ->
+      finish_side(state, id, query.abandon_copy)
   }
 }
 
-fn running_copy_call(
-  state: State,
-  socket: transport.Connection,
-  copy_state: CopyState,
-  session: CopySession,
-  call: CopyCall,
-) -> State {
-  case call {
-    SendChunk(chunk:, reply: reply_to) ->
-      send_copy_chunk(state, socket, copy_state, session, chunk, reply_to)
-    ReadRow(reply: reply_to) ->
-      read_copy_row(state, copy_state, session, reply_to)
-    EndCopy(ending: CompleteCopy, ..) ->
-      CopySession(..session, call: Some(call))
-      |> stop_copy(state, socket, query.finish_copy(copy_state), _)
-    EndCopy(ending: AbandonCopy, ..) | CallerLeft ->
-      CopySession(..session, call: Some(call))
-      |> stop_copy(state, socket, query.abandon_copy(copy_state), _)
+/// The caller took the row that the process pushed: the process reads on.
+/// A row taken after the process stopped the COPY, or after its end,
+/// changes nothing.
+fn take_row(state: State, id: Reference) -> State {
+  case state.running {
+    Some(RunningCopy(state: copy_state, session:))
+      if session.id == id && session.row_pushed
+    ->
+      running_copy(state, copy_state, CopySession(..session, row_pushed: False))
+      |> read_on
+    _ -> state
   }
+}
+
+/// The caller ends its side of the COPY `id`. A COPY that runs ends with
+/// the bytes that `ending` gives, and its end goes to the caller when the
+/// server ended it. The end of a COPY that ended already is dropped, and
+/// the process serves the next request. A COPY that is over changes
+/// nothing.
+fn finish_side(
+  state: State,
+  id: Reference,
+  ending: fn(CopyState) -> #(CopyState, BitArray),
+) -> State {
+  case state.running, state.copy, state.link {
+    Some(RunningCopy(state: copy_state, session:)), _, Open(socket:, ..)
+      if session.id == id
+    ->
+      CopySession(..session, finished: True)
+      |> stop_copy(state, socket, ending(copy_state), _)
+    _, Some(ended), _ if ended.id == id -> drop_ended_copy(state, ended)
+    _, _, _ -> state
+  }
+}
+
+/// The caller of an ended COPY needs it no more: the process watches the
+/// caller no more, and serves the next request.
+fn drop_ended_copy(state: State, ended: EndedCopy) -> State {
+  process.demonitor_process(ended.monitor)
+  next_request(State(..state, copy: None))
 }
 
 /// Sends a chunk while the server reads data and the deadline did not
@@ -3323,7 +3392,10 @@ fn send_copy_chunk(
     running_copy(
       state,
       copy_state,
-      CopySession(..session, call: Some(SendChunk(chunk, reply_to))),
+      CopySession(..session, waiting_chunks: [
+        reply_to,
+        ..session.waiting_chunks
+      ]),
     )
   case query.accepts_copy_data(copy_state) && !deadline_passed(state) {
     True ->
@@ -3351,31 +3423,9 @@ fn chunk_sent(
   }
 }
 
-/// Gives the row that the process kept, and reads on. Else the call waits
-/// for the next row.
-fn read_copy_row(
-  state: State,
-  copy_state: CopyState,
-  session: CopySession,
-  reply_to: ReplyTo(Result(CopyRead, CopyFault)),
-) -> State {
-  case session.held_row {
-    Some(row) -> {
-      reply(reply_to, Ok(RowRead(row)))
-      running_copy(state, copy_state, CopySession(..session, held_row: None))
-      |> read_on
-    }
-    None ->
-      running_copy(
-        state,
-        copy_state,
-        CopySession(..session, call: Some(ReadRow(reply_to))),
-      )
-  }
-}
-
-/// Sends the bytes that end the COPY, drops a row that the caller did not
-/// take, and reads on to the end of the COPY.
+/// Sends the bytes that end the COPY, stops waiting for the caller to take
+/// a row, and reads on to the end of the COPY. The step drops the rows
+/// after it.
 fn stop_copy(
   state: State,
   socket: transport.Connection,
@@ -3383,21 +3433,22 @@ fn stop_copy(
   session: CopySession,
 ) -> State {
   let #(copy_state, bytes) = stopped
-  running_copy(state, copy_state, CopySession(..session, held_row: None))
+  running_copy(state, copy_state, CopySession(..session, row_pushed: False))
   |> sent(socket, transport.send(socket, bytes))
   |> read_on
 }
 
-/// Reads the messages that came while the process kept a row, and asks
-/// the socket for more.
+/// Reads the messages that came while the process waited for the caller
+/// to take a row, and asks the socket for more.
 fn read_on(state: State) -> State {
   state |> read_messages |> receive_next
 }
 
+/// The process pushed a row that the caller did not take yet, so it reads
+/// nothing more from the socket.
 fn paused(state: State) -> Bool {
   case state.running {
-    Some(RunningCopy(session: CopySession(held_row: Some(_row), ..), ..)) ->
-      True
+    Some(RunningCopy(session: CopySession(row_pushed: True, ..), ..)) -> True
     _ -> False
   }
 }
@@ -3421,9 +3472,11 @@ fn caller_down(state: State, down: Down) -> State {
   case state.running, state.copy, state.link {
     Some(RunningCopy(state: copy_state, session:)), _, Open(socket:, ..)
       if session.monitor == down.monitor
-    -> running_copy_call(state, socket, copy_state, session, CallerLeft)
+    ->
+      CopySession(..session, finished: True)
+      |> stop_copy(state, socket, query.abandon_copy(copy_state), _)
     _, Some(ended), _ if ended.monitor == down.monitor ->
-      ended_copy_call(state, ended, CallerLeft)
+      drop_ended_copy(state, ended)
     _, _, _ -> state
   }
 }

@@ -34,11 +34,11 @@ import driver/server_connection.{
   caller_answer, connection_act_setup, connection_setup, controlled_act_setup,
   controlled_setup, fatal_error_bytes, pid_of, proxied_setup, resume_connection,
   run_control_script, run_controlled_setup_script, run_proxied_setup_script,
-  run_setup_script, send_stray_down, start_caller, start_connection,
-  start_test_connection, start_test_controlled, start_test_proxied,
-  start_test_proxied_with_tls, stop_after_error, stop_connection,
-  stop_controlled, stop_proxied, suspend_connection, transaction_act_setup,
-  wait_for_message, wait_for_reset,
+  run_setup_script, send_stray_down, short_wait_act_setup, start_caller,
+  start_connection, start_test_connection, start_test_controlled,
+  start_test_proxied, start_test_proxied_with_tls, stop_after_error,
+  stop_connection, stop_controlled, stop_proxied, suspend_connection,
+  transaction_act_setup, wait_for_message, wait_for_reset,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/copy_callbacks.{
@@ -51,7 +51,8 @@ import fixtures/copy_callbacks.{
   send_across_violation, send_after_end, send_after_go, send_after_idle,
   send_bad_row, send_binary, send_csv, send_then_fail, send_three_rows,
   send_twice_after_error, send_until_error, send_until_refused,
-  start_copy_caller, stop_then_send,
+  start_copy_caller, stop_at_first_row, stop_then_send, suspend_and_send_nothing,
+  suspend_at_first_row,
 }
 import fixtures/driver_tls.{verify_full}
 import gleam/bit_array
@@ -94,6 +95,9 @@ pub fn tests() -> TestSuite {
     slow_produce_tests(),
     slow_fold_tests(),
     cut_off_fold_tests(),
+    held_row_tests(),
+    suspended_row_tests(),
+    suspended_end_tests(),
     fold_in_transaction_tests(),
     copy_inside_tests(),
     copy_stopping_tests(),
@@ -880,6 +884,29 @@ fn caller_tests() -> List(ContextNode(Connection)) {
       |> be_equal(["SELECT 1"])
       |> or_fail_with("Expected the connection to work")
     }),
+    it(
+      "gives CopyFailed(ConnectionProcessDown) to a fold that stopped its connection",
+      fn(connection) {
+        // Act
+        let copied =
+          copy_to(
+            connection,
+            connection.statement(
+              "COPY (SELECT generate_series(1, 10)) TO STDOUT",
+            ),
+            5000,
+            False,
+            fn(stopped, row) { stop_at_first_row(stopped, row, connection) },
+          )
+
+        // Assert
+        copied
+        |> should
+        |> be_error
+        |> be_equal(CopyFailed(ConnectionProcessDown))
+        |> or_fail_with("Expected the wait for the next row to see the end")
+      },
+    ),
     group("a COPY whose app keeps its sender", [
       before_each(run_setup_script(
         "CREATE TEMP TABLE stale (id int, name text)",
@@ -1287,7 +1314,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
             process.send(go, Nil)
             use _chunk_sent <- try(wait_for_message(
               pid,
-              ["copy_call"],
+              ["send_chunk"],
               1_000_000,
             ))
             inject(proxied.proxy, fatal_error_bytes())
@@ -1549,6 +1576,130 @@ fn cut_off_fold_tests() -> TestSuite {
           |> extract_outcome_tags
           |> be_equal(["SELECT 1"])
           |> or_fail_with("Expected a usable connection")
+        },
+      ),
+    ],
+  )
+}
+
+/// A COPY TO STDOUT of 10,000,000 rows that the server streams, whose
+/// fold holds the first row until its backend is idle, past the deadline
+/// of 300 milliseconds. The fold takes its row after the driver stopped
+/// the COPY.
+fn hold_first_row(
+  controlled: ControlledConnection,
+) -> Result(Result(Bool, CopyError(ChunkError)), String) {
+  Ok(
+    copy_to(
+      controlled.connection,
+      connection.statement(
+        "COPY (SELECT generate_series(1, 10000000)) TO STDOUT",
+      ),
+      300,
+      False,
+      fn(waited, row) {
+        read_until_idle(waited, row, controlled.control, controlled.backend_pid)
+      },
+    ),
+  )
+}
+
+fn held_row_tests() -> TestSuite {
+  describe(
+    "a fold that holds its first row past the deadline",
+    controlled_act_setup(first_driver_server, hold_first_row),
+    [
+      it(
+        "gives the deadline to a fold that took its row after the deadline",
+        fn(
+          shared: ActOutcome(
+            ControlledConnection,
+            Result(Bool, CopyError(ChunkError)),
+          ),
+        ) {
+          shared.outcome
+          |> should
+          |> be_error
+          |> extract_copy_failure
+          |> be_equal(DeadlinePassed(cancelled: True))
+          |> or_fail_with("Expected DeadlinePassed(True)")
+        },
+      ),
+    ],
+  )
+}
+
+/// A COPY TO STDOUT whose fold suspends the connection process at the
+/// first row, with a deadline of 300 milliseconds. The process resumes
+/// after the COPY returned.
+fn read_from_suspended(
+  connection: Connection,
+) -> Result(Result(Bool, CopyError(Nil)), String) {
+  let copied =
+    copy_to(
+      connection,
+      connection.statement("COPY (SELECT generate_series(1, 10)) TO STDOUT"),
+      300,
+      False,
+      fn(suspended, row) { suspend_at_first_row(suspended, row, connection) },
+    )
+  resume_connection(connection)
+  Ok(copied)
+}
+
+fn suspended_row_tests() -> TestSuite {
+  describe(
+    "a COPY TO STDOUT whose connection process does not answer",
+    short_wait_act_setup(first_driver_server, read_from_suspended),
+    [
+      it(
+        "ends the wait for the next row when the process does not answer",
+        fn(shared: ActOutcome(Connection, Result(Bool, CopyError(Nil)))) {
+          shared.outcome
+          |> should
+          |> be_error
+          |> be_equal(CopyFailed(DeadlinePassed(cancelled: False)))
+          |> or_fail_with("Expected the wait to end at its limit")
+        },
+      ),
+    ],
+  )
+}
+
+/// A COPY FROM STDIN whose produce function suspends the connection
+/// process, with a deadline of 300 milliseconds. The process resumes
+/// after the COPY returned.
+fn end_on_suspended(
+  connection: Connection,
+) -> Result(Result(Int, CopyError(ChunkError)), String) {
+  use Nil <- try(run_control_script(
+    connection,
+    "CREATE TEMP TABLE suspended (id int, name text)",
+  ))
+  let copied =
+    copy_from(
+      connection,
+      connection.statement("COPY suspended FROM STDIN"),
+      300,
+      suspend_and_send_nothing(_, connection),
+    )
+  resume_connection(connection)
+  Ok(copied)
+}
+
+fn suspended_end_tests() -> TestSuite {
+  describe(
+    "a COPY FROM STDIN whose connection process does not answer",
+    short_wait_act_setup(first_driver_server, end_on_suspended),
+    [
+      it(
+        "ends the wait for the end when the process does not answer",
+        fn(shared: ActOutcome(Connection, Result(Int, CopyError(ChunkError)))) {
+          shared.outcome
+          |> should
+          |> be_error
+          |> be_equal(CopyFailed(DeadlinePassed(cancelled: False)))
+          |> or_fail_with("Expected the wait to end at its limit")
         },
       ),
     ],

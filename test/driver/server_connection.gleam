@@ -856,6 +856,29 @@ pub fn connection_act_setup(
   )
 }
 
+/// An `act_setup` whose act runs on a new connection to `server` with a
+/// setup timeout and a cancel timeout of 100 milliseconds each. A caller
+/// of it waits 200 milliseconds past the deadline of its request.
+pub fn short_wait_act_setup(
+  server: Server,
+  act: fn(Connection) -> Result(outcome, String),
+) -> Context(ActOutcome(Connection, outcome)) {
+  act_setup(
+    start: fn() { start_short_wait(server) },
+    stop: stop_connection,
+    act:,
+  )
+}
+
+/// Starts a connection to `server` with a setup timeout and a cancel
+/// timeout of 100 milliseconds each.
+pub fn start_short_wait(server: Server) -> Result(Connection, String) {
+  connection_config(server.port)
+  |> result.map(setup_timeout_config(_, 100))
+  |> result.map(cancel_timeout_config(_, 100))
+  |> try(start_configured)
+}
+
 /// An `act_setup` whose act runs on a new connection to `server` that ran
 /// `BEGIN`, so the act runs inside a transaction.
 pub fn transaction_act_setup(
