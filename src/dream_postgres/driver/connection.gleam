@@ -481,7 +481,13 @@ pub opaque type Connection {
 
 /// The text of a statement, and the caller's name of it for its span.
 pub opaque type Statement {
-  Statement(sql: String, name: Option(String))
+  Statement(
+    sql: String,
+    name: Option(String),
+    /// The text that the span records as `db.query.text` in place of the
+    /// SQL. It never goes to the server.
+    span_text: Option(String),
+  )
 }
 
 /// What a caller can read of the connection without a request to the
@@ -1115,7 +1121,7 @@ pub fn stop(connection: Connection) -> Nil {
 ///
 /// The statement.
 pub fn statement(sql: String) -> Statement {
-  Statement(sql:, name: None)
+  Statement(sql:, name: None, span_text: None)
 }
 
 /// Names a statement for its span. The name is recorded as
@@ -1137,6 +1143,37 @@ pub fn statement(sql: String) -> Statement {
 /// The statement with the name.
 pub fn named(statement: Statement, name: String) -> Statement {
   Statement(..statement, name: Some(name))
+}
+
+/// Sets the text that the statement's span records as `db.query.text`, in
+/// place of the SQL, for example the SQL with its secrets or literals
+/// replaced. The SQL is still what the server runs, and the key of the
+/// statement cache: the span text never goes to the server.
+///
+/// A script (`run_script`) records no text without it, because its SQL is
+/// not parameterized and may hold values (OTel semantic conventions at
+/// commit 7c8eb86d04, docs/db/database-spans.md note 15, line 303:
+/// "Non-parameterized query text SHOULD NOT be collected by default
+/// unless there is sanitization that excludes sensitive data"). With a
+/// span text, the script records it, as the sanitized form (lines
+/// 462-466). The caller makes sure that it holds no secret.
+///
+/// ## Parameters
+///
+/// - `statement`: the statement
+/// - `text`: the text for the span
+///
+/// ## Returns
+///
+/// The statement with the span text.
+pub fn span_text(statement: Statement, text text: String) -> Statement {
+  Statement(..statement, span_text: Some(text))
+}
+
+/// The text that the span of a statement records: its span text when the
+/// caller set one, else its SQL.
+fn recorded_text(statement: Statement) -> Option(String) {
+  option.or(statement.span_text, Some(statement.sql))
 }
 
 fn span_target(config: ConnectionConfig) -> SpanTarget {
@@ -1371,7 +1408,8 @@ pub fn prepare(
   deadline_milliseconds: Int,
 ) -> Result(StatementDescription, PrepareError) {
   {
-    use <- traced(connection, statement, Some(statement.sql), _, prepare_ending)
+    use <-
+      traced(connection, statement, recorded_text(statement), _, prepare_ending)
     request(
       connection,
       prepare_request(statement.sql, CachedDescription, _),
@@ -1411,7 +1449,8 @@ pub fn describe_current(
   deadline_milliseconds: Int,
 ) -> Result(StatementDescription, PrepareError) {
   {
-    use <- traced(connection, statement, Some(statement.sql), _, prepare_ending)
+    use <-
+      traced(connection, statement, recorded_text(statement), _, prepare_ending)
     request(
       connection,
       prepare_request(statement.sql, ServerDescription, _),
@@ -1452,7 +1491,8 @@ pub fn run(
   result_formats: List(Format),
   deadline_milliseconds: Int,
 ) -> Result(Outcome, RunError) {
-  use <- traced(connection, statement, Some(statement.sql), _, outcome_ending)
+  use <-
+    traced(connection, statement, recorded_text(statement), _, outcome_ending)
   run_without_span(
     connection,
     statement.sql,
@@ -1489,11 +1529,12 @@ pub fn run_script(
   statement: Statement,
   deadline_milliseconds: Int,
 ) -> Result(List(Outcome), ScriptError) {
-  // A script is not parameterized, so its text may hold values: it is not
+  // A script is not parameterized, so its SQL may hold values: it is not
   // recorded (OTel semantic conventions at commit 7c8eb86d04,
   // docs/db/database-spans.md note 15: "Non-parameterized query text SHOULD NOT
-  // be collected by default unless there is sanitization").
-  use <- traced(connection, statement, None, _, script_ending)
+  // be collected by default unless there is sanitization"). A span text is
+  // the caller's sanitized form, so the span records it (see `span_text`).
+  use <- traced(connection, statement, statement.span_text, _, script_ending)
   run_script_without_span(connection, statement.sql, deadline_milliseconds)
 }
 
@@ -1771,7 +1812,8 @@ pub fn copy_from(
   produce: fn(CopySender) -> Result(Nil, reason),
 ) -> Result(Int, CopyError(reason)) {
   {
-    use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
+    use <-
+      traced(connection, statement, recorded_text(statement), _, copy_ending)
     use sender <- with_sender(connection, deadline_milliseconds)
     use Nil <- try(start_copy(
       sender,
@@ -1865,7 +1907,8 @@ pub fn copy_to(
   fold: fn(value, BitArray) -> Result(value, reason),
 ) -> Result(value, CopyError(reason)) {
   {
-    use <- traced(connection, statement, Some(statement.sql), _, copy_ending)
+    use <-
+      traced(connection, statement, recorded_text(statement), _, copy_ending)
     use sender <- with_sender(connection, deadline_milliseconds)
     use Nil <- try(start_copy(
       sender,
