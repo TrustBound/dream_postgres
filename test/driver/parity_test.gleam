@@ -13,6 +13,9 @@ import dream_postgres/driver/login.{
   type Password, PreferChannelBinding, ServerRejectedLogin,
 }
 import dream_postgres/driver/message.{Protocol30}
+import dream_postgres/driver/pool.{
+  type Pool, type PoolConfig, type PoolStatus, PoolConfig, PoolStatus,
+}
 import dream_postgres/driver/statement_cache
 import dream_postgres/driver/transport.{
   type Tls, type TransportError, AuthorityFile, AuthorityFileUnreadable,
@@ -347,6 +350,7 @@ fn server_tests(server: Server) {
       map(type_changes(), unnamed_change_test(server, _)),
     ),
     group("statements after a schema change", schema_tests(server)),
+    group("the pool", pool_tests(server)),
   ])
 }
 
@@ -1431,4 +1435,156 @@ fn password_tests() {
       |> or_fail_with("Expected no password in the status")
     }),
   ]
+}
+
+// The pool ----------------------------------------------------------------------
+
+fn pool_config(
+  connection: ConnectionConfig,
+  extra: extra,
+) -> PoolConfig(extra) {
+  PoolConfig(
+    connection:,
+    health_check_interval_milliseconds: 60_000,
+    health_check_deadline_milliseconds: 5000,
+    rollback_deadline_milliseconds: 5000,
+    shutdown_deadline_milliseconds: 5000,
+    extra:,
+  )
+}
+
+fn with_pool(
+  config: Result(PoolConfig(extra), String),
+  size: Int,
+  body: fn(Pool(extra)) -> Result(value, String),
+) -> Result(value, String) {
+  use settings <- try(config)
+  use started <- try(
+    pool.start(settings, size) |> result.map_error(string.inspect),
+  )
+  let value = body(started)
+  pool.stop(started, 1000)
+  value
+}
+
+fn held(
+  pool: Pool(extra),
+  body: fn(Connection) -> Result(value, String),
+) -> Result(value, String) {
+  pool.hold(pool, deadline, body)
+  |> result.map_error(string.inspect)
+  |> result.flatten
+}
+
+fn held_backend_pid(pool: Pool(extra)) -> Result(String, String) {
+  held(pool, backend_pid)
+}
+
+fn held_one(connection: Connection) -> Result(List(List(String)), String) {
+  rows(connection, "SELECT 1", [])
+}
+
+fn held_two(
+  pool: Pool(extra),
+  first: Connection,
+) -> Result(List(List(String)), String) {
+  use first_rows <- try(held_one(first))
+  use second_rows <- try(held(pool, held_one))
+  Ok(list.append(first_rows, second_rows))
+}
+
+/// Asks for the status until all connections are available: no sleep.
+fn wait_for_available(
+  pool: Pool(extra),
+  wanted: Int,
+  attempts: Int,
+) -> Result(PoolStatus, String) {
+  use current <- try(pool.status(pool) |> result.map_error(string.inspect))
+  case current.available == wanted, attempts {
+    True, _ -> Ok(current)
+    False, 0 -> Error("the connections did not come back")
+    False, _ -> wait_for_available(pool, wanted, attempts - 1)
+  }
+}
+
+fn pool_tests(server: Server) {
+  [
+    it("runs a query on a held connection", fn() { check_held_query(server) }),
+    it("gives each connection back when its hold ends", fn() {
+      check_holds_end(server)
+    }),
+    it("replaces an idle connection whose socket closed", fn() {
+      check_idle_socket_closed(server)
+    }),
+  ]
+}
+
+fn check_held_query(server: Server) {
+  // Arrange
+  let config = dream_config(server.port) |> result.map(pool_config(_, Nil))
+
+  // Act
+  let answer = {
+    use pool <- with_pool(config, 1)
+    held(pool, held_one)
+  }
+
+  // Assert
+  answer
+  |> should
+  |> be_equal(Ok([["1"]]))
+  |> or_fail_with("Expected the query to run on the held connection")
+}
+
+fn check_holds_end(server: Server) {
+  // Arrange
+  let config = dream_config(server.port) |> result.map(pool_config(_, Nil))
+
+  // Act
+  let status = {
+    use pool <- with_pool(config, 2)
+    use _rows <- try(held(pool, held_two(pool, _)))
+    wait_for_available(pool, 2, 1000)
+  }
+
+  // Assert
+  status
+  |> should
+  |> be_equal(
+    Ok(PoolStatus(
+      size: 2,
+      connected: 2,
+      available: 2,
+      held: 0,
+      waiting: 0,
+      last_connect_error: None,
+    )),
+  )
+  |> or_fail_with("Expected both connections back and free")
+}
+
+fn check_idle_socket_closed(server: Server) {
+  // Arrange
+  let #(port, proxy) = start_proxy(server.port)
+  let events = process.new_subject()
+  let config =
+    dream_config(port)
+    |> result.map(with_events(_, events))
+    |> result.map(pool_config(_, Nil))
+
+  // Act
+  let changed = {
+    use pool <- with_pool(config, 1)
+    use first <- try(held_backend_pid(pool))
+    close_client(proxy)
+    use Nil <- try(wait_for_reconnect(events))
+    use second <- try(held_backend_pid(pool))
+    Ok(first != second)
+  }
+
+  // Assert
+  changed
+  |> should
+  |> be_equal(Ok(True))
+  |> or_fail_with("Expected a new backend after the socket closed")
 }
