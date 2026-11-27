@@ -19,6 +19,7 @@ import dream_postgres/internal/cell.{ColumnDescription, TextFormat}
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
+import driver/test_files.{read_recording}
 import gleam/int.{to_string}
 import gleam/list.{map}
 import gleam/option.{None, Some}
@@ -30,9 +31,6 @@ import matchers/extract_first.{extract_first}
 import matchers/extract_parameter_values.{extract_parameter_values}
 import matchers/extract_row_descriptions.{extract_row_descriptions}
 import matchers/extract_secret_key_lengths.{extract_secret_key_lengths}
-
-@external(erlang, "driver_file_ffi", "read_recording")
-fn read_recording(name: String) -> Result(BitArray, String)
 
 type Recording {
   Recording(
