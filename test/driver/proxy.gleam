@@ -45,3 +45,8 @@ pub fn watch_client_end(proxy: Proxy) -> ClientEndWatch
 /// Waits for the client to close, and gives the last bytes it sent.
 @external(erlang, "driver_proxy_ffi", "client_end")
 pub fn client_end(watch: ClientEndWatch) -> BitArray
+
+/// Ends the proxy and closes its sockets, so the server ends the session
+/// also after `stop_reading`. A test stops each proxy that it starts.
+@external(erlang, "driver_proxy_ffi", "stop")
+pub fn stop_proxy(proxy: Proxy) -> Nil

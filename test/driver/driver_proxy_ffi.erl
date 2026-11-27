@@ -1,7 +1,7 @@
 -module(driver_proxy_ffi).
 -export([start/1, inject/2, close_client/1, reset_client/1, stop_reading/1,
          stop_listening/1, answer_next_request/2,
-         watch_client_end/1, client_end/1]).
+         watch_client_end/1, client_end/1, stop/1]).
 
 %% A TCP proxy between a connection process and a driver server, for the
 %% connection tests: it passes every byte both ways, and on a command it
@@ -24,6 +24,10 @@
 %%   nothing more from the client.
 %%
 %% Each command waits until the proxy did it.
+%%
+%% stop(Proxy) ends the proxy at once. Its sockets close with it, so the
+%% server ends the session even when the proxy stopped reading, and saw
+%% no close of the client.
 %%
 %% watch_client_end(Proxy) asks for the last bytes that the client sends
 %% before it closes its socket; client_end(Watch) waits for them, so a test
@@ -53,6 +57,10 @@ client_end(Reference) ->
     receive
         {Reference, LastBytes} -> LastBytes
     end.
+
+stop(Proxy) ->
+    exit(Proxy, kill),
+    nil.
 
 command(Proxy, Command) ->
     Reference = make_ref(),
