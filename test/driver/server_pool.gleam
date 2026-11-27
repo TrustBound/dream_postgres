@@ -14,12 +14,12 @@
 
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionEvent, type DriverError, type Outcome, Backoff,
-  ConnectionConfig, Disconnected, ReconnectFailed, run_script, stop,
+  Connected, ConnectionConfig, Disconnected, ReconnectFailed, run_script, stop,
   transaction_status,
 }
 import dream_postgres/driver/pool.{
-  type HoldError, type Pool, type PoolConfig, type PoolMessage, type PoolStatus,
-  PoolConfig, PoolStopped,
+  type HoldError, type Pool, type PoolConfig, type PoolEvent, type PoolMessage,
+  type PoolStatus, MemberFree, PoolConfig, PoolStopped,
 }
 import dream_postgres/internal/cell.{type TransactionStatus}
 import dream_test/context.{type Context}
@@ -35,7 +35,7 @@ import gleam/erlang/process.{
 }
 import gleam/int.{to_string}
 import gleam/list
-import gleam/option.{Some}
+import gleam/option.{None, Some}
 import gleam/otp/actor.{type Started}
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/result.{flatten, map_error, replace, try}
@@ -52,6 +52,7 @@ pub fn pool_config(connection: connection.ConnectionConfig) -> PoolConfig {
     health_check_deadline_milliseconds: 5000,
     rollback_deadline_milliseconds: 5000,
     shutdown_deadline_milliseconds: 5000,
+    events: None,
   )
 }
 
@@ -107,10 +108,12 @@ pub fn slow_reconnect_config(config: PoolConfig) -> PoolConfig {
 fn watched_pool_config(
   config: PoolConfig,
   events: Subject(ConnectionEvent),
+  pool_events: Subject(PoolEvent),
 ) -> PoolConfig {
   PoolConfig(
     ..config,
     connection: ConnectionConfig(..config.connection, events: Some(events)),
+    events: Some(pool_events),
   )
 }
 
@@ -135,6 +138,8 @@ pub type PoolSession {
     pool: Pool,
     control: Connection,
     events: Subject(ConnectionEvent),
+    /// The events of the pool's members.
+    pool_events: Subject(PoolEvent),
     lock_key: Int,
   )
 }
@@ -148,11 +153,15 @@ pub fn start_pool_session(
 ) -> Result(PoolSession, String) {
   use config <- try(config)
   let events = process.new_subject()
-  use started <- try(start_pool(watched_pool_config(config, events), size))
+  let pool_events = process.new_subject()
+  use started <- try(start_pool(
+    watched_pool_config(config, events, pool_events),
+    size,
+  ))
   {
     use control <- try(start_connection(server.port))
     let lock_key = unique_lock_key()
-    Ok(PoolSession(pool: started, control:, events:, lock_key:))
+    Ok(PoolSession(pool: started, control:, events:, pool_events:, lock_key:))
   }
   |> map_error(stop_pool_after_error(started, _))
 }
@@ -230,6 +239,7 @@ pub type ProxiedPool {
     proxy: Proxy,
     control: Connection,
     events: Subject(ConnectionEvent),
+    pool_events: Subject(PoolEvent),
     lock_key: Int,
   )
 }
@@ -249,6 +259,7 @@ pub fn start_proxied_pool(
       proxy:,
       control: session.control,
       events: session.events,
+      pool_events: session.pool_events,
       lock_key: session.lock_key,
     ))
   }
@@ -868,6 +879,78 @@ pub fn wait_for_failed_reconnect(
   events: Subject(ConnectionEvent),
 ) -> Result(Nil, String) {
   wait_for_event(events, is_failed_reconnect, "ReconnectFailed")
+}
+
+/// Waits for the next `MemberFree` of `slot`, and drops the other events.
+pub fn wait_for_member_free(
+  pool_events: Subject(PoolEvent),
+  slot: Int,
+) -> Result(Nil, String) {
+  case process.receive(pool_events, 5000) {
+    Ok(MemberFree(free_slot)) if free_slot == slot -> Ok(Nil)
+    Ok(_other) -> wait_for_member_free(pool_events, slot)
+    Error(Nil) -> Error("no MemberFree within 5 seconds")
+  }
+}
+
+/// The events of the pool up to and with the next `MemberFree` of
+/// `slot`, in their order.
+pub fn pool_events_until_free(
+  pool_events: Subject(PoolEvent),
+  slot: Int,
+) -> Result(List(PoolEvent), String) {
+  collect_until_free(pool_events, slot, [])
+}
+
+fn collect_until_free(
+  pool_events: Subject(PoolEvent),
+  slot: Int,
+  seen: List(PoolEvent),
+) -> Result(List(PoolEvent), String) {
+  case process.receive(pool_events, 5000) {
+    Ok(MemberFree(free_slot)) if free_slot == slot ->
+      Ok(list.reverse([MemberFree(free_slot), ..seen]))
+    Ok(event) -> collect_until_free(pool_events, slot, [event, ..seen])
+    Error(Nil) -> Error("no MemberFree within 5 seconds")
+  }
+}
+
+/// The connection events up to and with the next `Connected`, in their
+/// order.
+pub fn connection_events_until_connected(
+  events: Subject(ConnectionEvent),
+) -> Result(List(ConnectionEvent), String) {
+  collect_until_connected(events, [])
+}
+
+fn collect_until_connected(
+  events: Subject(ConnectionEvent),
+  seen: List(ConnectionEvent),
+) -> Result(List(ConnectionEvent), String) {
+  case process.receive(events, 5000) {
+    Ok(Connected) -> Ok(list.reverse([Connected, ..seen]))
+    Ok(event) -> collect_until_connected(events, [event, ..seen])
+    Error(Nil) -> Error("no Connected within 5 seconds")
+  }
+}
+
+/// The connection events up to and with the next `Disconnected`, in their
+/// order.
+pub fn connection_events_until_disconnected(
+  events: Subject(ConnectionEvent),
+) -> Result(List(ConnectionEvent), String) {
+  collect_until_disconnected(events, [])
+}
+
+fn collect_until_disconnected(
+  events: Subject(ConnectionEvent),
+  seen: List(ConnectionEvent),
+) -> Result(List(ConnectionEvent), String) {
+  case process.receive(events, 5000) {
+    Ok(Disconnected(error)) -> Ok(list.reverse([Disconnected(error), ..seen]))
+    Ok(event) -> collect_until_disconnected(events, [event, ..seen])
+    Error(Nil) -> Error("no Disconnected within 5 seconds")
+  }
 }
 
 fn is_disconnect(event: ConnectionEvent) -> Bool {
