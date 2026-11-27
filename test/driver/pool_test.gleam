@@ -39,9 +39,7 @@ import gleam/erlang/process.{
 import gleam/int.{to_string}
 import gleam/list.{map, unique}
 import gleam/option.{type Option, None, Some}
-import gleam/otp/actor
 import gleam/otp/static_supervisor
-import gleam/otp/supervision
 import gleam/result.{try}
 
 @external(erlang, "port_ffi", "free_port")
@@ -1427,6 +1425,20 @@ fn name_tests() {
       |> be_equal(Error(PoolStopped))
       |> or_fail_with("Expected PoolStopped")
     }),
+    it("refuses a size below 1 under a supervisor", fn() {
+      // Arrange
+      let config = dream_config(first_server().port)
+      let name = process.new_name("pool_test_size")
+
+      // Act
+      let started = config |> result.map(start_aside(_, 0, name))
+
+      // Assert
+      started
+      |> should
+      |> be_equal(Ok(Error(Nil)))
+      |> or_fail_with("Expected the supervisor not to start")
+    }),
     it("refuses a name that another pool has", fn() { check_name_taken() }),
     it("ends a hold quietly when its pool stopped during it", fn() {
       check_pool_gone_during_hold()
@@ -1437,6 +1449,45 @@ fn name_tests() {
   ]
 }
 
+/// Starts a supervisor of a pool under a name in the test's process,
+/// linked to it.
+fn start_supervised_pool(
+  config: PoolConfig,
+  size: Int,
+  name: Name(pool.PoolMessage),
+) -> Result(Nil, Failure) {
+  static_supervisor.new(static_supervisor.OneForOne)
+  |> static_supervisor.add(pool.supervised(config, size, name))
+  |> static_supervisor.start
+  |> result.replace(Nil)
+  |> result.replace_error(Unexpected("no supervisor"))
+}
+
+/// Starts a supervisor of a pool in a process that traps exits, because a
+/// supervisor that fails to start exits, and gives whether it started.
+fn start_aside(
+  config: PoolConfig,
+  size: Int,
+  name: Name(pool.PoolMessage),
+) -> Result(Nil, Nil) {
+  let answer = process.new_subject()
+  process.spawn(fn() { start_and_tell(config, size, name, answer) })
+  process.receive(answer, 5000) |> result.flatten
+}
+
+fn start_and_tell(
+  config: PoolConfig,
+  size: Int,
+  name: Name(pool.PoolMessage),
+  answer: Subject(Result(Nil, Nil)),
+) -> Nil {
+  process.trap_exits(True)
+  let started =
+    start_supervised_pool(config, size, name) |> result.replace_error(Nil)
+  process.send(answer, started)
+  process.receive_forever(process.new_subject())
+}
+
 fn check_name_taken() {
   // Arrange
   let config = dream_config(first_server().port)
@@ -1445,50 +1496,41 @@ fn check_name_taken() {
   // Act
   let second = {
     use config <- try(config)
-    use first <- try(
-      pool.start_named(config, 1, name) |> result.map_error(Start),
-    )
-    let second = pool.start_named(config, 1, name) |> result.replace(Nil)
-    pool.stop(first, 1000)
-    Ok(second)
+    use Nil <- try(start_supervised_pool(config, 1, name))
+    Ok(start_aside(config, 1, name))
   }
 
   // Assert
   second
   |> should
-  |> be_equal(
-    Ok(
-      Error(
-        pool.PoolProcessStartFailed(actor.InitFailed("name already registered")),
-      ),
-    ),
-  )
-  |> or_fail_with("Expected the second start to fail on the name")
+  |> be_equal(Ok(Error(Nil)))
+  |> or_fail_with("Expected the second supervisor not to start")
 }
 
 /// The callback stops the pool, so when the hold ends no process has the
-/// name, and the hold gives the callback's value.
+/// name: the supervisor does not start a pool that stopped, and the hold
+/// gives the callback's value.
 fn check_pool_gone_during_hold() {
   // Arrange
   let config = dream_config(first_server().port)
   let name = process.new_name("pool_test_gone")
+  let handle = pool.from_name(name)
 
   // Act
   let answer = {
     use config <- try(config)
-    use _started <- try(
-      pool.start_named(config, 1, name) |> result.map_error(Start),
-    )
-    let handle = pool.from_name(name)
-    pool.hold(handle, 5000, stop_inside(handle, _))
-    |> result.map_error(Checkout)
+    use Nil <- try(start_supervised_pool(config, 1, name))
+    let answer =
+      pool.hold(handle, 5000, stop_inside(handle, _))
+      |> result.map_error(Checkout)
+    Ok(#(answer, pool.status(handle)))
   }
 
   // Assert
   answer
   |> should
-  |> be_equal(Ok("stopped"))
-  |> or_fail_with("Expected the callback's value")
+  |> be_equal(Ok(#(Ok("stopped"), Error(PoolStopped))))
+  |> or_fail_with("Expected the callback's value, and no pool after it")
 }
 
 fn stop_inside(handle: Pool, _connection: Connection) -> String {
@@ -1508,14 +1550,7 @@ fn check_restart_under_name() {
   // Act
   let pids = {
     use config <- try(config)
-    use _supervisor <- try(
-      static_supervisor.new(static_supervisor.OneForOne)
-      |> static_supervisor.add(
-        supervision.worker(fn() { start_named_child(config, name) }),
-      )
-      |> static_supervisor.start
-      |> result.replace_error(Unexpected("no supervisor")),
-    )
+    use Nil <- try(start_supervised_pool(config, 1, name))
     use first <- try(held_backend_pid(handle))
     use Nil <- try(kill_and_wait(name))
     use second <- try(hold_until_back(handle, 100_000))
@@ -1527,21 +1562,6 @@ fn check_restart_under_name() {
   |> should
   |> be_equal(Ok(True))
   |> or_fail_with("Expected a new connection through the same handle")
-}
-
-fn start_named_child(
-  config: PoolConfig,
-  name: Name(pool.PoolMessage),
-) -> Result(actor.Started(Pool), actor.StartError) {
-  use started <- try(
-    pool.start_named(config, 1, name)
-    |> result.replace_error(actor.InitFailed("the pool did not start")),
-  )
-  use pid <- try(
-    process.named(name)
-    |> result.replace_error(actor.InitFailed("no process has the name")),
-  )
-  Ok(actor.Started(pid:, data: started))
 }
 
 /// Kills the process of the name, and waits until it is down, so the name
