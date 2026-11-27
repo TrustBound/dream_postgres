@@ -1329,7 +1329,11 @@ fn copy_report(error: CopyError(reason)) -> Option(ServerReport) {
   }
 }
 
-/// Prepares a statement and describes it, before any run.
+/// Prepares a statement and describes it, before any run. The answer is
+/// always the server's description now: a statement that the cache holds
+/// is closed and prepared again, so a schema change since the last
+/// prepare shows, and the cache keeps the new description for the next
+/// run.
 ///
 /// ## Parameters
 ///
@@ -2296,6 +2300,14 @@ fn statement_sql(statement: StatementRequest) -> String {
   }
 }
 
+/// A run uses the statement of the cache. A prepare always asks the
+/// server, because its answer is the server's description now, which a
+/// schema change since the cached prepare can make different. A Describe
+/// of the cached name cannot give it: after a change of the result
+/// columns the server refuses that Describe with 0A000, "cached plan must
+/// not change result type" (checked on PostgreSQL 16 and 19). So the
+/// prepare closes the cached statement and prepares it again under a new
+/// name, in one round trip, and the cache keeps what the server answered.
 fn serve_cached(
   state: State,
   socket: transport.Connection,
@@ -2303,9 +2315,9 @@ fn serve_cached(
   cached: CachedStatement,
 ) -> State {
   case statement {
-    PrepareStatement(reply: reply_to, ..) -> {
-      reply(reply_to, Ok(Prepared(cached.description, warning_code: None)))
-      next_request(state)
+    PrepareStatement(sql:, ..) -> {
+      let cache = statement_cache.forget(state.cache, sql)
+      prepare_named(State(..state, cache:), socket, statement)
     }
     RunStatement(details) -> run_cached(state, socket, details, cached)
   }
