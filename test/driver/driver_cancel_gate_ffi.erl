@@ -1,5 +1,5 @@
 -module(driver_cancel_gate_ffi).
--export([start/1, record/1, release/1, events/1]).
+-export([start/1, record/1, release/1, events/1, stop/1]).
 
 %% A proxy for the cancel tests. The first client is the connection: the
 %% gate passes its bytes both ways. Each later client is a cancel: the
@@ -9,6 +9,10 @@
 %% After record/1, the gate notes in order each chunk of bytes that the
 %% connection sends to the server (main_bytes) and the moment it passes a
 %% held cancel on (cancel_passed). events/1 gives those notes.
+%%
+%% stop/1 ends the gate, which closes every socket that it owns. The gate
+%% also ends by itself when the connection closes, so a command to a gate
+%% that ended gives nil at once.
 
 start(ServerPort) ->
     Caller = self(),
@@ -19,11 +23,18 @@ start(ServerPort) ->
 record(Gate) -> call(Gate, record).
 release(Gate) -> call(Gate, release).
 events(Gate) -> call(Gate, events).
+stop(Gate) -> call(Gate, stop).
 
 call(Gate, Command) ->
-    Reference = make_ref(),
+    Reference = erlang:monitor(process, Gate),
     Gate ! {command, self(), Reference, Command},
-    receive {Reference, Answer} -> Answer end.
+    receive
+        {Reference, Answer} ->
+            erlang:demonitor(Reference, [flush]),
+            Answer;
+        {'DOWN', Reference, process, Gate, _Reason} ->
+            nil
+    end.
 
 init(Caller, Ready, ServerPort) ->
     {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]),
@@ -45,7 +56,9 @@ loop(State = #{main := none, server_port := ServerPort}) ->
         {accepted, Client} ->
             {ok, Server} = gen_tcp:connect("localhost", ServerPort, [binary, {active, true}]),
             ok = inet:setopts(Client, [{active, true}]),
-            loop(State#{main := {Client, Server}})
+            loop(State#{main := {Client, Server}});
+        {command, From, Reference, stop} ->
+            From ! {Reference, nil}
     end;
 loop(State = #{main := {Client, Server}}) ->
     receive
@@ -72,6 +85,8 @@ loop(State = #{main := {Client, Server}}) ->
         {command, From, Reference, events} ->
             From ! {Reference, lists:reverse(maps:get(events, State))},
             loop(State);
+        {command, From, Reference, stop} ->
+            From ! {Reference, nil};
         {tcp_closed, _Socket} ->
             ok
     end.

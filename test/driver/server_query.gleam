@@ -15,7 +15,7 @@ import dream_postgres/driver/query.{
   Wait,
 }
 import dream_postgres/driver/transport.{
-  type Connection, type TransportError, NoTls, close, receive, send,
+  type Connection, type TransportError, NoTls, receive, send,
 }
 import dream_postgres/internal/cell.{type ServerReport}
 import driver/server_login.{type LoginFailure, TestLogin, open_logged_in}
@@ -43,12 +43,9 @@ pub type Session {
 pub type StepFunction(state, outcome) =
   fn(state, BackendMessage) -> Result(Step(state, outcome), UnexpectedMessage)
 
-/// Logs in as `dream` with SCRAM over plain TCP, runs `body` on the
-/// session, and closes the connection.
-pub fn with_session(
-  server: Server,
-  body: fn(Session) -> Result(value, QueryFailure),
-) -> Result(value, QueryFailure) {
+/// Logs in as `dream` with SCRAM over plain TCP, and gives the session.
+/// The connection closes when the test process ends.
+pub fn open_session(server: Server) -> Result(Session, QueryFailure) {
   let test_login =
     TestLogin(
       host: "localhost",
@@ -58,12 +55,13 @@ pub fn with_session(
       channel_binding: PreferChannelBinding,
       protocol_version: Protocol30,
     )
-  use #(connection, bytes) <- try(
-    open_logged_in(server, test_login) |> map_error(LoginFailed),
-  )
-  let value = body(Session(connection:, bytes:))
-  close(connection)
-  value
+  open_logged_in(server, test_login)
+  |> result.map(session_of)
+  |> map_error(LoginFailed)
+}
+
+fn session_of(opened: #(Connection, BitArray)) -> Session {
+  Session(connection: opened.0, bytes: opened.1)
 }
 
 /// Runs one query step to its end, and gives its outcome and the session
