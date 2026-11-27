@@ -1,5 +1,7 @@
 -module(driver_reconnect_server_ffi).
--export([start/1, wait_for_second_connection/1]).
+-export([start/1, wait_for_second_connection/1, start_silent/0,
+         wait_for_connection/1, kill_linked_process/1, linked_process/1,
+         monitor_count/1, monitored_by_count/1]).
 
 %% A fake PostgreSQL server for the tests of the setup deadline on a
 %% reconnect. start(SecondBehavior) listens on a free port of localhost and
@@ -122,3 +124,78 @@ report_failure(Caller, Reference, {error, Reason}) ->
     Caller ! {Reference, {failed, Reason}}.
 
 reason_text(Reason) -> unicode:characters_to_binary(io_lib:format("~p", [Reason])).
+
+%% A server that accepts one connection, tells wait_for_connection, and
+%% never sends a byte, until the client closes. It gives
+%% {ok, {Port, Server}}, or {error, Reason}.
+start_silent() ->
+    Caller = self(),
+    Reference = make_ref(),
+    case gen_tcp:listen(0, [binary, {active, false}, {reuseaddr, true}]) of
+        {ok, Listen} -> started_silent(Caller, Reference, Listen);
+        {error, Reason} -> {error, reason_text(Reason)}
+    end.
+
+started_silent(Caller, Reference, Listen) ->
+    case inet:port(Listen) of
+        {ok, Port} ->
+            Server = spawn(fun() -> serve_silent(Caller, Reference) end),
+            handed_over(gen_tcp:controlling_process(Listen, Server), Listen,
+                        Server, Reference, Port);
+        {error, Reason} ->
+            gen_tcp:close(Listen),
+            {error, reason_text(Reason)}
+    end.
+
+serve_silent(Caller, Reference) ->
+    receive
+        {Reference, Listen} ->
+            accept_silent(Caller, Reference, gen_tcp:accept(Listen, ?WAIT)),
+            gen_tcp:close(Listen)
+    end.
+
+accept_silent(Caller, Reference, {ok, Socket}) ->
+    Caller ! {Reference, connected},
+    wait_for_close(Socket, infinity),
+    gen_tcp:close(Socket);
+accept_silent(Caller, Reference, {error, Reason}) ->
+    Caller ! {Reference, {failed, reason_text(Reason)}}.
+
+wait_for_connection({_Server, Reference}) ->
+    receive
+        {Reference, connected} -> {ok, nil};
+        {Reference, {failed, Reason}} -> {error, Reason}
+    after ?WAIT -> {error, <<"no connection within 5 seconds">>}
+    end.
+
+%% Kills the one process that Pid links to, for example the connection
+%% process that a starter waits for.
+kill_linked_process(Pid) ->
+    case erlang:process_info(Pid, links) of
+        {links, [Linked]} when is_pid(Linked) ->
+            exit(Linked, kill),
+            {ok, nil};
+        Other ->
+            {error, reason_text(Other)}
+    end.
+
+%% The one process that Pid links to.
+linked_process(Pid) ->
+    case erlang:process_info(Pid, links) of
+        {links, [Linked]} when is_pid(Linked) -> {ok, Linked};
+        Other -> {error, reason_text(Other)}
+    end.
+
+%% How many monitors Pid holds on other processes.
+monitor_count(Pid) ->
+    case erlang:process_info(Pid, monitors) of
+        {monitors, Monitors} -> {ok, length(Monitors)};
+        undefined -> {error, <<"the process is gone">>}
+    end.
+
+%% How many monitors other processes hold on Pid.
+monitored_by_count(Pid) ->
+    case erlang:process_info(Pid, monitored_by) of
+        {monitored_by, Monitors} -> {ok, length(Monitors)};
+        undefined -> {error, <<"the process is gone">>}
+    end.

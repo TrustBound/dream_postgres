@@ -35,6 +35,34 @@ fn start_ffi(
 @external(erlang, "driver_reconnect_server_ffi", "wait_for_second_connection")
 fn wait_for_second_connection(server: ReconnectServer) -> Result(Nil, String)
 
+/// A running silent server that tells when it accepted a connection.
+pub type SilentServer
+
+/// Starts a server that accepts one connection and never sends a byte,
+/// and gives its port.
+@external(erlang, "driver_reconnect_server_ffi", "start_silent")
+pub fn start_watched_silent_server() -> Result(#(Int, SilentServer), String)
+
+/// Waits until the silent server accepted its connection.
+@external(erlang, "driver_reconnect_server_ffi", "wait_for_connection")
+pub fn wait_for_connection(server: SilentServer) -> Result(Nil, String)
+
+/// Kills the one process that `pid` links to.
+@external(erlang, "driver_reconnect_server_ffi", "kill_linked_process")
+pub fn kill_linked_process(pid: process.Pid) -> Result(Nil, String)
+
+/// The one process that `pid` links to.
+@external(erlang, "driver_reconnect_server_ffi", "linked_process")
+pub fn linked_process(pid: process.Pid) -> Result(process.Pid, String)
+
+/// How many monitors `pid` holds on other processes.
+@external(erlang, "driver_reconnect_server_ffi", "monitor_count")
+pub fn monitor_count(pid: process.Pid) -> Result(Int, String)
+
+/// How many monitors other processes hold on `pid`.
+@external(erlang, "driver_reconnect_server_ffi", "monitored_by_count")
+pub fn monitored_by_count(pid: process.Pid) -> Result(Int, String)
+
 /// What a reconnect against the fake server gave.
 pub type BadReconnect {
   BadReconnect(

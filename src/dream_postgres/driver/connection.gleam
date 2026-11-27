@@ -219,10 +219,9 @@ type Message {
   SocketMessage(message: Dynamic)
   ReconnectNow(error: DriverError, attempt: Int)
   ExitSignal(exit: ExitMessage)
-  /// Tells the subscriber `Connected`. The process sends it to itself
-  /// before it opens its socket, so it comes before any message of the
-  /// socket, and only a process that started handles it.
-  AnnounceConnected
+  /// Connects and logs in for the first time: the starter's only
+  /// request. The process answers by the end of its own setup deadline.
+  OpenRequest(reply: ReplyTo(Result(Nil, ConnectError)))
 }
 
 /// A request that goes to the server.
@@ -291,6 +290,14 @@ fn call_process(
   timeout: Int,
 ) -> Result(reply, CallFailure)
 
+/// Waits for the answer of the process, or for its end, with no timer.
+/// Only for a request that the process answers by a deadline of its own.
+@external(erlang, "dream_postgres_connection_ffi", "call_until_answer")
+fn call_process_until_answer(
+  pid: Pid,
+  send_request: fn(ReplyTo(reply)) -> Nil,
+) -> Result(reply, CallFailure)
+
 @external(erlang, "dream_postgres_connection_ffi", "reply")
 fn reply(to: ReplyTo(reply), value: reply) -> Nil
 
@@ -316,18 +323,54 @@ fn started_connection(started: actor.Started(Connection)) -> Connection {
   started.data
 }
 
+/// Starts the process, then asks it to connect and log in. The start of
+/// the process does no I/O, and the process answers the open by the end of
+/// its own setup deadline, with the session or `SetupTimedOut`. So the
+/// starter waits for that answer with a monitor and no timer of its own:
+/// no second timer can end a start that the process completed.
 fn start_process(
   config: ConnectionConfig,
 ) -> Result(actor.Started(Connection), ConnectError) {
-  let failure = process.new_subject()
-  actor.new_with_initialiser(config.setup_timeout_milliseconds, initialise(
-    _,
-    config,
-    failure,
-  ))
-  |> actor.on_message(handle_message)
-  |> actor.start
-  |> map_error(start_error(_, failure))
+  use started <- try(
+    actor.new_with_initialiser(config.setup_timeout_milliseconds, initialise(
+      _,
+      config,
+    ))
+    |> actor.on_message(handle_message)
+    |> actor.start
+    |> map_error(start_failure),
+  )
+  open_process(started.data) |> result.replace(started)
+}
+
+fn open_process(connection: Connection) -> Result(Nil, ConnectError) {
+  case
+    call_process_until_answer(connection.pid, send_request(
+      connection,
+      OpenRequest,
+      _,
+    ))
+  {
+    Ok(opened) -> opened
+    Error(_process_down) -> Error(SetupExited)
+  }
+}
+
+/// The error of a process that did not start, before it did any I/O.
+///
+/// ## Parameters
+///
+/// - `error`: the start error of gleam_otp
+///
+/// ## Returns
+///
+/// `SetupTimedOut` when the VM did not run the new process within the
+/// setup timeout, and `SetupExited` when it exited while it started.
+pub fn start_failure(error: actor.StartError) -> ConnectError {
+  case error {
+    actor.InitTimeout -> SetupTimedOut
+    actor.InitFailed(_) | actor.InitExited(_) -> SetupExited
+  }
 }
 
 /// The process as a child of a gleam_otp supervisor.
@@ -354,28 +397,13 @@ fn child_start_error(_error: ConnectError) -> actor.StartError {
   actor.InitFailed("connect failed")
 }
 
+/// Sets up the process with no I/O: the open comes as its first request.
 fn initialise(
   subject: Subject(Message),
   config: ConnectionConfig,
-  failure: Subject(ConnectError),
 ) -> Result(actor.Initialised(State, Message, Connection), String) {
   process.trap_exits(True)
-  process.send(subject, AnnounceConnected)
-  case open_session(config) {
-    Ok(session) -> Ok(initialised(subject, config, session))
-    Error(error) -> {
-      process.send(failure, error)
-      Error("connect failed")
-    }
-  }
-}
-
-fn initialised(
-  subject: Subject(Message),
-  config: ConnectionConfig,
-  session: Session,
-) -> actor.Initialised(State, Message, Connection) {
-  let state = connected_state(new_state(config, subject), session)
+  let state = new_state(config, subject)
   let selector =
     process.new_selector()
     |> process.select(subject)
@@ -384,6 +412,27 @@ fn initialised(
   actor.initialised(state)
   |> actor.selecting(selector)
   |> actor.returning(Connection(subject:, pid: process.self()))
+  |> Ok
+}
+
+/// The first open of the process. A process that cannot connect answers
+/// with the error and stops.
+fn open_first(
+  state: State,
+  reply_to: ReplyTo(Result(Nil, ConnectError)),
+) -> actor.Next(State, Message) {
+  case open_session(state.config) {
+    Ok(session) -> {
+      let state = connected_state(state, session)
+      tell(state, Connected)
+      reply(reply_to, Ok(Nil))
+      actor.continue(state)
+    }
+    Error(error) -> {
+      reply(reply_to, Error(error))
+      actor.stop()
+    }
+  }
 }
 
 fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
@@ -408,17 +457,6 @@ fn connected_state(state: State, session: Session) -> State {
     tracker: track(new_tracker(), session.outcome.transaction_status, None),
     pending: append(notices, state.pending),
   )
-}
-
-fn start_error(
-  error: actor.StartError,
-  failure: Subject(ConnectError),
-) -> ConnectError {
-  case error {
-    actor.InitFailed(_) | actor.InitExited(_) ->
-      process.receive(failure, 0) |> result.unwrap(SetupExited)
-    actor.InitTimeout -> SetupTimedOut
-  }
 }
 
 /// Stops the process: it sends Terminate to the server and closes the
@@ -637,10 +675,7 @@ fn handle_message(
       actor.continue(socket_message_received(state, socket_message))
     ReconnectNow(error:, attempt:) ->
       actor.continue(reconnect(state, error, attempt))
-    AnnounceConnected -> {
-      tell(state, Connected)
-      actor.continue(state)
-    }
+    OpenRequest(reply_to) -> open_first(state, reply_to)
   }
 }
 

@@ -2,7 +2,8 @@
 //// step that it cuts short, and a reconnect that it ends.
 
 import dream_postgres/driver/connection.{
-  ConnectionLost, Disconnected, ReconnectFailed, SetupTimedOut,
+  ConnectionConfig, ConnectionLost, Disconnected, ReconnectFailed, SetupExited,
+  SetupTimedOut, start_failure,
 }
 import dream_postgres/driver/deadline.{
   bounded_wait, from_now, has_passed, time_left,
@@ -12,22 +13,32 @@ import dream_postgres/driver/transport.{
   SocketClosed, TransportConfig,
 }
 import dream_test/matchers.{
-  be_equal, be_error, be_false, be_true, or_fail_with, should,
+  be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,
 }
 import dream_test/suite.{type TestSuite}
 import dream_test/unit
 import dream_test/unit_context
 import driver/fake_server.{start_silent_server}
 import driver/reconnect_server.{
-  type BadReconnect, Silent, Trickle, bad_reconnect_setup,
+  type BadReconnect, Silent, Trickle, bad_reconnect_setup, kill_linked_process,
+  linked_process, monitor_count, monitored_by_count, start_watched_silent_server,
+  wait_for_connection,
 }
 import driver/server_connection.{connection_config}
-import gleam/result.{try}
+import driver/servers.{first_driver_server}
+import gleam/bool
+import gleam/erlang/process
+import gleam/otp/actor
+import gleam/result.{map_error, try}
+import gleam/string.{inspect}
 
 /// The tests of the setup deadline.
 pub fn tests() -> TestSuite {
   suite.group("the setup deadline", [
     deadline_tests(),
+    start_failure_tests(),
+    start_tests(),
+    start_monitor_tests(),
     transport_tests(),
     reconnect_tests("a reconnect against a silent server", Silent),
     reconnect_tests(
@@ -88,6 +99,157 @@ fn deadline_tests() -> TestSuite {
       |> should
       |> be_equal(0)
       |> or_fail_with("Expected no wait once the deadline passed")
+    }),
+  ])
+}
+
+fn start_failure_tests() -> TestSuite {
+  unit.describe("a process that did not start", [
+    unit.it("gives SetupTimedOut when the VM did not run it in time", fn() {
+      // Act
+      let error = start_failure(actor.InitTimeout)
+
+      // Assert
+      error
+      |> should
+      |> be_equal(SetupTimedOut)
+      |> or_fail_with("Expected SetupTimedOut")
+    }),
+    unit.it("gives SetupExited when its start failed", fn() {
+      // Act
+      let error = start_failure(actor.InitFailed("no start"))
+
+      // Assert
+      error
+      |> should
+      |> be_equal(SetupExited)
+      |> or_fail_with("Expected SetupExited")
+    }),
+    unit.it("gives SetupExited when it exited while it started", fn() {
+      // Act
+      let error = start_failure(actor.InitExited(process.Normal))
+
+      // Assert
+      error
+      |> should
+      |> be_equal(SetupExited)
+      |> or_fail_with("Expected SetupExited")
+    }),
+  ])
+}
+
+fn start_tests() -> TestSuite {
+  unit.describe("a start", [
+    unit.it("gives SetupExited when the process ends during its open", fn() {
+      // Act
+      let started = {
+        use #(port, server) <- try(start_watched_silent_server())
+        use config <- try(connection_config(port))
+        let answers = process.new_subject()
+        let starter =
+          process.spawn_unlinked(fn() {
+            process.trap_exits(True)
+            process.send(answers, connection.start(config))
+          })
+        use Nil <- try(wait_for_connection(server))
+        use Nil <- try(kill_linked_process(starter))
+        process.receive(answers, 5000)
+        |> result.replace_error("no answer of the start")
+      }
+
+      // Assert
+      started
+      |> should
+      |> be_ok
+      |> be_error
+      |> be_equal(SetupExited)
+      |> or_fail_with("Expected SetupExited")
+    }),
+  ])
+}
+
+fn start_monitor_tests() -> TestSuite {
+  unit.describe("the wait of a start", [
+    unit.it("leaves no monitor after a start that worked", fn() {
+      // Act
+      let monitors = {
+        use config <- try(connection_config(first_driver_server.port))
+        let answers = process.new_subject()
+        process.spawn_unlinked(fn() {
+          let count = {
+            use connection <- try(
+              connection.start(config) |> map_error(inspect),
+            )
+            let count = monitor_count(process.self())
+            connection.stop(connection)
+            count
+          }
+          process.send(answers, count)
+        })
+        process.receive(answers, 5000)
+        |> result.replace_error("no count")
+        |> result.flatten
+      }
+
+      // Assert
+      monitors
+      |> should
+      |> be_equal(Ok(0))
+      |> or_fail_with("Expected no monitor left in the starter")
+    }),
+    unit.it("leaves no monitor after a start that failed", fn() {
+      // Act
+      let monitors = {
+        use config <- try(connection_config(start_silent_server()))
+        let config = ConnectionConfig(..config, setup_timeout_milliseconds: 100)
+        let answers = process.new_subject()
+        process.spawn_unlinked(fn() {
+          let worked = connection.start(config) |> result.is_ok
+          process.send(
+            answers,
+            bool.guard(
+              when: worked,
+              return: Error("the start worked"),
+              otherwise: fn() { monitor_count(process.self()) },
+            ),
+          )
+        })
+        process.receive(answers, 5000)
+        |> result.replace_error("no count")
+        |> result.flatten
+      }
+
+      // Assert
+      monitors
+      |> should
+      |> be_equal(Ok(0))
+      |> or_fail_with("Expected no monitor left in the starter")
+    }),
+    unit.it("leaves no monitor on the process after its starter died", fn() {
+      // Act
+      let monitors = {
+        use #(port, server) <- try(start_watched_silent_server())
+        use config <- try(connection_config(port))
+        let config = ConnectionConfig(..config, setup_timeout_milliseconds: 300)
+        let starter = process.spawn_unlinked(fn() { connection.start(config) })
+        use Nil <- try(wait_for_connection(server))
+        use connection_pid <- try(linked_process(starter))
+        let starter_monitor = process.monitor(starter)
+        process.kill(starter)
+        use _down <- try(
+          process.new_selector()
+          |> process.select_specific_monitor(starter_monitor, fn(down) { down })
+          |> process.selector_receive(5000)
+          |> result.replace_error("the starter did not end"),
+        )
+        monitored_by_count(connection_pid)
+      }
+
+      // Assert
+      monitors
+      |> should
+      |> be_equal(Ok(0))
+      |> or_fail_with("Expected no monitor left on the connection process")
     }),
   ])
 }
