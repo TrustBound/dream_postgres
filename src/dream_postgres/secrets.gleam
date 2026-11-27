@@ -118,7 +118,7 @@ pub fn text(
 
 /// Replaces the value of each column called `name` in the rows that a
 /// recorder saves with `replacement`, written with `codec`. A NULL stays
-/// NULL. The rows of a script are not read, so they do not change.
+/// NULL. The rows of a `run_sql` call are not read, so they do not change.
 ///
 /// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///

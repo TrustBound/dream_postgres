@@ -8,7 +8,7 @@
 
 import dream_postgres.{
   type ListenMessage, type PoolEvent, type ServerNotice, Connected, affected,
-  named, named_listener, one, parameter, query, script, single, stop_listener,
+  named, named_listener, one, parameter, query, run_sql, single, stop_listener,
   with_connection,
 }
 import dream_postgres/codec
@@ -222,7 +222,7 @@ pub fn tests() -> TestSuite {
           start_pool_with_notices(server_pools.config(port_16), notices)
           |> should
           |> be_ok()
-          |> run_and_stop_pool(script(
+          |> run_and_stop_pool(run_sql(
             "DO $$ BEGIN RAISE NOTICE 'hello'; END $$",
             _,
           ))
@@ -290,13 +290,13 @@ pub fn tests() -> TestSuite {
             pools
             |> should
             |> run_in_rolled_back_transaction(fn(held) {
-              use Nil <- result.try(script(
+              use Nil <- result.try(run_sql(
                 "CREATE SCHEMA billing; CREATE TABLE billing.invoices (total int4)",
                 held,
               ))
               use stored <- result.try(load_invoice_totals(held, [10, 20, 30]))
               use sum <- result.try(sum_of_totals(held))
-              use Nil <- result.try(script(
+              use Nil <- result.try(run_sql(
                 "INSERT INTO billing.invoices VALUES (NULL)",
                 held,
               ))
@@ -330,7 +330,7 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_with_temporary_table("users", "(id int4)", fn(held) {
-            use Nil <- result.try(script(
+            use Nil <- result.try(run_sql(
               "INSERT INTO users VALUES (1), (2)",
               held,
             ))
@@ -353,7 +353,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_pool(
             with_connection(_, fn(held) {
-              use Nil <- result.try(script(
+              use Nil <- result.try(run_sql(
                 "CREATE TYPE pg_temp.mood AS ENUM ('happy', 'sad');
 CREATE TYPE pg_temp.address AS (street text, city text)",
                 held,
@@ -407,7 +407,7 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
               server_pools.config(port_16),
               jobs,
             ))
-            use Nil <- result.try(script("NOTIFY jobs, 'build-42'", pool))
+            use Nil <- result.try(run_sql("NOTIFY jobs, 'build-42'", pool))
             let job = next_job(jobs)
             use Nil <- result.try(stop_listening(listener, subscription))
             Ok(job)
@@ -640,7 +640,7 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
                     |> result.map_error(list.wrap),
                   )
                   use Nil <- result.try(
-                    script(
+                    run_sql(
                       "ALTER TABLE users ALTER COLUMN email TYPE int4 USING NULL",
                       held,
                     )
@@ -685,7 +685,7 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
               within: 5000,
             ))
             use Nil <- result.try(
-              script("NOTIFY jobs, 'build-43'", connection)
+              run_sql("NOTIFY jobs, 'build-43'", connection)
               |> result.map_error(error.describe),
             )
             let job = next_job(jobs)

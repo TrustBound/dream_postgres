@@ -48,11 +48,12 @@ import dream_postgres/driver/message.{
 import dream_postgres/driver/query.{
   type AsynchronousMessage, type CopyDirection, type CopyResult, type CopyState,
   type CopyStep, type Failure, type HousekeepingStart, type PrepareAndRunState,
-  type PrepareState, type RunState, type ScriptFailure, type SimpleQueryState,
-  type Start, type StatementResult, type Step, type UnexpectedMessage,
-  CopyCompleted, CopyConnectionEnded, CopyFinished, CopyFrom, CopyNotSupported,
-  CopyRow, CopySend, CopyStarted, CopyTo, CopyWait, Finished, NoCopyStarted,
-  Notice, ParameterChanged, ScriptFailure, Send, ServerError, Wait,
+  type PrepareState, type RunState, type SimpleQueryFailure,
+  type SimpleQueryState, type Start, type StatementResult, type Step,
+  type UnexpectedMessage, CopyCompleted, CopyConnectionEnded, CopyFinished,
+  CopyFrom, CopyNotSupported, CopyRow, CopySend, CopyStarted, CopyTo, CopyWait,
+  Finished, NoCopyStarted, Notice, ParameterChanged, Send, ServerError,
+  SimpleQueryFailure, Wait,
 }
 import dream_postgres/driver/sink.{
   type Delivery, type Sink, Delivered, MapFailed,
@@ -64,8 +65,8 @@ import dream_postgres/driver/trace.{
   type SpanEnd, type SpanTarget, Failed, SpanQuery, SpanTarget, Worked,
 }
 import dream_postgres/driver/transaction.{
-  type TransactionTracker, aborting_error, new_tracker, track, track_script,
-  track_step, transaction_status as tracked_status,
+  type TransactionTracker, aborting_error, new_tracker, track,
+  track_simple_query, track_step, transaction_status as tracked_status,
 }
 import dream_postgres/driver/transport.{
   type ReceiveError, type SendError, type SocketError, type TransportConfig,
@@ -238,8 +239,8 @@ pub type Outcome {
     columns: List(ColumnDescription),
     result: CommandResult,
     /// Each notice that arrived during the request of this outcome, in
-    /// order. The last outcome of a script holds the notices of the whole
-    /// script.
+    /// order. The last outcome of a simple query holds the notices of the whole
+    /// simple query.
     notices: List(ServerReport),
     /// Each notification since the last outcome, in order. An app that
     /// wants notifications uses the listener, which has its own connection.
@@ -355,33 +356,36 @@ pub type RunError {
   RunStatementChanged(description: StatementDescription)
 }
 
-/// Why `run_script` or `run_listener_script` failed.
-pub type ScriptError {
+/// Why `run_simple_query` or `run_listener_simple_query` failed.
+pub type SimpleQueryError {
   /// The request failed on its connection.
-  ScriptRequestFailed(failure: RequestFailure)
+  SimpleQueryRequestFailed(failure: RequestFailure)
   /// A supervised process has not connected yet. `error` is why its last
   /// attempt failed. It tries again after the reconnect backoff.
-  ScriptNotConnected(error: ConnectError)
-  /// The script cannot be written, for example SQL with a zero byte. No
+  SimpleQueryNotConnected(error: ConnectError)
+  /// The simple query cannot be written, for example SQL with a zero byte. No
   /// byte went to the server.
-  ScriptUnencodable(error: EncodeError)
-  /// The server refused the first statement of the script, so no
+  SimpleQueryUnencodable(error: EncodeError)
+  /// The server refused the first statement of the simple query, so no
   /// statement ran. The connection stays usable.
-  ScriptRefused(report: ServerReport, transaction_status: TransactionStatus)
-  /// A later statement of the script failed, after the ones in
+  SimpleQueryRefused(
+    report: ServerReport,
+    transaction_status: TransactionStatus,
+  )
+  /// A later statement of the simple query failed, after the ones in
   /// `completed` ran. `completed` is never empty: a failure of the first
-  /// statement is `ScriptRefused`.
-  ScriptFailed(
+  /// statement is `SimpleQueryRefused`.
+  SimpleQueryFailed(
     completed: List(Outcome),
     report: ServerReport,
     transaction_status: TransactionStatus,
   )
-  /// A statement of the script is a COPY. COPY goes through `copy_from`
+  /// A statement of the simple query is a COPY. COPY goes through `copy_from`
   /// and `copy_to`. `completed` holds the statements that ran before it.
-  ScriptCopyRefused(completed: List(Outcome))
+  SimpleQueryCopyRefused(completed: List(Outcome))
 }
 
-/// Why `run_housekeeping` or `run_housekeeping_script` failed. A
+/// Why `run_housekeeping` or `run_housekeeping_simple_query` failed. A
 /// housekeeping statement always encodes, runs on the unnamed statement
 /// and is one statement that is not a COPY, so no case of an unencodable
 /// statement, a changed statement or a later statement is here.
@@ -647,14 +651,17 @@ type Request {
   StatementRequest(statement: StatementRequest)
   /// The transaction status after every request before it.
   SettledStatusRequest(reply: ReplyTo(Result(TransactionStatus, SettleError)))
-  ScriptRequest(sql: String, reply: ReplyTo(Result(List(Outcome), ScriptError)))
+  SimpleQueryRequest(
+    sql: String,
+    reply: ReplyTo(Result(List(Outcome), SimpleQueryError)),
+  )
   /// A driver housekeeping statement, prepared and run in one round trip.
   HousekeepingRunRequest(
     sql: HousekeepingSql,
     reply: ReplyTo(Result(Outcome, HousekeepingError)),
   )
   /// A driver housekeeping statement, with the simple query protocol.
-  HousekeepingScriptRequest(
+  HousekeepingSimpleQueryRequest(
     sql: HousekeepingSql,
     reply: ReplyTo(Result(List(Outcome), HousekeepingError)),
   )
@@ -715,9 +722,9 @@ type Running {
     state: PrepareAndRunState,
     reply: ReplyTo(Result(Outcome, RunError)),
   )
-  RunningScript(
+  RunningSimpleQuery(
     state: SimpleQueryState,
-    reply: ReplyTo(Result(List(Outcome), ScriptError)),
+    reply: ReplyTo(Result(List(Outcome), SimpleQueryError)),
   )
   /// A run of a driver housekeeping statement on the unnamed statement.
   RunningHousekeepingRun(
@@ -725,7 +732,7 @@ type Running {
     reply: ReplyTo(Result(Outcome, HousekeepingError)),
   )
   /// A driver housekeeping statement with the simple query protocol.
-  RunningHousekeepingScript(
+  RunningHousekeepingSimpleQuery(
     state: SimpleQueryState,
     reply: ReplyTo(Result(List(Outcome), HousekeepingError)),
   )
@@ -1150,12 +1157,12 @@ pub fn named(statement: Statement, name: String) -> Statement {
 /// replaced. The SQL is still what the server runs, and the key of the
 /// statement cache: the span text never goes to the server.
 ///
-/// A script (`run_script`) records no text without it, because its SQL is
+/// A simple query (`run_simple_query`) records no text without it, because its SQL is
 /// not parameterized and may hold values (OTel semantic conventions at
 /// commit 7c8eb86d04, docs/db/database-spans.md note 15, line 303:
 /// "Non-parameterized query text SHOULD NOT be collected by default
 /// unless there is sanitization that excludes sensitive data"). With a
-/// span text, the script records it, as the sanitized form (lines
+/// span text, the simple query records it, as the sanitized form (lines
 /// 462-466). The caller makes sure that it holds no secret.
 ///
 /// ## Parameters
@@ -1236,14 +1243,16 @@ fn warning_code(outcomes: List(Outcome)) -> Option(String) {
   |> trace.last_warning_code
 }
 
-/// A script names its operation only when it ran exactly one statement.
-fn script_ending(result: Result(List(Outcome), ScriptError)) -> SpanEnd {
+/// A simple query names its operation only when it ran exactly one statement.
+fn simple_query_ending(
+  result: Result(List(Outcome), SimpleQueryError),
+) -> SpanEnd {
   case result {
     Ok([outcome]) -> worked_ending(outcome)
     Ok(several_or_none) ->
       Worked(operation: None, warning_code: warning_code(several_or_none))
     Error(error) ->
-      failed_ending(script_error_name(error), script_report(error))
+      failed_ending(simple_query_error_name(error), simple_query_report(error))
   }
 }
 
@@ -1334,25 +1343,27 @@ fn run_report(error: RunError) -> Option(ServerReport) {
   }
 }
 
-/// The name of a script error: its constructor's name, or the name of the
+/// The name of a simple query error: its constructor's name, or the name of the
 /// request failure that it holds.
-fn script_error_name(error: ScriptError) -> String {
+fn simple_query_error_name(error: SimpleQueryError) -> String {
   case error {
-    ScriptRequestFailed(failure) -> failure_name(failure)
-    ScriptNotConnected(..) -> "ScriptNotConnected"
-    ScriptUnencodable(..) -> "ScriptUnencodable"
-    ScriptRefused(..) -> "ScriptRefused"
-    ScriptFailed(..) -> "ScriptFailed"
-    ScriptCopyRefused(..) -> "ScriptCopyRefused"
+    SimpleQueryRequestFailed(failure) -> failure_name(failure)
+    SimpleQueryNotConnected(..) -> "SimpleQueryNotConnected"
+    SimpleQueryUnencodable(..) -> "SimpleQueryUnencodable"
+    SimpleQueryRefused(..) -> "SimpleQueryRefused"
+    SimpleQueryFailed(..) -> "SimpleQueryFailed"
+    SimpleQueryCopyRefused(..) -> "SimpleQueryCopyRefused"
   }
 }
 
-fn script_report(error: ScriptError) -> Option(ServerReport) {
+fn simple_query_report(error: SimpleQueryError) -> Option(ServerReport) {
   case error {
-    ScriptRequestFailed(failure) -> failure_report(failure)
-    ScriptRefused(report:, ..) | ScriptFailed(report:, ..) -> Some(report)
-    ScriptNotConnected(..) | ScriptUnencodable(..) | ScriptCopyRefused(..) ->
-      None
+    SimpleQueryRequestFailed(failure) -> failure_report(failure)
+    SimpleQueryRefused(report:, ..) | SimpleQueryFailed(report:, ..) ->
+      Some(report)
+    SimpleQueryNotConnected(..)
+    | SimpleQueryUnencodable(..)
+    | SimpleQueryCopyRefused(..) -> None
   }
 }
 
@@ -1502,40 +1513,45 @@ pub fn run(
   )
 }
 
-/// Runs a script of statements with the simple query protocol, for example
+/// Runs a simple query: one or more SQL statements in one Query message, for example
 /// `BEGIN`, `COMMIT` or several statements at once. Cells come in text.
 ///
 /// ## Parameters
 ///
 /// - `connection`: the connection
-/// - `sql`: the script
+/// - `sql`: the simple query
 /// - `deadline_milliseconds`: the longest time to wait for all results
 ///
 /// ## Returns
 ///
 /// - `Ok(outcomes)`: one outcome for each statement, in order
-/// - `Error(ScriptRefused(report, status))`: the server refused the first
+/// - `Error(SimpleQueryRefused(report, status))`: the server refused the first
 ///   statement, so none ran
-/// - `Error(ScriptFailed(completed, report, status))`: a later statement
+/// - `Error(SimpleQueryFailed(completed, report, status))`: a later statement
 ///   failed, after the ones in `completed` ran
-/// - `Error(ScriptCopyRefused(completed))`: a statement is a COPY
-/// - `Error(ScriptUnencodable(error))`: the script cannot be written
-/// - `Error(ScriptNotConnected(error))`: a supervised process has not
+/// - `Error(SimpleQueryCopyRefused(completed))`: a statement is a COPY
+/// - `Error(SimpleQueryUnencodable(error))`: the simple query cannot be written
+/// - `Error(SimpleQueryNotConnected(error))`: a supervised process has not
 ///   connected yet
-/// - `Error(ScriptRequestFailed(failure))`: the request failed on its
+/// - `Error(SimpleQueryRequestFailed(failure))`: the request failed on its
 ///   connection
-pub fn run_script(
+pub fn run_simple_query(
   connection: Connection,
   statement: Statement,
   deadline_milliseconds: Int,
-) -> Result(List(Outcome), ScriptError) {
-  // A script is not parameterized, so its SQL may hold values: it is not
+) -> Result(List(Outcome), SimpleQueryError) {
+  // A simple query is not parameterized, so its SQL may hold values: it is not
   // recorded (OTel semantic conventions at commit 7c8eb86d04,
   // docs/db/database-spans.md note 15: "Non-parameterized query text SHOULD NOT
   // be collected by default unless there is sanitization"). A span text is
   // the caller's sanitized form, so the span records it (see `span_text`).
-  use <- traced(connection, statement, statement.span_text, _, script_ending)
-  run_script_without_span(connection, statement.sql, deadline_milliseconds)
+  use <-
+    traced(connection, statement, statement.span_text, _, simple_query_ending)
+  run_simple_query_without_span(
+    connection,
+    statement.sql,
+    deadline_milliseconds,
+  )
 }
 
 /// Runs a statement that the driver sends for its own housekeeping, from
@@ -1594,14 +1610,14 @@ pub fn run_housekeeping(
 ///   not connected yet
 /// - `Error(HousekeepingFailed(failure))`: the request failed on its
 ///   connection
-pub fn run_housekeeping_script(
+pub fn run_housekeeping_simple_query(
   connection: Connection,
   sql: HousekeepingSql,
   deadline_milliseconds: Int,
 ) -> Result(List(Outcome), HousekeepingError) {
   request(
     connection,
-    HousekeepingScriptRequest(sql, _),
+    HousekeepingSimpleQueryRequest(sql, _),
     deadline_milliseconds,
     HousekeepingFailed,
   )
@@ -1620,13 +1636,13 @@ pub fn run_housekeeping_script(
 ///
 /// ## Returns
 ///
-/// The result of `run_script`, with the same errors.
-pub fn run_listener_script(
+/// The result of `run_simple_query`, with the same errors.
+pub fn run_listener_simple_query(
   connection: Connection,
   sql: String,
   deadline_milliseconds: Int,
-) -> Result(List(Outcome), ScriptError) {
-  run_script_without_span(connection, sql, deadline_milliseconds)
+) -> Result(List(Outcome), SimpleQueryError) {
+  run_simple_query_without_span(connection, sql, deadline_milliseconds)
 }
 
 fn run_without_span(
@@ -1644,16 +1660,16 @@ fn run_without_span(
   )
 }
 
-fn run_script_without_span(
+fn run_simple_query_without_span(
   connection: Connection,
   sql: String,
   deadline_milliseconds: Int,
-) -> Result(List(Outcome), ScriptError) {
+) -> Result(List(Outcome), SimpleQueryError) {
   request(
     connection,
-    ScriptRequest(sql, _),
+    SimpleQueryRequest(sql, _),
     deadline_milliseconds,
-    ScriptRequestFailed,
+    SimpleQueryRequestFailed,
   )
 }
 
@@ -2295,13 +2311,13 @@ fn begin(
   request: Request,
 ) -> State {
   case request {
-    ScriptRequest(sql:, reply: reply_to) ->
+    SimpleQueryRequest(sql:, reply: reply_to) ->
       start_step(
         state,
         socket,
         query.start_simple_query(sql),
-        RunningScript(_, reply_to),
-        script_unencodable(reply_to, _),
+        RunningSimpleQuery(_, reply_to),
+        simple_query_unencodable(reply_to, _),
       )
     HousekeepingRunRequest(sql:, reply: reply_to) ->
       start_housekeeping_step(
@@ -2310,12 +2326,12 @@ fn begin(
         query.start_housekeeping_run(sql),
         RunningHousekeepingRun(_, reply_to),
       )
-    HousekeepingScriptRequest(sql:, reply: reply_to) ->
+    HousekeepingSimpleQueryRequest(sql:, reply: reply_to) ->
       start_housekeeping_step(
         state,
         socket,
-        query.start_housekeeping_script(sql),
-        RunningHousekeepingScript(_, reply_to),
+        query.start_housekeeping_simple_query(sql),
+        RunningHousekeepingSimpleQuery(_, reply_to),
       )
     StatementRequest(statement) -> begin_statement(state, socket, statement)
     SettledStatusRequest(reply: reply_to) -> {
@@ -2493,11 +2509,11 @@ fn start_housekeeping_step(
   |> sent(socket, transport.send(socket, start.bytes))
 }
 
-fn script_unencodable(
-  reply_to: ReplyTo(Result(List(Outcome), ScriptError)),
+fn simple_query_unencodable(
+  reply_to: ReplyTo(Result(List(Outcome), SimpleQueryError)),
   error: EncodeError,
 ) -> Nil {
-  reply(reply_to, Error(ScriptUnencodable(error)))
+  reply(reply_to, Error(SimpleQueryUnencodable(error)))
 }
 
 fn statement_unencodable(
@@ -2518,11 +2534,11 @@ fn refuse(request: Request, refusal: Refusal) -> Nil {
     StatementRequest(statement) -> refuse_statement(statement, refusal)
     SettledStatusRequest(reply: reply_to) ->
       reply(reply_to, Error(settle_refusal(refusal)))
-    ScriptRequest(reply: reply_to, ..) ->
-      reply(reply_to, Error(script_refusal(refusal)))
+    SimpleQueryRequest(reply: reply_to, ..) ->
+      reply(reply_to, Error(simple_query_refusal(refusal)))
     HousekeepingRunRequest(reply: reply_to, ..) ->
       reply(reply_to, Error(housekeeping_refusal(refusal)))
-    HousekeepingScriptRequest(reply: reply_to, ..) ->
+    HousekeepingSimpleQueryRequest(reply: reply_to, ..) ->
       reply(reply_to, Error(housekeeping_refusal(refusal)))
     CopyRequest(reply: reply_to, ..) ->
       reply(reply_to, Error(StartRefused(refusal)))
@@ -2544,10 +2560,10 @@ fn settle_refusal(refusal: Refusal) -> SettleError {
   }
 }
 
-fn script_refusal(refusal: Refusal) -> ScriptError {
+fn simple_query_refusal(refusal: Refusal) -> SimpleQueryError {
   case refusal {
-    RefusedWithFailure(failure) -> ScriptRequestFailed(failure)
-    RefusedNotConnected(error) -> ScriptNotConnected(error)
+    RefusedWithFailure(failure) -> SimpleQueryRequestFailed(failure)
+    RefusedNotConnected(error) -> SimpleQueryNotConnected(error)
   }
 }
 
@@ -2580,11 +2596,11 @@ fn refuse_running(running: Running, failure: RequestFailure) -> Nil {
       reply(reply_to, Error(PrepareFailed(failure)))
     RunningRun(reply: reply_to, ..) ->
       reply(reply_to, Error(RunFailed(failure)))
-    RunningScript(reply: reply_to, ..) ->
-      reply(reply_to, Error(ScriptRequestFailed(failure)))
+    RunningSimpleQuery(reply: reply_to, ..) ->
+      reply(reply_to, Error(SimpleQueryRequestFailed(failure)))
     RunningHousekeepingRun(reply: reply_to, ..) ->
       reply(reply_to, Error(HousekeepingFailed(failure)))
-    RunningHousekeepingScript(reply: reply_to, ..) ->
+    RunningHousekeepingSimpleQuery(reply: reply_to, ..) ->
       reply(reply_to, Error(HousekeepingFailed(failure)))
     RunningNamedPrepare(request:, ..) ->
       refuse_statement(request, RefusedWithFailure(failure))
@@ -2822,13 +2838,13 @@ fn advance(
         run_finisher(reply_to),
         running,
       )
-    RunningScript(state: step_state, reply: reply_to) ->
+    RunningSimpleQuery(state: step_state, reply: reply_to) ->
       follow(
         state,
         socket,
         query.step_simple_query(step_state, message),
-        RunningScript(_, reply_to),
-        script_finisher(reply_to),
+        RunningSimpleQuery(_, reply_to),
+        simple_query_finisher(reply_to),
         running,
       )
     RunningHousekeepingRun(state: step_state, reply: reply_to) ->
@@ -2840,13 +2856,13 @@ fn advance(
         housekeeping_run_finisher(reply_to),
         running,
       )
-    RunningHousekeepingScript(state: step_state, reply: reply_to) ->
+    RunningHousekeepingSimpleQuery(state: step_state, reply: reply_to) ->
       follow(
         state,
         socket,
         query.step_simple_query(step_state, message),
-        RunningHousekeepingScript(_, reply_to),
-        housekeeping_script_finisher(reply_to),
+        RunningHousekeepingSimpleQuery(_, reply_to),
+        housekeeping_simple_query_finisher(reply_to),
         running,
       )
     RunningNamedPrepare(state: step_state, request:, name:) ->
@@ -2900,19 +2916,24 @@ fn housekeeping_run_finisher(
   }
 }
 
-fn script_finisher(
-  reply_to: ReplyTo(Result(List(Outcome), ScriptError)),
-) -> Finisher(query.Outcome(List(StatementResult), ScriptFailure)) {
+fn simple_query_finisher(
+  reply_to: ReplyTo(Result(List(Outcome), SimpleQueryError)),
+) -> Finisher(query.Outcome(List(StatementResult), SimpleQueryFailure)) {
   fn(state, _socket, outcome) {
-    finish_script(state, outcome, reply_to, script_failure)
+    finish_simple_query(state, outcome, reply_to, simple_query_failure)
   }
 }
 
-fn housekeeping_script_finisher(
+fn housekeeping_simple_query_finisher(
   reply_to: ReplyTo(Result(List(Outcome), HousekeepingError)),
-) -> Finisher(query.Outcome(List(StatementResult), ScriptFailure)) {
+) -> Finisher(query.Outcome(List(StatementResult), SimpleQueryFailure)) {
   fn(state, _socket, outcome) {
-    finish_script(state, outcome, reply_to, housekeeping_script_failure)
+    finish_simple_query(
+      state,
+      outcome,
+      reply_to,
+      housekeeping_simple_query_failure,
+    )
   }
 }
 
@@ -3041,22 +3062,22 @@ fn finish_run(
   State(..state, tracker:)
 }
 
-fn finish_script(
+fn finish_simple_query(
   state: State,
-  outcome: query.Outcome(List(StatementResult), ScriptFailure),
+  outcome: query.Outcome(List(StatementResult), SimpleQueryFailure),
   reply_to: ReplyTo(Result(List(Outcome), error)),
   failing: fn(Failure, TransactionStatus, List(Outcome)) -> error,
 ) -> State {
   let state = after_step(state, outcome.asynchronous_messages)
-  let tracker = track_script(state.tracker, outcome)
-  let #(state, result) = script_result(state, outcome, failing)
+  let tracker = track_simple_query(state.tracker, outcome)
+  let #(state, result) = simple_query_result(state, outcome, failing)
   reply(reply_to, result)
   State(..state, tracker:)
 }
 
-fn script_result(
+fn simple_query_result(
   state: State,
-  outcome: query.Outcome(List(StatementResult), ScriptFailure),
+  outcome: query.Outcome(List(StatementResult), SimpleQueryFailure),
   failing: fn(Failure, TransactionStatus, List(Outcome)) -> error,
 ) -> #(State, Result(List(Outcome), error)) {
   case outcome.result {
@@ -3064,7 +3085,7 @@ fn script_result(
       let #(state, outcomes) = outcomes_of(state, statements, outcome.status)
       #(state, Ok(outcomes))
     }
-    Error(ScriptFailure(completed:, failure:)) -> {
+    Error(SimpleQueryFailure(completed:, failure:)) -> {
       let #(state, outcomes) = outcomes_of(state, completed, outcome.status)
       #(state, Error(failing(failure, outcome.status, outcomes)))
     }
@@ -3228,7 +3249,7 @@ fn housekeeping_run_failure(
 
 /// A housekeeping statement is one statement that is not a COPY, so an
 /// error after a result and a COPY answer break the protocol.
-fn housekeeping_script_failure(
+fn housekeeping_simple_query_failure(
   failure: Failure,
   status: TransactionStatus,
   completed: List(Outcome),
@@ -3240,17 +3261,17 @@ fn housekeeping_script_failure(
   }
 }
 
-/// The first statement of a script that fails is refused; a later one
-/// fails the script after the ones that ran.
-fn script_failure(
+/// The first statement of a simple query that fails is refused; a later one
+/// fails the simple query after the ones that ran.
+fn simple_query_failure(
   failure: Failure,
   status: TransactionStatus,
   completed: List(Outcome),
-) -> ScriptError {
+) -> SimpleQueryError {
   case failure, completed {
-    ServerError(report), [] -> ScriptRefused(report, status)
-    ServerError(report), _ran -> ScriptFailed(completed, report, status)
-    CopyNotSupported(_report), _ran -> ScriptCopyRefused(completed)
+    ServerError(report), [] -> SimpleQueryRefused(report, status)
+    ServerError(report), _ran -> SimpleQueryFailed(completed, report, status)
+    CopyNotSupported(_report), _ran -> SimpleQueryCopyRefused(completed)
   }
 }
 

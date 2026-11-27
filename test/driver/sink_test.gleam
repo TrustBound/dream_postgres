@@ -12,7 +12,7 @@ import dream_test/suite.{type TestSuite}
 import dream_test/unit
 import dream_test/unit_context.{after_each, before_each, describe, it}
 import driver/server_connection.{
-  caller_answer, query_text, run_control_script, start_caller,
+  caller_answer, query_text, run_control_simple_query, start_caller,
 }
 import driver/server_listener.{
   type ListenerSession, listener_session_setup, send_notification,
@@ -86,7 +86,7 @@ fn connection_tests() -> TestSuite {
           sinks,
         ))
         let code = {
-          use Nil <- try(run_control_script(connection, warning_sql))
+          use Nil <- try(run_control_simple_query(connection, warning_sql))
           receive_sent(codes)
         }
         stop(connection)
@@ -148,7 +148,7 @@ fn connection_tests() -> TestSuite {
           sinks,
         ))
         let code = {
-          use Nil <- try(run_control_script(connection, warning_sql))
+          use Nil <- try(run_control_simple_query(connection, warning_sql))
           receive_sent(codes)
         }
         stop(connection)
@@ -174,7 +174,7 @@ fn connection_tests() -> TestSuite {
           sinks,
         ))
         let answer = {
-          use Nil <- try(run_control_script(connection, warning_sql))
+          use Nil <- try(run_control_simple_query(connection, warning_sql))
           query_text(connection, "SELECT 'still here'")
         }
         stop(connection)
@@ -206,7 +206,7 @@ fn connection_tests() -> TestSuite {
         ))
         let code = {
           use Nil <- try(notify_self(connection, "svc895_sink_crash", "lost"))
-          use Nil <- try(run_control_script(connection, warning_sql))
+          use Nil <- try(run_control_simple_query(connection, warning_sql))
           receive_sent(codes)
         }
         stop(connection)

@@ -1,7 +1,7 @@
 //// The keys of a recorder, on requests with cells that are written
 //// already, with no database.
 
-import dream_postgres/interceptor.{CopyTo, Request, Script}
+import dream_postgres/interceptor.{CopyTo, Request, Sql}
 import dream_postgres/internal/cell.{Binary, Null, Text}
 import dream_postgres/recorder/match
 import dream_test/matchers.{be_equal, or_fail_with, should}
@@ -74,13 +74,13 @@ pub fn tests() -> TestSuite {
       |> be_equal("statement\nSELECT $1")
       |> or_fail_with("Expected the kind and the SQL")
     }),
-    it("sql_only keys a script by its kind and SQL", fn() {
+    it("sql_only keys a `run_sql` call by its kind and SQL", fn() {
       // Act and assert
-      Request(sql: "SELECT 1", name: None, parameters: [], kind: Script)
+      Request(sql: "SELECT 1", name: None, parameters: [], kind: Sql)
       |> match.sql_only
       |> should
-      |> be_equal("script\nSELECT 1")
-      |> or_fail_with("Expected the kind script")
+      |> be_equal("sql\nSELECT 1")
+      |> or_fail_with("Expected the kind sql")
     }),
     it("sql_only keys a COPY TO by its kind and SQL", fn() {
       // Act and assert

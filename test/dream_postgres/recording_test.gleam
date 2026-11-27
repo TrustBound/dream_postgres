@@ -34,7 +34,7 @@ pub fn tests() -> TestSuite {
     it("refuses a cell that is not hex", fn() {
       // Act and assert
       recording.from_file_bytes(<<
-        "{\"dream_postgres_recording\": 1, \"entries\": [{\"key\": \"k\", \"script\": {\"sql\": \"SELECT 1\", \"outcome\": {\"answer\": {\"results\": [{\"count\": 1, \"rows\": [[{\"text\": \"zz\"}]], \"tag\": \"SELECT 1\"}]}}}}]}":utf8,
+        "{\"dream_postgres_recording\": 1, \"entries\": [{\"key\": \"k\", \"sql\": {\"sql\": \"SELECT 1\", \"outcome\": {\"answer\": {\"results\": [{\"count\": 1, \"rows\": [[{\"text\": \"zz\"}]], \"tag\": \"SELECT 1\"}]}}}}]}":utf8,
       >>)
       |> should
       |> be_error()

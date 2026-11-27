@@ -14,7 +14,7 @@ import dream_postgres/driver/pool.{
 import dream_postgres/driver/sink.{type Sink}
 import dream_postgres/internal/cell.{type ServerReport}
 import driver/server_connection.{
-  connection_config, query_text, run_control_script, start_configured,
+  connection_config, query_text, run_control_simple_query, start_configured,
 }
 import driver/server_pool.{
   kill_connection, pool_config, start_pool, wait_for_pool_event,
@@ -206,7 +206,7 @@ fn wait_for_replacing(pool_events: Subject(PoolEvent)) -> Result(Nil, String) {
 /// Runs a statement that makes the server send a warning notice, then
 /// gives the answer of a query.
 pub fn raise_notice(connection: Connection) -> Result(String, String) {
-  use _ran <- try(run_control_script(
+  use _ran <- try(run_control_simple_query(
     connection,
     "DO $$BEGIN RAISE WARNING 'through a pool sink'; END$$",
   ))
@@ -235,7 +235,7 @@ pub fn notify_self(
   channel: String,
   payload: String,
 ) -> Result(Nil, String) {
-  run_control_script(
+  run_control_simple_query(
     connection,
     "LISTEN " <> channel <> "; NOTIFY " <> channel <> ", '" <> payload <> "'",
   )

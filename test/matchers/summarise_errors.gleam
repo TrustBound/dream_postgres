@@ -16,7 +16,7 @@ import matchers/summarise_error.{summarise_error}
 /// ## Example
 ///
 /// ```gleam
-/// [script("SELECT 1", stopped), script("SELECT 2", stopped)]
+/// [run_sql("SELECT 1", stopped), run_sql("SELECT 2", stopped)]
 /// |> should
 /// |> summarise_errors()
 /// |> be_equal(["unavailable PoolStopped", "unavailable PoolStopped"])

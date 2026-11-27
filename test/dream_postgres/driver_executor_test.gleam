@@ -59,10 +59,10 @@ import matchers/map_prepare_error.{map_prepare_error}
 import matchers/map_request_failure.{map_request_failure}
 import matchers/map_run_error.{map_run_error}
 import matchers/map_run_failure.{map_run_failure}
-import matchers/map_script_error.{map_script_error}
+import matchers/map_simple_query_error.{map_simple_query_error}
 import matchers/run_on_executor.{run_on_executor}
 import matchers/run_on_executor_with_deadline.{run_on_executor_with_deadline}
-import matchers/run_script_on_server.{run_script_on_server}
+import matchers/run_simple_query_on_server.{run_simple_query_on_server}
 
 /// The runners on the executor of a driver connection to each server.
 pub fn tests() -> TestSuite {
@@ -180,7 +180,9 @@ pub fn tests() -> TestSuite {
           // Act and assert
           sessions
           |> should
-          |> run_script_on_server("CREATE TEMP TABLE executor_counts (id int4)")
+          |> run_simple_query_on_server(
+            "CREATE TEMP TABLE executor_counts (id int4)",
+          )
           |> run_on_executor(fn(executor) {
             use inserted <- result.try(
               runner.affected(
@@ -213,7 +215,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             sessions
             |> should
-            |> run_script_on_server(
+            |> run_simple_query_on_server(
               "CREATE TEMP TABLE executor_mismatch (id int4)",
             )
             |> run_on_executor(fn(executor) {
@@ -258,7 +260,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             sessions
             |> should
-            |> run_script_on_server(
+            |> run_simple_query_on_server(
               "CREATE TEMP TABLE executor_returning (id int4)",
             )
             |> run_on_executor(fn(executor) {
@@ -329,7 +331,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             sessions
             |> should
-            |> run_script_on_server(
+            |> run_simple_query_on_server(
               "CREATE TEMP TABLE executor_unique (id int4); "
               <> "CREATE UNIQUE INDEX executor_unique_id ON executor_unique (id); "
               <> "INSERT INTO executor_unique VALUES (1)",
@@ -397,7 +399,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             sessions
             |> should
-            |> run_script_on_server(
+            |> run_simple_query_on_server(
               "CREATE TEMP TABLE changing_table (id int4); INSERT INTO changing_table VALUES (1)",
             )
             |> run_on_executor(fn(executor) {
@@ -486,25 +488,25 @@ pub fn mapping_tests() -> TestSuite {
         |> or_fail_with("Expected the report as a Server reason")
       }),
       unit.it(
-        "a failed later statement of a script is ScriptStatementFailed",
+        "a failed later statement of a `run_sql` call is SqlStatementFailed",
         fn() {
           // Arrange
           let report = server_reports.administrator_shutdown()
 
           // Act and assert
-          connection.ScriptFailed(
+          connection.SimpleQueryFailed(
             [driver_outcomes.insert_outcome()],
             report,
             Idle,
           )
           |> should
-          |> map_script_error()
-          |> be_equal(error.ScriptStatementFailed(
+          |> map_simple_query_error()
+          |> be_equal(error.SqlStatementFailed(
             statements_run: 1,
             server_error: error.server_error_from_report(report),
           ))
           |> or_fail_with(
-            "Expected ScriptStatementFailed after 1 statement with the report",
+            "Expected SqlStatementFailed after 1 statement with the report",
           )
         },
       ),
@@ -892,22 +894,22 @@ pub fn mapping_tests() -> TestSuite {
         |> or_fail_with("Expected RunFailed(CopyStatementRefused)")
       }),
     ]),
-    unit.group("script errors", [
+    unit.group("run_sql errors", [
       unit.it("a failed request is its reason", fn() {
         // Act and assert
-        connection.ScriptRequestFailed(connection.ConnectionProcessDown)
+        connection.SimpleQueryRequestFailed(connection.ConnectionProcessDown)
         |> should
-        |> map_script_error()
+        |> map_simple_query_error()
         |> be_equal(error.ConnectionProcessDown)
         |> or_fail_with("Expected ConnectionProcessDown")
       }),
       unit.it("a connection that has not logged in yet is ConnectFailed", fn() {
         // Act and assert
-        connection.ScriptNotConnected(connection.TransportRefused(
+        connection.SimpleQueryNotConnected(connection.TransportRefused(
           transport.ConnectRefused,
         ))
         |> should
-        |> map_script_error()
+        |> map_simple_query_error()
         |> be_equal(
           error.ConnectFailed(error.ConnectionRefused(
             host: "db.example",
@@ -918,11 +920,11 @@ pub fn mapping_tests() -> TestSuite {
           "Expected ConnectFailed(ConnectionRefused) for db.example on port 5432",
         )
       }),
-      unit.it("an unwritable script is RequestNotWritable", fn() {
+      unit.it("an unwritable simple query is RequestNotWritable", fn() {
         // Act and assert
-        connection.ScriptUnencodable(message.ZeroByteInString("query"))
+        connection.SimpleQueryUnencodable(message.ZeroByteInString("query"))
         |> should
-        |> map_script_error()
+        |> map_simple_query_error()
         |> be_equal(error.RequestNotWritable(error.ZeroByteInString("query")))
         |> or_fail_with(
           "Expected RequestNotWritable(ZeroByteInString(\"query\"))",
@@ -930,9 +932,12 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a refused first statement is Server", fn() {
         // Act and assert
-        connection.ScriptRefused(server_reports.administrator_shutdown(), Idle)
+        connection.SimpleQueryRefused(
+          server_reports.administrator_shutdown(),
+          Idle,
+        )
         |> should
-        |> map_script_error()
+        |> map_simple_query_error()
         |> be_equal(
           error.Server(
             error.server_error_from_report(
@@ -946,21 +951,21 @@ pub fn mapping_tests() -> TestSuite {
         "a COPY statement after two statements is CopyStatementRefused",
         fn() {
           // Act and assert
-          connection.ScriptCopyRefused([
+          connection.SimpleQueryCopyRefused([
             driver_outcomes.insert_outcome(),
             driver_outcomes.insert_outcome(),
           ])
           |> should
-          |> map_script_error()
+          |> map_simple_query_error()
           |> be_equal(error.CopyStatementRefused(statements_run: 2))
           |> or_fail_with("Expected CopyStatementRefused(statements_run: 2)")
         },
       ),
       unit.it("a COPY statement is CopyStatementRefused", fn() {
         // Act and assert
-        connection.ScriptCopyRefused([])
+        connection.SimpleQueryCopyRefused([])
         |> should
-        |> map_script_error()
+        |> map_simple_query_error()
         |> be_equal(error.CopyStatementRefused(statements_run: 0))
         |> or_fail_with("Expected CopyStatementRefused")
       }),
@@ -1757,19 +1762,19 @@ pub fn mapping_tests() -> TestSuite {
           "Expected UnexpectedServerMessage(message: NoData, step: AwaitingStatementResult)",
         )
       }),
-      unit.it("ReadingScriptRows is the step", fn() {
+      unit.it("ReadingSqlRows is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.ReadingScriptRows,
+          driver_query.ReadingSimpleQueryRows,
         )
         |> should
         |> map_request_failure()
         |> be_equal(error.UnexpectedServerMessage(
           message: error.NoData,
-          step: error.ReadingScriptRows,
+          step: error.ReadingSqlRows,
         ))
         |> or_fail_with(
-          "Expected UnexpectedServerMessage(message: NoData, step: ReadingScriptRows)",
+          "Expected UnexpectedServerMessage(message: NoData, step: ReadingSqlRows)",
         )
       }),
       unit.it("ReadingCopyOut is the step", fn() {

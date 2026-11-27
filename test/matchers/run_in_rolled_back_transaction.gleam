@@ -32,7 +32,7 @@ type Ending(a) {
 /// pools
 /// |> should
 /// |> run_in_rolled_back_transaction(fn(held) {
-///   script("CREATE SCHEMA billing", held)
+///   run_sql("CREATE SCHEMA billing", held)
 /// })
 /// |> be_ok()
 /// |> or_fail_with("Expected the schema in the transaction")

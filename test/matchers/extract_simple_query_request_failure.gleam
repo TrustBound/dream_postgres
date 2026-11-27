@@ -1,7 +1,7 @@
-//// Extracts the request failure of a script.
+//// Extracts the request failure of a simple query.
 
 import dream_postgres/driver/connection.{
-  type RequestFailure, type ScriptError, ScriptRequestFailed,
+  type RequestFailure, type SimpleQueryError, SimpleQueryRequestFailed,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -9,18 +9,18 @@ import dream_test/types.{
 import gleam/option.{Some}
 import gleam/string.{inspect}
 
-/// Gives the failure of a `ScriptRequestFailed`. Fails for other errors.
+/// Gives the failure of a `SimpleQueryRequestFailed`. Fails for other errors.
 ///
 /// ```gleam
-/// run_script(stopped, statement("SELECT 1"), 5000)
+/// run_simple_query(stopped, statement("SELECT 1"), 5000)
 /// |> should
 /// |> be_error
-/// |> extract_script_request_failure
+/// |> extract_simple_query_request_failure
 /// |> be_equal(ConnectionProcessDown)
 /// |> or_fail_with("Expected ConnectionProcessDown")
 /// ```
-pub fn extract_script_request_failure(
-  result: MatchResult(ScriptError),
+pub fn extract_simple_query_request_failure(
+  result: MatchResult(SimpleQueryError),
 ) -> MatchResult(RequestFailure) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
@@ -28,16 +28,16 @@ pub fn extract_script_request_failure(
   }
 }
 
-fn failure_of(error: ScriptError) -> MatchResult(RequestFailure) {
+fn failure_of(error: SimpleQueryError) -> MatchResult(RequestFailure) {
   case error {
-    ScriptRequestFailed(failure) -> MatchOk(failure)
+    SimpleQueryRequestFailed(failure) -> MatchOk(failure)
     _other ->
       MatchFailed(AssertionFailure(
-        operator: "extract_script_request_failure",
+        operator: "extract_simple_query_request_failure",
         message: "",
         payload: Some(CustomMatcherFailure(
           actual: inspect(error),
-          description: "Expected ScriptRequestFailed",
+          description: "Expected SimpleQueryRequestFailed",
         )),
       ))
   }

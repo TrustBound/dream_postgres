@@ -16,9 +16,10 @@
 
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionConfig, type ConnectionEvent, type Outcome,
-  type ScriptError, type StatementCaching, Backoff, CacheStatements, Connected,
-  ConnectionConfig, LoginRefused, Outcome, ReconnectFailed, Reconnected, run,
-  run_script, server_parameter, start, stop, supervised, transaction_status,
+  type SimpleQueryError, type StatementCaching, Backoff, CacheStatements,
+  Connected, ConnectionConfig, LoginRefused, Outcome, ReconnectFailed,
+  Reconnected, run, run_simple_query, server_parameter, start, stop, supervised,
+  transaction_status,
 }
 import dream_postgres/driver/login.{
   type ChannelBindingSetting, type LoginConfig, type Password,
@@ -344,11 +345,11 @@ pub fn stop_connection(connection: Connection) -> Result(Nil, String) {
 
 /// Runs `sql` on the connection, for a step that prepares the state of a
 /// test.
-pub fn run_control_script(
+pub fn run_control_simple_query(
   connection: Connection,
   sql: String,
 ) -> Result(Nil, String) {
-  run_script(connection, connection.statement(sql), 5000)
+  run_simple_query(connection, connection.statement(sql), 5000)
   |> replace(Nil)
   |> map_error(fn(error) { "could not run " <> sql <> ": " <> inspect(error) })
 }
@@ -363,8 +364,8 @@ pub fn run_control_script(
 /// describe("connection", connection_setup(first_driver_server), [
 ///   before_each(start_test_connection(first_driver_server)),
 ///   after_each(stop_connection),
-///   it("runs a script", fn(connection) {
-///     run_script(connection, connection.statement("SELECT 1"), 5000)
+///   it("runs a simple query", fn(connection) {
+///     run_simple_query(connection, connection.statement("SELECT 1"), 5000)
 ///     |> should
 ///     |> be_ok
 ///     |> or_fail_with("Expected the outcome")
@@ -413,11 +414,11 @@ pub fn setup_step(
   fn(context) { step(context) |> replace(context) }
 }
 
-/// A hook that runs the script `sql`, which must work.
-pub fn run_setup_script(
+/// A hook that runs the simple query `sql`, which must work.
+pub fn run_setup_simple_query(
   sql: String,
 ) -> fn(Connection) -> Result(Connection, String) {
-  setup_step(run_control_script(_, sql))
+  setup_step(run_control_simple_query(_, sql))
 }
 
 /// A hook that runs the statement `sql` with no parameters, which must
@@ -431,13 +432,13 @@ pub fn run_setup_statement(
   })
 }
 
-/// A hook that runs the script `sql`, which must fail: for a test of the
-/// state after a failure. The setup fails when the script works.
-pub fn run_failing_script(
+/// A hook that runs the simple query `sql`, which must fail: for a test of the
+/// state after a failure. The setup fails when the simple query works.
+pub fn run_failing_simple_query(
   sql: String,
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    run_script(connection, connection.statement(sql), 5000)
+    run_simple_query(connection, connection.statement(sql), 5000)
     |> require_failure(connection, sql)
   }
 }
@@ -635,13 +636,13 @@ pub fn start_test_proxied_with_tls(
   fn(_tree_proxied) { start_proxied_with_tls(server, first_delay, tls) }
 }
 
-/// A hook that runs the script `sql` on the proxied connection, which must
+/// A hook that runs the simple query `sql` on the proxied connection, which must
 /// work.
-pub fn run_proxied_setup_script(
+pub fn run_proxied_setup_simple_query(
   sql: String,
 ) -> fn(ProxiedConnection) -> Result(ProxiedConnection, String) {
   setup_step(fn(proxied: ProxiedConnection) {
-    run_control_script(proxied.connection, sql)
+    run_control_simple_query(proxied.connection, sql)
   })
 }
 
@@ -715,7 +716,7 @@ fn stop_proxied_outcome(
 pub fn hold_advisory_lock(
   proxied: ProxiedConnection,
 ) -> Result(ProxiedConnection, String) {
-  run_control_script(proxied.control, advisory_lock_sql(proxied.lock_key))
+  run_control_simple_query(proxied.control, advisory_lock_sql(proxied.lock_key))
   |> replace(proxied)
 }
 
@@ -724,7 +725,7 @@ pub fn hold_advisory_lock(
 pub fn release_advisory_lock(
   proxied: ProxiedConnection,
 ) -> Result(Nil, String) {
-  run_control_script(
+  run_control_simple_query(
     proxied.control,
     "SELECT pg_advisory_unlock(" <> to_string(proxied.lock_key) <> ")",
   )
@@ -734,9 +735,9 @@ pub fn release_advisory_lock(
 /// proxied connection, for `start_caller`.
 pub fn lock_request(
   proxied: ProxiedConnection,
-) -> fn() -> Result(List(Outcome), ScriptError) {
+) -> fn() -> Result(List(Outcome), SimpleQueryError) {
   fn() {
-    run_script(
+    run_simple_query(
       proxied.connection,
       connection.statement(advisory_lock_sql(proxied.lock_key)),
       5000,
@@ -744,13 +745,13 @@ pub fn lock_request(
   }
 }
 
-/// A hook that runs the script `sql` on the control connection, which
+/// A hook that runs the simple query `sql` on the control connection, which
 /// must work.
-pub fn run_control_setup_script(
+pub fn run_control_setup_simple_query(
   sql: String,
 ) -> fn(ProxiedConnection) -> Result(ProxiedConnection, String) {
   setup_step(fn(proxied: ProxiedConnection) {
-    run_control_script(proxied.control, sql)
+    run_control_simple_query(proxied.control, sql)
   })
 }
 
@@ -898,7 +899,7 @@ pub fn transaction_act_setup(
 /// Starts a connection to `server` and runs `BEGIN` on it.
 pub fn start_in_transaction(server: Server) -> Result(Connection, String) {
   use connection <- try(start_connection(server.port))
-  run_control_script(connection, "BEGIN")
+  run_control_simple_query(connection, "BEGIN")
   |> replace(connection)
   |> map_error(stop_after_error(connection, _))
 }
@@ -955,13 +956,13 @@ pub fn start_test_controlled(
   fn(_tree_controlled) { start_controlled(server) }
 }
 
-/// A hook that runs the script `sql` on the controlled connection, which
+/// A hook that runs the simple query `sql` on the controlled connection, which
 /// must work.
-pub fn run_controlled_setup_script(
+pub fn run_controlled_setup_simple_query(
   sql: String,
 ) -> fn(ControlledConnection) -> Result(ControlledConnection, String) {
   setup_step(fn(controlled: ControlledConnection) {
-    run_control_script(controlled.connection, sql)
+    run_control_simple_query(controlled.connection, sql)
   })
 }
 
@@ -1022,7 +1023,7 @@ pub fn query_text(
   connection: Connection,
   sql: String,
 ) -> Result(String, String) {
-  run_script(connection, connection.statement(sql), 5000) |> single_text
+  run_simple_query(connection, connection.statement(sql), 5000) |> single_text
 }
 
 /// The backend process ID of the session that waits for the advisory lock
@@ -1035,7 +1036,7 @@ pub fn lock_waiter_pid(
 }
 
 fn single_text(
-  answer: Result(List(Outcome), ScriptError),
+  answer: Result(List(Outcome), SimpleQueryError),
 ) -> Result(String, String) {
   case answer {
     Ok([Outcome(result: CommandResult(rows: [[Text(bytes)]], ..), ..)]) ->
@@ -1051,7 +1052,10 @@ pub fn terminate_backend(
   control: Connection,
   pid: String,
 ) -> Result(Nil, String) {
-  run_control_script(control, "SELECT pg_terminate_backend(" <> pid <> ")")
+  run_control_simple_query(
+    control,
+    "SELECT pg_terminate_backend(" <> pid <> ")",
+  )
 }
 
 /// Sends the connection process a message that is not about its socket.
@@ -1178,7 +1182,7 @@ fn wait_for_one(
   sql: String,
   attempts: Int,
 ) -> Result(Nil, String) {
-  case run_script(control, connection.statement(sql), 5000), attempts {
+  case run_simple_query(control, connection.statement(sql), 5000), attempts {
     Ok([Outcome(result: CommandResult(rows: [[Text(<<"1">>)]], ..), ..)]), _ ->
       Ok(Nil)
     Error(error), _ -> Error("could not ask for waiters: " <> inspect(error))
@@ -1264,14 +1268,16 @@ pub fn caller_answer(caller: Caller(answer)) -> Result(answer, String) {
   |> map_error(fn(_timeout) { "the caller gave no answer within 5 seconds" })
 }
 
-/// The outcomes of a caller of a script, with an error when the caller
-/// gave no answer or the script failed: for a step of a setup.
+/// The outcomes of a caller of a simple query, with an error when the caller
+/// gave no answer or the simple query failed: for a step of a setup.
 pub fn caller_outcomes(
-  caller: Caller(Result(List(Outcome), ScriptError)),
+  caller: Caller(Result(List(Outcome), SimpleQueryError)),
 ) -> Result(List(Outcome), String) {
   use answer <- try(caller_answer(caller))
   answer
-  |> map_error(fn(error) { "the caller's script failed: " <> inspect(error) })
+  |> map_error(fn(error) {
+    "the caller's simple query failed: " <> inspect(error)
+  })
 }
 
 /// Makes `start` in a process that traps exits and then ends, and gives

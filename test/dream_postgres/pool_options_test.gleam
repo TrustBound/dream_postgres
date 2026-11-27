@@ -8,7 +8,7 @@ import dream_postgres.{
   Returned, Stopping, SystemAuthorities, TlsOff, TlsPreferred, TlsRequired,
   Waiting, all, cancel_timeout, connect_timeout, default_config,
   health_check_interval, named_connection, one, query, return_rollback_timeout,
-  script, setup_timeout, single, start, supervised, with_connection,
+  run_sql, setup_timeout, single, start, supervised, with_connection,
 }
 import dream_postgres/codec
 import dream_postgres/driver/connection
@@ -476,7 +476,7 @@ fn notice_tests() {
       |> dream_postgres.notices(notices)
       |> should
       |> run_on_started_pool(fn(connection) {
-        script("DROP TABLE IF EXISTS missing_table_x", connection)
+        run_sql("DROP TABLE IF EXISTS missing_table_x", connection)
       })
       |> receive_message(notices, within: 5000)
       |> extract_notice_message()

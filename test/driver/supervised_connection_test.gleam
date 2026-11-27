@@ -5,10 +5,10 @@
 import dream_postgres/driver/connection.{
   type ChunkError, type Connection, type ConnectionEvent, type CopyError,
   type HousekeepingError, type Outcome, type PrepareError, type RunError,
-  type ScriptError, type SettleError, Backoff, ConnectFailed, Connected,
+  type SettleError, type SimpleQueryError, Backoff, ConnectFailed, Connected,
   ConnectionConfig, CopyNotConnected, HousekeepingNotConnected,
-  PrepareNotConnected, RunNotConnected, ScriptNotConnected, SettleNotConnected,
-  TransportRefused, supervised,
+  PrepareNotConnected, RunNotConnected, SettleNotConnected,
+  SimpleQueryNotConnected, TransportRefused, supervised,
 }
 import dream_postgres/driver/housekeeping_sql.{catalog_load, rollback}
 import dream_postgres/driver/transport.{ConnectRefused}
@@ -44,14 +44,14 @@ pub fn tests() -> TestSuite {
       |> or_fail_with("Expected ConnectFailed")
     }),
     it(
-      "refuses a script with ScriptNotConnected before its first login",
+      "refuses a simple query with SimpleQueryNotConnected before its first login",
       fn(outcome: LateServer) {
         // Assert
-        outcome.early_script
+        outcome.early_simple_query
         |> should
         |> be_error
-        |> be_equal(ScriptNotConnected(TransportRefused(ConnectRefused)))
-        |> or_fail_with("Expected ScriptNotConnected")
+        |> be_equal(SimpleQueryNotConnected(TransportRefused(ConnectRefused)))
+        |> or_fail_with("Expected SimpleQueryNotConnected")
       },
     ),
     it(
@@ -110,10 +110,10 @@ pub fn tests() -> TestSuite {
       },
     ),
     it(
-      "refuses a housekeeping script with HousekeepingNotConnected before its first login",
+      "refuses a housekeeping simple query with HousekeepingNotConnected before its first login",
       fn(outcome: LateServer) {
         // Assert
-        outcome.early_housekeeping_script
+        outcome.early_housekeeping_simple_query
         |> should
         |> be_error
         |> be_equal(HousekeepingNotConnected(TransportRefused(ConnectRefused)))
@@ -142,15 +142,15 @@ type LateServer {
   LateServer(
     connection: Connection,
     first_event: Result(ConnectionEvent, Nil),
-    early_script: Result(List(Outcome), ScriptError),
+    early_simple_query: Result(List(Outcome), SimpleQueryError),
     early_prepare: Result(StatementDescription, PrepareError),
     early_run: Result(Outcome, RunError),
     early_settle: Result(TransactionStatus, SettleError),
     early_copy: Result(Int, CopyError(ChunkError)),
     early_housekeeping_run: Result(Outcome, HousekeepingError),
-    early_housekeeping_script: Result(List(Outcome), HousekeepingError),
+    early_housekeeping_simple_query: Result(List(Outcome), HousekeepingError),
     connected_event: Result(ConnectionEvent, Nil),
-    late_request: Result(List(Outcome), ScriptError),
+    late_request: Result(List(Outcome), SimpleQueryError),
   )
 }
 
@@ -182,8 +182,12 @@ fn watch_late_server(
   events: process.Subject(ConnectionEvent),
 ) -> Result(LateServer, String) {
   let first_event = next_event(events)
-  let early_script =
-    connection.run_script(connection, connection.statement("SELECT 1"), 5000)
+  let early_simple_query =
+    connection.run_simple_query(
+      connection,
+      connection.statement("SELECT 1"),
+      5000,
+    )
   let early_prepare =
     connection.prepare(connection, connection.statement("SELECT 1"), 5000)
   let early_run =
@@ -198,22 +202,26 @@ fn watch_late_server(
     )
   let early_housekeeping_run =
     connection.run_housekeeping(connection, catalog_load, 5000)
-  let early_housekeeping_script =
-    connection.run_housekeeping_script(connection, rollback, 5000)
+  let early_housekeeping_simple_query =
+    connection.run_housekeeping_simple_query(connection, rollback, 5000)
   use Nil <- try(start_forwarder(port, first_driver_server.port))
   let connected_event = next_event_after_failed_connects(events)
   let late_request =
-    connection.run_script(connection, connection.statement("SELECT 1"), 5000)
+    connection.run_simple_query(
+      connection,
+      connection.statement("SELECT 1"),
+      5000,
+    )
   Ok(LateServer(
     connection:,
     first_event:,
-    early_script:,
+    early_simple_query:,
     early_prepare:,
     early_run:,
     early_settle:,
     early_copy:,
     early_housekeeping_run:,
-    early_housekeeping_script:,
+    early_housekeeping_simple_query:,
     connected_event:,
     late_request:,
   ))

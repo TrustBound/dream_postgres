@@ -4,7 +4,7 @@
 //// server.
 
 import dream_errors.{Failed, Invalid, NotFound, Retry, Timeout, Unavailable}
-import dream_postgres.{ReconnectStep, one, parameter, query, script, single}
+import dream_postgres.{ReconnectStep, one, parameter, query, run_sql, single}
 import dream_postgres/codec
 import dream_postgres/error
 import dream_postgres/sql_state.{UniqueViolation}
@@ -209,7 +209,7 @@ fn connecting_tests() {
       |> be_ok()
       |> run_on_pool_with_subject(fn(connection, notice_subject) {
         let _ran =
-          script(
+          run_sql(
             "DO $$ BEGIN RAISE NOTICE 'the table is empty'; END $$",
             connection,
           )
@@ -487,7 +487,7 @@ fn transaction_tests() {
         let _ann = sign_up(connection, "ann@example.com", "Ann")
         let _bob = sign_up(connection, "bob@example.com", "Bob")
         let _filled =
-          script("UPDATE accounts SET balance = 100 WHERE id = 1", connection)
+          run_sql("UPDATE accounts SET balance = 100 WHERE id = 1", connection)
         let moved = move_money(connection, 1, 2, 40)
         #(moved, balances(connection))
       })
@@ -505,7 +505,7 @@ fn transaction_tests() {
         let _ann = sign_up(connection, "ann@example.com", "Ann")
         let _bob = sign_up(connection, "bob@example.com", "Bob")
         let _filled =
-          script("UPDATE accounts SET balance = 40 WHERE id = 1", connection)
+          run_sql("UPDATE accounts SET balance = 40 WHERE id = 1", connection)
         let refused = move_money(connection, 1, 2, 1000)
         #(refused, balances(connection))
       })
@@ -533,7 +533,7 @@ fn transaction_tests() {
       |> should
       |> run_with_example_tables(fn(connection) {
         let _ann = sign_up(connection, "ann@example.com", "Ann")
-        let _filled = script("UPDATE accounts SET balance = 70", connection)
+        let _filled = run_sql("UPDATE accounts SET balance = 70", connection)
         balance_report(connection)
       })
       |> be_ok()
@@ -548,7 +548,7 @@ fn transaction_tests() {
         let _ann = sign_up(connection, "ann@example.com", "Ann")
         let _bob = sign_up(connection, "bob@example.com", "Bob")
         let _filled =
-          script("UPDATE accounts SET balance = 25 WHERE id = 1", connection)
+          run_sql("UPDATE accounts SET balance = 25 WHERE id = 1", connection)
         let moved = move_balance(connection, from: 1, to: 2)
         #(moved, balances(connection))
       })
@@ -564,7 +564,7 @@ fn transaction_tests() {
       |> should
       |> run_with_example_tables(fn(connection) {
         let _ann = sign_up(connection, "ann@example.com", "Ann")
-        let _filled = script("UPDATE accounts SET balance = 25", connection)
+        let _filled = run_sql("UPDATE accounts SET balance = 25", connection)
         let _missing = move_balance(connection, from: 1, to: 9)
         balances(connection)
       })
@@ -616,7 +616,7 @@ fn codec_tests() {
       pools
       |> should
       |> run_with_example_tables(fn(connection) {
-        use Nil <- result.try(script(
+        use Nil <- result.try(run_sql(
           "CREATE TYPE mood AS ENUM ('happy', 'sad')",
           connection,
         ))
@@ -636,7 +636,7 @@ fn codec_tests() {
       pools
       |> should
       |> run_with_example_tables(fn(connection) {
-        use Nil <- result.try(script(
+        use Nil <- result.try(run_sql(
           "CREATE TYPE address AS (street text, city text)",
           connection,
         ))

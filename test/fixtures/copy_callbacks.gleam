@@ -5,8 +5,8 @@
 
 import dream_postgres/driver/connection.{
   type ChunkError, type Connection, type CopyError, type CopySender,
-  type Outcome, type ScriptError, ChunkFailed, ConnectionEnded, ConnectionLost,
-  SocketFailed, copy_from, copy_to, run_script, send_chunk,
+  type Outcome, type SimpleQueryError, ChunkFailed, ConnectionEnded,
+  ConnectionLost, SocketFailed, copy_from, copy_to, run_simple_query, send_chunk,
 }
 import dream_postgres/driver/transport.{SocketClosed}
 import driver/proxy.{type Proxy, close_client, inject}
@@ -108,7 +108,7 @@ pub fn send_after_end(
   use Nil <- try(send_chunk(sender, <<"1\tone\n":utf8>>))
   let sql = "SELECT pg_terminate_backend(" <> pid <> ", 5000)"
   use _terminated <- try(
-    run_script(control, connection.statement(sql), 5000)
+    run_simple_query(control, connection.statement(sql), 5000)
     |> result.replace_error(no_answer()),
   )
   send_chunk(sender, <<"2\ttwo\n":utf8>>)
@@ -171,17 +171,17 @@ fn with_next_send(
   #(error, send_chunk(sender, <<"3\tthree\n":utf8>>))
 }
 
-/// Runs a script and a second COPY on the connection of the COPY, each
+/// Runs a `run_sql` call and a second COPY on the connection of the COPY, each
 /// with a deadline of 50 milliseconds, and fails with their answers.
 pub fn copy_inside(
   _sender: CopySender,
   connection: Connection,
 ) -> Result(
   Nil,
-  #(Result(List(Outcome), ScriptError), Result(Int, CopyError(ChunkError))),
+  #(Result(List(Outcome), SimpleQueryError), Result(Int, CopyError(ChunkError))),
 ) {
-  let inner_script =
-    run_script(connection, connection.statement("SELECT 1"), 50)
+  let inner_simple_query =
+    run_simple_query(connection, connection.statement("SELECT 1"), 50)
   let inner_copy =
     copy_from(
       connection,
@@ -189,7 +189,7 @@ pub fn copy_inside(
       50,
       send_nothing,
     )
-  Error(#(inner_script, inner_copy))
+  Error(#(inner_simple_query, inner_copy))
 }
 
 /// Suspends the connection process of the COPY and sends nothing, so the

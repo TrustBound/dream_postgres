@@ -6,7 +6,7 @@ import dream_postgres/driver/connection.{
   statement, stop,
 }
 import dream_postgres/internal/cell.{type StatementDescription}
-import driver/server_connection.{run_control_script, start_connection}
+import driver/server_connection.{run_control_simple_query, start_connection}
 import gleam/result.{map_error, replace, try}
 import gleam/string.{inspect}
 
@@ -28,9 +28,9 @@ pub fn prepare_around_change(
 ) -> Result(#(StatementDescription, StatementDescription), String) {
   use connection <- try(start_connection(port))
   let descriptions = {
-    use Nil <- try(run_control_script(connection, create_table_sql))
+    use Nil <- try(run_control_simple_query(connection, create_table_sql))
     use first <- try(prepare_select_all(connection))
-    use Nil <- try(run_control_script(connection, change_sql))
+    use Nil <- try(run_control_simple_query(connection, change_sql))
     use second <- try(describe_select_all(connection))
     Ok(#(first, second))
   }
@@ -47,9 +47,9 @@ pub fn run_after_changed_prepare(
 ) -> Result(Nil, String) {
   use connection <- try(start_connection(port))
   let ran = {
-    use Nil <- try(run_control_script(connection, create_table_sql))
+    use Nil <- try(run_control_simple_query(connection, create_table_sql))
     use _first <- try(prepare_select_all(connection))
-    use Nil <- try(run_control_script(connection, change_sql))
+    use Nil <- try(run_control_simple_query(connection, change_sql))
     use _second <- try(describe_select_all(connection))
     run(connection, statement(select_all_sql), [], [], 5000)
     |> replace(Nil)
@@ -88,9 +88,9 @@ pub fn prepare_and_run_after_change(
 ) -> Result(StaleOutcome, String) {
   use connection <- try(start_connection(port))
   let outcome = {
-    use Nil <- try(run_control_script(connection, create_table_sql))
+    use Nil <- try(run_control_simple_query(connection, create_table_sql))
     use _first <- try(prepare_select_all(connection))
-    use Nil <- try(run_control_script(connection, change_sql))
+    use Nil <- try(run_control_simple_query(connection, change_sql))
     use prepared <- try(prepare_select_all(connection))
     let ran = run(connection, statement(select_all_sql), [], [], 5000)
     Ok(StaleOutcome(prepared:, ran:))

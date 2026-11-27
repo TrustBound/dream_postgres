@@ -1,4 +1,4 @@
-//// Interceptors: functions that every query and script of a connection
+//// Interceptors: functions that every query and `run_sql` call of a connection
 //// goes through, in the order they were added to the config.
 ////
 //// An interceptor gets the request and `next`, the rest of the chain. It
@@ -78,9 +78,9 @@ pub type Request {
     sql: String,
     /// The name that `dream_postgres.named` gave the query, if any.
     name: Option(String),
-    /// The parameters with their codecs, `$1` first. A script has none.
+    /// The parameters with their codecs, `$1` first. A `run_sql` call has none.
     parameters: List(Parameter),
-    /// Whether the SQL is one statement with parameters or a script.
+    /// Whether the SQL is one statement with parameters or a `run_sql` call.
     kind: RequestKind,
   )
 }
@@ -96,9 +96,9 @@ pub type RequestKind {
   /// `all`, `one`, `maybe_one` and `affected`.
   Statement
   /// SQL that runs with the simple query protocol: the requests of
-  /// `dream_postgres.script`, and the `BEGIN`, `COMMIT`, `ROLLBACK` and
+  /// `dream_postgres.run_sql`, and the `BEGIN`, `COMMIT`, `ROLLBACK` and
   /// savepoint commands of a transaction.
-  Script
+  Sql
   /// A binary `COPY ... FROM STDIN` of `dream_postgres.copy_from`: the
   /// SQL of the request is the COPY, and the rows are made from the rows
   /// of the app one at a time, when they are sent.
@@ -137,8 +137,8 @@ pub type Answer {
     types: List(TypeDescription),
     result: CommandResult,
   )
-  /// The answer to a `Script`: the result of each statement, in order.
-  ScriptAnswer(results: List(CommandResult))
+  /// The answer to a `Sql`: the result of each statement, in order.
+  SqlAnswer(results: List(CommandResult))
   /// The answer to a `CopyFrom`: the number of rows stored.
   CopyFromAnswer(count: Int)
   /// The answer to a `CopyTo`: the description of the query, the type of

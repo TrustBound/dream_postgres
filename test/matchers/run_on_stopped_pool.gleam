@@ -19,7 +19,7 @@ import gleam/result
 /// ```gleam
 /// pools
 /// |> should
-/// |> run_on_stopped_pool(fn(connection) { script("SELECT 1", connection) })
+/// |> run_on_stopped_pool(fn(connection) { run_sql("SELECT 1", connection) })
 /// |> be_error()
 /// |> summarise_error()
 /// |> be_equal("unavailable PoolStopped")

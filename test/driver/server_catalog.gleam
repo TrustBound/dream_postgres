@@ -13,13 +13,13 @@ import dream_postgres/driver/catalog.{
   type Catalog, type CatalogError, type CatalogEvent, UnknownType,
 }
 import dream_postgres/driver/connection.{
-  type Connection, type Outcome, type ScriptError, run_script, stop,
+  type Connection, type Outcome, type SimpleQueryError, run_simple_query, stop,
 }
 import dream_postgres/internal/cell.{type TypeDescription}
 import dream_test/context.{type Context}
 import driver/server_connection.{
-  type Caller, advisory_lock_sql, caller_answer, query_text, run_control_script,
-  start_caller, start_connection, wait_for_lock_waiter,
+  type Caller, advisory_lock_sql, caller_answer, query_text,
+  run_control_simple_query, start_caller, start_connection, wait_for_lock_waiter,
 }
 import driver/servers.{type Server}
 import gleam/erlang/process.{type Subject}
@@ -108,7 +108,7 @@ pub fn begin_in_schema(
   schema: String,
   statements: String,
 ) -> Result(Nil, String) {
-  run_control_script(
+  run_control_simple_query(
     connection,
     "BEGIN; CREATE SCHEMA "
       <> schema
@@ -120,7 +120,7 @@ pub fn begin_in_schema(
 /// Rolls back the transaction of the connection, so no type that the test
 /// made stays on the server.
 pub fn roll_back(connection: Connection) -> Result(Nil, String) {
-  run_control_script(connection, "ROLLBACK")
+  run_control_simple_query(connection, "ROLLBACK")
 }
 
 // Catalog sessions ------------------------------------------------------------
@@ -318,7 +318,7 @@ fn require_unknown(
 }
 
 /// A hook that runs the connection hook `step` on the session's
-/// connection, for example `run_setup_script("BEGIN")`.
+/// connection, for example `run_setup_simple_query("BEGIN")`.
 pub fn on_session_connection(
   step: fn(Connection) -> Result(Connection, String),
 ) -> fn(CatalogSession) -> Result(CatalogSession, String) {
@@ -334,7 +334,7 @@ pub type BlockedConnection {
     control: Connection,
     blocked: Connection,
     key: Int,
-    blocker: Caller(Result(List(Outcome), ScriptError)),
+    blocker: Caller(Result(List(Outcome), SimpleQueryError)),
   )
 }
 
@@ -347,10 +347,10 @@ pub fn block_connection(
   key: Int,
 ) -> Result(BlockedConnection, String) {
   let lock = advisory_lock_sql(key)
-  use _locked <- try(run_control_script(control, lock))
+  use _locked <- try(run_control_simple_query(control, lock))
   let blocker =
     start_caller(fn() {
-      run_script(blocked, connection.statement(lock), 10_000)
+      run_simple_query(blocked, connection.statement(lock), 10_000)
     })
   use _waited <- try(wait_for_lock_waiter(control, key))
   Ok(BlockedConnection(control:, blocked:, key:, blocker:))
@@ -360,13 +360,13 @@ pub fn block_connection(
 /// lets the lock go on it too.
 pub fn unblock_connection(blocked: BlockedConnection) -> Result(Nil, String) {
   let unlock = "SELECT pg_advisory_unlock(" <> to_string(blocked.key) <> ")"
-  use _unlocked <- try(run_control_script(blocked.control, unlock))
+  use _unlocked <- try(run_control_simple_query(blocked.control, unlock))
   use answer <- try(caller_answer(blocked.blocker))
   use _outcomes <- try(
     answer
     |> map_error(fn(error) { "the blocked lock failed: " <> inspect(error) }),
   )
-  run_control_script(blocked.blocked, unlock)
+  run_control_simple_query(blocked.blocked, unlock)
 }
 
 // Load races ------------------------------------------------------------------

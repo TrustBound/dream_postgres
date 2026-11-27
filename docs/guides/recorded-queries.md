@@ -183,7 +183,7 @@ pub fn run_create_api_key(
 ```gleam
 import dream_errors.{type Error}
 import dream_postgres.{
-  type Connection, type PostgresError, script, with_connection,
+  type Connection, type PostgresError, run_sql, with_connection,
 }
 import gleam/result
 
@@ -195,7 +195,7 @@ pub fn with_api_keys_table(
 ) -> Result(a, Error(PostgresError)) {
   {
     use held <- with_connection(connection)
-    use Nil <- result.try(script(
+    use Nil <- result.try(run_sql(
       "CREATE TEMPORARY TABLE api_keys (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   owner int4 NOT NULL,
@@ -367,7 +367,7 @@ This recording holds one `BEGIN`:
 {
   "dream_postgres_recording": 1,
   "entries": [
-    {"key":"script\nBEGIN","script":{"outcome":{"answer":{"results":[{"count":0,"rows":[],"tag":"BEGIN"}]}},"sql":"BEGIN"}}
+    {"key":"sql\nBEGIN","sql":{"outcome":{"answer":{"results":[{"count":0,"rows":[],"tag":"BEGIN"}]}},"sql":"BEGIN"}}
   ]
 }
 ```
@@ -377,7 +377,7 @@ The number `dream_postgres_recording` is the format of the file. A file of anoth
 ## What a recording does not hold
 
 - A recording holds only what PostgreSQL answered. A request that failed in the client before the database answered is not recorded. A failure of the client, such as a codec that does not take the type of its column, comes again in playback from the recorded types.
-- The only failures in a recording are server errors: `error.Server`, and `error.ScriptStatementFailed` for a script.
+- The only failures in a recording are server errors: `error.Server`, and `error.SqlStatementFailed` for a `run_sql` call.
 - A listener has a connection of its own, outside the recorder. Its notifications are not recorded.
 - The file holds the value of each parameter of `parameter`, as hex. Add a secret with `secret_parameter`, and the file holds only its codec.
 

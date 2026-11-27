@@ -18,10 +18,11 @@ import dream_postgres/driver/query.{
   AwaitingPortalColumns, AwaitingReadyForQuery, AwaitingReadyForQueryAfterError,
   AwaitingStatementColumns, AwaitingStatementResult, ConnectionEnded,
   CopyNotSupported, Finished, Notice, Notification, Outcome, ParameterChanged,
-  ReadingCopyOut, ReadingExecuteRows, ReadingScriptRows, ScriptFailure,
-  ServerError, StatementResult, UnexpectedMessage, failure_report, start_prepare,
-  start_prepare_and_run, start_prepare_closing, start_run, start_simple_query,
-  step_prepare, step_prepare_and_run, step_run, step_simple_query,
+  ReadingCopyOut, ReadingExecuteRows, ReadingSimpleQueryRows, ServerError,
+  SimpleQueryFailure, StatementResult, UnexpectedMessage, failure_report,
+  start_prepare, start_prepare_and_run, start_prepare_closing, start_run,
+  start_simple_query, step_prepare, step_prepare_and_run, step_run,
+  step_simple_query,
 }
 import dream_postgres/internal/cell.{
   type ColumnDescription, type Format, type ServerReport, Binary, BinaryFormat,
@@ -600,7 +601,7 @@ fn simple_query_tests() {
       )
       |> or_fail_with("Expected three results in order")
     }),
-    it("gives no results for an empty script", fn() {
+    it("gives no results for an empty simple query", fn() {
       // Arrange
       let start = start_simple_query("  ")
       let messages = [EmptyQueryResponse, ReadyForQuery(Idle)]
@@ -654,7 +655,7 @@ fn simple_query_tests() {
       )
       |> or_fail_with("Expected a binary cell")
     }),
-    it("reads a script from the bytes of the server", fn() {
+    it("reads a simple query from the bytes of the server", fn() {
       // Arrange
       let start = start_simple_query("SELECT 1 AS n, NULL AS m")
       // The answer as the server sends it, with a ParameterStatus in the
@@ -795,7 +796,7 @@ fn server_error_tests() {
       )
       |> or_fail_with("Expected the error of the Execute")
     }),
-    it("gives the results before the error of a script", fn() {
+    it("gives the results before the error of a simple query", fn() {
       // Arrange
       let start =
         start_simple_query("BEGIN; INSERT INTO t VALUES (1); SELECT 1/0")
@@ -817,7 +818,7 @@ fn server_error_tests() {
       |> be_equal(
         Finished(
           Outcome(
-            result: Error(ScriptFailure(
+            result: Error(SimpleQueryFailure(
               completed: [
                 StatementResult(
                   columns: [],
@@ -1057,7 +1058,7 @@ fn copy_tests() {
       |> be_equal(<<"c", 4:32>>)
       |> or_fail_with("Expected CopyDone only")
     }),
-    it("goes on with the script after a COPY TO STDOUT", fn() {
+    it("goes on with the simple query after a COPY TO STDOUT", fn() {
       // Arrange
       let start = start_simple_query("COPY t TO STDOUT; SELECT 1")
       let messages = [
@@ -1080,7 +1081,7 @@ fn copy_tests() {
       |> be_equal(
         Finished(
           Outcome(
-            result: Error(ScriptFailure(
+            result: Error(SimpleQueryFailure(
               completed: [
                 StatementResult(
                   columns: [column("?column?", 23, 0)],
@@ -1290,7 +1291,7 @@ fn prepare_and_run_unexpected_test(
   })
 }
 
-fn script_unexpected_test(
+fn simple_query_unexpected_test(
   name: String,
   messages: List(BackendMessage),
   error: UnexpectedMessage,
@@ -1424,26 +1425,26 @@ fn unexpected_tests() {
       ],
       UnexpectedMessage(DataRow([Some(<<"1">>)]), ReadingExecuteRows, []),
     ),
-    script_unexpected_test(
-      "DataRow before RowDescription in a script",
+    simple_query_unexpected_test(
+      "DataRow before RowDescription in a simple query",
       [DataRow([])],
       UnexpectedMessage(DataRow([]), AwaitingStatementResult, []),
     ),
-    script_unexpected_test(
-      "ReadyForQuery inside the rows of a script",
+    simple_query_unexpected_test(
+      "ReadyForQuery inside the rows of a simple query",
       [RowDescription([]), ReadyForQuery(Idle)],
-      UnexpectedMessage(ReadyForQuery(Idle), ReadingScriptRows, []),
+      UnexpectedMessage(ReadyForQuery(Idle), ReadingSimpleQueryRows, []),
     ),
-    script_unexpected_test(
-      "a DataRow with more values than the columns of a script",
+    simple_query_unexpected_test(
+      "a DataRow with more values than the columns of a simple query",
       [
         RowDescription([result_column("n", 23, 1, TextFormat)]),
         DataRow([None, None]),
       ],
-      UnexpectedMessage(DataRow([None, None]), ReadingScriptRows, []),
+      UnexpectedMessage(DataRow([None, None]), ReadingSimpleQueryRows, []),
     ),
-    script_unexpected_test(
-      "a tag whose count is not a number in a script",
+    simple_query_unexpected_test(
+      "a tag whose count is not a number in a simple query",
       [CommandComplete("INSERT 0 many")],
       UnexpectedMessage(
         CommandComplete("INSERT 0 many"),

@@ -1,11 +1,12 @@
-//// Proves the errors of `run_housekeeping` and `run_housekeeping_script`
+//// Proves the errors of `run_housekeeping` and `run_housekeeping_simple_query`
 //// on a proxied connection to the first driver server. The proxy answers
 //// in place of the server, as no PostgreSQL server answers a housekeeping
 //// statement, or breaks the connection.
 
 import dream_postgres/driver/connection.{
   ConnectionEnded, ConnectionLost, HousekeepingAnswerUnexpected,
-  HousekeepingFailed, SocketFailed, run_housekeeping, run_housekeeping_script,
+  HousekeepingFailed, SocketFailed, run_housekeeping,
+  run_housekeeping_simple_query,
 }
 import dream_postgres/driver/housekeeping_sql.{catalog_load, health_check}
 import dream_postgres/driver/transport.{SocketClosed}
@@ -52,14 +53,18 @@ pub fn tests() -> TestSuite {
         },
       ),
       it(
-        "gives HousekeepingAnswerUnexpected when a housekeeping script gets two answers",
+        "gives HousekeepingAnswerUnexpected when a housekeeping simple query gets two answers",
         fn(proxied: ProxiedConnection) {
           // Arrange
           answer_next_request(proxied.proxy, result_then_refusal_bytes())
 
           // Act
           let answer =
-            run_housekeeping_script(proxied.connection, health_check, 5000)
+            run_housekeeping_simple_query(
+              proxied.connection,
+              health_check,
+              5000,
+            )
 
           // Assert
           answer
@@ -106,11 +111,11 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
   group("after the network closed", [
     before_each(break_session(close_client)),
     it(
-      "fails a housekeeping script while the connection is lost",
+      "fails a housekeeping simple query while the connection is lost",
       fn(proxied: ProxiedConnection) {
         // Act
         let answer =
-          run_housekeeping_script(proxied.connection, health_check, 5000)
+          run_housekeeping_simple_query(proxied.connection, health_check, 5000)
 
         // Assert
         answer

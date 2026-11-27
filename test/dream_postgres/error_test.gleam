@@ -1328,27 +1328,30 @@ pub fn tests() -> TestSuite {
           "Expected Failed with the message: the SQL did not start a COPY of the direction asked for; the statement ran to its end, and outside a transaction it is committed",
         )
       }),
-      it("a COPY statement after two statements of a script is Failed", fn() {
-        // Arrange
-        let failure =
-          postgres_failure.with_reason(error.CopyStatementRefused(
-            statements_run: 2,
+      it(
+        "a COPY statement after two statements of a `run_sql` call is Failed",
+        fn() {
+          // Arrange
+          let failure =
+            postgres_failure.with_reason(error.CopyStatementRefused(
+              statements_run: 2,
+            ))
+
+          // Act
+          let found = error.to_dream_error(failure)
+
+          // Assert
+          found
+          |> should
+          |> be_equal(Failed(
+            "a COPY statement cannot run as a query; the SQL ran 2 of its statements before it, and outside a transaction they are committed",
+            failure,
           ))
-
-        // Act
-        let found = error.to_dream_error(failure)
-
-        // Assert
-        found
-        |> should
-        |> be_equal(Failed(
-          "a COPY statement cannot run as a query; the script ran 2 of its statements before it, and outside a transaction they are committed",
-          failure,
-        ))
-        |> or_fail_with(
-          "Expected Failed with the message: a COPY statement cannot run as a query; the script ran 2 of its statements before it, and outside a transaction they are committed",
-        )
-      }),
+          |> or_fail_with(
+            "Expected Failed with the message: a COPY statement cannot run as a query; the SQL ran 2 of its statements before it, and outside a transaction they are committed",
+          )
+        },
+      ),
       it("a query timeout with no confirmed stop is Timeout", fn() {
         // Arrange
         let failure =
@@ -1371,11 +1374,11 @@ pub fn tests() -> TestSuite {
         )
       }),
       it(
-        "a later statement of a script that failed is the kind of its server error",
+        "a later statement of a `run_sql` call that failed is the kind of its server error",
         fn() {
           // Arrange
           let failure =
-            postgres_failure.with_reason(error.ScriptStatementFailed(
+            postgres_failure.with_reason(error.SqlStatementFailed(
               statements_run: 1,
               server_error: server_error.with_sql_state(
                 sql_state.UniqueViolation,
@@ -1390,11 +1393,11 @@ pub fn tests() -> TestSuite {
           found
           |> should
           |> be_equal(Conflict(
-            "the script failed after it ran 1 of its statements (outside a transaction they are committed): the message (23505, constraint users_email_key)",
+            "the SQL failed after it ran 1 of its statements (outside a transaction they are committed): the message (23505, constraint users_email_key)",
             failure,
           ))
           |> or_fail_with(
-            "Expected Conflict with the message: the script failed after it ran 1 of its statements (outside a transaction they are committed): the message (23505, constraint users_email_key)",
+            "Expected Conflict with the message: the SQL failed after it ran 1 of its statements (outside a transaction they are committed): the message (23505, constraint users_email_key)",
           )
         },
       ),
@@ -3150,7 +3153,7 @@ pub fn tests() -> TestSuite {
         },
       ),
       it(
-        "the server broke the protocol: it sent NoData while the client waited for the next result of the script",
+        "the server broke the protocol: it sent NoData while the client waited for the next result of the SQL",
         fn() {
           // Arrange
           let failure =
@@ -3166,22 +3169,22 @@ pub fn tests() -> TestSuite {
           found
           |> should
           |> be_equal(Failed(
-            "the server broke the protocol: it sent NoData while the client waited for the next result of the script",
+            "the server broke the protocol: it sent NoData while the client waited for the next result of the SQL",
             failure,
           ))
           |> or_fail_with(
-            "Expected Failed with the message: the server broke the protocol: it sent NoData while the client waited for the next result of the script",
+            "Expected Failed with the message: the server broke the protocol: it sent NoData while the client waited for the next result of the SQL",
           )
         },
       ),
       it(
-        "the server broke the protocol: it sent NoData while the client waited for the rows of a statement of the script",
+        "the server broke the protocol: it sent NoData while the client waited for the rows of a statement of the SQL",
         fn() {
           // Arrange
           let failure =
             postgres_failure.with_reason(error.UnexpectedServerMessage(
               error.NoData,
-              error.ReadingScriptRows,
+              error.ReadingSqlRows,
             ))
 
           // Act
@@ -3191,11 +3194,11 @@ pub fn tests() -> TestSuite {
           found
           |> should
           |> be_equal(Failed(
-            "the server broke the protocol: it sent NoData while the client waited for the rows of a statement of the script",
+            "the server broke the protocol: it sent NoData while the client waited for the rows of a statement of the SQL",
             failure,
           ))
           |> or_fail_with(
-            "Expected Failed with the message: the server broke the protocol: it sent NoData while the client waited for the rows of a statement of the script",
+            "Expected Failed with the message: the server broke the protocol: it sent NoData while the client waited for the rows of a statement of the SQL",
           )
         },
       ),
@@ -5168,11 +5171,11 @@ pub fn tests() -> TestSuite {
           "Expected the unique violation of the commit that rolled back",
         )
       }),
-      it("has the server error of a later statement of a script", fn() {
+      it("has the server error of a later statement of a `run_sql` call", fn() {
         // Arrange
         let failure =
           error.to_dream_error(
-            postgres_failure.with_reason(error.ScriptStatementFailed(
+            postgres_failure.with_reason(error.SqlStatementFailed(
               statements_run: 1,
               server_error: server_error.with_sql_state(
                 sql_state.UniqueViolation,
@@ -5192,7 +5195,9 @@ pub fn tests() -> TestSuite {
           sql_state.UniqueViolation,
           Some("users_email_key"),
         ))
-        |> or_fail_with("Expected the unique violation of the script statement")
+        |> or_fail_with(
+          "Expected the unique violation of the `run_sql` call statement",
+        )
       }),
       it("has no server error for a timeout", fn() {
         // Arrange

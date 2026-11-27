@@ -4,7 +4,7 @@
 import dream_postgres/codec
 import dream_postgres/error.{InterceptorFailed}
 import dream_postgres/interceptor.{
-  type Outcome, type Request, CopyFrom, CopyToAnswer, Request, ScriptAnswer,
+  type Outcome, type Request, CopyFrom, CopyToAnswer, Request, SqlAnswer,
   Statement, StatementAnswer,
 }
 import dream_postgres/internal/cell.{
@@ -84,16 +84,16 @@ pub fn rows_of(type_name: String, rows: List(List(Cell))) -> Outcome {
   ))
 }
 
-/// The answer of a script with the rows, whose cells have no type.
+/// The answer of a `run_sql` call with the rows, whose cells have no type.
 ///
 /// ## Example
 ///
 /// ```gleam
-/// normalize_inputs.script_rows([[Text(<<"1":utf8>>)]])
+/// normalize_inputs.sql_rows([[Text(<<"1":utf8>>)]])
 /// ```
-pub fn script_rows(rows: List(List(Cell))) -> Outcome {
+pub fn sql_rows(rows: List(List(Cell))) -> Outcome {
   Ok(
-    ScriptAnswer(results: [
+    SqlAnswer(results: [
       CommandResult(rows:, tag: "SELECT", count: list.length(rows)),
     ]),
   )

@@ -13,9 +13,9 @@
 //// has a stop.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionEvent, type Outcome, type ScriptError, Backoff,
-  Connected, ConnectionConfig, Disconnected, ReconnectFailed, run_script, stop,
-  transaction_status,
+  type Connection, type ConnectionEvent, type Outcome, type SimpleQueryError,
+  Backoff, Connected, ConnectionConfig, Disconnected, ReconnectFailed,
+  run_simple_query, stop, transaction_status,
 }
 import dream_postgres/driver/pool.{
   type HoldError, type Pool, type PoolConfig, type PoolEvent, type PoolMessage,
@@ -26,7 +26,7 @@ import dream_test/context.{type Context}
 import driver/proxy.{type Proxy, start_proxy, stop_proxy}
 import driver/server_connection.{
   type ActOutcome, act_setup, advisory_lock_sql, backend_pid, connection_config,
-  pid_of, query_text, run_control_script, start_connection, user_config,
+  pid_of, query_text, run_control_simple_query, start_connection, user_config,
 }
 import driver/servers.{type Server}
 import fixtures/backoff_strategies.{capped_delay}
@@ -415,13 +415,13 @@ pub fn connection_status(
 pub fn begin_transaction(
   connection: Connection,
 ) -> Result(TransactionStatus, String) {
-  use _begun <- try(run_control_script(connection, "BEGIN"))
+  use _begun <- try(run_control_simple_query(connection, "BEGIN"))
   connection_status(connection)
 }
 
 /// Begins a transaction, and gives the backend process ID.
 pub fn begin_on_backend(connection: Connection) -> Result(String, String) {
-  use _begun <- try(run_control_script(connection, "BEGIN"))
+  use _begun <- try(run_control_simple_query(connection, "BEGIN"))
   backend_pid(connection)
 }
 
@@ -490,13 +490,15 @@ pub fn query_in_hold(
   fn() { hold_connection(pool, query_text(_, sql)) }
 }
 
-/// The call that holds a connection of the pool and runs the script `sql`
+/// The call that holds a connection of the pool and runs the simple query `sql`
 /// on it, for `start_caller`.
-pub fn script_in_hold(
+pub fn simple_query_in_hold(
   pool: Pool(attachment),
   sql: String,
-) -> fn() -> Result(Result(List(Outcome), ScriptError), HoldError) {
-  fn() { pool.hold(pool, 5000, run_script(_, connection.statement(sql), 5000)) }
+) -> fn() -> Result(Result(List(Outcome), SimpleQueryError), HoldError) {
+  fn() {
+    pool.hold(pool, 5000, run_simple_query(_, connection.statement(sql), 5000))
+  }
 }
 
 /// The callback of a hold that stops the pool of `handle` with a deadline
@@ -599,14 +601,14 @@ pub fn leave_transaction_open(
 /// A hook that takes the advisory lock `session.lock_key` on the control
 /// connection. The stop of the control connection gives the lock back.
 pub fn hold_pool_lock(session: PoolSession) -> Result(PoolSession, String) {
-  run_control_script(session.control, advisory_lock_sql(session.lock_key))
+  run_control_simple_query(session.control, advisory_lock_sql(session.lock_key))
   |> replace(session)
 }
 
 /// Gives back the advisory lock `session.lock_key` of the control
 /// connection.
 pub fn release_pool_lock(session: PoolSession) -> Result(Nil, String) {
-  run_control_script(
+  run_control_simple_query(
     session.control,
     "SELECT pg_advisory_unlock(" <> to_string(session.lock_key) <> ")",
   )

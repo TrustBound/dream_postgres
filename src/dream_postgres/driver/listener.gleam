@@ -84,10 +84,11 @@
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type Notification, type ScriptError, Connected,
+  type ConnectionEvent, type Notification, type SimpleQueryError, Connected,
   ConnectionConfig, ConnectionEnded, ConnectionProcessDown, DeadlinePassed,
-  Disconnected, ReconnectFailed, Reconnected, ScriptCopyRefused, ScriptFailed,
-  ScriptNotConnected, ScriptRefused, ScriptRequestFailed, ScriptUnencodable,
+  Disconnected, ReconnectFailed, Reconnected, SimpleQueryCopyRefused,
+  SimpleQueryFailed, SimpleQueryNotConnected, SimpleQueryRefused,
+  SimpleQueryRequestFailed, SimpleQueryUnencodable,
 }
 import dream_postgres/driver/sink.{
   type Delivery, type Sink, Delivered, MapFailed,
@@ -1168,27 +1169,28 @@ fn run_listen(state: SessionState, channel: String) -> Listened {
 /// The SQL is one `LISTEN` in one Query message. Its only encode failure
 /// is the zero byte: the message is far below the 2 GiB limit, because
 /// the channel has at most 63 bytes. A PostgreSQL server answers it with
-/// one result or one error, so `ScriptFailed` and `ScriptCopyRefused` come
+/// one result or one error, so `SimpleQueryFailed` and `SimpleQueryCopyRefused` come
 /// only from a server that breaks the protocol.
-fn listened(result: Result(Nil, ScriptError)) -> Listened {
+fn listened(result: Result(Nil, SimpleQueryError)) -> Listened {
   case result {
     Ok(Nil) -> ListenWorked
-    Error(ScriptRequestFailed(ConnectionEnded(_)))
-    | Error(ScriptNotConnected(_)) -> ListenLost
-    Error(ScriptRequestFailed(ConnectionProcessDown)) ->
+    Error(SimpleQueryRequestFailed(ConnectionEnded(_)))
+    | Error(SimpleQueryNotConnected(_)) -> ListenLost
+    Error(SimpleQueryRequestFailed(ConnectionProcessDown)) ->
       ListenNotDone(ListenerConnectionDown)
-    Error(ScriptRequestFailed(DeadlinePassed(cancelled:))) ->
+    Error(SimpleQueryRequestFailed(DeadlinePassed(cancelled:))) ->
       ListenNotDone(ListenDeadlinePassed(cancelled))
-    Error(ScriptUnencodable(_zero_byte)) -> ListenNotDone(ChannelHasZeroByte)
-    Error(ScriptRefused(report:, transaction_status:)) ->
+    Error(SimpleQueryUnencodable(_zero_byte)) ->
+      ListenNotDone(ChannelHasZeroByte)
+    Error(SimpleQueryRefused(report:, transaction_status:)) ->
       ListenNotDone(ListenRefused(report, transaction_status))
-    Error(ScriptFailed(..)) | Error(ScriptCopyRefused(..)) ->
+    Error(SimpleQueryFailed(..)) | Error(SimpleQueryCopyRefused(..)) ->
       ListenNotDone(ListenAnswerUnexpected)
   }
 }
 
-fn run(state: SessionState, sql: String) -> Result(Nil, ScriptError) {
-  connection.run_listener_script(
+fn run(state: SessionState, sql: String) -> Result(Nil, SimpleQueryError) {
+  connection.run_listener_simple_query(
     state.connection,
     sql,
     state.deadline_milliseconds,

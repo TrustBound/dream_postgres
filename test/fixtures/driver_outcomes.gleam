@@ -9,7 +9,7 @@ import dream_postgres/internal/cell.{CommandResult, Idle}
 /// ## Example
 ///
 /// ```gleam
-/// connection.ScriptCopyRefused([driver_outcomes.insert_outcome()])
+/// connection.SimpleQueryCopyRefused([driver_outcomes.insert_outcome()])
 /// ```
 pub fn insert_outcome() -> Outcome {
   Outcome(

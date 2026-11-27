@@ -12,8 +12,8 @@
 
 import dream_postgres/driver/catalog.{CatalogProcessDown}
 import dream_postgres/driver/connection.{
-  type ConnectionEvent, type Outcome, type ScriptError, Connected,
-  ConnectionLost, ConnectionProcessDown, Disconnected, ScriptRequestFailed,
+  type ConnectionEvent, type Outcome, type SimpleQueryError, Connected,
+  ConnectionLost, ConnectionProcessDown, Disconnected, SimpleQueryRequestFailed,
   SocketFailed, TransportRefused,
 }
 import dream_postgres/driver/pool.{
@@ -52,7 +52,7 @@ import driver/server_pool.{
   leave_transaction_open, named_pool_setup, next_pool_event, pool_act_setup,
   pool_events_until_free, pool_session_setup, pool_status,
   proxied_pool_act_setup, proxied_pool_setup, query_in_hold, release_holder,
-  release_pool_lock, rollback_deadline_config, script_in_hold,
+  release_pool_lock, rollback_deadline_config, simple_query_in_hold,
   slow_reconnect_config, start_holder, start_idle_holder, start_named_pool,
   start_owned_pool, start_pool, start_supervised_pool, start_test_named_pool,
   start_test_pool, start_test_pool_configured, start_test_proxied_pool,
@@ -217,7 +217,7 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
             // Act
             let status = {
               let caller =
-                start_caller(script_in_hold(
+                start_caller(simple_query_in_hold(
                   session.pool,
                   "BEGIN; SELECT pg_advisory_xact_lock("
                     <> to_string(session.lock_key)
@@ -605,7 +605,7 @@ fn stop_tests() -> ContextNode(PoolSession) {
         // Act
         let answer = {
           let running =
-            start_caller(script_in_hold(
+            start_caller(simple_query_in_hold(
               session.pool,
               advisory_lock_sql(session.lock_key),
             ))
@@ -625,7 +625,7 @@ fn stop_tests() -> ContextNode(PoolSession) {
         |> be_ok
         |> be_ok
         |> be_error
-        |> be_equal(ScriptRequestFailed(ConnectionProcessDown))
+        |> be_equal(SimpleQueryRequestFailed(ConnectionProcessDown))
         |> or_fail_with("Expected the hold's command to end with the pool")
       }),
     ]),
@@ -1214,7 +1214,7 @@ type Drain {
   Drain(
     refused: Result(Result(String, String), HoldError),
     finished: Result(
-      Result(Result(List(Outcome), ScriptError), HoldError),
+      Result(Result(List(Outcome), SimpleQueryError), HoldError),
       String,
     ),
     stopped: Result(Nil, String),
@@ -1227,7 +1227,7 @@ type Drain {
 fn drain_running_hold(session: PoolSession) -> Result(Drain, String) {
   use _locked <- try(hold_pool_lock(session))
   let running =
-    start_caller(script_in_hold(
+    start_caller(simple_query_in_hold(
       session.pool,
       advisory_lock_sql(session.lock_key),
     ))

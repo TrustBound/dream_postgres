@@ -14,7 +14,7 @@ import dream_postgres/internal/cell.{
 }
 import dream_postgres/recording.{
   type Recording, RecordedCopyFrom, RecordedCopyTo, RecordedEntry,
-  RecordedScript, RecordedScriptFailure, RecordedServerError, RecordedStatement,
+  RecordedServerError, RecordedSql, RecordedSqlFailure, RecordedStatement,
   RecordedStream, Recording, SecretCell, StatementReply, WrittenCell,
   WrittenParameters, WrittenRows,
 }
@@ -116,14 +116,14 @@ pub fn every_form() -> Recording {
             types: [],
             outcome: Error(RecordedServerError(server_error: every_field())),
           ),
-          RecordedScript(
+          RecordedSql(
             sql: "SELECT 1; SELECT 1 / 0",
-            outcome: Error(RecordedScriptFailure(
+            outcome: Error(RecordedSqlFailure(
               server_error: every_field(),
               statements_run: 1,
             )),
           ),
-          RecordedScript(
+          RecordedSql(
             sql: "BEGIN",
             outcome: Ok([CommandResult(rows: [], tag: "BEGIN", count: 0)]),
           ),
@@ -176,7 +176,7 @@ pub fn every_form() -> Recording {
             UnlistedSeverity("LOUD"),
           ],
           fn(severity) {
-            RecordedScript(
+            RecordedSql(
               sql: "SELECT 1",
               outcome: Error(RecordedServerError(
                 server_error: ServerError(

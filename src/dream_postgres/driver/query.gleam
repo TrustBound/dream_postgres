@@ -1,6 +1,6 @@
 //// The query steps of the PostgreSQL wire protocol, as pure state machines:
 //// prepare a statement, run a prepared statement, prepare and run in one
-//// round trip, run a script with the simple query protocol, and run a
+//// round trip, run a simple query with the simple query protocol, and run a
 //// COPY that streams rows into a table or out of one.
 ////
 //// Each step has a start function and a step function. The start function
@@ -90,13 +90,13 @@ pub type Phase {
   /// DataRow, or the end of an Execute: CommandComplete,
   /// EmptyQueryResponse, or the start of a COPY.
   ReadingExecuteRows
-  /// The start of the next result of a script: RowDescription,
+  /// The start of the next result of a simple query: RowDescription,
   /// CommandComplete, EmptyQueryResponse, the start of a COPY, or the
   /// ReadyForQuery after the last statement.
   AwaitingStatementResult
   /// DataRow or CommandComplete, after the RowDescription of a statement of
-  /// a script.
-  ReadingScriptRows
+  /// a simple query.
+  ReadingSimpleQueryRows
   /// CopyData or CopyDone from the server: the rows of a
   /// `COPY ... TO STDOUT`, or of a COPY that the step refused.
   ReadingCopyOut
@@ -148,10 +148,10 @@ pub type StatementResult {
   )
 }
 
-/// Why a script did not succeed, with the results of the statements that
+/// Why a simple query did not succeed, with the results of the statements that
 /// were done before.
-pub type ScriptFailure {
-  ScriptFailure(completed: List(StatementResult), failure: Failure)
+pub type SimpleQueryFailure {
+  SimpleQueryFailure(completed: List(StatementResult), failure: Failure)
 }
 
 /// The finished outcome of a step: what it gave, the transaction status of
@@ -585,18 +585,18 @@ pub fn step_prepare_and_run(
   |> result.map(to_step(_, PrepareAndRunState, prepare_and_run_outcome))
 }
 
-/// Starts to run a script of one or more statements with the simple query
-/// protocol: one Query.
+/// Starts a simple query: one Query message that holds one or more SQL
+/// statements.
 ///
 /// ## Parameters
 ///
-/// - `script`: the SQL statements
+/// - `sql`: the SQL statements
 ///
 /// ## Returns
 ///
 /// The messages to send and the state for `step_simple_query`.
-pub fn start_simple_query(script: String) -> Start(SimpleQueryState) {
-  Start(messages: [Query(script)], state: simple_query_state())
+pub fn start_simple_query(sql: String) -> Start(SimpleQueryState) {
+  Start(messages: [Query(sql)], state: simple_query_state())
 }
 
 /// Starts to run a driver housekeeping statement with the simple query
@@ -609,7 +609,7 @@ pub fn start_simple_query(script: String) -> Start(SimpleQueryState) {
 /// ## Returns
 ///
 /// The bytes to send and the state for `step_simple_query`.
-pub fn start_housekeeping_script(
+pub fn start_housekeeping_simple_query(
   sql: HousekeepingSql,
 ) -> HousekeepingStart(SimpleQueryState) {
   HousekeepingStart(
@@ -626,7 +626,7 @@ fn simple_query_state() -> SimpleQueryState {
 /// Reads one message from the server in a simple query step. The outcome
 /// has one result for each statement, in order, with each cell in the
 /// format that its RowDescription gives (text, except for a `FETCH` from a
-/// binary cursor). An empty script, with only spaces or comments, gets an
+/// binary cursor). An empty simple query, with only spaces or comments, gets an
 /// EmptyQueryResponse and gives no results. After an error, the results of
 /// the statements before it come with the failure.
 ///
@@ -645,7 +645,7 @@ pub fn step_simple_query(
   state: SimpleQueryState,
   message: BackendMessage,
 ) -> Result(
-  Step(SimpleQueryState, Outcome(List(StatementResult), ScriptFailure)),
+  Step(SimpleQueryState, Outcome(List(StatementResult), SimpleQueryFailure)),
   UnexpectedMessage,
 ) {
   receive(state.machine, message)
@@ -654,7 +654,7 @@ pub fn step_simple_query(
 
 /// Starts a copy step: Parse, Bind and Execute of one statement on the
 /// unnamed statement and portal, and Sync. The extended protocol takes one
-/// statement only, so a script cannot hide a second one. The server reads
+/// statement only, so a simple query cannot hide a second one. The server reads
 /// past the Sync during a `COPY ... FROM STDIN`, so the step sends a new
 /// one when the COPY ends.
 ///
@@ -944,10 +944,10 @@ fn prepare_and_run_outcome(
 fn simple_query_outcome(
   machine: Machine,
   status: TransactionStatus,
-) -> Outcome(List(StatementResult), ScriptFailure) {
+) -> Outcome(List(StatementResult), SimpleQueryFailure) {
   let completed = reverse(machine.results)
   step_result(machine, completed)
-  |> result.map_error(ScriptFailure(completed, _))
+  |> result.map_error(SimpleQueryFailure(completed, _))
   |> outcome(machine, status, _)
 }
 
@@ -1009,7 +1009,7 @@ fn receive_in_phase(
     AwaitingCloseComplete -> close_answer(machine, message)
     ReadingExecuteRows -> execute_answer(machine, message)
     AwaitingStatementResult -> statement_answer(machine, message)
-    ReadingScriptRows -> script_row_answer(machine, message)
+    ReadingSimpleQueryRows -> simple_query_row_answer(machine, message)
     ReadingCopyOut -> copy_out_answer(machine, message)
     AwaitingCopyComplete | CopyingIn -> copy_end_answer(machine, message)
     AwaitingReadyForQuery | AwaitingReadyForQueryAfterError ->
@@ -1126,7 +1126,7 @@ fn statement_answer(
   case message {
     RowDescription(columns:) -> {
       let described = with_columns(machine, columns)
-      Ok(wait_with(Machine(..described, phase: ReadingScriptRows)))
+      Ok(wait_with(Machine(..described, phase: ReadingSimpleQueryRows)))
     }
     CommandComplete(tag:) -> finish_statement(machine, tag)
     EmptyQueryResponse -> Ok(wait_with(machine))
@@ -1135,7 +1135,7 @@ fn statement_answer(
   }
 }
 
-fn script_row_answer(
+fn simple_query_row_answer(
   machine: Machine,
   message: BackendMessage,
 ) -> Result(Transition, UnexpectedMessage) {
@@ -1354,7 +1354,7 @@ fn complete_command(
   }
 }
 
-/// Ends one statement of a script: its result joins the others, and the
+/// Ends one statement of a simple query: its result joins the others, and the
 /// next statement starts with no columns and no rows.
 fn finish_statement(
   machine: Machine,

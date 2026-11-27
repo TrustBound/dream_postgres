@@ -7,7 +7,7 @@ import gleam/list.{map}
 /// Gives the command tag of each outcome, in order.
 ///
 /// ```gleam
-/// run_script(connection, "SELECT 1", 5000)
+/// run_simple_query(connection, "SELECT 1", 5000)
 /// |> should
 /// |> be_ok
 /// |> extract_outcome_tags

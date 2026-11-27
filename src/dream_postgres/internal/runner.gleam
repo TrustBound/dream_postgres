@@ -12,7 +12,7 @@ import dream_postgres/error.{
 }
 import dream_postgres/interceptor.{
   type Answer, type Interceptor, type Outcome, type Request, CopyFromAnswer,
-  CopyToAnswer, Request, ScriptAnswer, Statement, StatementAnswer,
+  CopyToAnswer, Request, SqlAnswer, Statement, StatementAnswer,
 }
 import dream_postgres/internal/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
@@ -234,7 +234,7 @@ fn statement_answer(
   case answer {
     StatementAnswer(description:, types:, result:) ->
       Ok(#(description, types, result))
-    ScriptAnswer(..) | CopyFromAnswer(..) | CopyToAnswer(..) ->
+    SqlAnswer(..) | CopyFromAnswer(..) | CopyToAnswer(..) ->
       Error(InterceptorFailed(
         reason: "an interceptor answered a statement with the answer of another kind of request",
       ))

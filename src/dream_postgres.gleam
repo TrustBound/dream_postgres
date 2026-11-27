@@ -58,7 +58,7 @@ import dream_postgres/error.{
 }
 import dream_postgres/interceptor.{
   type Answer, type Interceptor, type Outcome, type Request, CopyFromAnswer,
-  CopyToAnswer, Request, Script, ScriptAnswer, StatementAnswer,
+  CopyToAnswer, Request, Sql, SqlAnswer, StatementAnswer,
 }
 import dream_postgres/internal/cell.{type CommandResult, type ServerReport}
 import dream_postgres/internal/copy
@@ -407,7 +407,7 @@ pub fn reconnect_strategy(
   Config(..config, reconnect_strategy: strategy)
 }
 
-/// Adds an interceptor after the ones added before. Each query and script
+/// Adds an interceptor after the ones added before. Each query and `run_sql` call
 /// of the pool, also in a transaction, goes through the interceptors in
 /// the order they were added. See `dream_postgres/interceptor`.
 ///
@@ -1891,7 +1891,7 @@ fn hold_database(
 }
 
 /// The connection with an interceptor added after its other interceptors.
-/// Each query and script on the new connection, also in a transaction,
+/// Each query and `run_sql` call on the new connection, also in a transaction,
 /// goes through it. The connection that was given does not change. For an
 /// interceptor of every connection of a pool, use `intercept` on the
 /// config.
@@ -1959,61 +1959,61 @@ pub fn with_connection(
 
 /// Runs SQL with the simple query protocol, for example several
 /// statements at once, or a statement that has no parameters and no
-/// result to read. The rows of the statements are not read.
-pub fn script(
+/// result to read. The rows of the statements are not read. Outside a
+/// transaction, the statements of one call run as one transaction, unless
+/// the SQL has its own `BEGIN` or `COMMIT`.
+pub fn run_sql(
   sql: String,
   connection: Connection,
 ) -> Result(Nil, Error(PostgresError)) {
-  hold(connection, run_script(_, sql))
+  hold(connection, run_held_sql(_, sql))
   |> result.map_error(failure(None, Some(sql), _))
   |> result.flatten
   |> result.map_error(secret_free_error(connection, _))
   |> result.replace(Nil)
 }
 
-// Runs a script through the interceptors, and gives the result of each
+// Runs a `run_sql` call through the interceptors, and gives the result of each
 // of its statements.
-fn run_script(
+fn run_held_sql(
   held: HeldConnection,
   sql: String,
 ) -> Result(List(CommandResult), Error(PostgresError)) {
-  run_script_with_postgres_error(held, sql)
+  run_held_sql_with_postgres_error(held, sql)
   |> result.map_error(error.to_dream_error)
 }
 
-// Runs a script, and gives its failure as the PostgresError itself, for a
+// Runs a `run_sql` call, and gives its failure as the PostgresError itself, for a
 // caller that keeps it whole, such as the rollback of a transaction.
-fn run_script_with_postgres_error(
+fn run_held_sql_with_postgres_error(
   held: HeldConnection,
   sql: String,
 ) -> Result(List(CommandResult), PostgresError) {
   runner.intercept(
     chain_of(held),
-    Request(sql:, name: None, parameters: [], kind: Script),
-    script_answer_from_session(held.session, _),
+    Request(sql:, name: None, parameters: [], kind: Sql),
+    sql_answer_from_session(held.session, _),
   )
-  |> result.try(script_answer)
+  |> result.try(sql_answer)
   |> result.map_error(fn(reason) {
     error.PostgresError(query_name: None, sql: Some(sql), reason:)
   })
 }
 
-// The end of the chain of a script: runs its SQL on the connection, or
+// The end of the chain of a `run_sql` call: runs its SQL on the connection, or
 // gives the answer of the replay.
-fn script_answer_from_session(session: Session, request: Request) -> Outcome {
+fn sql_answer_from_session(session: Session, request: Request) -> Outcome {
   case session {
     DatabaseSession(connection:, catalog: _, settings:) ->
-      driver_connection.run_script(
+      driver_connection.run_simple_query(
         connection,
         driver_executor.statement(request.sql, None, settings.secrets),
         settings.query_timeout_milliseconds,
       )
       |> result.map(fn(outcomes) {
-        ScriptAnswer(
-          results: list.map(outcomes, fn(outcome) { outcome.result }),
-        )
+        SqlAnswer(results: list.map(outcomes, fn(outcome) { outcome.result }))
       })
-      |> result.map_error(driver_executor.script_error_reason(
+      |> result.map_error(driver_executor.simple_query_error_reason(
         _,
         endpoint_of(settings),
       ))
@@ -2021,12 +2021,12 @@ fn script_answer_from_session(session: Session, request: Request) -> Outcome {
   }
 }
 
-fn script_answer(answer: Answer) -> Result(List(CommandResult), Reason) {
+fn sql_answer(answer: Answer) -> Result(List(CommandResult), Reason) {
   case answer {
-    ScriptAnswer(results:) -> Ok(results)
+    SqlAnswer(results:) -> Ok(results)
     StatementAnswer(..) | CopyFromAnswer(..) | CopyToAnswer(..) ->
       Error(InterceptorFailed(
-        reason: "an interceptor answered a script with the answer of another kind of request",
+        reason: "an interceptor answered a `run_sql` call with the answer of another kind of request",
       ))
   }
 }
@@ -2242,7 +2242,7 @@ fn run_outermost(
   body: fn(Connection) -> Result(value, Error(cause)),
 ) -> Result(value, Error(cause)) {
   use _begun <- result.try(
-    run_script(held, begin_sql(plan)) |> result.map_error(plan_error(plan, _)),
+    run_held_sql(held, begin_sql(plan)) |> result.map_error(plan_error(plan, _)),
   )
   case body(OneConnection(held, InTransaction(savepoints: 0))) {
     Ok(value) ->
@@ -2273,7 +2273,7 @@ fn begin_sql(plan: Transaction(planned, cause, steps)) -> String {
 // transaction ends, so it is read before the COMMIT.
 fn commit_held(held: HeldConnection) -> Result(Nil, Error(PostgresError)) {
   use aborted_by <- result.try(aborted_by(held, "COMMIT"))
-  use results <- result.try(run_script(held, "COMMIT"))
+  use results <- result.try(run_held_sql(held, "COMMIT"))
   results
   |> list.map(fn(command_result) { command_result.tag })
   |> commit_answer(aborted_by)
@@ -2326,7 +2326,7 @@ fn undo(
   rollback_sql: String,
   step_error: Error(cause),
 ) -> Result(value, Error(cause)) {
-  case run_script_with_postgres_error(held, rollback_sql) {
+  case run_held_sql_with_postgres_error(held, rollback_sql) {
     Ok(_rolled_back) -> Error(step_error)
     Error(rollback_error) ->
       Error(Unavailable(
@@ -2349,7 +2349,7 @@ fn run_nested(
   })
   let name = savepoint_name(savepoints + 1)
   use _saved <- result.try(
-    run_script(held, "SAVEPOINT " <> name)
+    run_held_sql(held, "SAVEPOINT " <> name)
     |> result.map_error(plan_error(plan, _)),
   )
   case body(OneConnection(held, InTransaction(savepoints: savepoints + 1))) {
@@ -2383,7 +2383,7 @@ fn release_savepoint(
   )
   case aborted_by {
     None ->
-      run_script(held, release_sql)
+      run_held_sql(held, release_sql)
       |> result.replace(Nil)
       |> result.map_error(plan_error(plan, _))
     Some(_report) ->

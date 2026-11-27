@@ -4,7 +4,7 @@ import dream_postgres/driver/query.{type StatementResult}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{map}
 
-/// Gives `#(tag, count)` of each statement result of a script, in order.
+/// Gives `#(tag, count)` of each statement result of a simple query, in order.
 ///
 /// ```gleam
 /// results

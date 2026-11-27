@@ -1,5 +1,5 @@
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, script}
+import dream_postgres.{type Connection, type PostgresError, run_sql}
 
 /// Makes the tables of the examples: users, and the accounts of users.
 pub fn create_tables(
@@ -17,5 +17,5 @@ pub fn create_tables(
     balance bigint NOT NULL DEFAULT 0
   );
   "
-  |> script(connection)
+  |> run_sql(connection)
 }

@@ -6,7 +6,7 @@
 import dream_postgres/error.{type Reason}
 import dream_postgres/interceptor.{
   type Interceptor, type Outcome, type Request, CopyFromAnswer, CopyToAnswer,
-  Request, Script, ScriptAnswer, StatementAnswer,
+  Request, Sql, SqlAnswer, StatementAnswer,
 }
 import gleam/erlang/process.{type Subject}
 import gleam/int
@@ -54,17 +54,17 @@ pub fn replace_sql(sql: String) -> Interceptor {
   }
 }
 
-/// An interceptor that sends each request on as a script.
+/// An interceptor that sends each request on as a `run_sql` call.
 ///
 /// ## Example
 ///
 /// ```gleam
-/// interceptors.make_script()
-/// // a copy_from request reaches the database as a script
+/// interceptors.make_sql()
+/// // a copy_from request reaches the database as a `run_sql` call
 /// ```
-pub fn make_script() -> Interceptor {
+pub fn make_sql() -> Interceptor {
   fn(request: Request, next: fn(Request) -> Outcome) {
-    next(Request(..request, kind: Script))
+    next(Request(..request, kind: Sql))
   }
 }
 
@@ -139,7 +139,7 @@ pub fn send_tags_to(seen: Subject(Result(String, Reason))) -> Interceptor {
       result.map(outcome, fn(answer) {
         case answer {
           StatementAnswer(result: command_result, ..) -> command_result.tag
-          ScriptAnswer(results:) ->
+          SqlAnswer(results:) ->
             results
             |> list.map(fn(command_result) { command_result.tag })
             |> string.join(", ")

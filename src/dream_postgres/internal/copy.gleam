@@ -12,7 +12,7 @@ import dream_postgres/error.{
 }
 import dream_postgres/interceptor.{
   type Answer, type Interceptor, type Outcome, type Request, CopyFrom,
-  CopyFromAnswer, CopyTo, CopyToAnswer, Request, Script, ScriptAnswer, Statement,
+  CopyFromAnswer, CopyTo, CopyToAnswer, Request, Sql, SqlAnswer, Statement,
   StatementAnswer,
 }
 import dream_postgres/internal/cell.{
@@ -100,7 +100,7 @@ pub fn copy_from(
   use answer <- result.try(runner.intercept(interceptors, request, last))
   case answer {
     CopyFromAnswer(count:) -> Ok(count)
-    StatementAnswer(..) | ScriptAnswer(..) | CopyToAnswer(..) ->
+    StatementAnswer(..) | SqlAnswer(..) | CopyToAnswer(..) ->
       Error(InterceptorFailed(
         reason: "an interceptor answered a COPY FROM with the answer of another kind of request",
       ))
@@ -135,7 +135,7 @@ pub fn copy_from_database(
           rows,
         )
         |> result.map(CopyFromAnswer)
-      Statement | Script | CopyTo ->
+      Statement | Sql | CopyTo ->
         Error(InterceptorFailed(
           reason: "an interceptor changed a COPY FROM into another kind of request",
         ))
@@ -354,7 +354,7 @@ fn copy_to_answer(
 ) -> Result(#(StatementDescription, List(TypeDescription), CopyRows), Reason) {
   case answer {
     CopyToAnswer(description:, types:, rows:) -> Ok(#(description, types, rows))
-    StatementAnswer(..) | ScriptAnswer(..) | CopyFromAnswer(..) ->
+    StatementAnswer(..) | SqlAnswer(..) | CopyFromAnswer(..) ->
       Error(InterceptorFailed(
         reason: "an interceptor answered a COPY TO with the answer of another kind of request",
       ))

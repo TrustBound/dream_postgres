@@ -5,7 +5,7 @@
 
 import dream_postgres/driver/catalog
 import dream_postgres/driver/connection.{
-  type Connection, copy_from, copy_to, named, prepare, run, run_script,
+  type Connection, copy_from, copy_to, named, prepare, run, run_simple_query,
   statement, stop,
 }
 import dream_postgres/driver/listener.{type Listener}
@@ -21,7 +21,7 @@ import dream_test/unit
 import dream_test/unit_context.{describe, it}
 import driver/proxy.{type Proxy, answer_next_request, start_proxy, stop_proxy}
 import driver/server_connection.{
-  connection_setup, run_control_script, start_connection,
+  connection_setup, run_control_simple_query, start_connection,
 }
 import driver/server_listener.{start_listener, subscribe_to}
 import driver/server_pool.{
@@ -340,12 +340,12 @@ fn statement_tests() -> TestSuite {
       |> or_fail_with("Expected no attribute with the parameter's value")
     }),
     it(
-      "of a script records no text, and the operation of its statement",
+      "of a simple query records no text, and the operation of its statement",
       fn(connection: Connection) {
         {
           record_spans_here()
           use _outcomes <- try(
-            run_script(connection, statement("SELECT 'a-literal'"), 5000)
+            run_simple_query(connection, statement("SELECT 'a-literal'"), 5000)
             |> map_error(inspect),
           )
           next_span()
@@ -369,12 +369,12 @@ fn statement_tests() -> TestSuite {
       },
     ),
     it(
-      "of a script of two statements records no operation",
+      "of a simple query of two statements records no operation",
       fn(connection: Connection) {
         {
           record_spans_here()
           use _outcomes <- try(
-            run_script(connection, statement("SELECT 1; SELECT 2"), 5000)
+            run_simple_query(connection, statement("SELECT 1; SELECT 2"), 5000)
             |> map_error(inspect),
           )
           next_span()
@@ -581,7 +581,10 @@ fn copy_tests() -> TestSuite {
   describe("of a COPY", connection_setup(first_driver_server), [
     it("records the warning code of its own notice", fn(connection: Connection) {
       {
-        use Nil <- try(run_control_script(connection, warning_function_sql))
+        use Nil <- try(run_control_simple_query(
+          connection,
+          warning_function_sql,
+        ))
         record_spans_here()
         use _rows <- try(
           copy_to(
@@ -605,7 +608,10 @@ fn copy_tests() -> TestSuite {
       "records no warning of a COPY on the next statement",
       fn(connection: Connection) {
         {
-          use Nil <- try(run_control_script(connection, warning_function_sql))
+          use Nil <- try(run_control_simple_query(
+            connection,
+            warning_function_sql,
+          ))
           record_spans_here()
           use _rows <- try(
             copy_to(
@@ -669,7 +675,7 @@ fn copy_tests() -> TestSuite {
       fn(connection: Connection) {
         {
           use _created <- try(
-            run_script(
+            run_simple_query(
               connection,
               statement("CREATE TEMP TABLE IF NOT EXISTS traced_rows (x text)"),
               5000,

@@ -4,7 +4,7 @@
 //// deadline on a reconnect.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionEvent, type ScriptError, Backoff,
+  type Connection, type ConnectionEvent, type SimpleQueryError, Backoff,
   ConnectFailed, ConnectionConfig,
 }
 import dream_test/context.{type Context}
@@ -88,7 +88,7 @@ pub type BadReconnect {
     /// of the reconnect.
     events: List(ConnectionEvent),
     /// The answer of a request that came while the reconnect ran.
-    waiting_answer: Result(Nil, ScriptError),
+    waiting_answer: Result(Nil, SimpleQueryError),
   )
 }
 
@@ -136,7 +136,11 @@ fn watch_reconnect(
 ) -> Result(BadReconnect, String) {
   use Nil <- try(wait_for_second_connection(server))
   let waiting_answer =
-    connection.run_script(connection, connection.statement("SELECT 1"), 5000)
+    connection.run_simple_query(
+      connection,
+      connection.statement("SELECT 1"),
+      5000,
+    )
     |> result.replace(Nil)
   use lost <- try(next_event(events) |> map_error(no_event))
   use reconnect_end <- try(next_event(events) |> map_error(no_event))

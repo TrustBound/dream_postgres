@@ -29,8 +29,8 @@ import matchers/extract_notifications.{extract_notifications}
 import matchers/extract_outcome_result.{extract_outcome_result}
 import matchers/extract_parameter_changes.{extract_parameter_changes}
 import matchers/extract_report_code.{extract_report_code}
-import matchers/extract_script_tracker.{extract_script_tracker}
 import matchers/extract_session_step.{extract_session_step}
+import matchers/extract_simple_query_tracker.{extract_simple_query_tracker}
 import matchers/extract_statement_tags.{extract_statement_tags}
 import matchers/extract_step_outcome.{extract_step_outcome}
 import matchers/extract_tracked_state.{extract_tracked_state}
@@ -121,7 +121,7 @@ fn server_tests(server: Server) {
       |> be_equal([[Text(<<"t":utf8>>)]])
       |> or_fail_with("Expected the text cell t")
     }),
-    it("runs a script and gives one result for each statement", fn() {
+    it("runs a simple query and gives one result for each statement", fn() {
       // Arrange
       let sql =
         "CREATE TEMP TABLE t (id int); INSERT INTO t VALUES (1), (2); SELECT id FROM t ORDER BY id"
@@ -187,7 +187,7 @@ fn server_tests(server: Server) {
       session
       |> should
       |> be_ok
-      |> extract_script_tracker(["BEGIN; SELECT 1/0"])
+      |> extract_simple_query_tracker(["BEGIN; SELECT 1/0"])
       |> extract_tracked_state
       |> be_equal(#(InFailedTransaction, Some("22012")))
       |> or_fail_with("Expected 22012 while the transaction failed")
@@ -200,7 +200,7 @@ fn server_tests(server: Server) {
       session
       |> should
       |> be_ok
-      |> extract_script_tracker(["BEGIN; SELECT 1/0", "ROLLBACK"])
+      |> extract_simple_query_tracker(["BEGIN; SELECT 1/0", "ROLLBACK"])
       |> extract_tracked_state
       |> be_equal(#(Idle, None))
       |> or_fail_with("Expected no error after the rollback")

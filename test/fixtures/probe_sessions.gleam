@@ -258,7 +258,7 @@ fn prepare_session(
   started: Connection,
 ) -> Result(Dict(Int, TypeDescription), String) {
   use _ <- result.try(
-    connection.run_script(
+    connection.run_simple_query(
       started,
       connection.statement(session_setup),
       deadline_milliseconds,

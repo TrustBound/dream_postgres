@@ -3,7 +3,7 @@
 
 import dream_postgres.{
   ListenFailed, Listening, NotListening, NotificationArrived, listen,
-  monitor_listener, named_listener, script, stop_listener, unlisten,
+  monitor_listener, named_listener, run_sql, stop_listener, unlisten,
 }
 import dream_postgres/driver/connection
 import dream_postgres/driver/listener
@@ -68,7 +68,7 @@ pub fn tests() -> TestSuite {
                 "arriving_jobs",
                 messages,
               ))
-              script("NOTIFY arriving_jobs, 'hello'", connection)
+              run_sql("NOTIFY arriving_jobs, 'hello'", connection)
             },
           )
           |> extract_listen_payloads()
@@ -92,7 +92,7 @@ pub fn tests() -> TestSuite {
                 messages,
               ))
               use Nil <- result.try(unlisten(listener, subscription))
-              script("NOTIFY ended_jobs, 'after the end'", connection)
+              run_sql("NOTIFY ended_jobs, 'after the end'", connection)
             },
           )
           |> be_empty()
@@ -120,7 +120,7 @@ pub fn tests() -> TestSuite {
                 within: 5000,
               ))
               use Nil <- result.try(
-                script("NOTIFY named_jobs, 'by name'", connection)
+                run_sql("NOTIFY named_jobs, 'by name'", connection)
                 |> result.map_error(error.describe),
               )
               listen_messages.receive_messages(messages, count: 1, within: 5000)
@@ -169,7 +169,7 @@ pub fn tests() -> TestSuite {
                 within: 5000,
               ))
               use Nil <- result.try(
-                script("NOTIFY revived_jobs, 'after the crash'", connection)
+                run_sql("NOTIFY revived_jobs, 'after the crash'", connection)
                 |> result.map_error(error.describe),
               )
               listen_messages.receive_messages(messages, count: 1, within: 5000)

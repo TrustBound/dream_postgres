@@ -9,7 +9,7 @@
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionConfig, type StatementCaching, CacheStatements,
   ConnectionLost, Disconnected, SocketFailed, TransportRefused,
-  UnnamedStatements, run, run_script, server_parameter, start,
+  UnnamedStatements, run, run_simple_query, server_parameter, start,
 }
 import dream_postgres/driver/pool.{PoolStatus}
 import dream_postgres/driver/transport.{
@@ -38,10 +38,11 @@ import driver/server_connection.{
   connection_setup, database_config, host_config, next_event,
   on_proxied_connection, parameter_config, parameters_config,
   password_function_config, pid_of, proxied_setup, query_text,
-  run_failing_statement, run_failing_statement_with_parameters, run_setup_script,
-  run_setup_statement, start_test_configured, start_test_proxied,
-  stop_connection, stop_proxied, supervised_connection_setup, terminate_backend,
-  tls_config, user_config, wait_for_proxied_reconnect, wait_for_reconnect,
+  run_failing_statement, run_failing_statement_with_parameters,
+  run_setup_simple_query, run_setup_statement, start_test_configured,
+  start_test_proxied, stop_connection, stop_proxied, supervised_connection_setup,
+  terminate_backend, tls_config, user_config, wait_for_proxied_reconnect,
+  wait_for_reconnect,
 }
 import driver/server_pool.{
   type PoolSession, type ProxiedPool, held_backend_pid, hold_connection,
@@ -327,7 +328,7 @@ fn request_tests(server: Server) -> List(ContextNode(Connection)) {
     it("gives the tag SET for a SET of a reported parameter", fn(connection) {
       // Act
       let outcomes =
-        run_script(
+        run_simple_query(
           connection,
           connection.statement(set_application_name),
           deadline,
@@ -372,7 +373,7 @@ fn request_tests(server: Server) -> List(ContextNode(Connection)) {
 
 fn set_tests() -> List(ContextNode(Connection)) {
   [
-    before_each(run_setup_script(set_application_name)),
+    before_each(run_setup_simple_query(set_application_name)),
     it(
       "keeps a SET of a reported parameter as the server parameter",
       fn(connection) {
@@ -554,7 +555,7 @@ fn insert_update_tests() -> List(ContextNode(Connection)) {
       },
     ),
     group("after them", [
-      before_each(run_setup_script(join(insert_update_statements, "; "))),
+      before_each(run_setup_simple_query(join(insert_update_statements, "; "))),
       it("gives the rows of the inserts and updates in order", fn(connection) {
         // Act
         let outcome =
@@ -690,7 +691,7 @@ fn format_tests(server: Server) -> List(ContextNode(Connection)) {
       },
     ),
     group("with a table of an int4 and an aclitem", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE parity_acl (id int4, acl aclitem)",
       )),
       it("writes and reads a row with binary and text cells", fn(connection) {
@@ -785,7 +786,7 @@ const changing_select = "SELECT c FROM parity_change"
 /// column.
 fn change_hooks(change: TypeChange) -> List(ContextNode(Connection)) {
   [
-    before_each(run_setup_script(
+    before_each(run_setup_simple_query(
       "CREATE TEMP TABLE parity_change (c "
       <> change.from
       <> "); INSERT INTO parity_change VALUES ("
@@ -794,7 +795,7 @@ fn change_hooks(change: TypeChange) -> List(ContextNode(Connection)) {
     )),
     before_each(run_setup_statement(changing_select)),
     before_each(run_setup_statement(changing_select)),
-    before_each(run_setup_script(
+    before_each(run_setup_simple_query(
       "ALTER TABLE parity_change ALTER COLUMN c TYPE "
       <> change.to
       <> " USING "
@@ -905,12 +906,12 @@ fn schema_tests(server: Server) -> List(ContextNode(Connection)) {
       before_each(dream_connection(server, UnnamedStatements)),
       group("a changed INSERT RETURNING", unnamed_returning_tests()),
       group("a column added to an aclitem column", [
-        before_each(run_setup_script(
+        before_each(run_setup_simple_query(
           "CREATE TEMP TABLE parity_added (c aclitem); "
           <> "INSERT INTO parity_added VALUES ('dream=r/dream')",
         )),
         before_each(run_setup_statement(added_select)),
-        before_each(run_setup_script(
+        before_each(run_setup_simple_query(
           "ALTER TABLE parity_added ADD COLUMN d int4 DEFAULT 3",
         )),
         it(
@@ -954,7 +955,7 @@ const returning_count = "SELECT count(*) FROM parity_returning"
 
 fn cached_returning_tests() -> List(ContextNode(Connection)) {
   [
-    before_each(run_setup_script(returning_table)),
+    before_each(run_setup_simple_query(returning_table)),
     it(
       "gives the old default from an INSERT RETURNING before the change",
       fn(connection) {
@@ -975,7 +976,7 @@ fn cached_returning_tests() -> List(ContextNode(Connection)) {
     ),
     group("after the change", [
       before_each(run_setup_statement(returning_insert)),
-      before_each(run_setup_script(returning_change)),
+      before_each(run_setup_simple_query(returning_change)),
       before_each(run_failing_statement(returning_insert)),
       it(
         "gives the new default from a changed INSERT RETURNING after StatementChanged",
@@ -1022,7 +1023,7 @@ fn cached_returning_tests() -> List(ContextNode(Connection)) {
 
 fn unnamed_returning_tests() -> List(ContextNode(Connection)) {
   [
-    before_each(run_setup_script(returning_table)),
+    before_each(run_setup_simple_query(returning_table)),
     it(
       "gives the old default from an INSERT RETURNING, unnamed",
       fn(connection) {
@@ -1043,7 +1044,7 @@ fn unnamed_returning_tests() -> List(ContextNode(Connection)) {
     ),
     group("after the change", [
       before_each(run_setup_statement(returning_insert)),
-      before_each(run_setup_script(returning_change)),
+      before_each(run_setup_simple_query(returning_change)),
       it(
         "gives the new default from a changed INSERT RETURNING, unnamed",
         fn(connection) {
@@ -1128,7 +1129,7 @@ fn added_columns() -> List(AddedColumn) {
 
 fn added_column_tests(change: AddedColumn) -> ContextNode(Connection) {
   group(change.setup, [
-    before_each(run_setup_script(
+    before_each(run_setup_simple_query(
       "CREATE TEMP TABLE parity_added ("
       <> change.column
       <> "); INSERT INTO parity_added VALUES ("
@@ -1136,7 +1137,7 @@ fn added_column_tests(change: AddedColumn) -> ContextNode(Connection) {
       <> ")",
     )),
     before_each(run_setup_statement(added_select)),
-    before_each(run_setup_script(
+    before_each(run_setup_simple_query(
       "ALTER TABLE parity_added ADD COLUMN " <> change.added,
     )),
     it(change.changed_name, fn(connection) {
@@ -1166,12 +1167,12 @@ const transaction_select = "SELECT c FROM parity_in_transaction"
 
 fn transaction_tests() -> List(ContextNode(Connection)) {
   [
-    before_each(run_setup_script(
+    before_each(run_setup_simple_query(
       "CREATE TEMP TABLE parity_in_transaction (c int8); "
       <> "INSERT INTO parity_in_transaction VALUES (5)",
     )),
     before_each(run_setup_statement(transaction_select)),
-    before_each(run_setup_script(
+    before_each(run_setup_simple_query(
       "ALTER TABLE parity_in_transaction ALTER COLUMN c TYPE float8; BEGIN",
     )),
     it(
@@ -1206,7 +1207,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
       ),
       group("and a ROLLBACK", [
         before_each(run_failing_statement("SELECT 1")),
-        before_each(run_setup_script("ROLLBACK")),
+        before_each(run_setup_simple_query("ROLLBACK")),
         it(
           "refuses a changed statement in a transaction, then prepares it",
           fn(connection) {
@@ -1243,7 +1244,7 @@ fn proxied_tests() -> TestSuite {
   )
 }
 
-/// The SQL of the prepared statements of the session. A script runs with
+/// The SQL of the prepared statements of the session. A simple query runs with
 /// the simple protocol, so it adds no statement of its own.
 const prepared_statements =
   "SELECT statement FROM pg_prepared_statements ORDER BY statement"
@@ -1369,7 +1370,7 @@ fn reconnected_tests() -> ContextNode(ProxiedConnection) {
             )
             |> map_error(inspect),
           )
-          run_script(
+          run_simple_query(
             proxied.connection,
             connection.statement(prepared_statements),
             deadline,

@@ -92,26 +92,29 @@ pub fn tests() -> TestSuite {
           |> be_equal([2])
           |> or_fail_with("Expected the user 2 with a NULL email")
         }),
-        it("copy_from that an interceptor made a script is refused", fn(pools) {
-          // Act and assert
-          pools
-          |> should
-          |> run_on_pool(fn(pool) {
-            copy_from(
-              dream_postgres.with_interceptor(pool, interceptors.make_script()),
-              into: table("copy_users"),
-              columns: ["id", "email"],
-              rows: copy_users.users(),
-              write: copy_users.user_fields,
+        it(
+          "copy_from that an interceptor made a `run_sql` call is refused",
+          fn(pools) {
+            // Act and assert
+            pools
+            |> should
+            |> run_on_pool(fn(pool) {
+              copy_from(
+                dream_postgres.with_interceptor(pool, interceptors.make_sql()),
+                into: table("copy_users"),
+                columns: ["id", "email"],
+                rows: copy_users.users(),
+                write: copy_users.user_fields,
+              )
+            })
+            |> be_error()
+            |> summarise_error()
+            |> be_equal(
+              "failed InterceptorFailed(\"an interceptor changed a COPY FROM into another kind of request\")",
             )
-          })
-          |> be_error()
-          |> summarise_error()
-          |> be_equal(
-            "failed InterceptorFailed(\"an interceptor changed a COPY FROM into another kind of request\")",
-          )
-          |> or_fail_with("Expected the changed request refused")
-        }),
+            |> or_fail_with("Expected the changed request refused")
+          },
+        ),
         it("copy_from with no rows stores none", fn(pools) {
           // Act and assert
           pools

@@ -18,7 +18,7 @@
 //// {
 ////   "dream_postgres_recording": 1,
 ////   "entries": [
-////     {"key":"script\nBEGIN","script":{"outcome":{"answer":{"results":[{"count":0,"rows":[],"tag":"BEGIN"}]}},"sql":"BEGIN"}}
+////     {"key":"sql\nBEGIN","sql":{"outcome":{"answer":{"results":[{"count":0,"rows":[],"tag":"BEGIN"}]}},"sql":"BEGIN"}}
 ////   ]
 //// }
 //// ```
@@ -38,7 +38,7 @@ import dream_postgres/error.{
   QueryTimeout, ReaderDependsOnValue, RecorderNotStarted, RecorderStopped,
   RecordingInUse, RecordingNotDecoded, RecordingNotFound, RecordingNotRead,
   RecordingNotWritten, RequestNotMatched, RequestNotRecorded, RequestNotWritable,
-  RollbackAlsoFailed, ScriptStatementFailed, SecretColumnNotReplaced, Server,
+  RollbackAlsoFailed, SecretColumnNotReplaced, Server, SqlStatementFailed,
   StatementChangedDuringRun, SubscriberHasNoProcess, TooManyRows,
   UndecodableServerMessage, UnexpectedCommitAnswer, UnexpectedIdleMessage,
   UnexpectedListenAnswer, UnexpectedNull, UnexpectedServerMessage, UnknownType,
@@ -85,8 +85,8 @@ pub type RecordedRequest {
     types: List(TypeDescription),
     outcome: Result(StatementReply, RecordedFailure),
   )
-  /// A script, or a command of a transaction.
-  RecordedScript(
+  /// A `run_sql` call, or a command of a transaction.
+  RecordedSql(
     sql: String,
     outcome: Result(List(CommandResult), RecordedFailure),
   )
@@ -153,8 +153,8 @@ pub type RecordedStream {
 pub type RecordedFailure {
   /// `error.Server`.
   RecordedServerError(server_error: ServerError)
-  /// `error.ScriptStatementFailed`.
-  RecordedScriptFailure(server_error: ServerError, statements_run: Int)
+  /// `error.SqlStatementFailed`.
+  RecordedSqlFailure(server_error: ServerError, statements_run: Int)
 }
 
 /// The recorded failure of a reason, or `None` when PostgreSQL did not
@@ -178,8 +178,8 @@ pub type RecordedFailure {
 pub fn recorded_failure(reason: Reason) -> Option(RecordedFailure) {
   case reason {
     Server(server_error) -> Some(RecordedServerError(server_error:))
-    ScriptStatementFailed(statements_run:, server_error:) ->
-      Some(RecordedScriptFailure(statements_run:, server_error:))
+    SqlStatementFailed(statements_run:, server_error:) ->
+      Some(RecordedSqlFailure(statements_run:, server_error:))
     ConnectFailed(..)
     | ConnectionLost(..)
     | NoConnection
@@ -263,8 +263,8 @@ pub fn recorded_failure(reason: Reason) -> Option(RecordedFailure) {
 pub fn failure_reason(failure: RecordedFailure) -> Reason {
   case failure {
     RecordedServerError(server_error:) -> Server(server_error)
-    RecordedScriptFailure(statements_run:, server_error:) ->
-      ScriptStatementFailed(statements_run:, server_error:)
+    RecordedSqlFailure(statements_run:, server_error:) ->
+      SqlStatementFailed(statements_run:, server_error:)
   }
 }
 
@@ -326,8 +326,8 @@ fn request_member(request: RecordedRequest) -> #(String, Json) {
         #("outcome", outcome_json(outcome, statement_reply_json)),
       ]),
     )
-    RecordedScript(sql:, outcome:) -> #(
-      "script",
+    RecordedSql(sql:, outcome:) -> #(
+      "sql",
       sorted_object([
         #("sql", json.string(sql)),
         #(
@@ -419,10 +419,10 @@ fn failure_json(failure: RecordedFailure) -> Json {
   case failure {
     RecordedServerError(server_error:) ->
       sorted_object([#("server_error", server_error_json(server_error))])
-    RecordedScriptFailure(statements_run:, server_error:) ->
+    RecordedSqlFailure(statements_run:, server_error:) ->
       sorted_object([
         #(
-          "script_statement_failed",
+          "sql_statement_failed",
           sorted_object([
             #("statements_run", json.int(statements_run)),
             #("server_error", server_error_json(server_error)),
@@ -611,7 +611,7 @@ fn entry_decoder() -> Decoder(RecordedEntry) {
 
 fn request_decoder() -> Decoder(RecordedRequest) {
   decode.one_of(decode.at(["statement"], statement_decoder()), [
-    decode.at(["script"], script_decoder()),
+    decode.at(["sql"], sql_decoder()),
     decode.at(["copy_from"], copy_from_decoder()),
     decode.at(["copy_to"], copy_to_decoder()),
   ])
@@ -642,7 +642,7 @@ fn statement_decoder() -> Decoder(RecordedRequest) {
   decode.success(RecordedStatement(sql:, parameters:, types:, outcome:))
 }
 
-fn script_decoder() -> Decoder(RecordedRequest) {
+fn sql_decoder() -> Decoder(RecordedRequest) {
   use sql <- decode.field("sql", decode.string)
   use outcome <- decode.field(
     "outcome",
@@ -652,7 +652,7 @@ fn script_decoder() -> Decoder(RecordedRequest) {
       decode.success,
     )),
   )
-  decode.success(RecordedScript(sql:, outcome:))
+  decode.success(RecordedSql(sql:, outcome:))
 }
 
 fn copy_from_decoder() -> Decoder(RecordedRequest) {
@@ -715,14 +715,14 @@ fn failure_decoder() -> Decoder(RecordedFailure) {
     }),
     [
       decode.field(
-        "script_statement_failed",
+        "sql_statement_failed",
         {
           use statements_run <- decode.field("statements_run", decode.int)
           use server_error <- decode.field(
             "server_error",
             server_error_decoder(),
           )
-          decode.success(RecordedScriptFailure(statements_run:, server_error:))
+          decode.success(RecordedSqlFailure(statements_run:, server_error:))
         },
         decode.success,
       ),

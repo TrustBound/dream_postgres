@@ -16,7 +16,7 @@ This guide explains how the pool hands out connections, and how the pool size an
 
 ## How a call gets a connection
 
-A pool has `pool_size` connections. Each call of `all`, `one`, `maybe_one`, `affected` or `script` holds one connection for its run, and gives it back when the run ends. A transaction holds one connection from `BEGIN` to `COMMIT` or `ROLLBACK`. `with_connection` holds one connection for its whole callback.
+A pool has `pool_size` connections. Each call of `all`, `one`, `maybe_one`, `affected` or `run_sql` holds one connection for its run, and gives it back when the run ends. A transaction holds one connection from `BEGIN` to `COMMIT` or `ROLLBACK`. `with_connection` holds one connection for its whole callback.
 
 When no connection is free, the call waits in a queue, oldest first. It gets the next connection that comes free, or an error when its wait passes the checkout timeout.
 

@@ -31,7 +31,7 @@
 //// ```
 
 import dream_postgres/interceptor.{
-  type Parameter, type Request, CopyFrom, CopyTo, Script, Statement,
+  type Parameter, type Request, CopyFrom, CopyTo, Sql, Statement,
 }
 import dream_postgres/internal/cell.{type Cell, Binary, Null, Text}
 import dream_postgres/internal/copy_request.{type RowFeed}
@@ -84,7 +84,7 @@ pub fn sql_and_parameters(request: Request) -> String {
         <> " "
         <> string.join(list.map(row, parameter_text), ", ")
       })
-    Statement | Script | CopyTo -> []
+    Statement | Sql | CopyTo -> []
   }
   string.join(
     [sql_only(request), ..list.append(parameter_lines, row_lines)],
@@ -123,7 +123,7 @@ pub fn sql_only(request: Request) -> String {
 fn kind_name(request: Request) -> String {
   case request.kind {
     Statement -> "statement"
-    Script -> "script"
+    Sql -> "sql"
     CopyFrom(..) -> "copy_from"
     CopyTo -> "copy_to"
   }

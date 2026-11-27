@@ -186,9 +186,9 @@ pub type Reason {
   /// A recorder could not write the replacement value of a secret column
   /// of `secrets.column`, so the answer is not saved.
   SecretColumnNotReplaced(column: String, reason: String)
-  /// A COPY statement went to a query runner or a script. A query runner
-  /// and a script do not run COPY. `statements_run` is the number of
-  /// statements of the script that ran before it. Outside a transaction,
+  /// A COPY statement went to a query runner or a `run_sql` call. A query runner
+  /// and a `run_sql` call do not run COPY. `statements_run` is the number of
+  /// statements of the `run_sql` call that ran before it. Outside a transaction,
   /// they are committed.
   CopyStatementRefused(statements_run: Int)
   /// The SQL of `copy_from` or `copy_to` did not start a COPY of that
@@ -198,10 +198,10 @@ pub type Reason {
   /// changes are committed. It is `False` for a COPY from the client given
   /// to `copy_to`, which stored no row.
   CopyNotStarted(statement_ran: Bool)
-  /// PostgreSQL refused a later statement of a script, after
+  /// PostgreSQL refused a later statement of a `run_sql` call, after
   /// `statements_run` statements of it ran. Outside a transaction, the
   /// statements that ran are committed.
-  ScriptStatementFailed(statements_run: Int, server_error: ServerError)
+  SqlStatementFailed(statements_run: Int, server_error: ServerError)
   /// A chunk or the end came for a COPY that does not run any more.
   CopyNotRunning
   /// The request could not be written to the server, for example SQL that
@@ -555,10 +555,10 @@ pub type ProtocolStep {
   AwaitingPortalColumns
   /// DataRow, or the end of an Execute.
   ReadingExecuteRows
-  /// The start of the next result of a script.
+  /// The start of the next result of a `run_sql` call.
   AwaitingStatementResult
-  /// DataRow or CommandComplete of a statement of a script.
-  ReadingScriptRows
+  /// DataRow or CommandComplete of a statement of a `run_sql` call.
+  ReadingSqlRows
   /// CopyData or CopyDone, in a COPY that the client refused.
   ReadingCopyOut
   /// The end of a COPY that the client refused.
@@ -961,10 +961,10 @@ pub fn to_dream_error(error: PostgresError) -> Error(PostgresError) {
           <> statement_ran_text(statement_ran),
         error,
       )
-    ScriptStatementFailed(statements_run:, server_error:) ->
+    SqlStatementFailed(statements_run:, server_error:) ->
       server_to_dream_error(
         prefix
-          <> "the script failed after it ran "
+          <> "the SQL failed after it ran "
           <> int.to_string(statements_run)
           <> " of its statements (outside a transaction they are committed): ",
         server_error,
@@ -1419,8 +1419,8 @@ fn protocol_step_text(step: ProtocolStep) -> String {
     AwaitingBindComplete -> "BindComplete"
     AwaitingPortalColumns -> "the columns of the portal"
     ReadingExecuteRows -> "the rows of the run"
-    AwaitingStatementResult -> "the next result of the script"
-    ReadingScriptRows -> "the rows of a statement of the script"
+    AwaitingStatementResult -> "the next result of the SQL"
+    ReadingSqlRows -> "the rows of a statement of the SQL"
     ReadingCopyOut -> "the data of a refused COPY"
     AwaitingCopyComplete -> "the end of a refused COPY"
     AwaitingReadyForQuery -> "ReadyForQuery"
@@ -1589,7 +1589,7 @@ fn statements_run_text(statements_run: Int) -> String {
   case statements_run {
     0 -> ""
     _ ->
-      "; the script ran "
+      "; the SQL ran "
       <> int.to_string(statements_run)
       <> " of its statements before it, and outside a transaction they are committed"
   }
@@ -1773,7 +1773,7 @@ fn severity_from_string(name: String) -> Severity {
 pub fn server_error(error: Error(PostgresError)) -> Option(ServerError) {
   case dream_errors.cause(error) {
     Some(PostgresError(reason: Server(server_error), ..)) -> Some(server_error)
-    Some(PostgresError(reason: ScriptStatementFailed(server_error:, ..), ..)) ->
+    Some(PostgresError(reason: SqlStatementFailed(server_error:, ..), ..)) ->
       Some(server_error)
     Some(PostgresError(reason: ConnectFailed(LoginRefused(server_error)), ..)) ->
       Some(server_error)

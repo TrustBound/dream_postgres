@@ -2,7 +2,7 @@
 //// interceptor.
 
 import dream_postgres/interceptor.{
-  type Outcome, CopyFromAnswer, CopyToAnswer, ScriptAnswer, StatementAnswer,
+  type Outcome, CopyFromAnswer, CopyToAnswer, SqlAnswer, StatementAnswer,
 }
 import dream_postgres/internal/cell.{type Cell}
 import dream_postgres/internal/copy_request.{
@@ -16,7 +16,7 @@ import gleam/option.{Some}
 import gleam/string
 
 /// Give the cells of each row of the answer: the rows of a statement, of
-/// each statement of a script in order, or of a recorded COPY TO. An
+/// each statement of a `run_sql` call in order, or of a recorded COPY TO. An
 /// error, the count of a COPY FROM and the rows of a database fail.
 ///
 /// ## Example
@@ -40,8 +40,8 @@ pub fn extract_answer_rows(
 fn rows_of(outcome: Outcome) -> MatchResult(List(List(Cell))) {
   case outcome {
     Ok(StatementAnswer(result:, ..)) -> MatchOk(result.rows)
-    Ok(ScriptAnswer(results:)) ->
-      MatchOk(list.flat_map(results, fn(script_result) { script_result.rows }))
+    Ok(SqlAnswer(results:)) ->
+      MatchOk(list.flat_map(results, fn(sql_result) { sql_result.rows }))
     Ok(CopyToAnswer(rows: CopyRows(source: RecordedRows(rows:, ..), ..), ..)) ->
       MatchOk(rows)
     Ok(CopyToAnswer(rows: CopyRows(source: DatabaseRows(..), ..), ..))

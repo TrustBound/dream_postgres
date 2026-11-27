@@ -27,7 +27,7 @@ import gleam/result
 /// |> should
 /// |> collect_with_listener(messages, within: 500, work: fn(listener, connection) {
 ///   use _subscription <- result.try(listen(listener, "jobs", messages))
-///   script("NOTIFY jobs, 'hello'", connection)
+///   run_sql("NOTIFY jobs, 'hello'", connection)
 /// })
 /// |> extract_listen_payloads()
 /// |> be_equal([#("jobs", "hello")])

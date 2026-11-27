@@ -12,7 +12,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 /// |> extract_first_of_pair
 /// |> be_error
 /// |> be_equal(DeadlinePassed(cancelled: False))
-/// |> or_fail_with("Expected the inner script to pass its deadline")
+/// |> or_fail_with("Expected the inner simple query to pass its deadline")
 /// ```
 pub fn extract_first_of_pair(result: MatchResult(#(a, b))) -> MatchResult(a) {
   case result {

@@ -113,12 +113,12 @@ pub fn tests() -> TestSuite {
       ])
       |> or_fail_with("Expected the placeholder in the JSON")
     }),
-    it("generated_uuids replaces a UUID in a cell of a script", fn() {
+    it("generated_uuids replaces a UUID in a cell of a `run_sql` call", fn() {
       // Act and assert
       normalize.generated_uuids(keep: [])(
         normalize_inputs.statement("SELECT 1", []),
         normalize_inputs.answering(
-          normalize_inputs.script_rows([[Text(<<uuid_text:utf8>>)]]),
+          normalize_inputs.sql_rows([[Text(<<uuid_text:utf8>>)]]),
         ),
       )
       |> should

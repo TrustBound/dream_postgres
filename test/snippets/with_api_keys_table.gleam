@@ -1,6 +1,6 @@
 import dream_errors.{type Error}
 import dream_postgres.{
-  type Connection, type PostgresError, script, with_connection,
+  type Connection, type PostgresError, run_sql, with_connection,
 }
 import gleam/result
 
@@ -12,7 +12,7 @@ pub fn with_api_keys_table(
 ) -> Result(a, Error(PostgresError)) {
   {
     use held <- with_connection(connection)
-    use Nil <- result.try(script(
+    use Nil <- result.try(run_sql(
       "CREATE TEMPORARY TABLE api_keys (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   owner int4 NOT NULL,

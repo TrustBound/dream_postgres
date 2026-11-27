@@ -3,7 +3,7 @@
 //// own, for some work.
 
 import dream_postgres.{
-  type Connection, one, query, script, single, with_connection,
+  type Connection, one, query, run_sql, single, with_connection,
 }
 import dream_postgres/codec
 import dream_postgres/error
@@ -79,7 +79,7 @@ fn run_in_schema(
   )
   let schema = "examples_" <> int.to_string(process_id)
   use Nil <- result.try(
-    script(
+    run_sql(
       "CREATE SCHEMA "
         <> schema
         <> "; SET search_path TO "
@@ -93,7 +93,7 @@ fn run_in_schema(
     create_tables.create_tables(held) |> result.map_error(error.describe)
   let outcome = result.map(made, fn(_made) { work(held) })
   let dropped =
-    script("DROP SCHEMA " <> schema <> " CASCADE; RESET search_path", held)
+    run_sql("DROP SCHEMA " <> schema <> " CASCADE; RESET search_path", held)
     |> result.map_error(error.describe)
   use Nil <- result.try(dropped)
   outcome

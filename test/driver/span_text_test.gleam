@@ -5,7 +5,7 @@
 
 import dream_postgres/driver/connection.{
   type Connection, copy_from, copy_to, describe_current, prepare, run,
-  run_script, span_text, statement,
+  run_simple_query, span_text, statement,
 }
 import dream_postgres/internal/cell.{Text}
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
@@ -91,12 +91,12 @@ pub fn tests() -> TestSuite {
         },
       ),
       it(
-        "is the query text of the span of a script",
+        "is the query text of the span of a simple query",
         fn(connection: Connection) {
           {
             record_spans_here()
             use _outcomes <- try(
-              run_script(connection, secret_select(), 5000)
+              run_simple_query(connection, secret_select(), 5000)
               |> map_error(inspect),
             )
             next_span()
@@ -105,7 +105,7 @@ pub fn tests() -> TestSuite {
           |> be_ok
           |> extract_span_attribute(key: "db.query.text")
           |> be_equal(Some("SELECT ?"))
-          |> or_fail_with("Expected the span text on the script")
+          |> or_fail_with("Expected the span text on the simple query")
         },
       ),
       it(
@@ -138,7 +138,7 @@ pub fn tests() -> TestSuite {
         fn(connection: Connection) {
           {
             use _created <- try(
-              run_script(
+              run_simple_query(
                 connection,
                 statement(
                   "CREATE TEMP TABLE IF NOT EXISTS span_text_rows (n int, w text)",

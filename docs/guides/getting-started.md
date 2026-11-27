@@ -60,13 +60,13 @@ The default config requires TLS. It checks the certificate of the server against
 
 ## Step 2: Make the tables
 
-`script` runs SQL with the simple query protocol. It can run several statements at once, and it reads no rows:
+`run_sql` runs SQL with the simple query protocol. It can run several statements at once, and it reads no rows:
 
 ### Make the tables <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/create_tables.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, script}
+import dream_postgres.{type Connection, type PostgresError, run_sql}
 
 /// Makes the tables of the examples: users, and the accounts of users.
 pub fn create_tables(
@@ -84,7 +84,7 @@ pub fn create_tables(
     balance bigint NOT NULL DEFAULT 0
   );
   "
-  |> script(connection)
+  |> run_sql(connection)
 }
 ```
 

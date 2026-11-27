@@ -2,7 +2,7 @@
 //// no server, then the chain of the client on PostgreSQL 16 to 19.
 
 import dream_postgres.{
-  affected, all, commit, named, one, query, script, secret_parameter, single,
+  affected, all, commit, named, one, query, run_sql, secret_parameter, single,
   step, transaction, with_interceptor,
 }
 import dream_postgres/codec
@@ -10,7 +10,7 @@ import dream_postgres/error.{
   ColumnTypeMismatch, InterceptorFailed, ParameterTypeMismatch, UnknownType,
 }
 import dream_postgres/interceptor.{
-  ScriptAnswer, StatementAnswer, column, command, connection_lost, refuse, rows,
+  SqlAnswer, StatementAnswer, column, command, connection_lost, refuse, rows,
   server_error, timeout,
 }
 import dream_postgres/internal/cell.{
@@ -139,13 +139,13 @@ pub fn unit_tests() -> TestSuite {
       |> not_contain_text("hunter2")
       |> or_fail_with("Expected no secret value in the request text")
     }),
-    unit.it("the answer of a script to a statement is refused", fn() {
+    unit.it("the answer of a `run_sql` call to a statement is refused", fn() {
       // Act and assert
       runner.all(
         posts.query(),
         posts.reader(),
         runner.DatabaseLayer(fake_executor.returning(posts.statement(), [])),
-        [interceptors.answer_with(Ok(ScriptAnswer(results: [])))],
+        [interceptors.answer_with(Ok(SqlAnswer(results: [])))],
       )
       |> should
       |> be_error()
@@ -154,7 +154,9 @@ pub fn unit_tests() -> TestSuite {
       |> be_equal(InterceptorFailed(
         reason: "an interceptor answered a statement with the answer of another kind of request",
       ))
-      |> or_fail_with("Expected a script answer to a statement to be refused")
+      |> or_fail_with(
+        "Expected a `run_sql` call answer to a statement to be refused",
+      )
     }),
     unit.it("an answer with no type for its column gives UnknownType", fn() {
       // Act and assert
@@ -303,7 +305,7 @@ pub fn tests() -> TestSuite {
           |> be_equal(Ok("SELECT 2"))
           |> or_fail_with("Expected the watcher to see the tag SELECT 2")
         }),
-        it("an interceptor watches a script", fn(pools) {
+        it("an interceptor watches a `run_sql` call", fn(pools) {
           // Arrange
           let seen = process.new_subject()
 
@@ -311,7 +313,7 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_on_pool(fn(connection) {
-            script(
+            run_sql(
               "SELECT 1; SELECT 2",
               with_interceptor(connection, interceptors.send_tags_to(seen)),
             )
@@ -370,12 +372,12 @@ pub fn tests() -> TestSuite {
           |> be_equal(InterceptorFailed(reason: "read only"))
           |> or_fail_with("Expected the refusal of the interceptor")
         }),
-        it("the statement answer to a script is refused", fn(pools) {
+        it("the statement answer to a `run_sql` call is refused", fn(pools) {
           // Act and assert
           pools
           |> should
           |> run_on_pool(fn(connection) {
-            script(
+            run_sql(
               "SELECT 1",
               with_interceptor(
                 connection,
@@ -387,9 +389,11 @@ pub fn tests() -> TestSuite {
           |> have_cause()
           |> have_reason()
           |> be_equal(InterceptorFailed(
-            reason: "an interceptor answered a script with the answer of another kind of request",
+            reason: "an interceptor answered a `run_sql` call with the answer of another kind of request",
           ))
-          |> or_fail_with("Expected a statement answer to a script refused")
+          |> or_fail_with(
+            "Expected a statement answer to a `run_sql` call refused",
+          )
         }),
         it("a simulated deadlock is retry", fn(pools) {
           // Act and assert

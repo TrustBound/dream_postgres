@@ -11,8 +11,8 @@ import gleam/string
 
 /// Give the kind name of the error, a space, and its reason in short: the
 /// SQLSTATE of a server error, `CommitRolledBack` and the SQLSTATE of a
-/// rolled back commit, `ScriptStatementFailed`, the number of statements
-/// that ran and the SQLSTATE of a failed later statement of a script,
+/// rolled back commit, `SqlStatementFailed`, the number of statements
+/// that ran and the SQLSTATE of a failed later statement of a `run_sql` call,
 /// `RollbackAlsoFailed` with the summary of the step error and the reason
 /// of the rollback error, the reason itself for each other reason, or
 /// `no cause` for an error with no cause.
@@ -53,8 +53,8 @@ fn reason_summary(reason: Reason) -> String {
     error.Server(server_error) -> sql_state.to_string(server_error.sql_state)
     error.CommitRolledBack(cause: Some(server_error)) ->
       "CommitRolledBack " <> sql_state.to_string(server_error.sql_state)
-    error.ScriptStatementFailed(statements_run:, server_error:) ->
-      "ScriptStatementFailed "
+    error.SqlStatementFailed(statements_run:, server_error:) ->
+      "SqlStatementFailed "
       <> int.to_string(statements_run)
       <> " "
       <> sql_state.to_string(server_error.sql_state)

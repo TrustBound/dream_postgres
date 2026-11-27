@@ -7,10 +7,10 @@ import dream_errors.{type Error}
 import dream_postgres.{
   type Config, type Connection, type PoolName, type PostgresError, affected, all,
   commit, copy_from, copy_to, maybe_one, named, one, parameter, query, run,
-  script, single, step, table, transaction, with_connection,
+  run_sql, single, step, table, transaction, with_connection,
 }
 import dream_postgres/codec
-import dream_postgres/interceptor.{type Request, ScriptAnswer}
+import dream_postgres/interceptor.{type Request, SqlAnswer}
 import dream_postgres/recorder.{type Recorder, type RecorderBuilder}
 import dream_postgres/recorder/match
 import dream_postgres/recorder/normalize
@@ -93,14 +93,14 @@ pub fn record_all() -> Result(RecordedRuns, String) {
   recorded |> result.replace(RecordedRuns(directory:))
 }
 
-// Runs a script on the test server, on a pool of its own.
+// Runs a `run_sql` call on the test server, on a pool of its own.
 fn on_server(sql: String) -> Result(Nil, String) {
   use connection <- result.try(
     server_pools.config(server_port)
     |> dream_postgres.start
     |> result.map_error(string.inspect),
   )
-  let ran = script(sql, connection) |> result.map_error(string.inspect)
+  let ran = run_sql(sql, connection) |> result.map_error(string.inspect)
   dream_postgres.stop(connection)
   ran
 }
@@ -336,8 +336,8 @@ pub fn scenarios() -> List(Scenario) {
     scenario("one", count_array),
     scenario("maybe_one", select_nothing),
     scenario("affected", update_rows),
-    scenario("script", run_script),
-    scenario("script_failure", run_failing_script),
+    scenario("run_sql", run_two_statements),
+    scenario("run_sql_failure", run_failing_sql),
     scenario("transaction", count_in_transaction),
     scenario("rolled_back", commit_after_conflict),
     scenario("copy_from", store_users),
@@ -362,7 +362,7 @@ pub fn scenarios() -> List(Scenario) {
       ..scenario("other_kind", select_series),
       recorder_settings: recorder.intercept(
         _,
-        interceptors.answer_with(Ok(ScriptAnswer(results: []))),
+        interceptors.answer_with(Ok(SqlAnswer(results: []))),
       ),
     ),
     identical(),
@@ -422,7 +422,7 @@ pub fn identical() -> Scenario {
     use series <- result.try(select_series(connection))
     use counted <- result.try(count_array(connection))
     use streamed <- result.try(read_series(connection))
-    use Nil <- result.try(script("SELECT 1; SELECT 'two'", connection))
+    use Nil <- result.try(run_sql("SELECT 1; SELECT 'two'", connection))
     Ok(series <> counted <> streamed)
   })
 }
@@ -625,7 +625,7 @@ pub fn select_nothing(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn update_rows(connection: Connection) -> ScenarioResult {
   with_connection(connection, fn(held) {
-    use Nil <- result.try(script(
+    use Nil <- result.try(run_sql(
       "CREATE TEMPORARY TABLE counters (id int4); INSERT INTO counters VALUES (1), (2), (3)",
       held,
     ))
@@ -637,28 +637,28 @@ pub fn update_rows(connection: Connection) -> ScenarioResult {
   |> inspected
 }
 
-/// A script of two statements.
+/// A `run_sql` call of two statements.
 ///
 /// ## Example
 ///
 /// ```gleam
-/// run_script(connection)
+/// run_two_statements(connection)
 /// // -> Ok("Nil")
 /// ```
-pub fn run_script(connection: Connection) -> ScenarioResult {
-  script("SELECT 1; SELECT 2", connection) |> inspected
+pub fn run_two_statements(connection: Connection) -> ScenarioResult {
+  run_sql("SELECT 1; SELECT 2", connection) |> inspected
 }
 
-/// A script whose second statement divides by zero.
+/// A `run_sql` call whose second statement divides by zero.
 ///
 /// ## Example
 ///
 /// ```gleam
-/// run_failing_script(connection)
-/// // -> Error(ScriptStatementFailed)
+/// run_failing_sql(connection)
+/// // -> Error(SqlStatementFailed)
 /// ```
-pub fn run_failing_script(connection: Connection) -> ScenarioResult {
-  script("SELECT 1; SELECT 1 / 0", connection) |> inspected
+pub fn run_failing_sql(connection: Connection) -> ScenarioResult {
+  run_sql("SELECT 1; SELECT 1 / 0", connection) |> inspected
 }
 
 /// A transaction that makes a table, stores a row and counts the rows.
@@ -675,7 +675,7 @@ pub fn count_in_transaction(connection: Connection) -> ScenarioResult {
     database: function.identity,
     rollback_also_failed: keep_both,
   )
-  |> step(script(
+  |> step(run_sql(
     "CREATE TEMPORARY TABLE notes (id int4) ON COMMIT DROP; INSERT INTO notes VALUES (1)",
     _,
   ))
@@ -702,7 +702,7 @@ pub fn commit_after_conflict(connection: Connection) -> ScenarioResult {
     rollback_also_failed: keep_both,
   )
   |> run(fn(held) {
-    use Nil <- result.try(script(
+    use Nil <- result.try(run_sql(
       "CREATE TEMPORARY TABLE tags (name text UNIQUE) ON COMMIT DROP; INSERT INTO tags VALUES ('a')",
       held,
     ))
@@ -725,7 +725,7 @@ pub fn commit_after_conflict(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn store_users(connection: Connection) -> ScenarioResult {
   with_connection(connection, fn(held) {
-    use Nil <- result.try(script(
+    use Nil <- result.try(run_sql(
       "CREATE TEMPORARY TABLE copied_users (id int4, email text)",
       held,
     ))
@@ -851,7 +851,7 @@ pub fn read_null(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn insert_twice(connection: Connection) -> ScenarioResult {
   with_connection(connection, fn(held) {
-    use Nil <- result.try(script(
+    use Nil <- result.try(run_sql(
       "CREATE TEMPORARY TABLE names (name text UNIQUE)",
       held,
     ))

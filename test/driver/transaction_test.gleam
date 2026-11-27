@@ -2,11 +2,11 @@
 //// and the error that aborted a failed transaction, after each outcome.
 
 import dream_postgres/driver/query.{
-  type Failure, type Outcome, type ScriptFailure, CopyNotSupported, Outcome,
-  ScriptFailure, ServerError,
+  type Failure, type Outcome, type SimpleQueryFailure, CopyNotSupported, Outcome,
+  ServerError, SimpleQueryFailure,
 }
 import dream_postgres/driver/transaction.{
-  aborting_error, new_tracker, track, track_script, track_step,
+  aborting_error, new_tracker, track, track_simple_query, track_step,
   transaction_status,
 }
 import dream_postgres/internal/cell.{
@@ -153,30 +153,33 @@ pub fn tests() -> TestSuite {
       |> be_equal(division())
       |> or_fail_with("Expected the error of the COPY")
     }),
-    it("keeps the error that aborted a script", fn() {
+    it("keeps the error that aborted a simple query", fn() {
       // Arrange
       let outcome =
-        script_outcome(
-          Error(ScriptFailure(completed: [], failure: ServerError(division()))),
+        simple_query_outcome(
+          Error(SimpleQueryFailure(
+            completed: [],
+            failure: ServerError(division()),
+          )),
           InFailedTransaction,
         )
 
       // Act
-      let tracker = track_script(new_tracker(), outcome)
+      let tracker = track_simple_query(new_tracker(), outcome)
 
       // Assert
       aborting_error(tracker)
       |> should
       |> be_some
       |> be_equal(division())
-      |> or_fail_with("Expected the error of the script")
+      |> or_fail_with("Expected the error of the simple query")
     }),
-    it("keeps the status of a script that succeeded", fn() {
+    it("keeps the status of a simple query that succeeded", fn() {
       // Arrange
-      let outcome = script_outcome(Ok(Nil), InTransaction)
+      let outcome = simple_query_outcome(Ok(Nil), InTransaction)
 
       // Act
-      let tracker = track_script(new_tracker(), outcome)
+      let tracker = track_simple_query(new_tracker(), outcome)
 
       // Assert
       transaction_status(tracker)
@@ -204,10 +207,10 @@ fn step_outcome(
   Outcome(result:, status:, asynchronous_messages: [])
 }
 
-fn script_outcome(
-  result: Result(Nil, ScriptFailure),
+fn simple_query_outcome(
+  result: Result(Nil, SimpleQueryFailure),
   status: TransactionStatus,
-) -> Outcome(Nil, ScriptFailure) {
+) -> Outcome(Nil, SimpleQueryFailure) {
   Outcome(result:, status:, asynchronous_messages: [])
 }
 

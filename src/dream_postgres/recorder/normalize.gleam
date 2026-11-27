@@ -36,7 +36,7 @@
 
 import dream_postgres/interceptor.{
   type Answer, type Interceptor, type Request, CopyFrom, CopyFromAnswer, CopyTo,
-  CopyToAnswer, Request, Script, ScriptAnswer, Statement, StatementAnswer,
+  CopyToAnswer, Request, Sql, SqlAnswer, Statement, StatementAnswer,
 }
 import dream_postgres/internal/cell.{
   type Cell, type CommandResult, type StatementDescription, type TypeDescription,
@@ -150,7 +150,7 @@ pub fn timestamps_near_now(window_days window_days: Int) -> Interceptor {
 // --- Cells --------------------------------------------------------------------------
 
 // An interceptor that changes the SQL and the written cells of the
-// request, then the cells of the answer. A cell of a script answer has no
+// request, then the cells of the answer. A cell of a `run_sql` call answer has no
 // type.
 fn changing_cells(
   change_text: fn(String) -> String,
@@ -187,7 +187,7 @@ fn changed_kind(
           list.map(values, query.change_cell(_, change))
         }),
       )
-    Statement | Script | CopyTo -> request.kind
+    Statement | Sql | CopyTo -> request.kind
   }
 }
 
@@ -209,12 +209,12 @@ fn changed_answer(
           ),
         ),
       )
-    ScriptAnswer(results:) ->
-      ScriptAnswer(
-        results: list.map(results, fn(script_result: CommandResult) {
+    SqlAnswer(results:) ->
+      SqlAnswer(
+        results: list.map(results, fn(sql_result: CommandResult) {
           CommandResult(
-            ..script_result,
-            rows: changed_rows(script_result.rows, [], change),
+            ..sql_result,
+            rows: changed_rows(sql_result.rows, [], change),
           )
         }),
       )

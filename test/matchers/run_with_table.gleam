@@ -1,7 +1,7 @@
 //// A matcher that holds one connection of the client pool of the chosen
 //// version, with a new temporary table, for some work.
 
-import dream_postgres.{type Connection, script, with_connection}
+import dream_postgres.{type Connection, run_sql, with_connection}
 import dream_postgres/error
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -79,7 +79,7 @@ fn run_on_table(
   work: fn(Connection) -> a,
 ) -> Result(TableRun(a), String) {
   use Nil <- result.try(
-    script("CREATE TEMPORARY TABLE " <> table <> " (id int4)", held)
+    run_sql("CREATE TEMPORARY TABLE " <> table <> " (id int4)", held)
     |> result.map_error(error.describe),
   )
   let outcome = work(held)
@@ -87,7 +87,7 @@ fn run_on_table(
     client_statements.ids(held, table) |> result.map_error(error.describe),
   )
   use Nil <- result.try(
-    script("DROP TABLE " <> table, held) |> result.map_error(error.describe),
+    run_sql("DROP TABLE " <> table, held) |> result.map_error(error.describe),
   )
   Ok(TableRun(outcome:, rows:))
 }

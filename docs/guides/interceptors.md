@@ -22,8 +22,8 @@ A `Request` has four fields:
 |---|---|
 | `sql` | the SQL text |
 | `name` | the name that `named` gave the query, or `None` |
-| `parameters` | the parameters with their codecs, `$1` first, as `codec.field` makes them. A script has none. |
-| `kind` | `Statement`, `Script`, `CopyFrom(table, columns, rows)` or `CopyTo` |
+| `parameters` | the parameters with their codecs, `$1` first, as `codec.field` makes them. A `run_sql` call has none. |
+| `kind` | `Statement`, `Sql`, `CopyFrom(table, columns, rows)` or `CopyTo` |
 
 These two interceptors change the request, and watch the time of each request:
 
@@ -128,8 +128,8 @@ Inside a transaction and inside `with_connection`, each request goes through the
 | Call | Kind of the request |
 |---|---|
 | `all`, `one`, `maybe_one`, `affected` | `Statement` |
-| `script` | `Script` |
-| `BEGIN`, `COMMIT`, `ROLLBACK` and the savepoint commands of a transaction | `Script` |
+| `run_sql` | `Sql` |
+| `BEGIN`, `COMMIT`, `ROLLBACK` and the savepoint commands of a transaction | `Sql` |
 | `copy_from` | `CopyFrom`, with the table, the columns and the rows |
 | `copy_to` | `CopyTo`, with the query inside the COPY as its SQL |
 
@@ -216,7 +216,7 @@ pub fn answer_three_updates(
 }
 ```
 
-An interceptor that answers a script with the answer of another kind of request makes the call fail with `InterceptorFailed`.
+An interceptor that answers a `run_sql` call with the answer of another kind of request makes the call fail with `InterceptorFailed`.
 
 ## Simulate a failure
 

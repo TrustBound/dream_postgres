@@ -22,7 +22,7 @@ import gleam/result
 /// |> should
 /// |> run_with_listener(fn(listener, connection) {
 ///   use _subscription <- result.try(listen(listener, "jobs", messages))
-///   script("NOTIFY jobs, 'hello'", connection)
+///   run_sql("NOTIFY jobs, 'hello'", connection)
 /// })
 /// |> receive_message(messages, within: 5000)
 /// |> extract_listen_payload()

@@ -55,7 +55,7 @@ import dream_postgres/error.{
 }
 import dream_postgres/interceptor.{
   type Interceptor, type Outcome, type Request, CopyFrom, CopyFromAnswer, CopyTo,
-  CopyToAnswer, Request, Script, ScriptAnswer, Statement, StatementAnswer,
+  CopyToAnswer, Request, Sql, SqlAnswer, Statement, StatementAnswer,
 }
 import dream_postgres/internal/cell.{
   type Cell, type StatementDescription, type TypeDescription, CommandResult,
@@ -74,7 +74,7 @@ import dream_postgres/recorder/match
 import dream_postgres/recording.{
   type RecordedEntry, type RecordedFailure, type RecordedRequest,
   type WrittenParameter, type WrittenParameters, type WrittenRows,
-  RecordedCopyFrom, RecordedCopyTo, RecordedEntry, RecordedScript,
+  RecordedCopyFrom, RecordedCopyTo, RecordedEntry, RecordedSql,
   RecordedStatement, RecordedStream, Recording, SecretCell, StatementReply,
   WrittenParameters, WrittenRows,
 }
@@ -590,7 +590,7 @@ fn record(
       ))
     Ok(StatementAnswer(types:, ..)) ->
       save(recorder, secrets, copy, outcome, every_type(events, types))
-    Ok(ScriptAnswer(..)) | Ok(CopyFromAnswer(..)) | Error(_) ->
+    Ok(SqlAnswer(..)) | Ok(CopyFromAnswer(..)) | Error(_) ->
       save(recorder, secrets, copy, outcome, every_type(events, []))
   }
 }
@@ -620,7 +620,7 @@ fn watched_request(request: Request, seen: Subject(WriteSeen)) -> Request {
           }),
         ),
       )
-    Statement | Script | CopyTo ->
+    Statement | Sql | CopyTo ->
       Request(
         ..request,
         parameters: watched_values(request.parameters, 0, seen),
@@ -667,7 +667,7 @@ fn written_request(request: Request, events: List(WriteSeen)) -> Request {
             |> copy_request.feed(fn(values) { values }),
         ),
       )
-    Statement | Script | CopyTo ->
+    Statement | Sql | CopyTo ->
       Request(
         ..request,
         parameters: written_values(request.parameters, events, 0),
@@ -854,7 +854,7 @@ fn secret_free_outcome(
         ))
       })
     Ok(CopyToAnswer(..))
-    | Ok(ScriptAnswer(..))
+    | Ok(SqlAnswer(..))
     | Ok(CopyFromAnswer(..))
     | Error(_) -> Ok(outcome)
   }
@@ -873,8 +873,8 @@ fn recorded_request(
         types:,
         outcome: Ok(StatementReply(description:, result:)),
       ))
-    Script, Ok(ScriptAnswer(results:)) ->
-      Some(RecordedScript(sql: request.sql, outcome: Ok(results)))
+    Sql, Ok(SqlAnswer(results:)) ->
+      Some(RecordedSql(sql: request.sql, outcome: Ok(results)))
     CopyFrom(rows:, ..), Ok(CopyFromAnswer(count:)) ->
       Some(RecordedCopyFrom(
         sql: request.sql,
@@ -899,10 +899,9 @@ fn recorded_request(
       })
     // An answer of another kind than the request: it is not one that
     // PostgreSQL gave, so it is not saved.
-    Statement, Ok(_) | Script, Ok(_) | CopyFrom(..), Ok(_) | CopyTo, Ok(_) ->
-      None
+    Statement, Ok(_) | Sql, Ok(_) | CopyFrom(..), Ok(_) | CopyTo, Ok(_) -> None
     Statement, Error(reason)
-    | Script, Error(reason)
+    | Sql, Error(reason)
     | CopyFrom(..), Error(reason)
     | CopyTo, Error(reason)
     ->
@@ -924,7 +923,7 @@ fn failed_request(
         types:,
         outcome: Error(failure),
       )
-    Script -> RecordedScript(sql: request.sql, outcome: Error(failure))
+    Sql -> RecordedSql(sql: request.sql, outcome: Error(failure))
     CopyFrom(rows:, ..) ->
       RecordedCopyFrom(
         sql: request.sql,
@@ -1071,7 +1070,7 @@ fn given(
 fn entry_failure(request: RecordedRequest) -> Result(Nil, RecordedFailure) {
   case request {
     RecordedStatement(outcome:, ..) -> result.replace(outcome, Nil)
-    RecordedScript(outcome:, ..) -> result.replace(outcome, Nil)
+    RecordedSql(outcome:, ..) -> result.replace(outcome, Nil)
     RecordedCopyFrom(outcome:, ..) -> result.replace(outcome, Nil)
     RecordedCopyTo(outcome:, ..) -> result.replace(outcome, Nil)
   }
@@ -1080,7 +1079,7 @@ fn entry_failure(request: RecordedRequest) -> Result(Nil, RecordedFailure) {
 fn recorded_sql(request: RecordedRequest) -> String {
   case request {
     RecordedStatement(sql:, ..)
-    | RecordedScript(sql:, ..)
+    | RecordedSql(sql:, ..)
     | RecordedCopyFrom(sql:, ..)
     | RecordedCopyTo(sql:, ..) -> sql
   }
@@ -1098,7 +1097,7 @@ fn written_like(
       |> result.map(fn(rows) {
         Request(..request, kind: CopyFrom(table:, columns:, rows:))
       })
-    Statement | Script | CopyTo ->
+    Statement | Sql | CopyTo ->
       parameters_written_like(request.parameters, recorded)
       |> result.map(fn(parameters) { Request(..request, parameters:) })
   }
@@ -1122,7 +1121,7 @@ fn parameters_written_like(
         })
       })
     RecordedStatement(parameters: None, ..)
-    | RecordedScript(..)
+    | RecordedSql(..)
     | RecordedCopyFrom(..)
     | RecordedCopyTo(..) -> Ok(values)
   }
@@ -1152,7 +1151,7 @@ fn rows_written_like(
       |> result.map(copy_request.feed(_, fn(values) { values }))
     RecordedCopyFrom(rows: None, ..)
     | RecordedStatement(..)
-    | RecordedScript(..)
+    | RecordedSql(..)
     | RecordedCopyTo(..) -> Ok(rows)
   }
 }
@@ -1181,9 +1180,9 @@ fn recorded_outcome(recorded: RecordedRequest) -> Outcome {
         )
       })
       |> result.map_error(recording.failure_reason)
-    RecordedScript(outcome:, ..) ->
+    RecordedSql(outcome:, ..) ->
       outcome
-      |> result.map(ScriptAnswer)
+      |> result.map(SqlAnswer)
       |> result.map_error(recording.failure_reason)
     RecordedCopyFrom(outcome:, ..) ->
       outcome

@@ -31,7 +31,7 @@ import driver/server_catalog.{
   stop_catalog_session, type_oid, unblock_connection,
 }
 import driver/server_connection.{
-  caller_answer, run_failing_statement, run_setup_script, start_caller,
+  caller_answer, run_failing_statement, run_setup_simple_query, start_caller,
   start_in_ended_owner,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
@@ -476,7 +476,7 @@ fn watched_load_tests() {
 fn failed_load_tests() {
   [
     before_each(start_test_catalog(first_driver_server)),
-    before_each(on_session_connection(run_setup_script("BEGIN"))),
+    before_each(on_session_connection(run_setup_simple_query("BEGIN"))),
     group("in a failed transaction", [
       before_each(on_session_connection(run_failing_statement("SELECT 1/0"))),
       it(

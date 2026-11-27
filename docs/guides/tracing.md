@@ -14,7 +14,7 @@ dream_postgres makes an OpenTelemetry span for each call that your app makes to 
 
 ## What makes a span
 
-dream_postgres depends on `opentelemetry_api` only. The driver starts a span of kind `CLIENT` for each statement that the app sends: the prepare and the run of a query, a script, the commands of a transaction, a `copy_from` and a `copy_to`. The span starts and ends in the process that made the call, so it is a child of the current span of that process, for example the span of an HTTP request.
+dream_postgres depends on `opentelemetry_api` only. The driver starts a span of kind `CLIENT` for each statement that the app sends: the prepare and the run of a query, a `run_sql` call, the commands of a transaction, a `copy_from` and a `copy_to`. The span starts and ends in the process that made the call, so it is a child of the current span of that process, for example the span of an HTTP request.
 
 With no OpenTelemetry SDK running, each span call is a no-op of the API.
 
@@ -81,7 +81,7 @@ The name of a query plays no part in the statement cache, whose key is the SQL t
 | `server.address` | the host of the config | always |
 | `server.port` | the port of the config | when it is not 5432 |
 | `db.query.summary` | the name of `named` | when the query has a name |
-| `db.query.text` | the SQL text | for a prepare, a run and a COPY, whose values go as parameters, but not for a script |
+| `db.query.text` | the SQL text | for a prepare, a run and a COPY, whose values go as parameters, but not for a `run_sql` call |
 | `db.operation.name` | the operation of the command tag, for example `SELECT` | when the statement worked and gave exactly one tag |
 | `db.response.status_code` | the SQLSTATE of the last warning (class `01`), or the SQLSTATE of the failure | when there is one |
 | `error.type` | the SQLSTATE of the server, or else the name of the error | when the statement failed |
@@ -99,7 +99,7 @@ These are the attributes of the two spans of `find_user_id` in the test, with th
 
 No span holds a parameter value. The test of `find_user_id` passes the email `ada@example.com` as `$1`, and checks every attribute of both spans: `db.query.text` is `SELECT id FROM users WHERE email = $1`, and no attribute holds the email.
 
-A script runs with the simple query protocol, so its text can hold values. Its span has no `db.query.text`.
+A `run_sql` call runs with the simple query protocol, so its text can hold values. Its span has no `db.query.text`.
 
 ## What makes no span
 

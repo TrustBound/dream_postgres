@@ -14,7 +14,7 @@ import gleam/string.{inspect}
 /// errors.
 ///
 /// ```gleam
-/// run_housekeeping_script(connection, health_check, 5000)
+/// run_housekeeping_simple_query(connection, health_check, 5000)
 /// |> should
 /// |> be_error
 /// |> extract_housekeeping_refusal_code

@@ -3,8 +3,8 @@
 
 import dream_postgres/driver/connection.{
   ConnectionConfig, ConnectionEnded, ConnectionLost, Disconnected,
-  ReconnectFailed, ScriptRequestFailed, SetupExited, SetupTimedOut, SocketFailed,
-  start_failure,
+  ReconnectFailed, SetupExited, SetupTimedOut, SimpleQueryRequestFailed,
+  SocketFailed, start_failure,
 }
 import dream_postgres/driver/deadline.{
   bounded_wait, from_now, has_passed, time_left,
@@ -338,7 +338,7 @@ fn reconnect_tests(name: String, second: reconnect_server.SecondConnection) {
         |> should
         |> be_error
         |> be_equal(
-          ScriptRequestFailed(
+          SimpleQueryRequestFailed(
             ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))),
           ),
         )

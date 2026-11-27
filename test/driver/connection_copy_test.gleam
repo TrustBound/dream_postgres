@@ -10,11 +10,11 @@
 
 import dream_postgres/driver/connection.{
   type ChunkError, type Connection, type ConnectionStateError, type CopyError,
-  type Outcome, type ScriptError, AppFailed, ChunkCopyNotRunning, ChunkFailed,
-  ConnectionEnded, ConnectionLost, ConnectionProcessDown, CopyFailed,
-  CopyNotStarted, CopyUnencodable, DeadlinePassed, Outcome, ScriptRequestFailed,
-  ServerStoppedReading, SocketFailed, copy_from, copy_to, run_script, send_chunk,
-  transaction_status,
+  type Outcome, type SimpleQueryError, AppFailed, ChunkCopyNotRunning,
+  ChunkFailed, ConnectionEnded, ConnectionLost, ConnectionProcessDown,
+  CopyFailed, CopyNotStarted, CopyUnencodable, DeadlinePassed, Outcome,
+  ServerStoppedReading, SimpleQueryRequestFailed, SocketFailed, copy_from,
+  copy_to, run_simple_query, send_chunk, transaction_status,
 }
 import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{SocketClosed}
@@ -33,12 +33,12 @@ import driver/server_connection.{
   type ActOutcome, type ControlledConnection, type ProxiedConnection, act_setup,
   caller_answer, connection_act_setup, connection_setup, controlled_act_setup,
   controlled_setup, fatal_error_bytes, pid_of, proxied_setup, resume_connection,
-  run_control_script, run_controlled_setup_script, run_proxied_setup_script,
-  run_setup_script, send_stray_down, short_wait_act_setup, start_caller,
-  start_connection, start_test_connection, start_test_controlled,
-  start_test_proxied, start_test_proxied_with_tls, stop_after_error,
-  stop_connection, stop_controlled, stop_proxied, suspend_connection,
-  transaction_act_setup, wait_for_message, wait_for_reset,
+  run_control_simple_query, run_controlled_setup_simple_query,
+  run_proxied_setup_simple_query, run_setup_simple_query, send_stray_down,
+  short_wait_act_setup, start_caller, start_connection, start_test_connection,
+  start_test_controlled, start_test_proxied, start_test_proxied_with_tls,
+  stop_after_error, stop_connection, stop_controlled, stop_proxied,
+  suspend_connection, transaction_act_setup, wait_for_message, wait_for_reset,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
 import fixtures/copy_callbacks.{
@@ -77,8 +77,10 @@ import matchers/extract_outcome_tags.{extract_outcome_tags}
 import matchers/extract_protocol_violation.{extract_protocol_violation}
 import matchers/extract_report_code.{extract_report_code}
 import matchers/extract_sampled_peak.{extract_sampled_peak}
-import matchers/extract_script_request_failure.{extract_script_request_failure}
 import matchers/extract_second_of_pair.{extract_second_of_pair}
+import matchers/extract_simple_query_request_failure.{
+  extract_simple_query_request_failure,
+}
 import matchers/within_memory.{within_memory}
 
 /// The bound of the memory of each process during a COPY of 1,000,000
@@ -140,7 +142,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
 fn store_tests() -> List(ContextNode(Connection)) {
   [
     group("a COPY FROM STDIN", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE copied (id int, name text)",
       )),
       it(
@@ -168,7 +170,7 @@ fn store_tests() -> List(ContextNode(Connection)) {
         it("stores the rows that a COPY FROM STDIN sent", fn(connection) {
           // Act
           let rows =
-            run_script(
+            run_simple_query(
               connection,
               connection.statement(
                 "SELECT id::text, name FROM copied ORDER BY id",
@@ -236,7 +238,9 @@ fn store_tests() -> List(ContextNode(Connection)) {
 fn both_ways_tests() -> List(ContextNode(Connection)) {
   [
     group("a csv COPY", [
-      before_each(run_setup_script("CREATE TEMP TABLE csv (id int, name text)")),
+      before_each(run_setup_simple_query(
+        "CREATE TEMP TABLE csv (id int, name text)",
+      )),
       it("stores the rows of a csv COPY", fn(connection) {
         // Act
         let stored =
@@ -277,7 +281,7 @@ fn both_ways_tests() -> List(ContextNode(Connection)) {
       ]),
     ]),
     group("a binary COPY", [
-      before_each(run_setup_script("CREATE TEMP TABLE b (n int4)")),
+      before_each(run_setup_simple_query("CREATE TEMP TABLE b (n int4)")),
       it("stores the row of a binary COPY", fn(connection) {
         // Act
         let stored =
@@ -326,8 +330,10 @@ fn both_ways_tests() -> List(ContextNode(Connection)) {
 fn transaction_tests() -> List(ContextNode(Connection)) {
   [
     group("a COPY in a transaction", [
-      before_each(run_setup_script("CREATE TEMP TABLE kept (id int, name text)")),
-      before_each(run_setup_script("BEGIN")),
+      before_each(run_setup_simple_query(
+        "CREATE TEMP TABLE kept (id int, name text)",
+      )),
+      before_each(run_setup_simple_query("BEGIN")),
       it(
         "gives the count of a COPY in a transaction that rolls back",
         fn(connection) {
@@ -340,7 +346,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
                 5000,
                 send_three_rows,
               )
-            use Nil <- try(run_control_script(connection, "ROLLBACK"))
+            use Nil <- try(run_control_simple_query(connection, "ROLLBACK"))
             Ok(copied)
           }
 
@@ -355,11 +361,11 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
       ),
       group("rolled back", [
         before_each(copy_in_setup("COPY kept FROM STDIN", send_three_rows)),
-        before_each(run_setup_script("ROLLBACK")),
+        before_each(run_setup_simple_query("ROLLBACK")),
         it("commits and rolls back a COPY with its transaction", fn(connection) {
           // Act
           let count =
-            run_script(
+            run_simple_query(
               connection,
               connection.statement("SELECT count(*)::text FROM kept"),
               5000,
@@ -379,10 +385,10 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
       ]),
     ]),
     group("a COPY that fails its transaction", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE failing (id int, name text)",
       )),
-      before_each(run_setup_script("BEGIN")),
+      before_each(run_setup_simple_query("BEGIN")),
       it("gives the app's failure of a COPY in a transaction", fn(connection) {
         // Act
         let failed =
@@ -423,7 +429,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
 
 fn committed_tests() -> List(ContextNode(Connection)) {
   [
-    before_each(run_setup_script("BEGIN")),
+    before_each(run_setup_simple_query("BEGIN")),
     it(
       "gives the count of a COPY in a transaction that commits",
       fn(connection) {
@@ -436,7 +442,7 @@ fn committed_tests() -> List(ContextNode(Connection)) {
               5000,
               send_three_rows,
             )
-          use Nil <- try(run_control_script(connection, "COMMIT"))
+          use Nil <- try(run_control_simple_query(connection, "COMMIT"))
           Ok(copied)
         }
 
@@ -451,13 +457,13 @@ fn committed_tests() -> List(ContextNode(Connection)) {
     ),
     group("committed", [
       before_each(copy_in_setup("COPY kept FROM STDIN", send_three_rows)),
-      before_each(run_setup_script("COMMIT")),
+      before_each(run_setup_simple_query("COMMIT")),
       it(
         "keeps the rows of a COPY in a transaction that commits",
         fn(connection) {
           // Act
           let count =
-            run_script(
+            run_simple_query(
               connection,
               connection.statement("SELECT count(*)::text FROM kept"),
               5000,
@@ -481,7 +487,7 @@ fn committed_tests() -> List(ContextNode(Connection)) {
 fn refusal_tests() -> List(ContextNode(Connection)) {
   [
     group("a COPY that the server refuses in the middle", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE refused (id int, name text)",
       )),
       it(
@@ -516,7 +522,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
           fn(connection) {
             // Act
             let count =
-              run_script(
+              run_simple_query(
                 connection,
                 connection.statement("SELECT count(*)::text FROM refused"),
                 5000,
@@ -536,7 +542,9 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
       ]),
     ]),
     group("a COPY whose data the server refuses", [
-      before_each(run_setup_script("CREATE TEMP TABLE bad (id int, name text)")),
+      before_each(run_setup_simple_query(
+        "CREATE TEMP TABLE bad (id int, name text)",
+      )),
       it(
         "gives the server's error when the app sent all its data",
         fn(connection) {
@@ -599,7 +607,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
 fn app_failure_tests() -> List(ContextNode(Connection)) {
   [
     group("a COPY that the app abandons", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE abandoned (id int, name text)",
       )),
       it("abandons the COPY with CopyFail when the app fails", fn(connection) {
@@ -628,7 +636,7 @@ fn app_failure_tests() -> List(ContextNode(Connection)) {
         it("stores no row of a COPY that the app abandoned", fn(connection) {
           // Act
           let count =
-            run_script(
+            run_simple_query(
               connection,
               connection.statement("SELECT count(*)::text FROM abandoned"),
               5000,
@@ -678,7 +686,7 @@ fn app_failure_tests() -> List(ContextNode(Connection)) {
         fn(connection) {
           // Act
           let next =
-            run_script(connection, connection.statement("SELECT 7"), 5000)
+            run_simple_query(connection, connection.statement("SELECT 7"), 5000)
 
           // Assert
           next
@@ -723,7 +731,7 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
       |> or_fail_with("Expected the SELECT")
     }),
     group("a table that no COPY reaches", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE other (id int, name text)",
       )),
       it(
@@ -791,7 +799,7 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
         it("stores no row of a COPY that did not start", fn(connection) {
           // Act
           let count =
-            run_script(
+            run_simple_query(
               connection,
               connection.statement("SELECT count(*)::text FROM other"),
               5000,
@@ -815,7 +823,7 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
 fn memory_tests() -> List(ContextNode(Connection)) {
   [
     group("a load", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE loaded (n int, name text)",
       )),
       it("keeps the memory flat while it loads 1,000,000 rows", fn(connection) {
@@ -874,7 +882,8 @@ fn caller_tests() -> List(ContextNode(Connection)) {
     it("ignores the DOWN of a process that it does not watch", fn(connection) {
       // Act
       send_stray_down(pid_of(connection))
-      let next = run_script(connection, connection.statement("SELECT 10"), 5000)
+      let next =
+        run_simple_query(connection, connection.statement("SELECT 10"), 5000)
 
       // Assert
       next
@@ -908,7 +917,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
       },
     ),
     group("a COPY whose app keeps its sender", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE stale (id int, name text)",
       )),
       it("gives the count of a COPY whose app sent nothing", fn(connection) {
@@ -955,7 +964,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
       }),
     ]),
     group("a COPY that a CHECK constraint refuses", [
-      before_each(run_setup_script(
+      before_each(run_setup_simple_query(
         "CREATE TEMP TABLE again (id int CHECK (id < 2), name text)",
       )),
       it(
@@ -1041,7 +1050,7 @@ fn controlled_tests() -> TestSuite {
 fn session_end_tests(server: Server) -> ContextNode(ControlledConnection) {
   group("PostgreSQL " <> to_string(server.version), [
     before_each(start_test_controlled(server)),
-    before_each(run_controlled_setup_script(
+    before_each(run_controlled_setup_simple_query(
       "CREATE TEMP TABLE ended (id int, name text)",
     )),
     it(
@@ -1095,7 +1104,7 @@ fn proxied_tests() -> TestSuite {
             suspend_connection(proxied.connection)
             let caller =
               start_caller(fn() {
-                run_script(
+                run_simple_query(
                   proxied.connection,
                   connection.statement("SELECT 1"),
                   5000,
@@ -1118,7 +1127,7 @@ fn proxied_tests() -> TestSuite {
           |> be_ok
           |> be_error
           |> be_equal(
-            ScriptRequestFailed(
+            SimpleQueryRequestFailed(
               ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))),
             ),
           )
@@ -1133,7 +1142,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
   [
     before_each(start_test_proxied(first_driver_server, 60_000)),
     group("a COPY whose socket closes", [
-      before_each(run_proxied_setup_script(
+      before_each(run_proxied_setup_simple_query(
         "CREATE TEMP TABLE lost (id int, name text)",
       )),
       it(
@@ -1154,7 +1163,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
       ),
     ]),
     group("a COPY that gets a message out of place", [
-      before_each(run_proxied_setup_script(
+      before_each(run_proxied_setup_simple_query(
         "CREATE TEMP TABLE broken (id int, name text)",
       )),
       it(
@@ -1261,7 +1270,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
           suspend_connection(proxied.connection)
           let caller =
             start_caller(fn() {
-              run_script(
+              run_simple_query(
                 proxied.connection,
                 connection.statement("SELECT 1"),
                 5000,
@@ -1281,7 +1290,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
         |> should
         |> be_ok
         |> be_error
-        |> extract_script_request_failure
+        |> extract_simple_query_request_failure
         |> extract_connection_end
         |> extract_ending_report
         |> extract_report_code
@@ -1290,7 +1299,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
       },
     ),
     group("a COPY that waits for go", [
-      before_each(run_proxied_setup_script(
+      before_each(run_proxied_setup_simple_query(
         "CREATE TEMP TABLE gated (id int, name text)",
       )),
       it(
@@ -1348,7 +1357,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
 type CopyAndNext(value, error) {
   CopyAndNext(
     copied: Result(value, error),
-    next: Result(List(Outcome), ScriptError),
+    next: Result(List(Outcome), SimpleQueryError),
   )
 }
 
@@ -1363,7 +1372,7 @@ type ControlledCopy(value, error) =
 fn copy_past_deadline(
   connection: Connection,
 ) -> Result(CopyAndNext(Int, CopyError(ChunkError)), String) {
-  use Nil <- try(run_control_script(
+  use Nil <- try(run_control_simple_query(
     connection,
     "CREATE TEMP TABLE late (id int, name text)",
   ))
@@ -1376,7 +1385,7 @@ fn copy_past_deadline(
       send_until_error(_, chunk, 1_000_000),
     )
   let next =
-    run_script(
+    run_simple_query(
       connection,
       connection.statement("SELECT count(*)::text FROM late"),
       5000,
@@ -1423,7 +1432,7 @@ fn late_copy_tests() -> TestSuite {
 fn copy_slowly(
   controlled: ControlledConnection,
 ) -> Result(CopyAndNext(Int, CopyError(ChunkError)), String) {
-  use Nil <- try(run_control_script(
+  use Nil <- try(run_control_simple_query(
     controlled.connection,
     "CREATE TEMP TABLE idle (id int, name text)",
   ))
@@ -1435,7 +1444,7 @@ fn copy_slowly(
       send_after_idle(_, controlled.control, controlled.backend_pid),
     )
   let next =
-    run_script(
+    run_simple_query(
       controlled.connection,
       connection.statement("SELECT count(*)::text FROM idle"),
       5000,
@@ -1477,7 +1486,7 @@ fn slow_produce_tests() -> TestSuite {
 }
 
 /// A COPY TO STDOUT whose fold holds the first row until its backend is
-/// idle, past the deadline of 300 milliseconds, and a script after it.
+/// idle, past the deadline of 300 milliseconds, and a simple query after it.
 fn read_slowly(
   controlled: ControlledConnection,
 ) -> Result(CopyAndNext(Bool, CopyError(ChunkError)), String) {
@@ -1494,7 +1503,11 @@ fn read_slowly(
       },
     )
   let next =
-    run_script(controlled.connection, connection.statement("SELECT 8"), 5000)
+    run_simple_query(
+      controlled.connection,
+      connection.statement("SELECT 8"),
+      5000,
+    )
   Ok(CopyAndNext(copied:, next:))
 }
 
@@ -1531,7 +1544,7 @@ fn slow_fold_tests() -> TestSuite {
 
 /// A COPY TO STDOUT of 10,000,000 rows whose fold fails at the first row,
 /// so the deadline of 300 milliseconds ends the reading of the rest, and
-/// a script after it.
+/// a simple query after it.
 fn read_after_failed_fold(
   connection: Connection,
 ) -> Result(CopyAndNext(Int, CopyError(String)), String) {
@@ -1545,7 +1558,8 @@ fn read_after_failed_fold(
       0,
       fail_at_first_row,
     )
-  let next = run_script(connection, connection.statement("SELECT 9"), 5000)
+  let next =
+    run_simple_query(connection, connection.statement("SELECT 9"), 5000)
   Ok(CopyAndNext(copied:, next:))
 }
 
@@ -1672,7 +1686,7 @@ fn suspended_row_tests() -> TestSuite {
 fn end_on_suspended(
   connection: Connection,
 ) -> Result(Result(Int, CopyError(ChunkError)), String) {
-  use Nil <- try(run_control_script(
+  use Nil <- try(run_control_simple_query(
     connection,
     "CREATE TEMP TABLE suspended (id int, name text)",
   ))
@@ -1712,7 +1726,7 @@ type AfterFailedFold {
   AfterFailedFold(
     copied: Result(Int, CopyError(String)),
     status: Result(TransactionStatus, ConnectionStateError),
-    next: Result(List(Outcome), ScriptError),
+    next: Result(List(Outcome), SimpleQueryError),
   )
 }
 
@@ -1730,7 +1744,8 @@ fn fail_fold_in_transaction(
       fail_at_first_row,
     )
   let status = transaction_status(connection)
-  let next = run_script(connection, connection.statement("SELECT 9"), 5000)
+  let next =
+    run_simple_query(connection, connection.statement("SELECT 9"), 5000)
   Ok(AfterFailedFold(copied:, status:, next:))
 }
 
@@ -1774,20 +1789,20 @@ fn fold_in_transaction_tests() -> TestSuite {
   )
 }
 
-/// The answers of a script and of a COPY that the produce function of a
+/// The answers of a simple query and of a COPY that the produce function of a
 /// COPY runs on the same connection.
 type InnerAnswers =
-  #(Result(List(Outcome), ScriptError), Result(Int, CopyError(ChunkError)))
+  #(Result(List(Outcome), SimpleQueryError), Result(Int, CopyError(ChunkError)))
 
 type InsideCopy =
   ActOutcome(Connection, Result(Int, CopyError(InnerAnswers)))
 
-/// A COPY FROM STDIN whose produce function runs a script and a second
+/// A COPY FROM STDIN whose produce function runs a simple query and a second
 /// COPY on the same connection, each with a deadline of 50 milliseconds.
 fn copy_inside_copy(
   connection: Connection,
 ) -> Result(Result(Int, CopyError(InnerAnswers)), String) {
-  use Nil <- try(run_control_script(
+  use Nil <- try(run_control_simple_query(
     connection,
     "CREATE TEMP TABLE waiting (id int, name text)",
   ))
@@ -1815,8 +1830,12 @@ fn copy_inside_tests() -> TestSuite {
           |> extract_app_failure
           |> extract_first_of_pair
           |> be_error
-          |> be_equal(ScriptRequestFailed(DeadlinePassed(cancelled: False)))
-          |> or_fail_with("Expected the inner script to wait to its deadline")
+          |> be_equal(
+            SimpleQueryRequestFailed(DeadlinePassed(cancelled: False)),
+          )
+          |> or_fail_with(
+            "Expected the inner simple query to wait to its deadline",
+          )
         },
       ),
       it(
@@ -1850,7 +1869,7 @@ type StoppedInside =
 fn copy_stopping_its_connection(
   connection: Connection,
 ) -> Result(StoppedAnswers, String) {
-  use Nil <- try(run_control_script(
+  use Nil <- try(run_control_simple_query(
     connection,
     "CREATE TEMP TABLE stopped (id int, name text)",
   ))
@@ -1908,36 +1927,39 @@ type HungCopy(told) {
 /// What the function of the caller told before the caller was killed, and
 /// what the next request on the connection gave after it.
 type CallerEnd(told) {
-  CallerEnd(told: Result(told, Nil), next: Result(List(Outcome), ScriptError))
+  CallerEnd(
+    told: Result(told, Nil),
+    next: Result(List(Outcome), SimpleQueryError),
+  )
 }
 
 type EndedCaller(told) =
   ActOutcome(HungCopy(told), CallerEnd(told))
 
 /// The context of a describe whose tests check one caller that ends in the
-/// middle of a COPY: the setup runs `scripts` on a new connection, starts
+/// middle of a COPY: the setup runs `simple_queries` on a new connection, starts
 /// a caller that runs `copy` on it, waits until the caller tells what its
 /// function did, kills it, and runs `next_sql`. The teardown kills the
 /// caller and stops the connection.
 fn hung_copy_setup(
-  scripts: List(String),
+  simple_queries: List(String),
   copy: fn(Connection, Subject(told)) -> answer,
   next_sql: String,
 ) -> Context(EndedCaller(told)) {
   act_setup(
-    start: fn() { start_hung_copy(scripts, copy) },
+    start: fn() { start_hung_copy(simple_queries, copy) },
     stop: stop_hung_copy,
     act: end_caller(_, next_sql),
   )
 }
 
 fn start_hung_copy(
-  scripts: List(String),
+  simple_queries: List(String),
   copy: fn(Connection, Subject(told)) -> answer,
 ) -> Result(HungCopy(told), String) {
   use connection <- try(start_connection(first_driver_server.port))
   use Nil <- try(
-    try_each(scripts, run_control_script(connection, _))
+    try_each(simple_queries, run_control_simple_query(connection, _))
     |> map_error(stop_after_error(connection, _)),
   )
   Ok(HungCopy(connection:, caller: start_copy_caller(copy(connection, _))))
@@ -1954,7 +1976,8 @@ fn end_caller(
 ) -> Result(CallerEnd(told), String) {
   let told = caller_told(hung.caller)
   process.kill(hung.caller.pid)
-  let next = run_script(hung.connection, connection.statement(next_sql), 5000)
+  let next =
+    run_simple_query(hung.connection, connection.statement(next_sql), 5000)
   Ok(CallerEnd(told:, next:))
 }
 

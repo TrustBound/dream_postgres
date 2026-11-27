@@ -10,7 +10,8 @@
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/query.{
-  type Failure, type Outcome, type ScriptFailure, ScriptFailure, failure_report,
+  type Failure, type Outcome, type SimpleQueryFailure, SimpleQueryFailure,
+  failure_report,
 }
 import dream_postgres/internal/cell.{
   type ServerReport, type TransactionStatus, Idle, InFailedTransaction,
@@ -92,11 +93,11 @@ pub fn track_step(
 /// ## Returns
 ///
 /// The tracker after the step, as `track` gives it.
-pub fn track_script(
+pub fn track_simple_query(
   tracker: TransactionTracker,
-  outcome: Outcome(value, ScriptFailure),
+  outcome: Outcome(value, SimpleQueryFailure),
 ) -> TransactionTracker {
-  track(tracker, outcome.status, script_error(outcome.result))
+  track(tracker, outcome.status, simple_query_error(outcome.result))
 }
 
 /// The transaction status of the last step.
@@ -134,11 +135,11 @@ fn step_error(step_result: Result(value, Failure)) -> Option(ServerReport) {
   }
 }
 
-fn script_error(
-  script_result: Result(value, ScriptFailure),
+fn simple_query_error(
+  simple_query_result: Result(value, SimpleQueryFailure),
 ) -> Option(ServerReport) {
-  case script_result {
+  case simple_query_result {
     Ok(_) -> None
-    Error(ScriptFailure(failure:, ..)) -> failure_report(failure)
+    Error(SimpleQueryFailure(failure:, ..)) -> failure_report(failure)
   }
 }

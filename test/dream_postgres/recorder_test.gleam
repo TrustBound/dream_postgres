@@ -10,7 +10,7 @@ import dream_postgres/error.{
   RecordingInUse, RecordingNotFound, RecordingNotRead, RecordingNotWritten,
   SecretColumnNotReplaced,
 }
-import dream_postgres/interceptor.{ScriptAnswer, command}
+import dream_postgres/interceptor.{SqlAnswer, command}
 import dream_postgres/posix
 import dream_postgres/recorder
 import dream_postgres/recorder/normalize
@@ -105,25 +105,25 @@ pub fn tests() -> TestSuite {
         |> be_equal("3")
         |> or_fail_with("Expected 3 rows updated")
       }),
-      it("a script replays", fn(runs: RecordedRuns) {
+      it("a `run_sql` call replays", fn(runs: RecordedRuns) {
         // Act and assert
         runs
         |> should
-        |> play_back("script", recorded_scenarios.run_script)
+        |> play_back("run_sql", recorded_scenarios.run_two_statements)
         |> be_ok()
         |> be_equal("Nil")
-        |> or_fail_with("Expected the script to succeed")
+        |> or_fail_with("Expected the `run_sql` call to succeed")
       }),
       it(
-        "a failed statement of a script replays its server error",
+        "a failed statement of a `run_sql` call replays its server error",
         fn(runs: RecordedRuns) {
           // Act and assert
           runs
           |> should
-          |> play_back("script_failure", recorded_scenarios.run_failing_script)
+          |> play_back("run_sql_failure", recorded_scenarios.run_failing_sql)
           |> be_error()
           |> summarise_error()
-          |> be_equal("invalid ScriptStatementFailed 1 22012")
+          |> be_equal("invalid SqlStatementFailed 1 22012")
           |> or_fail_with(
             "Expected the division by zero of the second statement",
           )
@@ -300,13 +300,15 @@ pub fn tests() -> TestSuite {
           // Act and assert
           runs
           |> should
-          |> play_back("script", recorded_scenarios.select_series)
+          |> play_back("run_sql", recorded_scenarios.select_series)
           |> be_error()
           |> summarise_error()
           |> be_equal(
             "failed RequestNotMatched(\"SELECT 1; SELECT 2\", \"SELECT x FROM generate_series(1, $1) AS x\")",
           )
-          |> or_fail_with("Expected the statement not matched to the script")
+          |> or_fail_with(
+            "Expected the statement not matched to the `run_sql` call",
+          )
         },
       ),
       it(
@@ -597,7 +599,7 @@ pub fn tests() -> TestSuite {
         },
       ),
       it(
-        "copy_from answered with a script answer fails",
+        "copy_from answered with a `run_sql` call answer fails",
         fn(runs: RecordedRuns) {
           // Act and assert
           runs
@@ -606,7 +608,7 @@ pub fn tests() -> TestSuite {
             copy_from(
               with_interceptor(
                 connection,
-                interceptors.answer_with(Ok(ScriptAnswer(results: []))),
+                interceptors.answer_with(Ok(SqlAnswer(results: []))),
               ),
               into: table("users"),
               columns: ["id", "email"],
@@ -623,30 +625,33 @@ pub fn tests() -> TestSuite {
           |> or_fail_with("Expected the answer refused")
         },
       ),
-      it("copy_to answered with a script answer fails", fn(runs: RecordedRuns) {
-        // Act and assert
-        runs
-        |> should
-        |> play_back("all", fn(connection) {
-          copy_to(
-            with_interceptor(
-              connection,
-              interceptors.answer_with(Ok(ScriptAnswer(results: []))),
-            ),
-            query("SELECT 1"),
-            read: single(codec.int),
-            from: [],
-            with: list.prepend,
+      it(
+        "copy_to answered with a `run_sql` call answer fails",
+        fn(runs: RecordedRuns) {
+          // Act and assert
+          runs
+          |> should
+          |> play_back("all", fn(connection) {
+            copy_to(
+              with_interceptor(
+                connection,
+                interceptors.answer_with(Ok(SqlAnswer(results: []))),
+              ),
+              query("SELECT 1"),
+              read: single(codec.int),
+              from: [],
+              with: list.prepend,
+            )
+            |> result.map(string.inspect)
+          })
+          |> be_error()
+          |> summarise_error()
+          |> be_equal(
+            "failed InterceptorFailed(\"an interceptor answered a COPY TO with the answer of another kind of request\")",
           )
-          |> result.map(string.inspect)
-        })
-        |> be_error()
-        |> summarise_error()
-        |> be_equal(
-          "failed InterceptorFailed(\"an interceptor answered a COPY TO with the answer of another kind of request\")",
-        )
-        |> or_fail_with("Expected the answer refused")
-      }),
+          |> or_fail_with("Expected the answer refused")
+        },
+      ),
       it(
         "RecordMissing plays back a recording that exists",
         fn(runs: RecordedRuns) {

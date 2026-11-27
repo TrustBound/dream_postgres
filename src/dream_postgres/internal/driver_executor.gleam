@@ -9,7 +9,7 @@ import dream_postgres/driver/connection.{
   type ChunkError, type ConnectError, type Connection, type ConnectionEnd,
   type ConnectionStateError, type CopyError, type HousekeepingError,
   type LossReason, type PrepareError, type RequestFailure, type RunError,
-  type ScriptError, type Statement, type Violation,
+  type SimpleQueryError, type Statement, type Violation,
 }
 import dream_postgres/driver/listener.{
   type ListenFailure, type ListenerError, type UnsubscribeError,
@@ -201,26 +201,27 @@ pub fn run_error_reason(run_error: RunError, endpoint: Endpoint) -> Reason {
   }
 }
 
-/// The client reason of a failed `run_script`.
+/// The client reason of a failed `run_simple_query`.
 @internal
-pub fn script_error_reason(
-  script_error: ScriptError,
+pub fn simple_query_error_reason(
+  simple_query_error: SimpleQueryError,
   endpoint: Endpoint,
 ) -> Reason {
-  case script_error {
-    connection.ScriptRequestFailed(failure:) -> request_failure_reason(failure)
-    connection.ScriptNotConnected(error: connect_error) ->
+  case simple_query_error {
+    connection.SimpleQueryRequestFailed(failure:) ->
+      request_failure_reason(failure)
+    connection.SimpleQueryNotConnected(error: connect_error) ->
       not_connected_reason(connect_error, endpoint)
-    connection.ScriptUnencodable(error: encode_error) ->
+    connection.SimpleQueryUnencodable(error: encode_error) ->
       error.RequestNotWritable(request_fault(encode_error))
-    connection.ScriptRefused(report:, transaction_status: _) ->
+    connection.SimpleQueryRefused(report:, transaction_status: _) ->
       error.Server(error.server_error_from_report(report))
-    connection.ScriptFailed(completed:, report:, transaction_status: _) ->
-      error.ScriptStatementFailed(
+    connection.SimpleQueryFailed(completed:, report:, transaction_status: _) ->
+      error.SqlStatementFailed(
         statements_run: list.length(completed),
         server_error: error.server_error_from_report(report),
       )
-    connection.ScriptCopyRefused(completed:) ->
+    connection.SimpleQueryCopyRefused(completed:) ->
       error.CopyStatementRefused(statements_run: list.length(completed))
   }
 }
@@ -474,7 +475,7 @@ fn protocol_step(phase: Phase) -> error.ProtocolStep {
     query.AwaitingPortalColumns -> error.AwaitingPortalColumns
     query.ReadingExecuteRows -> error.ReadingExecuteRows
     query.AwaitingStatementResult -> error.AwaitingStatementResult
-    query.ReadingScriptRows -> error.ReadingScriptRows
+    query.ReadingSimpleQueryRows -> error.ReadingSqlRows
     query.ReadingCopyOut -> error.ReadingCopyOut
     query.AwaitingCopyComplete -> error.AwaitingCopyComplete
     query.AwaitingReadyForQuery -> error.AwaitingReadyForQuery

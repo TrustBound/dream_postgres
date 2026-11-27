@@ -4,14 +4,14 @@
 //// notice goes with a later request.
 
 import dream_postgres/driver/connection.{
-  copy_to, prepare, run, run_housekeeping_script, statement, stop,
+  copy_to, prepare, run, run_housekeeping_simple_query, statement, stop,
 }
 import dream_postgres/driver/housekeeping_sql.{rollback}
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
 import driver/fake_server.{Answer, start_fake_server}
-import driver/server_connection.{run_control_script, start_connection}
+import driver/server_connection.{run_control_simple_query, start_connection}
 import driver/server_notices.{next_notice, start_noticed_connection}
 import driver/servers.{first_driver_server}
 import fixtures/copy_callbacks.{collect_row}
@@ -141,7 +141,10 @@ fn subscriber_tests() {
           first_driver_server.port,
           notices,
         ))
-        use Nil <- try(run_control_script(connection, nonstandard_strings_sql))
+        use Nil <- try(run_control_simple_query(
+          connection,
+          nonstandard_strings_sql,
+        ))
         use _description <- try(
           prepare(connection, statement(backslash_sql), 5000)
           |> map_error(inspect),
@@ -167,7 +170,10 @@ fn subscriber_tests() {
           first_driver_server.port,
           notices,
         ))
-        use Nil <- try(run_control_script(connection, warning_function_sql))
+        use Nil <- try(run_control_simple_query(
+          connection,
+          warning_function_sql,
+        ))
         use _rows <- try(
           copy_to(
             connection,
@@ -200,7 +206,10 @@ fn carry_over_tests() {
       // Act
       let outcome = {
         use connection <- try(start_connection(first_driver_server.port))
-        use Nil <- try(run_control_script(connection, nonstandard_strings_sql))
+        use Nil <- try(run_control_simple_query(
+          connection,
+          nonstandard_strings_sql,
+        ))
         use _description <- try(
           prepare(connection, statement(backslash_sql), 5000)
           |> map_error(inspect),
@@ -253,7 +262,7 @@ fn carry_over_tests() {
       let outcome = {
         use connection <- try(start_connection(first_driver_server.port))
         use _outcomes <- try(
-          run_housekeeping_script(connection, rollback, 5000)
+          run_housekeeping_simple_query(connection, rollback, 5000)
           |> map_error(inspect),
         )
         let outcome =

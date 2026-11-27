@@ -280,7 +280,7 @@ fn reset_connection(state: State, held: Connection) -> State {
 
 fn roll_back(state: State, held: Connection) -> State {
   let deadline = state.config.rollback_deadline_milliseconds
-  case connection.run_housekeeping_script(held, rollback, deadline) {
+  case connection.run_housekeeping_simple_query(held, rollback, deadline) {
     Ok(_outcomes) -> ready(state)
     Error(_error) -> replace(state, held)
   }
@@ -288,7 +288,7 @@ fn roll_back(state: State, held: Connection) -> State {
 
 fn check_connection(state: State, idle: Connection) -> State {
   let deadline = state.config.health_check_deadline_milliseconds
-  case connection.run_housekeeping_script(idle, health_check, deadline) {
+  case connection.run_housekeeping_simple_query(idle, health_check, deadline) {
     Ok(_outcomes) -> ready(state)
     Error(_error) -> replace(state, idle)
   }

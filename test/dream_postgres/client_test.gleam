@@ -1,5 +1,5 @@
 //// The public client on PostgreSQL 16 to 19: the config, the pool
-//// runners, `with_connection`, `script` and transactions.
+//// runners, `with_connection`, `run_sql` and transactions.
 ////
 //// Each server has one pool for all of its tests. A test that writes rows
 //// holds one connection with `with_connection` and makes its own
@@ -8,7 +8,7 @@
 import dream_errors.{Invalid, Unavailable}
 import dream_postgres.{
   affected, all, check, column, column_at, column_named, commit, isolation,
-  maybe_one, named, one, parameter, query, read_only, row, run, script, single,
+  maybe_one, named, one, parameter, query, read_only, row, run, run_sql, single,
   step, step_with, transaction, with_connection, with_interceptor,
 }
 import dream_postgres/codec
@@ -162,30 +162,55 @@ pub fn tests() -> TestSuite {
           |> be_equal([1])
           |> or_fail_with("Expected the nested call to read the inserted row")
         }),
-        it("script runs several statements", fn(pools) {
+        it("run_sql runs several statements", fn(pools) {
           // Act and assert
           pools
           |> should
           |> run_on_pool(fn(connection) {
-            script("SELECT 1; SELECT 2", connection)
+            run_sql("SELECT 1; SELECT 2", connection)
           })
           |> be_ok()
           |> be_equal(Nil)
-          |> or_fail_with("Expected both statements of the script to run")
+          |> or_fail_with(
+            "Expected both statements of the `run_sql` call to run",
+          )
         }),
-        it("script gives the error of a failed statement", fn(pools) {
+        it("run_sql gives the error of a failed statement", fn(pools) {
           // Act and assert
           pools
           |> should
           |> run_on_pool(fn(connection) {
-            script("SELECT 1; SELECT 1 / 0", connection)
+            run_sql("SELECT 1; SELECT 1 / 0", connection)
           })
           |> be_error()
           |> summarise_error()
-          |> be_equal("invalid ScriptStatementFailed 1 22012")
+          |> be_equal("invalid SqlStatementFailed 1 22012")
           |> or_fail_with(
-            "Expected the division by zero of the script after 1 statement",
+            "Expected the division by zero of the `run_sql` call after 1 statement",
           )
+        }),
+        it("run_sql rolls back every statement when one fails", fn(pools) {
+          // Act and assert
+          pools
+          |> should
+          |> run_on_pool(fn(connection) {
+            with_connection(connection, fn(held) {
+              #(
+                run_sql(
+                  "CREATE TEMPORARY TABLE run_sql_rolled_back (id int4); SELECT 1 / 0",
+                  held,
+                )
+                  |> result.is_error,
+                query(
+                  "SELECT to_regclass('pg_temp.run_sql_rolled_back') IS NULL",
+                )
+                  |> one(single(codec.bool), held),
+              )
+            })
+          })
+          |> be_ok()
+          |> be_equal(#(True, Ok(True)))
+          |> or_fail_with("Expected the failed call to leave no table behind")
         }),
         it("every call on a stopped pool is Unavailable", fn(pools) {
           // Act and assert
@@ -196,7 +221,7 @@ pub fn tests() -> TestSuite {
               query("SELECT 1")
                 |> all(single(codec.int), connection)
                 |> result.replace(Nil),
-              script("SELECT 1", connection),
+              run_sql("SELECT 1", connection),
               with_connection(connection, fn(_held) { Nil }),
               transaction(
                 connection,
@@ -258,7 +283,7 @@ pub fn tests() -> TestSuite {
               rollback_also_failed: keep_both,
             )
             |> step(fn(transaction_connection) {
-              script(
+              run_sql(
                 "CREATE TEMPORARY TABLE pooled_rows (id int4) ON COMMIT DROP",
                 transaction_connection,
               )
@@ -429,7 +454,10 @@ pub fn tests() -> TestSuite {
               rollback_also_failed: keep_both,
             )
             |> read_only
-            |> step(script("CREATE TEMPORARY TABLE read_only_rows (id int4)", _))
+            |> step(run_sql(
+              "CREATE TEMPORARY TABLE read_only_rows (id int4)",
+              _,
+            ))
             |> commit
           })
           |> be_error()
@@ -474,7 +502,7 @@ pub fn tests() -> TestSuite {
               rollback_also_failed: RollbackFailed,
             )
             |> isolation(Serializable)
-            |> step(script(
+            |> step(run_sql(
               "DO $$ BEGIN RAISE EXCEPTION 'conflict' USING ERRCODE = 'serialization_failure'; END $$",
               _,
             ))
