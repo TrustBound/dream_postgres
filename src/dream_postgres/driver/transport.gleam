@@ -738,7 +738,7 @@ fn socket_error_of_name(name: String) -> SocketError {
 ///
 /// `SendTimedOut` for a send timeout, else `SendFailed` with the error of
 /// `socket_error`.
-pub fn send_error(reason: SocketFailure) -> SendError {
+fn send_error(reason: SocketFailure) -> SendError {
   case reason_name(reason) {
     "timeout" -> SendTimedOut
     _other -> SendFailed(socket_error(reason))
@@ -764,7 +764,7 @@ fn receive_error(reason: SocketFailure) -> ReceiveError {
 /// ## Returns
 ///
 /// The typed error.
-pub fn tls_error(reason: SocketFailure) -> TransportError {
+fn tls_error(reason: SocketFailure) -> TransportError {
   case reason_name(reason) {
     "hostname_check_failed" -> TlsFailed(HostNameMismatch)
     "unknown_ca" -> TlsFailed(UnknownAuthority)

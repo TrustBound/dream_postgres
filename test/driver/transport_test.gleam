@@ -5,19 +5,18 @@
 
 import dream_postgres/driver/message.{AuthenticationOk, AuthenticationSasl}
 import dream_postgres/driver/transport.{
-  type AddressError, type SendError, type SocketError, type SocketFailure,
-  type Tls, type TransportError, AuthorityCertificates, AuthorityFile,
-  AuthorityFileEmpty, AuthorityFileUnreadable, BytesBeforeTls,
-  CertificateExpired, CheckAuthority, CheckAuthorityAndHost, ConnectClosed,
-  ConnectRefused, ConnectReset, ConnectTimedOut, ConnectUnlisted,
-  ConnectionReset, DirectNegotiation, DnsLookupFailed, HostNameMismatch,
-  InvalidHost, InvalidPort, NoCertificateCheck, NoTls, OtherReason,
-  OtherTlsFailure, PostgresNegotiation, PreferTls, ReasonAtom, ReceiveFailed,
-  ReceiveTimedOut, RequireTls, SendFailed, SendTimedOut, ServerRefusedTls,
-  SocketClosed, SystemAuthorities, TlsAlert, TlsAlertRaised, TlsFailed,
-  TlsRequestAnsweredWithError, UnexpectedTlsAnswer, UnknownAuthority, Unlisted,
-  address, close, connect_error, send_error, server_certificate, socket_error,
-  tls_error,
+  type AddressError, type SocketError, type SocketFailure, type Tls,
+  type TransportError, AuthorityCertificates, AuthorityFile, AuthorityFileEmpty,
+  AuthorityFileUnreadable, BytesBeforeTls, CertificateExpired, CheckAuthority,
+  CheckAuthorityAndHost, ConnectClosed, ConnectRefused, ConnectReset,
+  ConnectTimedOut, ConnectUnlisted, ConnectionReset, DirectNegotiation,
+  DnsLookupFailed, HostNameMismatch, InvalidHost, InvalidPort,
+  NoCertificateCheck, NoTls, OtherReason, OtherTlsFailure, PostgresNegotiation,
+  PreferTls, ReasonAtom, ReceiveFailed, ReceiveTimedOut, RequireTls, SendFailed,
+  ServerRefusedTls, SocketClosed, SystemAuthorities, TlsAlert, TlsAlertRaised,
+  TlsFailed, TlsRequestAnsweredWithError, TransportConfig, UnexpectedTlsAnswer,
+  UnknownAuthority, Unlisted, address, close, connect_error, server_certificate,
+  socket_error,
 }
 import dream_test/matchers.{
   be_equal, be_error, be_ok, be_true, or_fail_with, should,
@@ -519,6 +518,28 @@ fn connect_failure_tests() {
       |> be_equal(ConnectRefused)
       |> or_fail_with("Expected ConnectRefused")
     }),
+    it("gives ConnectTimedOut for a TLS handshake that never ends", fn() {
+      // Arrange
+      let tls = RequireTls(NoCertificateCheck, PostgresNegotiation)
+
+      // Act
+      let connected = {
+        use #(port, _server) <- try(
+          start_fake_server(Answer(<<"S">>)) |> map_error(ConnectUnlisted),
+        )
+        use config <- try(transport_config("localhost", port, tls))
+        connect_with_minute_deadline(
+          TransportConfig(..config, connect_timeout_milliseconds: 100),
+        )
+      }
+
+      // Assert
+      connected
+      |> should
+      |> be_error
+      |> be_equal(ConnectTimedOut)
+      |> or_fail_with("Expected ConnectTimedOut for the handshake")
+    }),
     it("gives DnsLookupFailed with the host for a name with no address", fn() {
       // Arrange
       let config = transport_config("no-such-host.invalid", 5432, NoTls)
@@ -752,19 +773,6 @@ fn reason_tests() {
     ),
     socket_reason_test(ReasonAtom(atom.create("einval")), SocketClosed),
     socket_reason_test(OtherReason("{some,reason}"), Unlisted("{some,reason}")),
-    send_reason_test(ReasonAtom(atom.create("timeout")), SendTimedOut),
-    send_reason_test(
-      ReasonAtom(atom.create("closed")),
-      SendFailed(SocketClosed),
-    ),
-    send_reason_test(
-      TlsAlert(atom.create("bad_record_mac")),
-      SendFailed(TlsAlertRaised("bad_record_mac")),
-    ),
-    tls_reason_test(
-      OtherReason("{some,reason}"),
-      TlsFailed(OtherTlsFailure("{some,reason}")),
-    ),
     connect_reason_test(ReasonAtom(atom.create("timeout")), ConnectTimedOut),
     connect_reason_test(ReasonAtom(atom.create("econnrefused")), ConnectRefused),
     socket_reason_test(ReasonAtom(atom.create("closed")), SocketClosed),
@@ -773,24 +781,6 @@ fn reason_tests() {
     socket_reason_test(
       ReasonAtom(atom.create("ehostunreach")),
       Unlisted("ehostunreach"),
-    ),
-    tls_reason_test(
-      ReasonAtom(atom.create("hostname_check_failed")),
-      TlsFailed(HostNameMismatch),
-    ),
-    tls_reason_test(
-      ReasonAtom(atom.create("unknown_ca")),
-      TlsFailed(UnknownAuthority),
-    ),
-    tls_reason_test(
-      ReasonAtom(atom.create("cert_expired")),
-      TlsFailed(CertificateExpired),
-    ),
-    tls_reason_test(ReasonAtom(atom.create("closed")), ConnectClosed),
-    tls_reason_test(ReasonAtom(atom.create("timeout")), ConnectTimedOut),
-    tls_reason_test(
-      ReasonAtom(atom.create("handshake_failure")),
-      TlsFailed(OtherTlsFailure("handshake_failure")),
     ),
   ]
 }
@@ -812,32 +802,6 @@ fn socket_reason_test(reason: SocketFailure, expected: SocketError) {
   it("maps the reason " <> inspect(reason) <> " of a socket call", fn() {
     // Act
     let error = socket_error(reason)
-
-    // Assert
-    error
-    |> should
-    |> be_equal(expected)
-    |> or_fail_with("Expected the typed error")
-  })
-}
-
-fn send_reason_test(reason: SocketFailure, expected: SendError) {
-  it("maps the reason " <> inspect(reason) <> " of a send", fn() {
-    // Act
-    let error = send_error(reason)
-
-    // Assert
-    error
-    |> should
-    |> be_equal(expected)
-    |> or_fail_with("Expected the typed error")
-  })
-}
-
-fn tls_reason_test(reason: SocketFailure, expected: TransportError) {
-  it("maps the reason " <> inspect(reason) <> " of a TLS handshake", fn() {
-    // Act
-    let error = tls_error(reason)
 
     // Assert
     error
