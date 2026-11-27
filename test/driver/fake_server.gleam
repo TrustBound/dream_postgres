@@ -16,6 +16,9 @@ pub type FakeBehavior {
   NotTls
   /// Answers `S` and does a TLS handshake with this certificate and key.
   Tls(String, String)
+  /// Answers `S`, does a TLS handshake with this certificate and key, then
+  /// sends a record that is not valid TLS.
+  TlsThenNotTls(String, String)
 }
 
 /// Starts a fake server, and gives its port. Gives the reason when the
