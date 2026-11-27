@@ -45,17 +45,15 @@ import driver/proxy.{
 import driver/server_connection.{
   ask_transaction_status, backend_pid, caching_config, caller_answer,
   connection_config, lock_waiter_pid, next_event,
-  next_event_after_refused_reconnects, parameter_config, protocol_config,
+  next_event_after_refused_reconnects, parameter_config, pid_of, protocol_config,
   resume_connection, send_stray_message, start_announced_caller, start_caller,
   start_configured, start_connection, start_in_ended_owner, start_proxied,
   start_proxied_with_caching, stop_proxied, suspend_connection,
   terminate_backend, tls_config, user_config, wait_for_lock_waiter,
-  wait_for_parameter, wait_for_table_waiter, watched_config,
+  wait_for_mailbox_length, wait_for_message, wait_for_parameter,
+  wait_for_table_waiter, watched_config,
 }
 import driver/servers.{type Server, driver_servers, first_driver_server}
-import fixtures/driver_session.{
-  pid_of, wait_for_mailbox_length, wait_for_message,
-}
 import fixtures/driver_tls.{verify_full}
 import gleam/bit_array
 import gleam/erlang/process.{type Subject}

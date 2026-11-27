@@ -1,10 +1,10 @@
 //// Test fixtures that start connection processes on the driver servers:
 //// the connection config, a started connection, a text query, a
 //// connection through a test proxy with a control connection beside it,
-//// the backend process IDs, a suspended connection process, and callers
-//// in their own processes. A test stops each connection
-//// that it starts, because the shared servers keep a connection open
-//// until it ends.
+//// the backend process IDs, a suspended connection process, the mailbox
+//// and the memory of the connection process, and callers in their own
+//// processes. A test stops each connection that it starts, because the
+//// shared servers keep a connection open until it ends.
 
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
@@ -213,6 +213,24 @@ pub fn start_proxied_with_caching(
   ProxiedConnection(connection:, control:, proxy:, events:)
 }
 
+/// Starts a connection to `server` through a new proxy, as `start_proxied`
+/// does, with the TLS setting `tls` through the proxy.
+pub fn start_proxied_with_tls(
+  server: Server,
+  first_delay: Int,
+  tls: Tls,
+) -> ProxiedConnection {
+  let #(port, proxy) = start_proxy(server.port)
+  let events = process.new_subject()
+  let config =
+    connection_config(port)
+    |> watched_config(events, first_delay)
+    |> tls_config(tls)
+  let connection = start_configured(config)
+  let control = start_connection(server.port)
+  ProxiedConnection(connection:, control:, proxy:, events:)
+}
+
 /// Stops the connection and the control connection.
 pub fn stop_proxied(proxied: ProxiedConnection) -> Nil {
   stop(proxied.connection)
@@ -307,13 +325,73 @@ fn suspend(pid: Pid) -> Nil
 @external(erlang, "sys", "resume")
 fn resume(pid: Pid) -> Nil
 
+/// The process of a connection.
 @external(erlang, "driver_connection_test_ffi", "pid_of")
-fn pid_of(connection: Connection) -> Pid
+pub fn pid_of(connection: Connection) -> Pid
 
 @external(erlang, "erlang", "send")
 fn send_raw(pid: Pid, message: String) -> String
 
+/// The memory of a process, with the binaries it references, and the
+/// length of its mailbox.
+@external(erlang, "driver_copy_test_ffi", "memory_of")
+pub fn memory_of(pid: Pid) -> #(Int, Int)
+
+/// Sends a process a DOWN message of a monitor that it never made.
+@external(erlang, "driver_copy_test_ffi", "send_stray_down")
+pub fn send_stray_down(pid: Pid) -> Nil
+
+/// The bytes of the ErrorResponse that a server sends when an
+/// administrator ends the session: FATAL, 57P01.
+pub fn fatal_error_bytes() -> BitArray {
+  let body = <<
+    "SFATAL":utf8, 0, "VFATAL":utf8, 0, "C57P01":utf8, 0,
+    "Mterminating connection due to administrator command":utf8, 0, 0,
+  >>
+  <<"E", { bit_array.byte_size(body) + 4 }:32, body:bits>>
+}
+
 // Waiting without a sleep -----------------------------------------------------
+
+/// Waits until a message with one of the tags waits in the mailbox of
+/// `pid`, for example `request`, `copy_call` or `tcp`. It looks again each
+/// time, at most `attempts` times: no sleep. Gives whether it came.
+@external(erlang, "driver_copy_test_ffi", "wait_for_message")
+pub fn wait_for_message(pid: Pid, tags: List(String), attempts: Int) -> Bool
+
+/// Waits until at least `length` messages wait in the mailbox of `pid`.
+/// Gives whether they came.
+@external(erlang, "driver_copy_test_ffi", "wait_for_mailbox_length")
+pub fn wait_for_mailbox_length(pid: Pid, length: Int, attempts: Int) -> Bool
+
+/// Waits until the reset of the peer reached the TCP socket of `pid`.
+/// Gives whether it did.
+@external(erlang, "driver_copy_test_ffi", "wait_for_reset")
+pub fn wait_for_reset(pid: Pid, attempts: Int) -> Bool
+
+/// Waits until the backend of `pid` is idle. It asks the control
+/// connection again each time: no sleep.
+pub fn wait_for_idle_backend(
+  control: Connection,
+  pid: String,
+) -> Result(Nil, Nil) {
+  wait_for_idle(control, pid, 1_000_000)
+}
+
+fn wait_for_idle(
+  control: Connection,
+  pid: String,
+  attempts: Int,
+) -> Result(Nil, Nil) {
+  let sql = "SELECT state FROM pg_stat_activity WHERE pid = " <> pid
+  case run_script(control, sql, 5000), attempts {
+    Ok([Outcome(result: CommandResult(rows: [[Text(<<"idle">>)]], ..), ..)]), _
+    -> Ok(Nil)
+    Error(_error), _ -> Error(Nil)
+    _, 0 -> Error(Nil)
+    _, _ -> wait_for_idle(control, pid, attempts - 1)
+  }
+}
 
 /// Waits until one session of the server waits for the advisory lock
 /// `key`. It asks the control connection again each time: no sleep.

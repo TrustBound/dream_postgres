@@ -1,23 +1,59 @@
 //// Tests for COPY in `dream_postgres/driver/connection`: `copy_from` and
-//// `copy_to` on the driver servers of PostgreSQL 16 to 19. The scenarios
-//// are in `fixtures/copy_scenarios`.
+//// `copy_to` on the driver servers of PostgreSQL 16 to 19. The produce
+//// functions and folds are in `fixtures/copy_callbacks`.
 
 import dream_postgres/driver/connection.{
-  AppFailed, CopyNotRunning, CopyNotStarted, DriverFailed, InvalidRequest,
-  Outcome,
+  ConnectionLost, CopyNotRunning, CopyNotStarted, DeadlinePassed, InvalidRequest,
+  Outcome, SocketFailed, copy_from, copy_to, run_script, send_chunk, stop,
+  transaction_status,
 }
 import dream_postgres/driver/message.{ZeroByteInString}
+import dream_postgres/driver/transport.{SendTimedOut, SocketClosed}
 import dream_postgres/internal/cell.{
   CommandResult, Idle, InFailedTransaction, Text,
 }
-import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
+import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
-import driver/servers.{type Server, driver_servers}
-import fixtures/copy_scenarios
+import driver/proxy.{answer_next_request, inject, reset_client}
+import driver/server_connection.{
+  backend_pid, caller_answer, fatal_error_bytes, pid_of, resume_connection,
+  send_stray_down, start_caller, start_connection, start_proxied,
+  start_proxied_with_tls, stop_proxied, suspend_connection, wait_for_message,
+  wait_for_reset,
+}
+import driver/servers.{type Server, driver_servers, first_driver_server}
+import fixtures/copy_callbacks.{
+  MemoryPeak, append_row, await_go, binary_copy, caller_told, close_at_first_row,
+  collect_row, collect_size, copy_inside, count_and_sample, fail_at_first_row,
+  fail_at_second_row, hang_after_refusal, hang_after_rows, hang_at_first_row,
+  keep_sender, kept_sender, load_chunks_sampling, read_until_idle,
+  send_across_close, send_across_violation, send_after_end, send_after_go,
+  send_after_idle, send_bad_row, send_binary, send_csv, send_then_fail,
+  send_three_rows, send_twice_after_error, send_until_error, send_until_refused,
+  start_copy_caller,
+}
+import fixtures/driver_tls.{verify_full}
+import gleam/bit_array
+import gleam/erlang/process
 import gleam/int.{to_string}
 import gleam/list.{map}
 import gleam/option.{None, Some}
+import gleam/string.{repeat}
+import matchers/extract_app_failure.{extract_app_failure}
+import matchers/extract_command_result.{extract_command_result}
+import matchers/extract_command_rows.{extract_command_rows}
+import matchers/extract_copy_driver_error.{extract_copy_driver_error}
+import matchers/extract_driver_error_code.{extract_driver_error_code}
+import matchers/extract_ending_report.{extract_ending_report}
+import matchers/extract_first.{extract_first}
+import matchers/extract_first_of_pair.{extract_first_of_pair}
+import matchers/extract_loss_reason.{extract_loss_reason}
+import matchers/extract_outcome_tags.{extract_outcome_tags}
+import matchers/extract_protocol_violation.{extract_protocol_violation}
+import matchers/extract_report_code.{extract_report_code}
+import matchers/extract_sampled_peak.{extract_sampled_peak}
+import matchers/extract_second_of_pair.{extract_second_of_pair}
 import matchers/within_memory.{within_memory}
 
 /// The bound of the memory of each process during a COPY of 1,000,000
@@ -32,160 +68,861 @@ pub fn tests() -> TestSuite {
     group("deadlines", deadline_tests()),
     group("callers", caller_tests()),
     group("losses", loss_tests()),
+    group("writes after the server's last error", write_failure_tests()),
   ])
 }
 
 fn server_tests(server: Server) {
-  group("PostgreSQL " <> to_string(server.version), [
+  group(
+    "PostgreSQL " <> to_string(server.version),
+    list.flatten([
+      store_tests(server),
+      both_ways_tests(server),
+      transaction_tests(server),
+      refusal_tests(server),
+      app_failure_tests(server),
+      no_copy_tests(server),
+    ]),
+  )
+}
+
+fn store_tests(server: Server) {
+  [
     it("stores the rows of a COPY FROM STDIN and gives their count", fn() {
-      copy_scenarios.store_three_rows(server.port)
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE copied (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let stored =
+        copy_from(connection, "COPY copied FROM STDIN", 5000, send_three_rows)
+      stop(connection)
+
+      // Assert
+      stored
       |> should
       |> be_ok
-      |> be_equal(#(Ok(3), ["1", "one", "2", "two", "3", "three"]))
+      |> be_equal(3)
       |> or_fail_with("Expected three rows stored")
     }),
-    it("reads the rows of a COPY TO STDOUT one at a time", fn() {
-      copy_scenarios.read_three_rows(server.port)
+    it("stores the rows that a COPY FROM STDIN sent", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE copied (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _stored =
+        copy_from(connection, "COPY copied FROM STDIN", 5000, send_three_rows)
+      let rows =
+        run_script(
+          connection,
+          "SELECT id::text, name FROM copied ORDER BY id",
+          5000,
+        )
+      stop(connection)
+
+      // Assert
+      rows
       |> should
       |> be_ok
-      |> be_equal(
-        Ok([<<"3\tr3\n":utf8>>, <<"2\tr2\n":utf8>>, <<"1\tr1\n":utf8>>]),
-      )
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([
+        [Text(<<"1">>), Text(<<"one">>)],
+        [Text(<<"2">>), Text(<<"two">>)],
+        [Text(<<"3">>), Text(<<"three">>)],
+      ])
+      |> or_fail_with("Expected the three rows in the table")
+    }),
+    it("reads the rows of a COPY TO STDOUT one at a time", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let rows =
+        copy_to(
+          connection,
+          "COPY (SELECT n, 'r' || n FROM generate_series(1, 3) n) TO STDOUT",
+          5000,
+          [],
+          collect_row,
+        )
+      stop(connection)
+
+      // Assert
+      rows
+      |> should
+      |> be_ok
+      |> be_equal([<<"3\tr3\n":utf8>>, <<"2\tr2\n":utf8>>, <<"1\tr1\n":utf8>>])
       |> or_fail_with("Expected each row as its own bytes")
     }),
     it("gives a row that is longer than one read of the socket", fn() {
-      copy_scenarios.read_long_row(server.port)
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let sizes =
+        copy_to(
+          connection,
+          "COPY (SELECT repeat('x', 4000000)) TO STDOUT",
+          5000,
+          [],
+          collect_size,
+        )
+      stop(connection)
+
+      // Assert
+      sizes
       |> should
       |> be_ok
-      |> be_equal(Ok([4_000_001]))
+      |> be_equal([4_000_001])
       |> or_fail_with("Expected one row of 4,000,001 bytes")
     }),
-    it("moves the bytes of a csv COPY both ways", fn() {
-      copy_scenarios.copy_csv_both_ways(server.port)
+  ]
+}
+
+fn both_ways_tests(server: Server) {
+  [
+    it("stores the rows of a csv COPY", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE csv (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let stored =
+        copy_from(
+          connection,
+          "COPY csv FROM STDIN (FORMAT csv)",
+          5000,
+          send_csv,
+        )
+      stop(connection)
+
+      // Assert
+      stored
       |> should
       |> be_ok
-      |> be_equal(#(Ok(2), Ok([<<"2,\"b,c\"\n":utf8>>, <<"1,a\n":utf8>>])))
+      |> be_equal(2)
+      |> or_fail_with("Expected two csv rows stored")
+    }),
+    it("moves the bytes of a csv COPY both ways", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE csv (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _stored =
+        copy_from(
+          connection,
+          "COPY csv FROM STDIN (FORMAT csv)",
+          5000,
+          send_csv,
+        )
+      let rows =
+        copy_to(
+          connection,
+          "COPY csv TO STDOUT (FORMAT csv)",
+          5000,
+          [],
+          collect_row,
+        )
+      stop(connection)
+
+      // Assert
+      rows
+      |> should
+      |> be_ok
+      |> be_equal([<<"2,\"b,c\"\n":utf8>>, <<"1,a\n":utf8>>])
       |> or_fail_with("Expected the csv rows back")
     }),
-    it("moves the bytes of a binary COPY both ways", fn() {
-      copy_scenarios.copy_binary_both_ways(server.port)
+    it("stores the row of a binary COPY", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(connection, "CREATE TEMP TABLE b (n int4)", 5000)
+
+      // Act
+      let stored =
+        copy_from(
+          connection,
+          "COPY b FROM STDIN (FORMAT binary)",
+          5000,
+          send_binary,
+        )
+      stop(connection)
+
+      // Assert
+      stored
       |> should
       |> be_ok
-      |> be_equal(#(Ok(1), Ok(copy_scenarios.binary_copy())))
+      |> be_equal(1)
+      |> or_fail_with("Expected one binary row stored")
+    }),
+    it("moves the bytes of a binary COPY both ways", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(connection, "CREATE TEMP TABLE b (n int4)", 5000)
+
+      // Act
+      let _stored =
+        copy_from(
+          connection,
+          "COPY b FROM STDIN (FORMAT binary)",
+          5000,
+          send_binary,
+        )
+      let data =
+        copy_to(
+          connection,
+          "COPY b TO STDOUT (FORMAT binary)",
+          5000,
+          <<>>,
+          append_row,
+        )
+      stop(connection)
+
+      // Assert
+      data
+      |> should
+      |> be_ok
+      |> be_equal(binary_copy())
       |> or_fail_with("Expected the same binary COPY data back")
     }),
-    it("commits and rolls back a COPY with its transaction", fn() {
-      copy_scenarios.copy_in_transactions(server.port)
+  ]
+}
+
+fn transaction_tests(server: Server) {
+  [
+    it("gives the count of a COPY in a transaction that rolls back", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE kept (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _begun = run_script(connection, "BEGIN", 5000)
+      let rolled_back =
+        copy_from(connection, "COPY kept FROM STDIN", 5000, send_three_rows)
+      let _rolled_back = run_script(connection, "ROLLBACK", 5000)
+      stop(connection)
+
+      // Assert
+      rolled_back
       |> should
       |> be_ok
-      |> be_equal(#(Ok(3), "0", Ok(3), "3"))
-      |> or_fail_with("Expected no row after ROLLBACK and three after COMMIT")
+      |> be_equal(3)
+      |> or_fail_with("Expected three rows copied before the ROLLBACK")
+    }),
+    it("commits and rolls back a COPY with its transaction", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE kept (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _begun = run_script(connection, "BEGIN", 5000)
+      let _rolled_back =
+        copy_from(connection, "COPY kept FROM STDIN", 5000, send_three_rows)
+      let _ended = run_script(connection, "ROLLBACK", 5000)
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM kept", 5000)
+      stop(connection)
+
+      // Assert
+      count
+      |> should
+      |> be_ok
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"0">>)]])
+      |> or_fail_with("Expected no row after ROLLBACK")
+    }),
+    it("gives the count of a COPY in a transaction that commits", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE kept (id int, name text)",
+          5000,
+        )
+      let _begun = run_script(connection, "BEGIN", 5000)
+      let _rolled_back =
+        copy_from(connection, "COPY kept FROM STDIN", 5000, send_three_rows)
+      let _ended = run_script(connection, "ROLLBACK", 5000)
+
+      // Act
+      let _begun = run_script(connection, "BEGIN", 5000)
+      let committed =
+        copy_from(connection, "COPY kept FROM STDIN", 5000, send_three_rows)
+      let _committed = run_script(connection, "COMMIT", 5000)
+      stop(connection)
+
+      // Assert
+      committed
+      |> should
+      |> be_ok
+      |> be_equal(3)
+      |> or_fail_with("Expected three rows copied before the COMMIT")
+    }),
+    it("keeps the rows of a COPY in a transaction that commits", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE kept (id int, name text)",
+          5000,
+        )
+      let _begun = run_script(connection, "BEGIN", 5000)
+      let _rolled_back =
+        copy_from(connection, "COPY kept FROM STDIN", 5000, send_three_rows)
+      let _ended = run_script(connection, "ROLLBACK", 5000)
+
+      // Act
+      let _begun = run_script(connection, "BEGIN", 5000)
+      let _committed =
+        copy_from(connection, "COPY kept FROM STDIN", 5000, send_three_rows)
+      let _ended = run_script(connection, "COMMIT", 5000)
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM kept", 5000)
+      stop(connection)
+
+      // Assert
+      count
+      |> should
+      |> be_ok
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"3">>)]])
+      |> or_fail_with("Expected three rows after COMMIT")
     }),
     it("fails the transaction with a COPY that the app abandoned", fn() {
-      copy_scenarios.abandon_in_transaction(server.port)
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE failing (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _begun = run_script(connection, "BEGIN", 5000)
+      let _failed =
+        copy_from(connection, "COPY failing FROM STDIN", 5000, send_then_fail)
+      let status = transaction_status(connection)
+      let _rolled_back = run_script(connection, "ROLLBACK", 5000)
+      stop(connection)
+
+      // Assert
+      status
       |> should
       |> be_ok
-      |> be_equal(#(Error(AppFailed("stopped")), InFailedTransaction))
-      |> or_fail_with("Expected the app's failure in a failed transaction")
+      |> be_equal(InFailedTransaction)
+      |> or_fail_with("Expected a failed transaction")
     }),
+    it("gives the app's failure of a COPY in a transaction", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE failing (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _begun = run_script(connection, "BEGIN", 5000)
+      let failed =
+        copy_from(connection, "COPY failing FROM STDIN", 5000, send_then_fail)
+      let _rolled_back = run_script(connection, "ROLLBACK", 5000)
+      stop(connection)
+
+      // Assert
+      failed
+      |> should
+      |> be_error
+      |> extract_app_failure
+      |> be_equal("stopped")
+      |> or_fail_with("Expected the app's failure")
+    }),
+  ]
+}
+
+fn refusal_tests(server: Server) {
+  [
     it("ends the COPY at a server error in the middle and stays usable", fn() {
-      copy_scenarios.refuse_in_the_middle(server.port)
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE refused (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let refused =
+        copy_from(
+          connection,
+          "COPY refused FROM STDIN",
+          5000,
+          send_until_refused,
+        )
+      stop(connection)
+
+      // Assert
+      refused
+      |> should
+      |> be_error
+      |> extract_app_failure
+      |> extract_driver_error_code
+      |> be_equal("22P02")
+      |> or_fail_with("Expected the app's failure with 22P02")
+    }),
+    it("stores no row of a COPY that the server refused in the middle", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE refused (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _refused =
+        copy_from(
+          connection,
+          "COPY refused FROM STDIN",
+          5000,
+          send_until_refused,
+        )
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM refused", 5000)
+      stop(connection)
+
+      // Assert
+      count
       |> should
       |> be_ok
-      |> be_equal(#(Error("app 22P02"), "0"))
-      |> or_fail_with("Expected the app's failure with 22P02, and no row")
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"0">>)]])
+      |> or_fail_with("Expected no row")
     }),
     it("gives the server's error when the app sent all its data", fn() {
-      copy_scenarios.refuse_after_the_data(server.port)
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE bad (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let refused =
+        copy_from(connection, "COPY bad FROM STDIN", 5000, send_bad_row)
+      stop(connection)
+
+      // Assert
+      refused
       |> should
-      |> be_ok
-      |> be_equal(#(Error("driver 22P02"), Idle))
+      |> be_error
+      |> extract_copy_driver_error
+      |> extract_driver_error_code
+      |> be_equal("22P02")
       |> or_fail_with("Expected the server's 22P02")
     }),
-    it("abandons the COPY with CopyFail when the app fails", fn() {
-      copy_scenarios.abandon_on_app_failure(server.port)
+    it("is idle after the server's error for the app's data", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE bad (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _refused =
+        copy_from(connection, "COPY bad FROM STDIN", 5000, send_bad_row)
+      let status = transaction_status(connection)
+      stop(connection)
+
+      // Assert
+      status
       |> should
       |> be_ok
-      |> be_equal(#(Error(AppFailed("stopped")), "0"))
-      |> or_fail_with("Expected the app's failure, and no row stored")
-    }),
-    it("reads the rest of a COPY TO STDOUT when the app fails", fn() {
-      copy_scenarios.fail_the_fold(server.port)
-      |> should
-      |> be_ok
-      |> be_equal(#(Error(AppFailed("enough")), ["SELECT 1"]))
-      |> or_fail_with("Expected the app's failure, then a usable connection")
-    }),
-    it("gives what ran in place of the COPY", fn() {
-      copy_scenarios.start_no_copy(server.port)
-      |> should
-      |> be_ok
-      |> be_equal(#(
-        Error(
-          DriverFailed(
-            CopyNotStarted(
-              Some(Outcome(
-                columns: [],
-                result: CommandResult([[Text(<<"1":utf8>>)]], "SELECT 1", 1),
-                notices: [],
-                notifications: [],
-                transaction_status: Idle,
-              )),
-            ),
-          ),
-        ),
-        Error(
-          DriverFailed(
-            CopyNotStarted(
-              Some(Outcome(
-                columns: [],
-                result: CommandResult([], "COPY 0", 0),
-                notices: [],
-                notifications: [],
-                transaction_status: Idle,
-              )),
-            ),
-          ),
-        ),
-        Error(DriverFailed(CopyNotStarted(None))),
-        "0",
-      ))
-      |> or_fail_with(
-        "Expected the SELECT, the COPY TO STDOUT, and no outcome for the refused COPY",
-      )
+      |> be_equal(Idle)
+      |> or_fail_with("Expected Idle after the server's error")
     }),
     it(
       "gives the server's error for a COPY of a table that does not exist",
       fn() {
-        copy_scenarios.copy_missing_table(server.port)
+        // Arrange
+        let connection = start_connection(server.port)
+
+        // Act
+        let refused =
+          copy_from(
+            connection,
+            "COPY no_such_table FROM STDIN",
+            5000,
+            send_three_rows,
+          )
+        stop(connection)
+
+        // Assert
+        refused
         |> should
-        |> be_ok
-        |> be_equal(Error("driver 42P01"))
+        |> be_error
+        |> extract_copy_driver_error
+        |> extract_driver_error_code
+        |> be_equal("42P01")
         |> or_fail_with("Expected 42P01")
       },
     ),
     it("gives the end of the session in the middle of a COPY", fn() {
-      copy_scenarios.end_the_session_in_the_middle(server.port)
+      // Arrange
+      let connection = start_connection(server.port)
+      let control = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE ended (id int, name text)",
+          5000,
+        )
+      let pid = backend_pid(connection)
+
+      // Act
+      let ended =
+        copy_from(connection, "COPY ended FROM STDIN", 5000, send_after_end(
+          _,
+          control,
+          pid,
+        ))
+      stop(connection)
+      stop(control)
+
+      // Assert
+      ended
       |> should
-      |> be_ok
-      |> be_equal(Error("driver ended 57P01"))
+      |> be_error
+      |> extract_copy_driver_error
+      |> extract_ending_report
+      |> extract_report_code
+      |> be_equal("57P01")
       |> or_fail_with("Expected the server's 57P01")
     }),
-  ])
+  ]
+}
+
+fn app_failure_tests(server: Server) {
+  [
+    it("abandons the COPY with CopyFail when the app fails", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE abandoned (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let failed =
+        copy_from(connection, "COPY abandoned FROM STDIN", 5000, send_then_fail)
+      stop(connection)
+
+      // Assert
+      failed
+      |> should
+      |> be_error
+      |> extract_app_failure
+      |> be_equal("stopped")
+      |> or_fail_with("Expected the app's failure")
+    }),
+    it("stores no row of a COPY that the app abandoned", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE abandoned (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _failed =
+        copy_from(connection, "COPY abandoned FROM STDIN", 5000, send_then_fail)
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM abandoned", 5000)
+      stop(connection)
+
+      // Assert
+      count
+      |> should
+      |> be_ok
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"0">>)]])
+      |> or_fail_with("Expected no row stored")
+    }),
+    it("gives the app's failure of a fold of a COPY TO STDOUT", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let failed =
+        copy_to(
+          connection,
+          "COPY (SELECT n FROM generate_series(1, 100000) n) TO STDOUT",
+          5000,
+          0,
+          fail_at_second_row,
+        )
+      stop(connection)
+
+      // Assert
+      failed
+      |> should
+      |> be_error
+      |> extract_app_failure
+      |> be_equal("enough")
+      |> or_fail_with("Expected the app's failure")
+    }),
+    it("reads the rest of a COPY TO STDOUT when the app fails", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let _failed =
+        copy_to(
+          connection,
+          "COPY (SELECT n FROM generate_series(1, 100000) n) TO STDOUT",
+          5000,
+          0,
+          fail_at_second_row,
+        )
+      let next = run_script(connection, "SELECT 7", 5000)
+      stop(connection)
+
+      // Assert
+      next
+      |> should
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
+      |> or_fail_with("Expected a usable connection")
+    }),
+  ]
+}
+
+fn no_copy_tests(server: Server) {
+  [
+    it("gives what ran in place of the COPY", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+
+      // Act
+      let select = copy_from(connection, "SELECT 1", 5000, send_three_rows)
+      stop(connection)
+
+      // Assert
+      select
+      |> should
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(
+        CopyNotStarted(
+          Some(Outcome(
+            columns: [],
+            result: CommandResult([[Text(<<"1":utf8>>)]], "SELECT 1", 1),
+            notices: [],
+            notifications: [],
+            transaction_status: Idle,
+          )),
+        ),
+      )
+      |> or_fail_with("Expected the SELECT")
+    }),
+    it("gives the COPY TO STDOUT that copy_from ran in place of a COPY", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE other (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let out =
+        copy_from(connection, "COPY other TO STDOUT", 5000, send_three_rows)
+      stop(connection)
+
+      // Assert
+      out
+      |> should
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(
+        CopyNotStarted(
+          Some(Outcome(
+            columns: [],
+            result: CommandResult([], "COPY 0", 0),
+            notices: [],
+            notifications: [],
+            transaction_status: Idle,
+          )),
+        ),
+      )
+      |> or_fail_with("Expected the COPY TO STDOUT")
+    }),
+    it("gives no outcome for a COPY FROM STDIN that copy_to refused", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE other (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let into =
+        copy_to(connection, "COPY other FROM STDIN", 5000, [], collect_row)
+      stop(connection)
+
+      // Assert
+      into
+      |> should
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(CopyNotStarted(None))
+      |> or_fail_with("Expected no outcome for the refused COPY")
+    }),
+    it("stores no row of a COPY that did not start", fn() {
+      // Arrange
+      let connection = start_connection(server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE other (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let _select = copy_from(connection, "SELECT 1", 5000, send_three_rows)
+      let _out =
+        copy_from(connection, "COPY other TO STDOUT", 5000, send_three_rows)
+      let _into =
+        copy_to(connection, "COPY other FROM STDIN", 5000, [], collect_row)
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM other", 5000)
+      stop(connection)
+
+      // Assert
+      count
+      |> should
+      |> be_ok
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"0">>)]])
+      |> or_fail_with("Expected no row")
+    }),
+  ]
 }
 
 fn memory_tests() {
   [
     it("keeps the memory flat while it loads 1,000,000 rows", fn() {
-      copy_scenarios.load_million_rows()
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE loaded (n int, name text)",
+          5000,
+        )
+      let peaks = process.new_subject()
+      let connection_pid = pid_of(connection)
+
+      // Act
+      let stored =
+        copy_from(
+          connection,
+          "COPY loaded FROM STDIN",
+          5000,
+          load_chunks_sampling(_, connection_pid, peaks),
+        )
+      stop(connection)
+
+      // Assert
+      stored
       |> should
       |> be_ok
+      |> extract_sampled_peak(from: peaks)
       |> within_memory(memory_bound, 0)
       |> be_equal(1_000_000)
       |> or_fail_with("Expected 1,000,000 rows stored")
     }),
     it("keeps the memory flat while it reads 1,000,000 rows", fn() {
-      copy_scenarios.read_million_rows()
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let connection_pid = pid_of(connection)
+
+      // Act
+      let counted =
+        copy_to(
+          connection,
+          "COPY (SELECT n, 'some text' FROM generate_series(1, 1000000) n) TO STDOUT",
+          60_000,
+          #(0, MemoryPeak(0, 0, 0)),
+          fn(sampled, row) { count_and_sample(sampled, row, connection_pid) },
+        )
+      stop(connection)
+
+      // Assert
+      counted
       |> should
       |> be_ok
       |> within_memory(memory_bound, 1)
@@ -198,94 +935,582 @@ fn memory_tests() {
 fn deadline_tests() {
   [
     it("ends a COPY FROM STDIN at its deadline while the app sends", fn() {
-      copy_scenarios.pass_the_deadline_while_sending()
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE late (id int, name text)",
+          5000,
+        )
+      let chunk = bit_array.from_string(repeat("1\tone\n", 1000))
+
+      // Act
+      let late =
+        copy_from(connection, "COPY late FROM STDIN", 300, send_until_error(
+          _,
+          chunk,
+          1_000_000,
+        ))
+      stop(connection)
+
+      // Assert
+      late
+      |> should
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(DeadlinePassed(cancelled: True))
+      |> or_fail_with("Expected DeadlinePassed(True)")
+    }),
+    it("stores no row of a COPY FROM STDIN that passed its deadline", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE late (id int, name text)",
+          5000,
+        )
+      let chunk = bit_array.from_string(repeat("1\tone\n", 1000))
+
+      // Act
+      let _late =
+        copy_from(connection, "COPY late FROM STDIN", 300, send_until_error(
+          _,
+          chunk,
+          1_000_000,
+        ))
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM late", 5000)
+      stop(connection)
+
+      // Assert
+      count
       |> should
       |> be_ok
-      |> be_equal(#(Error("driver deadline cancelled"), "0"))
-      |> or_fail_with("Expected DeadlinePassed(True), and no row stored")
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"0">>)]])
+      |> or_fail_with("Expected no row stored")
     }),
     it("cuts off a slow produce function at its deadline", fn() {
-      copy_scenarios.cut_off_a_slow_producer()
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let control = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE idle (id int, name text)",
+          5000,
+        )
+      let pid = backend_pid(connection)
+
+      // Act
+      let late =
+        copy_from(connection, "COPY idle FROM STDIN", 300, send_after_idle(
+          _,
+          control,
+          pid,
+        ))
+      stop(connection)
+      stop(control)
+
+      // Assert
+      late
       |> should
-      |> be_ok
-      |> be_equal(#(Error("driver deadline cancelled"), "0"))
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(DeadlinePassed(cancelled: True))
       |> or_fail_with("Expected the end of the COPY at the deadline")
     }),
-    it("cuts off a slow fold at its deadline", fn() {
-      copy_scenarios.cut_off_a_slow_fold()
+    it("stores no row of a slow produce function", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let control = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE idle (id int, name text)",
+          5000,
+        )
+      let pid = backend_pid(connection)
+
+      // Act
+      let _late =
+        copy_from(connection, "COPY idle FROM STDIN", 300, send_after_idle(
+          _,
+          control,
+          pid,
+        ))
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM idle", 5000)
+      stop(connection)
+      stop(control)
+
+      // Assert
+      count
       |> should
       |> be_ok
-      |> be_equal(#(Error("driver deadline cancelled"), ["SELECT 1"]))
-      |> or_fail_with("Expected DeadlinePassed(True), then a usable connection")
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"0">>)]])
+      |> or_fail_with("Expected no row stored")
+    }),
+    it("cuts off a slow fold at its deadline", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let control = start_connection(first_driver_server.port)
+      let pid = backend_pid(connection)
+
+      // Act
+      let late =
+        copy_to(
+          connection,
+          "COPY (SELECT n FROM generate_series(1, 10000000) n) TO STDOUT",
+          300,
+          False,
+          fn(waited, row) { read_until_idle(waited, row, control, pid) },
+        )
+      stop(connection)
+      stop(control)
+
+      // Assert
+      late
+      |> should
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(DeadlinePassed(cancelled: True))
+      |> or_fail_with("Expected DeadlinePassed(True)")
+    }),
+    it("stays usable after a slow fold passed its deadline", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let control = start_connection(first_driver_server.port)
+      let pid = backend_pid(connection)
+
+      // Act
+      let _late =
+        copy_to(
+          connection,
+          "COPY (SELECT n FROM generate_series(1, 10000000) n) TO STDOUT",
+          300,
+          False,
+          fn(waited, row) { read_until_idle(waited, row, control, pid) },
+        )
+      let next = run_script(connection, "SELECT 8", 5000)
+      stop(connection)
+      stop(control)
+
+      // Assert
+      next
+      |> should
+      |> be_ok
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
+      |> or_fail_with("Expected a usable connection")
     }),
     it("cuts off the reading of the rest after a failed fold", fn() {
-      copy_scenarios.cut_off_the_rest_after_a_failed_fold()
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      let failed =
+        copy_to(
+          connection,
+          "COPY (SELECT n FROM generate_series(1, 10000000) n) TO STDOUT",
+          300,
+          0,
+          fail_at_first_row,
+        )
+      stop(connection)
+
+      // Assert
+      failed
       |> should
-      |> be_ok
-      |> be_equal(#(Error("driver deadline cancelled"), ["SELECT 1"]))
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(DeadlinePassed(cancelled: True))
       |> or_fail_with("Expected the deadline to end the reading of the rest")
     }),
-    it("serves no other request of the caller while its COPY runs", fn() {
-      copy_scenarios.request_inside_a_copy()
+    it("stays usable after the deadline cut off the rest of a COPY", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      let _failed =
+        copy_to(
+          connection,
+          "COPY (SELECT n FROM generate_series(1, 10000000) n) TO STDOUT",
+          300,
+          0,
+          fail_at_first_row,
+        )
+      let next = run_script(connection, "SELECT 9", 5000)
+      stop(connection)
+
+      // Assert
+      next
       |> should
       |> be_ok
-      |> be_equal(Error(AppFailed(#("deadline", "driver deadline"))))
-      |> or_fail_with("Expected both inner requests to wait to their deadline")
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
+      |> or_fail_with("Expected a usable connection")
+    }),
+    it("serves no other request of the caller while its COPY runs", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE waiting (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let answers =
+        copy_from(connection, "COPY waiting FROM STDIN", 5000, copy_inside(
+          _,
+          connection,
+        ))
+      stop(connection)
+
+      // Assert
+      answers
+      |> should
+      |> be_error
+      |> extract_app_failure
+      |> extract_first_of_pair
+      |> be_error
+      |> be_equal(DeadlinePassed(cancelled: False))
+      |> or_fail_with("Expected the inner script to wait to its deadline")
+    }),
+    it("serves no other COPY of the caller while its COPY runs", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE waiting (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let answers =
+        copy_from(connection, "COPY waiting FROM STDIN", 5000, copy_inside(
+          _,
+          connection,
+        ))
+      stop(connection)
+
+      // Assert
+      answers
+      |> should
+      |> be_error
+      |> extract_app_failure
+      |> extract_second_of_pair
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(DeadlinePassed(cancelled: False))
+      |> or_fail_with("Expected the inner COPY to wait to its deadline")
     }),
   ]
 }
 
 fn caller_tests() {
   [
-    it("abandons a COPY FROM STDIN when its caller ends", fn() {
-      copy_scenarios.end_the_caller_while_it_sends()
+    it("tells that the caller sent its rows before it ends", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE hung (id int, name text)",
+          5000,
+        )
+      let caller = start_copy_caller(hang_after_rows(connection, _))
+
+      // Act
+      let told = caller_told(caller)
+      process.kill(caller.pid)
+      stop(connection)
+
+      // Assert
+      told
       |> should
       |> be_ok
-      |> be_equal(#("sent", "0"))
+      |> be_equal("sent")
+      |> or_fail_with("Expected the caller to send its rows")
+    }),
+    it("abandons a COPY FROM STDIN when its caller ends", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE hung (id int, name text)",
+          5000,
+        )
+      let caller = start_copy_caller(hang_after_rows(connection, _))
+
+      // Act
+      let _told = caller_told(caller)
+      process.kill(caller.pid)
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM hung", 5000)
+      stop(connection)
+
+      // Assert
+      count
+      |> should
+      |> be_ok
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"0">>)]])
       |> or_fail_with("Expected no row stored, and a usable connection")
     }),
-    it("drops the end of a COPY when its caller ends before it took it", fn() {
-      copy_scenarios.end_the_caller_after_the_refusal()
+    it("tells the caller the server's refusal of its row", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE hung (id int, name text)",
+          5000,
+        )
+      let caller = start_copy_caller(hang_after_refusal(connection, _))
+
+      // Act
+      let told = caller_told(caller)
+      process.kill(caller.pid)
+      stop(connection)
+
+      // Assert
+      told
       |> should
       |> be_ok
-      |> be_equal(#("22P02", "0"))
-      |> or_fail_with("Expected the refusal, then a usable connection")
+      |> be_error
+      |> extract_driver_error_code
+      |> be_equal("22P02")
+      |> or_fail_with("Expected the refusal")
+    }),
+    it("drops the end of a COPY when its caller ends before it took it", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE hung (id int, name text)",
+          5000,
+        )
+      let caller = start_copy_caller(hang_after_refusal(connection, _))
+
+      // Act
+      let _told = caller_told(caller)
+      process.kill(caller.pid)
+      let count =
+        run_script(connection, "SELECT count(*)::text FROM hung", 5000)
+      stop(connection)
+
+      // Assert
+      count
+      |> should
+      |> be_ok
+      |> extract_first
+      |> extract_command_result
+      |> extract_command_rows
+      |> be_equal([[Text(<<"0">>)]])
+      |> or_fail_with("Expected a usable connection after the refusal")
+    }),
+    it("tells that the caller holds the first row before it ends", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let caller = start_copy_caller(hang_at_first_row(connection, _))
+
+      // Act
+      let told = caller_told(caller)
+      process.kill(caller.pid)
+      stop(connection)
+
+      // Assert
+      told
+      |> should
+      |> be_ok
+      |> be_equal("row")
+      |> or_fail_with("Expected the caller to hold a row")
     }),
     it("reads the rest of a COPY TO STDOUT when its caller ends", fn() {
-      copy_scenarios.end_the_caller_while_it_reads()
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let caller = start_copy_caller(hang_at_first_row(connection, _))
+
+      // Act
+      let _told = caller_told(caller)
+      process.kill(caller.pid)
+      let next = run_script(connection, "SELECT 9", 5000)
+      stop(connection)
+
+      // Assert
+      next
       |> should
       |> be_ok
-      |> be_equal(#("row", ["SELECT 1"]))
+      |> extract_outcome_tags
+      |> be_equal(["SELECT 1"])
       |> or_fail_with("Expected a usable connection")
     }),
     it("ignores the DOWN of a process that it does not watch", fn() {
-      copy_scenarios.send_a_stray_down()
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      send_stray_down(pid_of(connection))
+      let next = run_script(connection, "SELECT 10", 5000)
+      stop(connection)
+
+      // Assert
+      next
       |> should
       |> be_ok
+      |> extract_outcome_tags
       |> be_equal(["SELECT 1"])
       |> or_fail_with("Expected the connection to work")
     }),
-    it("refuses a chunk after its COPY ended", fn() {
-      copy_scenarios.send_after_the_end()
+    it("gives the count of a COPY whose app sent nothing", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE stale (id int, name text)",
+          5000,
+        )
+      let senders = process.new_subject()
+
+      // Act
+      let stored =
+        copy_from(connection, "COPY stale FROM STDIN", 5000, keep_sender(
+          _,
+          senders,
+        ))
+      stop(connection)
+
+      // Assert
+      stored
       |> should
       |> be_ok
-      |> be_equal(#(Ok(0), Ok(Error(CopyNotRunning))))
+      |> be_equal(0)
+      |> or_fail_with("Expected no row stored")
+    }),
+    it("refuses a chunk after its COPY ended", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE stale (id int, name text)",
+          5000,
+        )
+      let senders = process.new_subject()
+      let _stored =
+        copy_from(connection, "COPY stale FROM STDIN", 5000, keep_sender(
+          _,
+          senders,
+        ))
+
+      // Act
+      let late = send_chunk(kept_sender(senders), <<"1\tone\n":utf8>>)
+      stop(connection)
+
+      // Assert
+      late
+      |> should
+      |> be_error
+      |> be_equal(CopyNotRunning)
       |> or_fail_with("Expected CopyNotRunning")
     }),
-    it("gives the error of the COPY again to a chunk after it", fn() {
-      copy_scenarios.send_after_the_refusal()
+    it("gives the app the refusal of a row by a CHECK constraint", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE again (id int CHECK (id < 2), name text)",
+          5000,
+        )
+
+      // Act
+      let refused =
+        copy_from(
+          connection,
+          "COPY again FROM STDIN",
+          5000,
+          send_twice_after_error,
+        )
+      stop(connection)
+
+      // Assert
+      refused
       |> should
-      |> be_ok
-      |> be_equal(Error("app 23514, then 23514"))
+      |> be_error
+      |> extract_app_failure
+      |> extract_first_of_pair
+      |> extract_driver_error_code
+      |> be_equal("23514")
+      |> or_fail_with("Expected 23514 for the refused row")
+    }),
+    it("gives the error of the COPY again to a chunk after it", fn() {
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+      let _created =
+        run_script(
+          connection,
+          "CREATE TEMP TABLE again (id int CHECK (id < 2), name text)",
+          5000,
+        )
+
+      // Act
+      let refused =
+        copy_from(
+          connection,
+          "COPY again FROM STDIN",
+          5000,
+          send_twice_after_error,
+        )
+      stop(connection)
+
+      // Assert
+      refused
+      |> should
+      |> be_error
+      |> extract_app_failure
+      |> extract_second_of_pair
+      |> be_error
+      |> extract_driver_error_code
+      |> be_equal("23514")
       |> or_fail_with("Expected 23514 for the chunk after the error")
     }),
     it("refuses a COPY with a zero byte before it sends anything", fn() {
-      copy_scenarios.copy_with_a_zero_byte()
+      // Arrange
+      let connection = start_connection(first_driver_server.port)
+
+      // Act
+      let refused =
+        copy_from(
+          connection,
+          "COPY t FROM STDIN\u{0000}",
+          5000,
+          send_three_rows,
+        )
+      stop(connection)
+
+      // Assert
+      refused
       |> should
-      |> be_ok
-      |> be_equal(
-        Error(DriverFailed(InvalidRequest(ZeroByteInString("query")))),
-      )
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(InvalidRequest(ZeroByteInString("query")))
       |> or_fail_with("Expected InvalidRequest")
     }),
   ]
@@ -294,53 +1519,214 @@ fn caller_tests() {
 fn loss_tests() {
   [
     it("gives the loss of the connection in the middle of a COPY", fn() {
-      copy_scenarios.close_in_the_middle()
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _created =
+        run_script(
+          proxied.connection,
+          "CREATE TEMP TABLE lost (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let lost =
+        copy_from(
+          proxied.connection,
+          "COPY lost FROM STDIN",
+          5000,
+          send_across_close(_, proxied.proxy),
+        )
+      stop_proxied(proxied)
+
+      // Assert
+      lost
       |> should
-      |> be_ok
-      |> be_equal(Error("driver lost"))
+      |> be_error
+      |> extract_copy_driver_error
+      |> extract_loss_reason
       |> or_fail_with("Expected the loss of the connection")
     }),
     it("gives a violation in the middle of a COPY", fn() {
-      copy_scenarios.break_the_protocol_in_the_middle()
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _created =
+        run_script(
+          proxied.connection,
+          "CREATE TEMP TABLE broken (id int, name text)",
+          5000,
+        )
+
+      // Act
+      let broken =
+        copy_from(
+          proxied.connection,
+          "COPY broken FROM STDIN",
+          5000,
+          send_across_violation(_, proxied.proxy),
+        )
+      stop_proxied(proxied)
+
+      // Assert
+      broken
       |> should
-      |> be_ok
-      |> be_equal(Error("driver violation"))
+      |> be_error
+      |> extract_copy_driver_error
+      |> extract_protocol_violation
       |> or_fail_with("Expected the violation")
     }),
     it("loses the connection when a chunk cannot be sent in time", fn() {
-      copy_scenarios.fill_the_socket()
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      answer_next_request(proxied.proxy, <<
+        "1", 4:32, "2", 4:32, "G", 7:32, 0, 0:16,
+      >>)
+      let chunk = bit_array.from_string(repeat("x", 65_536))
+
+      // Act
+      let lost =
+        copy_from(
+          proxied.connection,
+          "COPY t FROM STDIN",
+          5000,
+          send_until_error(_, chunk, 1_000_000),
+        )
+      stop_proxied(proxied)
+
+      // Assert
+      lost
       |> should
-      |> be_ok
-      |> be_equal(Error("driver lost send timeout"))
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(ConnectionLost(SocketFailed(SendTimedOut)))
       |> or_fail_with("Expected the loss by a send timeout")
     }),
     it("gives the loss of the connection to the next row of a COPY", fn() {
-      copy_scenarios.close_while_reading()
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+
+      // Act
+      let lost =
+        copy_to(
+          proxied.connection,
+          "COPY (SELECT n FROM generate_series(1, 1000000) n) TO STDOUT",
+          5000,
+          False,
+          fn(closed, row) { close_at_first_row(closed, row, proxied.proxy) },
+        )
+      stop_proxied(proxied)
+
+      // Assert
+      lost
       |> should
-      |> be_ok
-      |> be_equal(Error("driver lost closed"))
+      |> be_error
+      |> extract_copy_driver_error
+      |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
       |> or_fail_with("Expected the loss of the connection")
     }),
+  ]
+}
+
+// The server's FATAL error is in the connection process's mailbox, and the
+// socket was reset, when a request comes: its write fails.
+fn write_failure_tests() {
+  [
     it("gives the server's last error when a write fails after it", fn() {
-      copy_scenarios.fail_a_write_after_the_error()
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let pid = pid_of(proxied.connection)
+      suspend_connection(proxied.connection)
+      let caller =
+        start_caller(fn() { run_script(proxied.connection, "SELECT 1", 5000) })
+      let _requested = wait_for_message(pid, ["request"], 1_000_000)
+      inject(proxied.proxy, fatal_error_bytes())
+      let _delivered = wait_for_message(pid, ["tcp"], 1_000_000)
+      reset_client(proxied.proxy)
+      let _reset = wait_for_reset(pid, 1_000_000)
+
+      // Act
+      resume_connection(proxied.connection)
+      let answer = caller_answer(caller)
+      stop_proxied(proxied)
+
+      // Assert
+      answer
       |> should
       |> be_ok
-      |> be_equal(Error("ended 57P01"))
+      |> be_error
+      |> extract_ending_report
+      |> extract_report_code
+      |> be_equal("57P01")
       |> or_fail_with("Expected the FATAL 57P01, not the failed write")
     }),
-    it("gives the failure of a TLS write after a reset", fn() {
-      copy_scenarios.fail_a_tls_write_after_a_reset()
-      |> should
-      |> be_ok
-      |> be_equal(Error("lost closed"))
-      |> or_fail_with("Expected the loss by the closed socket")
-    }),
     it("gives the server's last error when a chunk fails after it", fn() {
-      copy_scenarios.fail_a_chunk_after_the_error()
+      // Arrange
+      let proxied = start_proxied(first_driver_server, 60_000)
+      let _created =
+        run_script(
+          proxied.connection,
+          "CREATE TEMP TABLE gated (id int, name text)",
+          5000,
+        )
+      let pid = pid_of(proxied.connection)
+      let started = process.new_subject()
+      let caller =
+        start_caller(fn() {
+          copy_from(
+            proxied.connection,
+            "COPY gated FROM STDIN",
+            5000,
+            send_after_go(_, started),
+          )
+        })
+      let go = await_go(started)
+      suspend_connection(proxied.connection)
+      process.send(go, Nil)
+      let _chunk_sent = wait_for_message(pid, ["copy_call"], 1_000_000)
+      inject(proxied.proxy, fatal_error_bytes())
+      let _delivered = wait_for_message(pid, ["tcp"], 1_000_000)
+      reset_client(proxied.proxy)
+      let _reset = wait_for_reset(pid, 1_000_000)
+
+      // Act
+      resume_connection(proxied.connection)
+      let answer = caller_answer(caller)
+      stop_proxied(proxied)
+
+      // Assert
+      answer
       |> should
       |> be_ok
-      |> be_equal(Error("driver ended 57P01"))
+      |> be_error
+      |> extract_copy_driver_error
+      |> extract_ending_report
+      |> extract_report_code
+      |> be_equal("57P01")
       |> or_fail_with("Expected the FATAL 57P01, not the failed chunk")
+    }),
+    it("gives the failure of a TLS write after a reset", fn() {
+      // Arrange
+      let proxied =
+        start_proxied_with_tls(first_driver_server, 60_000, verify_full())
+      let pid = pid_of(proxied.connection)
+      suspend_connection(proxied.connection)
+      let caller =
+        start_caller(fn() { run_script(proxied.connection, "SELECT 1", 5000) })
+      let _requested = wait_for_message(pid, ["request"], 1_000_000)
+      reset_client(proxied.proxy)
+      let _reset = wait_for_message(pid, ["ssl_closed", "ssl_error"], 1_000_000)
+
+      // Act
+      resume_connection(proxied.connection)
+      let answer = caller_answer(caller)
+      stop_proxied(proxied)
+
+      // Assert
+      answer
+      |> should
+      |> be_ok
+      |> be_error
+      |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+      |> or_fail_with("Expected the loss by the closed socket")
     }),
   ]
 }
