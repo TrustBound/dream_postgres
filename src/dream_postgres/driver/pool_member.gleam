@@ -28,7 +28,6 @@ import dream_postgres/internal/cell.{Idle}
 import gleam/erlang/process.{
   type ExitMessage, type Pid, type Subject, ExitMessage, Normal,
 }
-import gleam/int.{min}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import gleam/otp/supervision.{type ChildSpecification, Transient}
@@ -44,8 +43,8 @@ pub type MemberConfig {
     connection: ConnectionConfig,
     /// The longest time that the query of a health check may take.
     health_check_deadline_milliseconds: Int,
-    /// The longest time that the rollback of a returned connection may
-    /// take.
+    /// The longest time that the reset of a returned connection may take:
+    /// the wait for its last request, then again for its rollback.
     rollback_deadline_milliseconds: Int,
   )
 }
@@ -247,24 +246,21 @@ fn connect(state: State, attempt: Int) -> State {
     }
     Error(error) -> {
       report(state, MemberConnectFailed(state.slot, error))
-      let delay = backoff_delay(state.config.connection.reconnect, attempt)
+      let delay =
+        connection.backoff_delay(state.config.connection.reconnect, attempt)
       process.send_after(state.subject, delay, Connect(attempt + 1))
       State(..state, connection: None)
     }
   }
 }
 
-/// The first delay, doubled for each failed attempt, up to the longest.
-fn backoff_delay(backoff: connection.Backoff, attempt: Int) -> Int {
-  let doubled =
-    int.bitwise_shift_left(backoff.first_delay_milliseconds, min(attempt, 30))
-  min(doubled, backoff.longest_delay_milliseconds)
-}
-
 /// A connection that is idle gets no query. One inside a transaction, or
-/// one whose process is gone, gets a ROLLBACK.
+/// one whose process is gone, gets a ROLLBACK. The status is the one after
+/// every request that the connection has: a request of a caller that
+/// stopped waiting still runs, and may begin a transaction.
 fn reset_connection(state: State, held: Connection) -> State {
-  case connection.transaction_status(held) {
+  let deadline = state.config.rollback_deadline_milliseconds
+  case connection.settled_transaction_status(held, deadline) {
     Ok(Idle) -> ready(state)
     _in_transaction_or_down -> roll_back(state, held)
   }

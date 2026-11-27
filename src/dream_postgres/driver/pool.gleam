@@ -25,6 +25,7 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/catalog.{type Catalog}
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
 }
@@ -61,8 +62,9 @@ pub type PoolConfig(extra) {
     health_check_interval_milliseconds: Int,
     /// The longest time that the query of a health check may take.
     health_check_deadline_milliseconds: Int,
-    /// The longest time that the rollback of a connection that comes back
-    /// inside a transaction may take.
+    /// The longest time that the reset of a connection that comes back
+    /// may take: the wait for its last request, then again for the
+    /// rollback of a transaction that it left open.
     rollback_deadline_milliseconds: Int,
     /// How long the pool waits for the holds that run when its owner's
     /// process exits, before it closes the connections.
@@ -115,12 +117,12 @@ pub type PoolStatus {
 
 /// A pool, with the extra value of its settings.
 pub opaque type Pool(extra) {
-  Pool(subject: Subject(Message), pid: Pid, extra: extra)
+  Pool(subject: Subject(Message), pid: Pid, catalog: Catalog, extra: extra)
 }
 
 /// The manager process, before the extra value goes with it.
 type Manager {
-  Manager(subject: Subject(Message), pid: Pid)
+  Manager(subject: Subject(Message), pid: Pid, catalog: Catalog)
 }
 
 /// A connection that a checkout gives, with the ID of the hold.
@@ -209,6 +211,9 @@ type State {
     subject: Subject(Message),
     settings: Settings,
     supervisor: Pid,
+    /// The pool's type catalog, and its process.
+    catalog: Catalog,
+    catalog_pid: Pid,
     /// The slot of each member that runs, by its place in the pool.
     slots: Dict(Int, Slot),
     /// The holds that run, by lease ID.
@@ -251,8 +256,8 @@ pub fn start(
   let interval = config.health_check_interval_milliseconds
   use <- guard(interval < 1, Error(InvalidHealthCheckInterval(interval)))
   use started <- try(start_manager(config, size))
-  let Manager(subject:, pid:) = started.data
-  Ok(Pool(subject:, pid:, extra: config.extra))
+  let Manager(subject:, pid:, catalog:) = started.data
+  Ok(Pool(subject:, pid:, catalog:, extra: config.extra))
 }
 
 fn start_manager(
@@ -277,13 +282,20 @@ fn start_manager(
   |> map_error(ManagerStartFailed)
 }
 
-/// Starts the supervisor of the members, with one member for each slot.
+/// Starts the pool's catalog, linked to the manager, and the supervisor of
+/// the members, with one member for each slot. The catalog starts from its
+/// child specification, because its start gives the process ID that the
+/// manager needs to know the catalog's exit.
 fn initialise(
   subject: Subject(Message),
   settings: Settings,
   member_config: pool_member.MemberConfig,
 ) -> Result(actor.Initialised(State, Message, Manager), String) {
   process.trap_exits(True)
+  use catalog <- try(
+    catalog.supervised(None).start()
+    |> result.replace_error("the catalog did not start"),
+  )
   let reports = process.new_subject()
   let supervisor =
     range(0, settings.size, static_supervisor.new(OneForOne), fn(builder, slot) {
@@ -291,7 +303,7 @@ fn initialise(
     })
     |> static_supervisor.start
   supervisor
-  |> result.map(initialised(_, subject, settings, reports))
+  |> result.map(initialised(_, catalog, subject, settings, reports))
   |> result.replace_error("the supervisor of the members did not start")
 }
 
@@ -309,6 +321,7 @@ fn add_member(
 
 fn initialised(
   supervisor: actor.Started(static_supervisor.Supervisor),
+  catalog: actor.Started(Catalog),
   subject: Subject(Message),
   settings: Settings,
   reports: Subject(MemberReport),
@@ -324,21 +337,28 @@ fn initialised(
     settings.health_check_interval_milliseconds,
     HealthCheckDue,
   )
-  new_state(subject, settings, supervisor.pid)
+  new_state(subject, settings, supervisor.pid, catalog)
   |> actor.initialised
   |> actor.selecting(selector)
-  |> actor.returning(Manager(subject:, pid: process.self()))
+  |> actor.returning(Manager(
+    subject:,
+    pid: process.self(),
+    catalog: catalog.data,
+  ))
 }
 
 fn new_state(
   subject: Subject(Message),
   settings: Settings,
   supervisor: Pid,
+  catalog: actor.Started(Catalog),
 ) -> State {
   State(
     subject:,
     settings:,
     supervisor:,
+    catalog: catalog.data,
+    catalog_pid: catalog.pid,
     slots: dict.new(),
     holders: dict.new(),
     waiters: [],
@@ -423,6 +443,20 @@ fn check_out(
 /// The `extra` of the `PoolConfig` that started the pool.
 pub fn extra(pool: Pool(extra)) -> extra {
   pool.extra
+}
+
+/// The type catalog of the pool. Each pool has its own catalog, which
+/// starts empty and stops with the pool.
+///
+/// ## Parameters
+///
+/// - `pool`: the pool
+///
+/// ## Returns
+///
+/// The pool's catalog, for the lookups of the codecs.
+pub fn catalog(pool: Pool(extra)) -> Catalog {
+  pool.catalog
 }
 
 /// The state of the pool now: its connections, its holds, its queue and
@@ -796,15 +830,15 @@ fn drain(
   |> refuse_waiters(PoolStopped)
 }
 
-/// The exit of the members' supervisor ends the pool with an error. Any
-/// other exit is the one of the pool's owner, and the pool drains and
-/// closes.
+/// The exit of the members' supervisor or of the catalog ends the pool
+/// with an error. Any other exit is the one of the pool's owner, and the
+/// pool drains and closes.
 fn exit_received(
   state: State,
   exit: ExitMessage,
 ) -> actor.Next(State, Message) {
-  case exit.pid == state.supervisor {
-    True -> stop_with_error("the supervisor of the members stopped")
+  case exit.pid == state.supervisor || exit.pid == state.catalog_pid {
+    True -> stop_with_error("a process of the pool stopped")
     False ->
       drain(state, state.settings.shutdown_deadline_milliseconds, []) |> next
   }
@@ -819,14 +853,15 @@ fn stop_with_error(reason: String) -> actor.Next(State, Message) {
 }
 
 /// Shuts the members' supervisor down, which makes each member send
-/// Terminate on its connection, and waits until it is down. Then each
-/// caller of `stop` gets its answer.
+/// Terminate on its connection, and waits until it is down. Then the
+/// catalog stops, and each caller of `stop` gets its answer.
 fn shut_down(state: State) -> actor.Next(State, Message) {
   let monitor = process.monitor(state.supervisor)
   process.send_abnormal_exit(state.supervisor, atom.create("shutdown"))
   process.new_selector()
   |> process.select_specific_monitor(monitor, ignore_down)
   |> process.selector_receive_forever
+  catalog.stop(state.catalog)
   each(state.stop_replies, process.send(_, Nil))
   actor.stop()
 }

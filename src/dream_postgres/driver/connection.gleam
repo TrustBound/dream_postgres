@@ -1648,8 +1648,18 @@ fn schedule_reconnect(state: State, error: DriverError, attempt: Int) -> Nil {
   Nil
 }
 
-/// The first delay, doubled for each failed attempt, up to the longest.
-fn backoff_delay(backoff: Backoff, attempt: Int) -> Int {
+/// The delay before a reconnect: the first delay, doubled for each failed
+/// attempt, up to the longest.
+///
+/// ## Parameters
+///
+/// - `backoff`: the backoff settings
+/// - `attempt`: the number of failed attempts so far, 0 for the first
+///
+/// ## Returns
+///
+/// The delay in milliseconds.
+pub fn backoff_delay(backoff: Backoff, attempt: Int) -> Int {
   let doubled =
     int.bitwise_shift_left(backoff.first_delay_milliseconds, min(attempt, 30))
   min(doubled, backoff.longest_delay_milliseconds)

@@ -5,10 +5,12 @@
 //// no test sleeps. The advisory lock keys of these tests are 82600 to
 //// 82699.
 
+import dream_postgres/driver/catalog.{CatalogProcessDown}
 import dream_postgres/driver/connection.{
   type Connection, type ConnectionConfig, type ConnectionEvent, type DriverError,
-  type Outcome, Backoff, ConnectionConfig, ConnectionProcessDown, Disconnected,
-  LoginRefused, ReconnectFailed, Reconnected, TransportRefused,
+  type Outcome, Backoff, CacheStatements, ConnectionConfig,
+  ConnectionProcessDown, Disconnected, LoginRefused, ReconnectFailed,
+  Reconnected, TransportRefused,
 }
 import dream_postgres/driver/login.{
   type Password, PreferChannelBinding, ServerRejectedLogin,
@@ -19,9 +21,10 @@ import dream_postgres/driver/pool.{
   type StartError, CheckoutTimedOut, ConnectFailed, InvalidHealthCheckInterval,
   InvalidSize, PoolConfig, PoolStatus, PoolStopped,
 }
+import dream_postgres/driver/statement_cache
 import dream_postgres/driver/transport.{ConnectRefused, NoTls, TransportConfig}
 import dream_postgres/internal/cell.{
-  type TransactionStatus, Idle, InTransaction, Text,
+  type TransactionStatus, type TypeDescription, Idle, InTransaction, Text,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -123,8 +126,11 @@ fn connection_config(
     transport: TransportConfig(address, NoTls, 5000, 500),
     login: login_config,
     setup_timeout_milliseconds: 5000,
+    cancel_timeout_milliseconds: 2000,
     reconnect: Backoff(10, 60_000),
     events:,
+    notifications: None,
+    statements: CacheStatements(statement_cache.default_limit),
   ))
 }
 
@@ -395,6 +401,10 @@ fn waiting_count(status: PoolStatus) -> Int {
   status.waiting
 }
 
+fn held_count(status: PoolStatus) -> Int {
+  status.held
+}
+
 // On each server --------------------------------------------------------------
 
 fn server_tests(server: Server) {
@@ -405,6 +415,12 @@ fn server_tests(server: Server) {
     }),
     it("rolls back the transaction of a caller that exits", fn() {
       check_rollback_after_exit(server)
+    }),
+    it("waits for the request of a caller that exits before the reset", fn() {
+      check_reset_after_running_request(server)
+    }),
+    it("gives a catalog that describes the server's types", fn() {
+      check_catalog(server)
     }),
   ])
 }
@@ -488,6 +504,79 @@ fn check_rollback_after_exit(server: Server) {
   |> or_fail_with("Expected the transaction to be rolled back")
 }
 
+/// A caller's script begins a transaction and waits for an advisory lock
+/// of the control connection. The caller is killed, so the pool starts the
+/// reset while the script still runs. The next holder must get the
+/// connection only after the script finished and the reset rolled its
+/// transaction back.
+fn check_reset_after_running_request(server: Server) {
+  // Arrange
+  let config = dream_config(server.port)
+  let key = 82_610 + server.version
+
+  // Act
+  let status = {
+    use config <- try(config)
+    use pool <- with_pool(config, 1)
+    use control <- with_control(server.port)
+    let lock = "pg_advisory_lock(" <> to_string(key) <> ")"
+    use _locked <- try(script(control, "SELECT " <> lock))
+    let begin = "BEGIN; SELECT pg_advisory_xact_lock(" <> to_string(key) <> ")"
+    let answer = process.new_subject()
+    let caller =
+      process.spawn_unlinked(fn() { hold_and_run(pool, begin, answer) })
+    use Nil <- try(wait_for_lock_waiter(control, key, 5000))
+    process.kill(caller)
+    use Nil <- try(wait_for_status(pool, held_count, 0, 100_000))
+    let unlock = "SELECT pg_advisory_unlock(" <> to_string(key) <> ")"
+    use _unlocked <- try(script(control, unlock))
+    held(pool, transaction_status)
+  }
+
+  // Assert
+  status
+  |> should
+  |> be_equal(Ok(Idle))
+  |> or_fail_with("Expected the next holder outside the caller's transaction")
+}
+
+/// Each pool's catalog describes a type on a held connection, and stops
+/// with the pool.
+fn check_catalog(server: Server) {
+  // Arrange
+  let config = dream_config(server.port)
+
+  // Act
+  let descriptions = {
+    use config <- try(config)
+    use pool <- try(pool.start(config, 1) |> result.map_error(Start))
+    use described <- try(held(pool, describe_int4(pool, _)))
+    pool.stop(pool, 1000)
+    use control <- with_control(server.port)
+    let after_stop = catalog.describe(pool.catalog(pool), control, 23, 5000)
+    Ok(#(described, result.replace(after_stop, Nil)))
+  }
+
+  // Assert
+  descriptions
+  |> should
+  |> be_equal(Ok(#("int4", Error(CatalogProcessDown))))
+  |> or_fail_with("Expected int4, then CatalogProcessDown after the stop")
+}
+
+fn describe_int4(
+  pool: Pool(extra),
+  connection: Connection,
+) -> Result(String, Failure) {
+  catalog.describe(pool.catalog(pool), connection, 23, 5000)
+  |> result.map(type_name)
+  |> result.replace_error(Unexpected("no description of int4"))
+}
+
+fn type_name(description: TypeDescription) -> String {
+  description.name
+}
+
 /// Holds a connection, begins a transaction, says so, and waits until it
 /// is killed.
 fn begin_and_wait(
@@ -546,7 +635,8 @@ fn start_tests() {
 }
 
 /// Two pools with other users and other extra values: each connection
-/// logs in with the user of its own pool.
+/// logs in with the user of its own pool, and each pool has its own
+/// catalog.
 fn check_two_pools() {
   // Arrange
   let port = first_server().port
@@ -563,14 +653,21 @@ fn check_two_pools() {
     use second <- with_pool(pool_config(second_settings, "second"), 1)
     use first_user <- try(held(first, current_user))
     use second_user <- try(held(second, current_user))
-    Ok(#(first_user, pool.extra(first), second_user, pool.extra(second)))
+    let separate_catalogs = pool.catalog(first) != pool.catalog(second)
+    Ok(#(
+      first_user,
+      pool.extra(first),
+      second_user,
+      pool.extra(second),
+      separate_catalogs,
+    ))
   }
 
   // Assert
   users
   |> should
-  |> be_equal(Ok(#("dream", "first", "dream_trust", "second")))
-  |> or_fail_with("Expected each pool's user and extra value")
+  |> be_equal(Ok(#("dream", "first", "dream_trust", "second", True)))
+  |> or_fail_with("Expected each pool's user, extra value and catalog")
 }
 
 fn current_user(connection: Connection) -> Result(String, Failure) {
@@ -1240,9 +1337,7 @@ fn check_supervisor_exit() {
   // Assert
   reason
   |> should
-  |> be_equal(
-    Ok(Abnormal(dynamic.string("the supervisor of the members stopped"))),
-  )
+  |> be_equal(Ok(Abnormal(dynamic.string("a process of the pool stopped"))))
   |> or_fail_with("Expected the pool to stop with an error")
 }
 
