@@ -1174,6 +1174,22 @@ fn new_request(state: State, request: Request, deadline: Int) -> State {
 /// until `next_request` ends it: while a step runs, and also after its
 /// step ended while the cancel of its deadline is not done yet, so that
 /// cancel can never reach the next request.
+///
+/// Why the close of the cancel socket is enough (PostgreSQL 16 source):
+/// the child that takes a CancelRequest sends SIGINT two times, to the
+/// backend and to its process group (postmaster.c signal_child,
+/// kill(pid) then kill(-pid)), and exits only after that, which closes
+/// the socket (postmaster.c processCancelRequest, ProcessStartupPacket).
+/// So when the driver sees the close, both signals are pending on the
+/// backend. A pending signal is handled before the backend runs more of
+/// its own code, so before it can read the next request. Handled during
+/// the statement, it ends that statement with 57014; handled in error
+/// recovery, the recovery clears it (postgres.c PostgresMain, the
+/// sigsetjmp block); handled while the backend waits for a command, it is
+/// dropped, because ProcessInterrupts ignores a cancel while
+/// DoingCommandRead and PostgresMain checks for interrupts before it sets
+/// DoingCommandRead to false (postgres.c ProcessInterrupts and step 5 of
+/// the main loop). The next request therefore never meets an old cancel.
 fn accept_request(state: State, ticket: Ticket) -> State {
   case state.current, state.copy, state.link {
     None, None, Connected(socket:, ..) -> {
