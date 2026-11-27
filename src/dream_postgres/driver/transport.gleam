@@ -452,7 +452,11 @@ fn request_tls(
   socket: TcpSocket,
   opening: Opening,
 ) -> Result(TlsAnswer, TransportError) {
-  use Nil <- try(tcp_send(socket, ssl_request()) |> map_error(socket_error))
+  // A send maps its reason as a send: a send timeout is SendTimedOut, not
+  // the ReceiveTimedOut of socket_error. The 8 bytes of the SSLRequest on
+  // a new socket fit in its send buffer, so in practice this send does not
+  // wait; the mapping says what a timeout would be.
+  use Nil <- try(tcp_send(socket, ssl_request()) |> map_error(send_error))
   read_tls_answer(socket, <<>>, opening)
 }
 
