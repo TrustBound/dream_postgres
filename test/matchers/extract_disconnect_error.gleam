@@ -1,7 +1,7 @@
 //// Extracts the error of a disconnect event of the connection process.
 
 import dream_postgres/driver/connection.{
-  type ConnectionEvent, type RequestFailure, Disconnected,
+  type ConnectionEnd, type ConnectionEvent, Disconnected,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -21,14 +21,14 @@ import gleam/string.{inspect}
 /// ```
 pub fn extract_disconnect_error(
   result: MatchResult(ConnectionEvent),
-) -> MatchResult(RequestFailure) {
+) -> MatchResult(ConnectionEnd) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(event) -> error_of(event)
   }
 }
 
-fn error_of(event: ConnectionEvent) -> MatchResult(RequestFailure) {
+fn error_of(event: ConnectionEvent) -> MatchResult(ConnectionEnd) {
   case event {
     Disconnected(error) -> MatchOk(error)
     _other ->

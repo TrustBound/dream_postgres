@@ -67,6 +67,7 @@ import matchers/extract_column_names.{extract_column_names}
 import matchers/extract_command_result.{extract_command_result}
 import matchers/extract_command_rows.{extract_command_rows}
 import matchers/extract_command_tag.{extract_command_tag}
+import matchers/extract_connection_end.{extract_connection_end}
 import matchers/extract_ending_report.{extract_ending_report}
 import matchers/extract_first.{extract_first}
 import matchers/extract_login_refusal_code.{extract_login_refusal_code}
@@ -184,6 +185,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
           |> should
           |> be_error
           |> extract_run_failure
+          |> extract_connection_end
           |> extract_ending_report
           |> extract_report_code
           |> be_equal("57P01")

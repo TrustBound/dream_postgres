@@ -1,7 +1,8 @@
 //// Extracts the message of a protocol violation during a request.
 
 import dream_postgres/driver/connection.{
-  type RequestFailure, ProtocolViolation, UnexpectedServerMessage,
+  type RequestFailure, ConnectionEnded, ProtocolViolation,
+  UnexpectedServerMessage,
 }
 import dream_postgres/driver/message.{type BackendMessage}
 import dream_test/types.{
@@ -32,7 +33,7 @@ pub fn extract_unexpected_server_message(
 
 fn message_of(error: RequestFailure) -> MatchResult(BackendMessage) {
   case error {
-    ProtocolViolation(UnexpectedServerMessage(unexpected)) ->
+    ConnectionEnded(ProtocolViolation(UnexpectedServerMessage(unexpected))) ->
       MatchOk(unexpected.message)
     _other ->
       MatchFailed(AssertionFailure(

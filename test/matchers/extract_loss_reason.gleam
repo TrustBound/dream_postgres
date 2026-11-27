@@ -1,7 +1,7 @@
 //// Extracts the reason of a lost connection.
 
 import dream_postgres/driver/connection.{
-  type LossReason, type RequestFailure, ConnectionLost,
+  type LossReason, type RequestFailure, ConnectionEnded, ConnectionLost,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -31,7 +31,7 @@ pub fn extract_loss_reason(
 
 fn reason_of(value: RequestFailure) -> MatchResult(LossReason) {
   case value {
-    ConnectionLost(reason) -> MatchOk(reason)
+    ConnectionEnded(ConnectionLost(reason)) -> MatchOk(reason)
     _other ->
       MatchFailed(AssertionFailure(
         operator: "extract_loss_reason",

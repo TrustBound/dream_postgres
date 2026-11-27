@@ -5,8 +5,8 @@
 
 import dream_postgres/driver/connection.{
   type ChunkError, type Connection, type CopyError, type CopySender,
-  type Outcome, type ScriptError, ChunkFailed, ConnectionLost, SocketFailed,
-  copy_from, copy_to, run_script, send_chunk,
+  type Outcome, type ScriptError, ChunkFailed, ConnectionEnded, ConnectionLost,
+  SocketFailed, copy_from, copy_to, run_script, send_chunk,
 }
 import dream_postgres/driver/transport.{SocketClosed}
 import driver/proxy.{type Proxy, close_client, inject}
@@ -28,7 +28,7 @@ pub type MemoryPeak {
 
 /// The error of a produce function or a fold whose wait got no answer.
 fn no_answer() -> ChunkError {
-  ChunkFailed(ConnectionLost(SocketFailed(SocketClosed)))
+  ChunkFailed(ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))))
 }
 
 // Data ------------------------------------------------------------------------

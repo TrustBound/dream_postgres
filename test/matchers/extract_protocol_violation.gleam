@@ -2,7 +2,7 @@
 //// on.
 
 import dream_postgres/driver/connection.{
-  type RequestFailure, type Violation, ProtocolViolation,
+  type RequestFailure, type Violation, ConnectionEnded, ProtocolViolation,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -32,7 +32,7 @@ pub fn extract_protocol_violation(
 
 fn violation_of(value: RequestFailure) -> MatchResult(Violation) {
   case value {
-    ProtocolViolation(violation) -> MatchOk(violation)
+    ConnectionEnded(ProtocolViolation(violation)) -> MatchOk(violation)
     _other ->
       MatchFailed(AssertionFailure(
         operator: "extract_protocol_violation",

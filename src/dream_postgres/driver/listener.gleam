@@ -32,10 +32,9 @@
 import dream_postgres/driver/connection.{
   type ConnectError, type Connection, type ConnectionConfig,
   type ConnectionEvent, type Notification, type ScriptError, Connected,
-  ConnectionConfig, ConnectionLost, ConnectionProcessDown, DeadlinePassed,
-  Disconnected, ProtocolViolation, ReconnectFailed, Reconnected,
-  ScriptCopyRefused, ScriptFailed, ScriptNotConnected, ScriptRefused,
-  ScriptRequestFailed, ScriptUnencodable, ServerEndedConnection,
+  ConnectionConfig, ConnectionEnded, ConnectionProcessDown, DeadlinePassed,
+  Disconnected, ReconnectFailed, Reconnected, ScriptCopyRefused, ScriptFailed,
+  ScriptNotConnected, ScriptRefused, ScriptRequestFailed, ScriptUnencodable,
 }
 import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{byte_size}
@@ -561,10 +560,8 @@ fn listen(state: State, channel: String) -> Listened {
 fn listened(result: Result(Nil, ScriptError)) -> Listened {
   case result {
     Ok(Nil) -> ListenWorked
-    Error(ScriptRequestFailed(ConnectionLost(_)))
-    | Error(ScriptNotConnected(_))
-    | Error(ScriptRequestFailed(ServerEndedConnection(_)))
-    | Error(ScriptRequestFailed(ProtocolViolation(_))) -> ListenLost
+    Error(ScriptRequestFailed(ConnectionEnded(_)))
+    | Error(ScriptNotConnected(_)) -> ListenLost
     Error(ScriptRequestFailed(ConnectionProcessDown)) ->
       ListenNotDone(ListenerConnectionDown)
     Error(ScriptRequestFailed(DeadlinePassed(cancelled:))) ->

@@ -10,10 +10,11 @@
 
 import dream_postgres/driver/connection.{
   type ChunkError, type Connection, type CopyError, type Outcome,
-  type ScriptError, AppFailed, ChunkCopyNotRunning, ChunkFailed, ConnectionLost,
-  ConnectionProcessDown, CopyFailed, CopyNotStarted, CopyUnencodable,
-  DeadlinePassed, Outcome, ScriptRequestFailed, ServerStoppedReading,
-  SocketFailed, copy_from, copy_to, run_script, send_chunk, transaction_status,
+  type ScriptError, AppFailed, ChunkCopyNotRunning, ChunkFailed, ConnectionEnded,
+  ConnectionLost, ConnectionProcessDown, CopyFailed, CopyNotStarted,
+  CopyUnencodable, DeadlinePassed, Outcome, ScriptRequestFailed,
+  ServerStoppedReading, SocketFailed, copy_from, copy_to, run_script, send_chunk,
+  transaction_status,
 }
 import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{SocketClosed}
@@ -63,6 +64,7 @@ import matchers/extract_app_failure.{extract_app_failure}
 import matchers/extract_chunk_refusal_code.{extract_chunk_refusal_code}
 import matchers/extract_command_result.{extract_command_result}
 import matchers/extract_command_rows.{extract_command_rows}
+import matchers/extract_connection_end.{extract_connection_end}
 import matchers/extract_copy_failure.{extract_copy_failure}
 import matchers/extract_copy_refusal_code.{extract_copy_refusal_code}
 import matchers/extract_ending_report.{extract_ending_report}
@@ -1030,6 +1032,7 @@ fn session_end_tests(server: Server) -> ContextNode(ControlledConnection) {
         |> should
         |> be_error
         |> extract_copy_failure
+        |> extract_connection_end
         |> extract_ending_report
         |> extract_report_code
         |> be_equal("57P01")
@@ -1086,7 +1089,9 @@ fn proxied_tests() -> TestSuite {
           |> be_ok
           |> be_error
           |> be_equal(
-            ScriptRequestFailed(ConnectionLost(SocketFailed(SocketClosed))),
+            ScriptRequestFailed(
+              ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))),
+            ),
           )
           |> or_fail_with("Expected the loss by the closed socket")
         },
@@ -1189,7 +1194,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         |> should
         |> be_error
         |> extract_copy_failure
-        |> be_equal(ConnectionLost(ServerStoppedReading))
+        |> be_equal(ConnectionEnded(ConnectionLost(ServerStoppedReading)))
         |> or_fail_with("Expected the loss by a send timeout")
       },
     ),
@@ -1208,7 +1213,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         |> should
         |> be_error
         |> extract_copy_failure
-        |> be_equal(ConnectionLost(SocketFailed(SocketClosed)))
+        |> be_equal(ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))))
         |> or_fail_with("Expected the loss of the connection")
       },
     ),
@@ -1248,6 +1253,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
         |> be_ok
         |> be_error
         |> extract_script_request_failure
+        |> extract_connection_end
         |> extract_ending_report
         |> extract_report_code
         |> be_equal("57P01")
@@ -1296,6 +1302,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
           |> be_ok
           |> be_error
           |> extract_copy_failure
+          |> extract_connection_end
           |> extract_ending_report
           |> extract_report_code
           |> be_equal("57P01")

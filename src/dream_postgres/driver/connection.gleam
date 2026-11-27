@@ -48,10 +48,10 @@ import dream_postgres/driver/query.{
   type AsynchronousMessage, type CopyDirection, type CopyResult, type CopyState,
   type CopyStep, type Failure, type PrepareAndRunState, type PrepareState,
   type RunState, type ScriptFailure, type SimpleQueryState, type Start,
-  type StatementResult, type Step, type UnexpectedMessage, ConnectionEnded,
-  CopyCompleted, CopyConnectionEnded, CopyFinished, CopyFrom, CopyNotSupported,
-  CopyRow, CopySend, CopyStarted, CopyTo, CopyWait, Finished, NoCopyStarted,
-  Notice, ParameterChanged, ScriptFailure, Send, ServerError, Wait,
+  type StatementResult, type Step, type UnexpectedMessage, CopyCompleted,
+  CopyConnectionEnded, CopyFinished, CopyFrom, CopyNotSupported, CopyRow,
+  CopySend, CopyStarted, CopyTo, CopyWait, Finished, NoCopyStarted, Notice,
+  ParameterChanged, ScriptFailure, Send, ServerError, Wait,
 }
 import dream_postgres/driver/statement_cache.{
   type CachedStatement, type StatementCache, CachedStatement,
@@ -158,8 +158,7 @@ pub type ConnectionEvent {
   /// failed. The next one follows after the reconnect backoff.
   ConnectFailed(error: ConnectError)
   /// The connection is lost. The process connects again after the backoff.
-  /// `error` is never `ConnectionProcessDown` or `DeadlinePassed`.
-  Disconnected(error: RequestFailure)
+  Disconnected(error: ConnectionEnd)
   /// An attempt to connect again failed. The next one follows after the
   /// backoff.
   ReconnectFailed(error: ConnectError)
@@ -239,8 +238,19 @@ pub type LossReason {
   ClosedAfterDeadline
 }
 
+/// Why a connection ended. The process connects again.
+pub type ConnectionEnd {
+  /// The connection is gone. `reason` says why.
+  ConnectionLost(reason: LossReason)
+  /// The server ended the session with a FATAL or PANIC error, for example
+  /// `57P01` when an administrator stops it.
+  ServerEndedConnection(report: ServerReport)
+  /// The server broke the protocol.
+  ProtocolViolation(violation: Violation)
+}
+
 /// A failure that any request can meet on its connection: the process is
-/// gone, the deadline passed, or the connection broke.
+/// gone, the deadline passed, or the connection ended.
 pub type RequestFailure {
   /// The connection process is gone, for example after `stop`.
   ConnectionProcessDown
@@ -248,14 +258,8 @@ pub type RequestFailure {
   /// the server confirmed a cancel. A request that waited behind another
   /// one, or a caller that got no answer in time, gets `False`.
   DeadlinePassed(cancelled: Bool)
-  /// The connection is gone. `reason` says why. The process connects
-  /// again.
-  ConnectionLost(reason: LossReason)
-  /// The server ended the session with a FATAL or PANIC error, for example
-  /// `57P01` when an administrator stops it. The process connects again.
-  ServerEndedConnection(report: ServerReport)
-  /// The server broke the protocol. The process connects again.
-  ProtocolViolation(violation: Violation)
+  /// The connection ended. `end` says why.
+  ConnectionEnded(end: ConnectionEnd)
 }
 
 /// Why `transaction_status`, `aborted_by` or `server_parameter` failed.
@@ -874,7 +878,11 @@ fn new_state(config: ConnectionConfig, subject: Subject(Message)) -> State {
   State(
     config:,
     subject:,
-    link: Lost(RefusedWithFailure(ConnectionLost(SocketFailed(SocketClosed)))),
+    link: Lost(
+      RefusedWithFailure(
+        ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))),
+      ),
+    ),
     parameters: dict.new(),
     tracker: new_tracker(),
     running: None,
@@ -1038,23 +1046,24 @@ fn failed_ending(name: String, report: Option(ServerReport)) -> SpanEnd {
 }
 
 /// The name of a request failure: its constructor's name.
+/// A failure of an ended connection is named by the case of its end.
 fn failure_name(failure: RequestFailure) -> String {
   case failure {
     ConnectionProcessDown -> "ConnectionProcessDown"
     DeadlinePassed(..) -> "DeadlinePassed"
-    ConnectionLost(..) -> "ConnectionLost"
-    ServerEndedConnection(..) -> "ServerEndedConnection"
-    ProtocolViolation(..) -> "ProtocolViolation"
+    ConnectionEnded(ConnectionLost(..)) -> "ConnectionLost"
+    ConnectionEnded(ServerEndedConnection(..)) -> "ServerEndedConnection"
+    ConnectionEnded(ProtocolViolation(..)) -> "ProtocolViolation"
   }
 }
 
 fn failure_report(failure: RequestFailure) -> Option(ServerReport) {
   case failure {
-    ServerEndedConnection(report:) -> Some(report)
+    ConnectionEnded(ServerEndedConnection(report:)) -> Some(report)
     ConnectionProcessDown
     | DeadlinePassed(..)
-    | ConnectionLost(..)
-    | ProtocolViolation(..) -> None
+    | ConnectionEnded(ConnectionLost(..))
+    | ConnectionEnded(ProtocolViolation(..)) -> None
   }
 }
 
@@ -2207,10 +2216,10 @@ fn write_failed(
 fn lose_if_connected(
   state: State,
   socket: transport.Connection,
-  error: RequestFailure,
+  end: ConnectionEnd,
 ) -> State {
   case state.link {
-    Open(..) -> lose(state, socket, error)
+    Open(..) -> lose(state, socket, end)
     Lost(..) -> state
   }
 }
@@ -2478,7 +2487,7 @@ fn follow(
       answer_deadline(state, current)
       |> finish(socket, outcome)
       |> next_request
-    Ok(ConnectionEnded(report, messages)) ->
+    Ok(query.ConnectionEnded(report, messages)) ->
       ended(state, socket, current, report, messages)
     Error(unexpected) ->
       failed(
@@ -2502,14 +2511,14 @@ fn ended(
 }
 
 /// The request failed in a way that leaves the connection in an unknown
-/// state: the caller gets the error, and the process connects again.
+/// state: the caller gets the end, and the process connects again.
 fn failed(
   state: State,
   socket: transport.Connection,
   current: Running,
-  error: RequestFailure,
+  end: ConnectionEnd,
 ) -> State {
-  lose(State(..state, running: Some(current)), socket, error)
+  lose(State(..state, running: Some(current)), socket, end)
 }
 
 fn finish_prepare(
@@ -3225,28 +3234,30 @@ fn lost_copy(state: State, failure: RequestFailure) -> Option(EndedCopy) {
 fn lose(
   state: State,
   socket: transport.Connection,
-  error: RequestFailure,
+  end: ConnectionEnd,
 ) -> State {
-  end_link(state, socket, running_error: error, error:)
+  end_link(state, socket, running_error: ConnectionEnded(end), end:)
 }
 
 /// Ends the link. The running request, and a COPY that runs, fail with
-/// `running_error`. The waiting requests, the subscriber, the reconnect
-/// and the requests that come while the link is lost get `error`.
+/// `running_error`. The waiting requests and the requests that come while
+/// the link is lost get `ConnectionEnded(end)`, and the subscriber gets
+/// `Disconnected(end)`.
 fn end_link(
   state: State,
   socket: transport.Connection,
   running_error running_error: RequestFailure,
-  error error: RequestFailure,
+  end end: ConnectionEnd,
 ) -> State {
+  let refusal = RefusedWithFailure(ConnectionEnded(end))
   transport.close(socket)
   option.map(state.running, refuse_running(_, running_error))
-  list.each(reverse(state.waiting), refuse_ticket(_, RefusedWithFailure(error)))
-  tell(state, Disconnected(error))
+  list.each(reverse(state.waiting), refuse_ticket(_, refusal))
+  tell(state, Disconnected(end))
   schedule_reconnect(state, 0)
   State(
     ..end_current(state),
-    link: Lost(RefusedWithFailure(error)),
+    link: Lost(refusal),
     running: None,
     waiting: [],
     tracker: new_tracker(),
@@ -3578,7 +3589,7 @@ fn lose_at_deadline(
     state,
     socket,
     running_error: DeadlinePassed(cancelled: False),
-    error: ConnectionLost(ClosedAfterDeadline),
+    end: ConnectionLost(ClosedAfterDeadline),
   )
 }
 

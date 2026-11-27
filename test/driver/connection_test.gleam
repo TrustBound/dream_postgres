@@ -9,13 +9,13 @@
 //// every connection.
 
 import dream_postgres/driver/connection.{
-  type Connection, type ConnectionConfig, type ConnectionEvent,
-  type ConnectionStateError, type Outcome, type RequestFailure, type RunError,
+  type Connection, type ConnectionConfig, type ConnectionEnd,
+  type ConnectionEvent, type ConnectionStateError, type Outcome, type RunError,
   type ScriptError, type SettleError, Backoff, CacheStatements,
-  ClosedAfterDeadline, ConnectionConfig, ConnectionLost, ConnectionProcessDown,
-  CopyFailed, DeadlinePassed, LoginRequiresTls, LoginSendFailed,
-  LoginSocketFailed, LoginUndecodable, NoAnswerInTime, PrepareFailed,
-  PrepareUnencodable, ProcessGone, ProtocolViolation, Reconnected,
+  ClosedAfterDeadline, ConnectionConfig, ConnectionEnded, ConnectionLost,
+  ConnectionProcessDown, CopyFailed, DeadlinePassed, LoginRequiresTls,
+  LoginSendFailed, LoginSocketFailed, LoginUndecodable, NoAnswerInTime,
+  PrepareFailed, PrepareUnencodable, ProcessGone, ProtocolViolation, Reconnected,
   RunCopyRefused, RunFailed, RunUnencodable, ScriptRequestFailed,
   ScriptUnencodable, ServerStoppedReading, SettleFailed, SetupTimedOut,
   SocketFailed, TransportRefused, UndecodableMessage, UnexpectedIdleMessage,
@@ -90,6 +90,7 @@ import matchers/extract_column_origins.{extract_column_origins}
 import matchers/extract_command_result.{extract_command_result}
 import matchers/extract_command_rows.{extract_command_rows}
 import matchers/extract_command_tag.{extract_command_tag}
+import matchers/extract_connection_end.{extract_connection_end}
 import matchers/extract_disconnect_error.{extract_disconnect_error}
 import matchers/extract_ending_report.{extract_ending_report}
 import matchers/extract_first.{extract_first}
@@ -1101,7 +1102,9 @@ fn running_run_lost_test(name: String) -> ContextNode(ProxiedConnection) {
     |> should
     |> be_ok
     |> be_error
-    |> be_equal(RunFailed(ConnectionLost(SocketFailed(SocketClosed))))
+    |> be_equal(
+      RunFailed(ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed)))),
+    )
     |> or_fail_with("Expected the loss for the running run")
   })
 }
@@ -1142,7 +1145,11 @@ fn running_prepare_lost_tests(
       |> should
       |> be_ok
       |> be_error
-      |> be_equal(PrepareFailed(ConnectionLost(SocketFailed(SocketClosed))))
+      |> be_equal(
+        PrepareFailed(
+          ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))),
+        ),
+      )
       |> or_fail_with("Expected the loss for the running prepare")
     }),
   ])
@@ -1151,7 +1158,7 @@ fn running_prepare_lost_tests(
 fn loss_event_test(
   name: String,
   breaking: fn(Proxy) -> Nil,
-  expected: RequestFailure,
+  expected: ConnectionEnd,
 ) -> ContextNode(ProxiedConnection) {
   it("tells of " <> name, fn(proxied: ProxiedConnection) {
     // Act
@@ -1189,6 +1196,7 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
           |> should
           |> be_error
           |> extract_script_request_failure
+          |> extract_connection_end
           |> extract_ending_report
           |> extract_report_code
           |> be_equal("57P01")
@@ -1209,7 +1217,11 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
           answer
           |> should
           |> be_error
-          |> be_equal(PrepareFailed(ConnectionLost(SocketFailed(SocketClosed))))
+          |> be_equal(
+            PrepareFailed(
+              ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))),
+            ),
+          )
           |> or_fail_with("Expected the error of the loss")
         },
       ),
@@ -1223,7 +1235,11 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
           settled
           |> should
           |> be_error
-          |> be_equal(SettleFailed(ConnectionLost(SocketFailed(SocketClosed))))
+          |> be_equal(
+            SettleFailed(
+              ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))),
+            ),
+          )
           |> or_fail_with("Expected the error of the loss")
         },
       ),
@@ -1248,7 +1264,11 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
         answer
         |> should
         |> be_error
-        |> be_equal(ScriptRequestFailed(ConnectionLost(ServerStoppedReading)))
+        |> be_equal(
+          ScriptRequestFailed(
+            ConnectionEnded(ConnectionLost(ServerStoppedReading)),
+          ),
+        )
         |> or_fail_with("Expected the loss by a send timeout")
       },
     ),
@@ -1396,7 +1416,9 @@ fn lock_tests() -> ContextNode(ProxiedConnection) {
         |> be_ok
         |> be_error
         |> be_equal(
-          ScriptRequestFailed(ConnectionLost(SocketFailed(SocketClosed))),
+          ScriptRequestFailed(
+            ConnectionEnded(ConnectionLost(SocketFailed(SocketClosed))),
+          ),
         )
         |> or_fail_with("Expected the loss for the running request")
       },
@@ -1615,6 +1637,7 @@ fn requests_at_loss_tests() -> TestSuite {
           |> be_ok
           |> be_error
           |> extract_script_request_failure
+          |> extract_connection_end
           |> extract_ending_report
           |> extract_report_code
           |> be_equal("57P01")
@@ -1629,6 +1652,7 @@ fn requests_at_loss_tests() -> TestSuite {
           |> be_ok
           |> be_error
           |> extract_script_request_failure
+          |> extract_connection_end
           |> extract_ending_report
           |> extract_report_code
           |> be_equal("57P01")
@@ -2078,7 +2102,11 @@ fn keyless_session_tests() -> TestSuite {
           |> should
           |> be_ok
           |> be_error
-          |> be_equal(ScriptRequestFailed(ConnectionLost(ClosedAfterDeadline)))
+          |> be_equal(
+            ScriptRequestFailed(
+              ConnectionEnded(ConnectionLost(ClosedAfterDeadline)),
+            ),
+          )
           |> or_fail_with(
             "Expected the request behind the deadline to get ClosedAfterDeadline",
           )
@@ -2097,7 +2125,9 @@ fn keyless_session_tests() -> TestSuite {
             answer
             |> should
             |> be_error
-            |> be_equal(RunFailed(ConnectionLost(ClosedAfterDeadline)))
+            |> be_equal(
+              RunFailed(ConnectionEnded(ConnectionLost(ClosedAfterDeadline))),
+            )
             |> or_fail_with(
               "Expected ClosedAfterDeadline while the process reconnects",
             )

@@ -20,9 +20,9 @@
 //// This module is internal to dream_postgres.
 
 import dream_postgres/driver/connection.{
-  type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type RequestFailure, ConnectFailed, Connected,
-  ConnectionConfig, Disconnected, ReconnectFailed, Reconnected,
+  type ConnectError, type Connection, type ConnectionConfig, type ConnectionEnd,
+  type ConnectionEvent, ConnectFailed, Connected, ConnectionConfig, Disconnected,
+  ReconnectFailed, Reconnected,
 }
 import dream_postgres/internal/cell.{Idle}
 import gleam/erlang/process.{
@@ -62,7 +62,7 @@ pub type MemberReport {
   MemberReady(slot: Int)
   /// The connection lost its session with the server, for `error`. Its
   /// process connects again.
-  SessionLost(slot: Int, error: RequestFailure)
+  SessionLost(slot: Int, error: ConnectionEnd)
   /// The connection connected and logged in again after a loss.
   SessionBack(slot: Int)
   /// A start of a connection process, or a reconnect of the connection,
