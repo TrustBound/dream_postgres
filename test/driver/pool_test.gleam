@@ -17,11 +17,11 @@ import dream_postgres/driver/connection.{
   TransportRefused,
 }
 import dream_postgres/driver/pool.{
-  type HoldError, type Pool, type PoolConfig, type PoolEvent, type PoolStatus,
-  ConnectFailed, HoldDeadlinePassed, HoldRefused, HoldWaiting,
-  InvalidHealthCheckInterval, InvalidSize, MemberConnected, MemberDisconnected,
-  MemberFree, MemberHeld, MemberReplacing, MemberReturned, PoolStatus,
-  PoolStopped, PoolStopping,
+  type HoldError, type Pool, type PoolConfig, type PoolEvent,
+  type PoolNotRunning, type PoolStatus, ConnectFailed, HoldDeadlinePassed,
+  HoldRefused, HoldWaiting, InvalidHealthCheckInterval, InvalidSize,
+  MemberConnected, MemberDisconnected, MemberFree, MemberHeld, MemberReplacing,
+  MemberReturned, PoolNotRunning, PoolStatus, PoolStopped, PoolStopping,
 }
 import dream_postgres/driver/transport.{ConnectRefused, SocketClosed}
 import dream_postgres/internal/cell.{type TransactionStatus, Idle, InTransaction}
@@ -651,8 +651,8 @@ fn stop_tests() -> ContextNode(PoolSession) {
         status
         |> should
         |> be_error
-        |> be_equal(PoolStopped)
-        |> or_fail_with("Expected PoolStopped for the status")
+        |> be_equal(PoolNotRunning)
+        |> or_fail_with("Expected PoolNotRunning for the status")
       },
     ),
   ])
@@ -843,7 +843,7 @@ fn start_tests() -> TestSuite {
         },
       ),
       it(
-        "gives PoolStopped for the attachment of a name that no pool has",
+        "gives PoolNotRunning for the attachment of a name that no pool has",
         fn(_inputs) {
           // Arrange
           let handle: Pool(String) =
@@ -856,8 +856,8 @@ fn start_tests() -> TestSuite {
           answer
           |> should
           |> be_error
-          |> be_equal(PoolStopped)
-          |> or_fail_with("Expected PoolStopped")
+          |> be_equal(PoolNotRunning)
+          |> or_fail_with("Expected PoolNotRunning")
         },
       ),
       it("gives PoolStopped for a name that no pool has", fn(_inputs) {
@@ -991,23 +991,23 @@ fn named_tests() -> TestSuite {
       },
     ),
     it(
-      "gives PoolStopped after its pool stopped during a hold",
+      "gives PoolNotRunning after its pool stopped during a hold",
       fn(named: NamedPool) {
         // Act
         let status = {
-          use _stopped <- try(pool.hold(
-            named.handle,
-            5000,
-            stop_pool_inside(named.handle),
-          ))
-          pool.status(named.handle)
+          use _stopped <- try(
+            pool.hold(named.handle, 5000, stop_pool_inside(named.handle))
+            |> map_error(fn(error) { "the hold failed: " <> inspect(error) }),
+          )
+          Ok(pool.status(named.handle))
         }
 
         // Assert
         status
         |> should
+        |> be_ok
         |> be_error
-        |> be_equal(PoolStopped)
+        |> be_equal(PoolNotRunning)
         |> or_fail_with("Expected no pool after the hold")
       },
     ),
@@ -1023,7 +1023,7 @@ type RestartedPool {
   RestartedPool(
     named: NamedPool,
     backends: Result(#(String, String), String),
-    attachment: Result(String, HoldError),
+    attachment: Result(String, PoolNotRunning),
   )
 }
 
