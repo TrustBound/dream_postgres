@@ -2,6 +2,10 @@
 //// tests of servers that refuse or misbehave, and a free port with no
 //// listener.
 
+import gleam/dynamic.{type Dynamic}
+import gleam/erlang/process
+import gleam/result
+
 /// A running fake server.
 pub type FakeServer
 
@@ -16,9 +20,6 @@ pub type FakeBehavior {
   NotTls
   /// Answers `S` and does a TLS handshake with this certificate and key.
   Tls(String, String)
-  /// Answers `S`, does a TLS handshake with this certificate and key, then
-  /// sends a record that is not valid TLS.
-  TlsThenNotTls(String, String)
 }
 
 /// Starts a fake server, and gives its port. Gives the reason when the
@@ -38,6 +39,32 @@ pub fn client_closed(server: FakeServer) -> Result(Bool, String)
 /// its port.
 @external(erlang, "driver_fake_server_ffi", "start_silent")
 pub fn start_silent_server() -> Result(Int, String)
+
+/// A server that answers `S`, does a TLS handshake with this certificate
+/// and key, and waits for `send_bad_record`.
+pub type BadRecordServer
+
+/// Starts a server that does a TLS handshake and then waits, and gives its
+/// port.
+@external(erlang, "driver_fake_server_ffi", "start_tls_then_bad_record")
+pub fn start_tls_then_bad_record(
+  certificate_file: String,
+  key_file: String,
+) -> Result(#(Int, BadRecordServer), String)
+
+/// Makes the server send a record that no key of the TLS session protects,
+/// so the client's TLS layer raises an alert.
+@external(erlang, "driver_fake_server_ffi", "send_bad_record")
+pub fn send_bad_record(server: BadRecordServer) -> Result(Nil, String)
+
+/// The next message of the calling process, of any kind, for a test that
+/// reads a socket message itself.
+pub fn next_message() -> Result(Dynamic, String) {
+  process.new_selector()
+  |> process.select_other(fn(message) { message })
+  |> process.selector_receive(5000)
+  |> result.replace_error("no message within 5 seconds")
+}
 
 /// A port on localhost with no listener.
 @external(erlang, "port_ffi", "free_port")
