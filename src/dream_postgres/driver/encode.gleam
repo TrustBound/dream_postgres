@@ -61,7 +61,7 @@ pub fn encode(message: FrontendMessage) -> Result(BitArray, EncodeError) {
   case message {
     StartupMessage(version:, user:, parameters:) ->
       startup_message(version, user, parameters)
-    SslRequest -> Ok(<<8:32, ssl_request_code:32>>)
+    SslRequest -> Ok(ssl_request())
     GssEncryptionRequest -> Ok(<<8:32, gss_encryption_request_code:32>>)
     CancelRequest(process_id:, secret_key:) ->
       cancel_request(process_id, secret_key)
@@ -87,6 +87,16 @@ pub fn encode(message: FrontendMessage) -> Result(BitArray, EncodeError) {
     CopyFail(message:) -> string_message("f", "message", message)
     Terminate -> Ok(<<"X", 4:32>>)
   }
+}
+
+/// The bytes of an SSLRequest. It has no field, so it cannot fail, and the
+/// transport sends it without a `Result`.
+///
+/// ## Returns
+///
+/// The eight bytes of the SSLRequest.
+pub fn ssl_request() -> BitArray {
+  <<8:32, ssl_request_code:32>>
 }
 
 fn startup_message(

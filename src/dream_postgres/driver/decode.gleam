@@ -32,9 +32,9 @@ import dream_postgres/driver/message.{
   InvalidReportNumber, InvalidSecretKeyLength, InvalidUtf8, MissingReportField,
   NeedMoreBytes, NegotiateProtocolVersion, NoData, NoticeResponse,
   NotificationResponse, ParameterDescriptions, ParameterStatus, ParseComplete,
-  PortalSuspended, ReadyForQuery, ResultColumn, RowDescription,
-  UnknownAuthenticationRequest, UnknownEncryptionAnswer, UnknownFormatCode,
-  UnknownMessageType, UnknownTransactionStatus,
+  PortalSuspended, ReadyForQuery, ResultColumn, RowDescription, UnknownAnswer,
+  UnknownAuthenticationRequest, UnknownFormatCode, UnknownMessageType,
+  UnknownTransactionStatus,
 }
 import dream_postgres/internal/cell.{
   type Format, type ParameterDescription, type ServerReport,
@@ -143,7 +143,7 @@ pub fn decode_backend(
   }
 }
 
-/// Reads the answer to an SslRequest: `S`, `N` or an ErrorResponse.
+/// Reads the answer to an SslRequest: `S`, `N`, `E` or another byte.
 ///
 /// ## Parameters
 ///
@@ -151,17 +151,14 @@ pub fn decode_backend(
 ///
 /// ## Returns
 ///
-/// - `Ok(Decoded(answer, rest))`: the answer, and the bytes after it
-/// - `Ok(NeedMoreBytes)`: no byte yet
-/// - `Error(UnknownEncryptionAnswer(byte))`: any other first byte
-pub fn decode_ssl_answer(
-  bytes: BitArray,
-) -> Result(DecodeStep(EncryptionAnswer), ProtocolError) {
+/// - `Decoded(answer, rest)`: the answer, and the bytes after it
+/// - `NeedMoreBytes`: no byte yet
+pub fn decode_ssl_answer(bytes: BitArray) -> DecodeStep(EncryptionAnswer) {
   encryption_answer(bytes, "S")
 }
 
-/// Reads the answer to a GssEncryptionRequest: `G`, `N` or an
-/// ErrorResponse.
+/// Reads the answer to a GssEncryptionRequest: `G`, `N`, `E` or another
+/// byte.
 ///
 /// ## Parameters
 ///
@@ -169,36 +166,32 @@ pub fn decode_ssl_answer(
 ///
 /// ## Returns
 ///
-/// - `Ok(Decoded(answer, rest))`: the answer, and the bytes after it
-/// - `Ok(NeedMoreBytes)`: no byte yet
-/// - `Error(UnknownEncryptionAnswer(byte))`: any other first byte
+/// - `Decoded(answer, rest)`: the answer, and the bytes after it
+/// - `NeedMoreBytes`: no byte yet
 pub fn decode_gss_encryption_answer(
   bytes: BitArray,
-) -> Result(DecodeStep(EncryptionAnswer), ProtocolError) {
+) -> DecodeStep(EncryptionAnswer) {
   encryption_answer(bytes, "G")
 }
 
 fn encryption_answer(
   bytes: BitArray,
   accept_byte: String,
-) -> Result(DecodeStep(EncryptionAnswer), ProtocolError) {
+) -> DecodeStep(EncryptionAnswer) {
   case bytes {
-    <<"N", rest:bytes>> -> Ok(Decoded(EncryptionRefused, rest))
-    <<"E", rest:bytes>> -> Ok(Decoded(EncryptionErrorResponse, rest))
-    <<answer, rest:bytes>> -> accepted_answer(answer, rest, accept_byte)
-    _ -> Ok(NeedMoreBytes)
+    <<"N", rest:bytes>> -> Decoded(EncryptionRefused, rest)
+    <<"E", rest:bytes>> -> Decoded(EncryptionErrorResponse, rest)
+    <<answer, rest:bytes>> ->
+      Decoded(accepted_answer(answer, accept_byte), rest)
+    _ -> NeedMoreBytes
   }
 }
 
-fn accepted_answer(
-  answer: Int,
-  rest: BitArray,
-  accept_byte: String,
-) -> Result(DecodeStep(EncryptionAnswer), ProtocolError) {
-  use <- guard(<<answer>> != <<accept_byte:utf8>>, {
-    Error(UnknownEncryptionAnswer(answer))
-  })
-  Ok(Decoded(EncryptionAccepted, rest))
+fn accepted_answer(answer: Int, accept_byte: String) -> EncryptionAnswer {
+  case <<answer>> == <<accept_byte:utf8>> {
+    True -> EncryptionAccepted
+    False -> UnknownAnswer(answer)
+  }
 }
 
 fn split_message(

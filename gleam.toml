@@ -36,3 +36,8 @@ checked_from_version = "2.0.0"
 # The files that the tests or CI use. A file, command or output block of the
 # docs must copy one of them.
 tested_files = ["test", ".github", "scripts", "gleam.toml", "docker-compose.yml"]
+
+[erlang]
+# The driver uses TLS (ssl), reads certificates (public_key) and computes
+# SCRAM and MD5 logins (crypto).
+extra_applications = ["crypto", "public_key", "ssl"]

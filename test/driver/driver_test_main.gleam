@@ -12,6 +12,7 @@ import driver/decode_test
 import driver/encode_test
 import driver/recorded_test
 import driver/server_test
+import driver/transport_test
 
 /// Every suite of the driver tests, in the order they run.
 pub fn suites() -> List(TestSuite) {
@@ -21,6 +22,7 @@ pub fn suites() -> List(TestSuite) {
     decode_test.tests(),
     recorded_test.tests(),
     server_test.tests(),
+    transport_test.tests(),
   ]
 }
 
