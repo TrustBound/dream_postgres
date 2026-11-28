@@ -1,8 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, type Row, all, column, named, query, row,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, named, query}
+import dream_postgres/row.{type Row, column, row}
 
 /// The id and the title of each post.
 pub fn list_titles(

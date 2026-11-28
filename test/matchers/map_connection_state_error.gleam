@@ -1,6 +1,8 @@
 //// A matcher that gives the client reason of a state question that the connection process did not answer.
 
-import dream_postgres/driver/connection.{type ConnectionStateError}
+import dream_postgres/driver/connection/request_failure.{
+  type ConnectionStateError,
+}
 import dream_postgres/error.{type Reason}
 import dream_postgres/internal/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
@@ -10,7 +12,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 /// ## Example
 ///
 /// ```gleam
-/// connection.ProcessGone
+/// connection_request_failure.ProcessGone
 /// |> should
 /// |> map_connection_state_error()
 /// |> be_equal(error.ConnectionProcessDown)

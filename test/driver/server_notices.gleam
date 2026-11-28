@@ -1,7 +1,8 @@
 //// Connections whose notices go to a subscriber of the test, and the wait
 //// for the next notice.
 
-import dream_postgres/driver/connection.{type Connection, ConnectionConfig}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/settings.{ConnectionConfig}
 import dream_postgres/internal/cell.{type ServerReport}
 import driver/server_connection.{connection_config, start_configured}
 import fixtures/identity_sink.{identity_sink}

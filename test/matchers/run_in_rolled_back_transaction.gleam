@@ -3,8 +3,9 @@
 //// the server.
 
 import dream_errors.{type Error, Failed}
-import dream_postgres.{type Connection, type PostgresError, run, transaction}
-import dream_postgres/error
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/transaction.{run, transaction}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

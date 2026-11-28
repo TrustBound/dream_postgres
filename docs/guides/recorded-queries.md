@@ -37,8 +37,8 @@ The app and its tests share one config. It holds the interceptors of the app and
 ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Config, intercept, secrets}
 import dream_postgres/codec.{text}
+import dream_postgres/config.{type Config, intercept, secrets}
 import dream_postgres/secrets
 import snippets/request_tagging.{tag_with_app_name}
 
@@ -63,11 +63,11 @@ This function creates an API key, then reads it back by the id that the database
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, type Row, column, named, one, parameter,
-  query, row, secret_parameter,
-}
 import dream_postgres/codec.{int, text, timestamp_with_time_zone, uuid}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query, secret_parameter}
+import dream_postgres/row.{type Row, column, row}
 import dream_uuid.{type Uuid}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
@@ -119,7 +119,7 @@ The database makes the id with `gen_random_uuid()` and the time with `now()`, so
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 import dream_postgres/recorder.{
   type Mode, type Recorder, intercept, match_on, mode, new, start,
 }
@@ -140,17 +140,19 @@ pub fn start_api_key_recorder(
 }
 ```
 
-`recorder.start` fails with `Error(PostgresError)`, the same type as `dream_postgres.start`. The recorder stops when its connection stops, or when the process that started it ends.
+`recorder.start` fails with `Error(PostgresError)`, the same type as `pool.start`. The recorder stops when its connection stops, or when the process that started it ends.
 
 ## Record, then play back
 
-`dream_postgres.record` attaches the recorder to the config. Then `dream_postgres.start` makes the connection of the mode:
+`config.record` attaches the recorder to the config. Then `pool.start` makes the connection of the mode:
 
 ### Run the test in either mode <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/run_create_api_key.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type Config, type PostgresError, record, start, stop}
+import dream_postgres/config.{type Config, record}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{start, stop}
 import dream_postgres/recorder.{type Recorder}
 import gleam/result
 import snippets/app_config.{app_config}
@@ -182,9 +184,9 @@ pub fn run_create_api_key(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, run_sql, with_connection,
-}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, with_connection}
+import dream_postgres/query.{run_sql}
 import gleam/result
 
 /// Runs the work on one connection that has a temporary table `api_keys`,
@@ -215,13 +217,14 @@ The test of this guide plays back `test/recordings/api_key_create.json` with the
 
 To play back in CI, commit the recording file with the test. To record again, for example after a query changed, run the test one time in `Record` mode against a database.
 
-`dream_postgres.supervised` takes a recorder in each mode. In `Playback` mode the pool under the name has no database: it starts no connection and dials nothing, and `named_connection` answers from the recording. After the supervisor starts the pool again, the same name answers the next recorded request:
+`pool.supervised` takes a recorder in each mode. In `Playback` mode the pool under the name has no database: it starts no connection and dials nothing, and `named_connection` answers from the recording. After the supervisor starts the pool again, the same name answers the next recorded request:
 
 ### Play back under a supervisor <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_app_supervisor.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Config, type PoolName, record, supervised}
+import dream_postgres/config.{type Config, record}
 import dream_postgres/error.{describe}
+import dream_postgres/pool.{type PoolName, supervised}
 import dream_postgres/recorder.{type Recorder}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}
@@ -263,7 +266,7 @@ Playback follows the recorded order. At each request, the recorder makes the key
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 import dream_postgres/recorder.{
   type Mode, type Recorder, match_on, mode, new, start,
 }
@@ -300,7 +303,7 @@ Each recording starts with no UUID known. A placeholder does not change, so the 
 
 ## Secrets
 
-`dream_postgres.secrets` declares the secrets of the config one time. They apply to each copy of a request that leaves the process:
+`config.secrets` declares the secrets of the config one time. They apply to each copy of a request that leaves the process:
 
 | Secret | The recording | `PostgresError.sql` | The text of the trace span |
 |---|---|---|---|
@@ -319,11 +322,11 @@ In playback, a secret parameter matches any value with the same codec at the sam
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, named, one, parameter, query,
-  secret_parameter, single,
-}
 import dream_postgres/codec.{bool, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query, secret_parameter}
+import dream_postgres/row.{single}
 
 /// Checks a password against its stored SHA-256 hash in hex. The password
 /// is a secret parameter, so a recording of this query never holds it.

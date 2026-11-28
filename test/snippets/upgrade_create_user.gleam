@@ -1,8 +1,9 @@
 import dream_errors.{type Error, Conflict}
-import dream_postgres.{
-  type Connection, type PostgresError, named, one, parameter, query, single,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query}
+import dream_postgres/row.{single}
 import gleam/int
 import snippets/upgrade_show_user.{type Response, Response}
 

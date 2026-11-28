@@ -1,4 +1,4 @@
-//// Inputs of the copy step of `dream_postgres/driver/query` for its
+//// Inputs of the copy step of `dream_postgres/driver/query/copy_step` for its
 //// tests: messages of the server and calls of the app, in the flows of the
 //// PostgreSQL documentation ("Message Flow", "COPY Operations"), and what
 //// the step gives back for each.
@@ -7,10 +7,10 @@ import dream_postgres/driver/message.{
   type BackendMessage, BindComplete, CopyInResponse, CopyOutResponse,
   ParseComplete,
 }
-import dream_postgres/driver/query.{
-  type CopyResult, type CopyState, type Failure, type Outcome, type Phase,
-  CopyFrom, Outcome,
-}
+import dream_postgres/driver/query/copy_step.{type CopyState} as query_copy_step
+import dream_postgres/driver/query/step.{
+  type CopyResult, type Failure, type Outcome, type Phase, CopyFrom, Outcome,
+} as query_step
 import dream_postgres/internal/cell.{
   type ServerReport, type TransactionStatus, ServerReport, TextFormat,
 }
@@ -140,24 +140,25 @@ pub fn repeated_byte(count: Int) -> BitArray {
 
 /// A copy step for `COPY ... FROM STDIN` after its CopyInResponse.
 pub fn started_copy_in() -> CopyState {
-  let start = query.start_copy("COPY t FROM STDIN", CopyFrom)
+  let start = query_copy_step.start_copy("COPY t FROM STDIN", CopyFrom)
   list.fold(copy_in_start(), start.state, take_message)
 }
 
 fn take_message(state: CopyState, input: Input) -> CopyState {
   case input {
-    FromServer(message) -> stepped_state(query.step_copy(state, message), state)
+    FromServer(message) ->
+      stepped_state(query_copy_step.step_copy(state, message), state)
     _app_call -> state
   }
 }
 
 fn stepped_state(
-  step: Result(query.CopyStep, query.UnexpectedMessage),
+  step: Result(query_copy_step.CopyStep, query_step.UnexpectedMessage),
   before: CopyState,
 ) -> CopyState {
   case step {
-    Ok(query.CopyStarted(state)) -> state
-    Ok(query.CopyWait(state)) -> state
+    Ok(query_copy_step.CopyStarted(state)) -> state
+    Ok(query_copy_step.CopyWait(state)) -> state
     _other -> before
   }
 }

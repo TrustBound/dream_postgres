@@ -1,7 +1,7 @@
 //// A matcher that runs work on the pool of the chain, then stops the
 //// pool.
 
-import dream_postgres.{type Connection}
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Run `work` on the pool, then stop the pool. The chain goes on with
@@ -28,7 +28,7 @@ pub fn run_and_stop_pool(
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(connection) -> {
       let outcome = work(connection)
-      dream_postgres.stop(connection)
+      pool.stop(connection)
       MatchOk(outcome)
     }
   }

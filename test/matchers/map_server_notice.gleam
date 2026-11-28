@@ -1,6 +1,6 @@
 //// A matcher that maps a notice report of the driver to the notice of the client.
 
-import dream_postgres.{type ServerNotice}
+import dream_postgres/config.{type ServerNotice}
 import dream_postgres/internal/cell.{type ServerReport}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
@@ -21,6 +21,6 @@ pub fn map_server_notice(
 ) -> MatchResult(ServerNotice) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
-    MatchOk(value) -> MatchOk(dream_postgres.server_notice(value))
+    MatchOk(value) -> MatchOk(config.server_notice(value))
   }
 }

@@ -1,8 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, all, column, query, row,
-}
 import dream_postgres/codec.{int, nullable, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, query}
+import dream_postgres/row.{column, row}
 import gleam/option.{type Option}
 
 /// Gives the email of each user and the balance of the user's account. A

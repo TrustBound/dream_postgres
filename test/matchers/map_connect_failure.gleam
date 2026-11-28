@@ -1,7 +1,7 @@
 //// A matcher that gives the client failure of an error of a connect to a
 //// server at a host and port.
 
-import dream_postgres/driver/connection.{type ConnectError}
+import dream_postgres/driver/connection/event.{type ConnectError}
 import dream_postgres/error.{type ConnectFailure}
 import dream_postgres/internal/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
@@ -12,7 +12,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 /// ## Example
 ///
 /// ```gleam
-/// connection.SetupTimedOut
+/// connection_event.SetupTimedOut
 /// |> should
 /// |> map_connect_failure("db", 5432)
 /// |> be_equal(error.SetupTimedOut)

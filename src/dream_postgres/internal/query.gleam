@@ -1,5 +1,5 @@
 //// Queries: the SQL, an optional name, and the parameters with their
-//// codecs. The module `dream_postgres` gives the public functions. Before
+//// codecs. The module `dream_postgres/query` gives the public functions. Before
 //// a query runs, its parameters are checked against the types that the
 //// server gave in the prepared statement's description, then written.
 

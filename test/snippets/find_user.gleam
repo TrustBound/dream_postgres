@@ -1,8 +1,8 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, maybe_one, named, parameter, query,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{maybe_one, named, parameter, query}
 import gleam/option.{type Option}
 import snippets/user_row.{type User, user_row}
 

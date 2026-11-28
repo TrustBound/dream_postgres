@@ -1,6 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Listener, type PostgresError, type Subscription, stop_listener, unlisten,
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/listener.{
+  type Listener, type Subscription, stop_listener, unlisten,
 }
 import gleam/result
 

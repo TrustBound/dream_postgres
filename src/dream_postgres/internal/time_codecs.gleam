@@ -94,20 +94,22 @@ fn encode_infinite_date(
 fn days_of_date(value: Date) -> Result(Int, String) {
   case calendar.is_valid_date(value) {
     False -> Error(date_text(value) <> " is not a valid date")
-    True -> {
-      let #(seconds, _) =
-        timestamp.from_calendar(
-          date: value,
-          time: TimeOfDay(0, 0, 0, 0),
-          offset: calendar.utc_offset,
-        )
-        |> timestamp.to_unix_seconds_and_nanoseconds
-      let days = { seconds - postgres_epoch_unix_seconds } / seconds_per_day
-      case days > int32_smallest && days < int32_largest {
-        True -> Ok(days)
-        False -> Error(date_text(value) <> " is out of range for date")
-      }
-    }
+    True -> days_in_range(value)
+  }
+}
+
+fn days_in_range(value: Date) -> Result(Int, String) {
+  let #(seconds, _) =
+    timestamp.from_calendar(
+      date: value,
+      time: TimeOfDay(0, 0, 0, 0),
+      offset: calendar.utc_offset,
+    )
+    |> timestamp.to_unix_seconds_and_nanoseconds
+  let days = { seconds - postgres_epoch_unix_seconds } / seconds_per_day
+  case days > int32_smallest && days < int32_largest {
+    True -> Ok(days)
+    False -> Error(date_text(value) <> " is out of range for date")
   }
 }
 

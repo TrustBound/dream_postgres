@@ -2,11 +2,11 @@
 //// version, with the tables of the docs' examples in a new schema of its
 //// own, for some work.
 
-import dream_postgres.{
-  type Connection, one, query, run_sql, single, with_connection,
-}
 import dream_postgres/codec
 import dream_postgres/error
+import dream_postgres/pool.{type Connection, with_connection}
+import dream_postgres/query.{one, query, run_sql}
+import dream_postgres/row.{single}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

@@ -1,6 +1,6 @@
 //// Runs one query step on a session with a driver server.
 
-import dream_postgres/driver/query.{type Start}
+import dream_postgres/driver/query/step.{type Start}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

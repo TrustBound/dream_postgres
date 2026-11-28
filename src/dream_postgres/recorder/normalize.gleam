@@ -13,7 +13,7 @@
 ////
 //// ```gleam
 //// import dream_errors.{type Error}
-//// import dream_postgres.{type PostgresError}
+//// import dream_postgres/error.{type PostgresError}
 //// import dream_postgres/recorder.{
 ////   type Mode, type Recorder, intercept, match_on, mode, new, start,
 //// }
@@ -83,7 +83,7 @@ const text_types = ["text", "varchar", "bpchar", "name", "json", "xml"]
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/recorder.{
 ///   type Mode, type Recorder, intercept, match_on, mode, new, start,
 /// }
@@ -120,7 +120,7 @@ pub fn generated_uuids(keep keep: List(String)) -> Interceptor {
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/recorder.{
 ///   type Mode, type Recorder, intercept, match_on, mode, new, start,
 /// }

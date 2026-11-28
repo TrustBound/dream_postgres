@@ -1,6 +1,6 @@
 //// A matcher that runs work on the client pool of the chosen version.
 
-import dream_postgres.{type Connection}
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

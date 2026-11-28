@@ -1,20 +1,24 @@
 //// The options of a pool: TLS, the statement cache, the notices subject
 //// and the pool events subject, with the mapping of each to the driver.
 
-import dream_postgres.{
+import dream_postgres/codec
+import dream_postgres/config.{
   AuthorityCertificates, AuthorityFile, CacheStatements, CheckAuthority,
   CheckAuthorityAndHost, ConnectFailed, Connected, Disconnected, Free, Held,
   NoCertificateCheck, NoStatementCache, Reconnected, Refused, Replacing,
   Returned, Stopping, SystemAuthorities, TlsOff, TlsPreferred, TlsRequired,
-  Waiting, all, cancel_timeout, connect_timeout, default_config,
-  health_check_interval, named_connection, one, query, return_rollback_timeout,
-  run_sql, setup_timeout, single, start, supervised, with_connection,
+  Waiting, cancel_timeout, connect_timeout, default_config,
+  health_check_interval, return_rollback_timeout, setup_timeout,
 }
-import dream_postgres/codec
-import dream_postgres/driver/connection
-import dream_postgres/driver/pool
+import dream_postgres/driver/connection/event as connection_event
+import dream_postgres/driver/connection/settings as connection_settings
+import dream_postgres/driver/pool/pool_event
+import dream_postgres/driver/pool/pool_failure
 import dream_postgres/driver/transport
 import dream_postgres/error
+import dream_postgres/pool.{named_connection, start, supervised, with_connection} as postgres_pool
+import dream_postgres/query.{all, one, query, run_sql}
+import dream_postgres/row.{single}
 import dream_test/matchers.{
   be_equal, be_error, be_ok, contain, or_fail_with, should,
 }
@@ -254,7 +258,7 @@ fn statement_cache_mapping_tests() {
       CacheStatements(limit: 64)
       |> should
       |> map_statement_cache()
-      |> be_equal(connection.CacheStatements(limit: 64))
+      |> be_equal(connection_settings.CacheStatements(limit: 64))
       |> or_fail_with("Expected CacheStatements(64)")
     }),
     it("NoStatementCache prepares unnamed statements", fn() {
@@ -262,7 +266,7 @@ fn statement_cache_mapping_tests() {
       NoStatementCache
       |> should
       |> map_statement_cache()
-      |> be_equal(connection.UnnamedStatements)
+      |> be_equal(connection_settings.UnnamedStatements)
       |> or_fail_with("Expected UnnamedStatements")
     }),
   ])
@@ -272,7 +276,7 @@ fn pool_event_mapping_tests() {
   group("pool events", [
     it("a member that connected is Connected", fn() {
       // Act and assert
-      pool.MemberConnected(slot: 1)
+      pool_event.MemberConnected(slot: 1)
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(Connected(slot: 1))
@@ -280,9 +284,11 @@ fn pool_event_mapping_tests() {
     }),
     it("a member that lost its session is Disconnected with the reason", fn() {
       // Act and assert
-      pool.MemberDisconnected(
+      pool_event.MemberDisconnected(
         slot: 2,
-        error: connection.ConnectionLost(connection.ClosedAfterDeadline),
+        error: connection_event.ConnectionLost(
+          connection_event.ClosedAfterDeadline,
+        ),
       )
       |> should
       |> map_pool_event("db", 5432)
@@ -296,7 +302,7 @@ fn pool_event_mapping_tests() {
     }),
     it("a member that connected again is Reconnected", fn() {
       // Act and assert
-      pool.MemberReconnected(slot: 3)
+      pool_event.MemberReconnected(slot: 3)
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(Reconnected(slot: 3))
@@ -304,7 +310,10 @@ fn pool_event_mapping_tests() {
     }),
     it("a failed connect is ConnectFailed with the reason", fn() {
       // Act and assert
-      pool.MemberConnectFailed(slot: 0, error: connection.SetupTimedOut)
+      pool_event.MemberConnectFailed(
+        slot: 0,
+        error: connection_event.SetupTimedOut,
+      )
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(ConnectFailed(
@@ -317,7 +326,7 @@ fn pool_event_mapping_tests() {
     }),
     it("a member that is replaced is Replacing", fn() {
       // Act and assert
-      pool.MemberReplacing(slot: 1)
+      pool_event.MemberReplacing(slot: 1)
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(Replacing(slot: 1))
@@ -325,7 +334,7 @@ fn pool_event_mapping_tests() {
     }),
     it("a free member is Free", fn() {
       // Act and assert
-      pool.MemberFree(slot: 1)
+      pool_event.MemberFree(slot: 1)
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(Free(slot: 1))
@@ -333,7 +342,7 @@ fn pool_event_mapping_tests() {
     }),
     it("a hold that waits is Waiting with the count", fn() {
       // Act and assert
-      pool.HoldWaiting(waiting: 4)
+      pool_event.HoldWaiting(waiting: 4)
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(Waiting(count: 4))
@@ -341,7 +350,7 @@ fn pool_event_mapping_tests() {
     }),
     it("a held member is Held", fn() {
       // Act and assert
-      pool.MemberHeld(slot: 2)
+      pool_event.MemberHeld(slot: 2)
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(Held(slot: 2))
@@ -349,7 +358,7 @@ fn pool_event_mapping_tests() {
     }),
     it("a returned member is Returned", fn() {
       // Act and assert
-      pool.MemberReturned(slot: 2)
+      pool_event.MemberReturned(slot: 2)
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(Returned(slot: 2))
@@ -357,7 +366,7 @@ fn pool_event_mapping_tests() {
     }),
     it("a refused hold is Refused with the reason", fn() {
       // Act and assert
-      pool.HoldRefused(error: pool.HoldDeadlinePassed)
+      pool_event.HoldRefused(error: pool_failure.HoldDeadlinePassed)
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(
@@ -367,7 +376,7 @@ fn pool_event_mapping_tests() {
     }),
     it("a pool that stops is Stopping", fn() {
       // Act and assert
-      pool.PoolStopping
+      pool_event.PoolStopping
       |> should
       |> map_pool_event("db", 5432)
       |> be_equal(Stopping)
@@ -400,7 +409,7 @@ fn tls_tests() {
 
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.tls(required)
+      |> config.tls(required)
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
@@ -413,7 +422,7 @@ fn tls_tests() {
     it("TlsOff connects with no TLS", fn() {
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.tls(TlsOff)
+      |> config.tls(TlsOff)
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
@@ -425,9 +434,9 @@ fn tls_tests() {
     }),
     it("the default refuses a server with no TLS", fn() {
       // Act and assert
-      dream_postgres.default_config()
-      |> dream_postgres.port(server_without_tls)
-      |> dream_postgres.pool_size(1)
+      config.default_config()
+      |> config.port(server_without_tls)
+      |> config.pool_size(1)
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT 1") |> all(single(codec.int), connection)
@@ -446,7 +455,7 @@ fn statement_cache_tests() {
     it("NoStatementCache runs queries with no named statement", fn() {
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.statement_cache(NoStatementCache)
+      |> config.statement_cache(NoStatementCache)
       |> should
       |> run_on_started_pool(fn(connection) {
         with_connection(connection, fn(held) {
@@ -473,7 +482,7 @@ fn notice_tests() {
 
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.notices(notices)
+      |> config.notices(notices)
       |> should
       |> run_on_started_pool(fn(connection) {
         run_sql("DROP TABLE IF EXISTS missing_table_x", connection)
@@ -494,8 +503,8 @@ fn pool_event_tests() {
 
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.pool_size(1)
-      |> dream_postgres.pool_events(events)
+      |> config.pool_size(1)
+      |> config.pool_events(events)
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT 1") |> all(single(codec.int), connection)
@@ -510,8 +519,8 @@ fn pool_event_tests() {
 
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.pool_size(1)
-      |> dream_postgres.pool_events(events)
+      |> config.pool_size(1)
+      |> config.pool_events(events)
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT 1") |> all(single(codec.int), connection)
@@ -526,8 +535,8 @@ fn pool_event_tests() {
 
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.pool_size(1)
-      |> dream_postgres.pool_events(events)
+      |> config.pool_size(1)
+      |> config.pool_events(events)
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT 1") |> all(single(codec.int), connection)
@@ -542,8 +551,8 @@ fn pool_event_tests() {
 
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.pool_size(1)
-      |> dream_postgres.pool_events(events)
+      |> config.pool_size(1)
+      |> config.pool_events(events)
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT 1") |> all(single(codec.int), connection)
@@ -555,9 +564,9 @@ fn pool_event_tests() {
     it("a stop of a pool that stopped already does nothing", fn() {
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.pool_size(1)
+      |> config.pool_size(1)
       |> should
-      |> run_on_started_pool(dream_postgres.stop)
+      |> run_on_started_pool(postgres_pool.stop)
       |> be_equal(Nil)
       |> or_fail_with("Expected the second stop to do nothing")
     }),
@@ -568,8 +577,8 @@ fn pool_event_tests() {
 
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.pool_size(1)
-      |> dream_postgres.pool_events(events)
+      |> config.pool_size(1)
+      |> config.pool_events(events)
       |> should
       |> run_on_supervised_pool(name, fn(_supervisor) {
         all(query("SELECT 1"), single(codec.int), named_connection(name))

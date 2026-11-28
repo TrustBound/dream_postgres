@@ -1,6 +1,6 @@
 //// Extracts the error of a disconnect event of the connection process.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/event.{
   type ConnectionEnd, type ConnectionEvent, Disconnected,
 }
 import dream_test/types.{

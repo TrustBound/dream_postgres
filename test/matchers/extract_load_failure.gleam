@@ -1,7 +1,7 @@
 //// Extracts the driver error of a failed catalog load.
 
 import dream_postgres/driver/catalog.{type CatalogError, LoadFailed}
-import dream_postgres/driver/connection.{type HousekeepingError}
+import dream_postgres/driver/connection/request_failure.{type HousekeepingError}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

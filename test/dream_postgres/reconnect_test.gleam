@@ -1,7 +1,8 @@
 //// The reconnect backoff of the config: the default strategy, and a
 //// strategy the app gives.
 
-import dream_postgres.{ReconnectStep, full_jitter}
+import dream_postgres/config
+import dream_postgres/reconnect.{ReconnectStep, full_jitter}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -31,12 +32,12 @@ pub fn tests() -> TestSuite {
 
       // Act and assert
       server_pools.config(free_ports.free_port())
-      |> dream_postgres.pool_size(1)
-      |> dream_postgres.reconnect_delays(
+      |> config.pool_size(1)
+      |> config.reconnect_delays(
         first_delay_milliseconds: 5,
         longest_delay_milliseconds: 40,
       )
-      |> dream_postgres.reconnect_strategy(fn(step) {
+      |> config.reconnect_strategy(fn(step) {
         process.send(steps, step)
         0
       })

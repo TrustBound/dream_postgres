@@ -1,7 +1,7 @@
 //// A matcher that gives the client reason of an error of a pool checkout
 //// from the pool of a server at a host and port.
 
-import dream_postgres/driver/pool.{type HoldError}
+import dream_postgres/driver/pool/pool_failure.{type HoldError}
 import dream_postgres/error.{type Reason}
 import dream_postgres/internal/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
@@ -12,7 +12,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 /// ## Example
 ///
 /// ```gleam
-/// pool.PoolStopped
+/// pool_failure.PoolStopped
 /// |> should
 /// |> map_checkout_error("db", 5432)
 /// |> be_equal(error.PoolStopped)

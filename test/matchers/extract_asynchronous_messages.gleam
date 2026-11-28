@@ -1,6 +1,6 @@
 //// Extracts the asynchronous messages of a query outcome.
 
-import dream_postgres/driver/query.{type AsynchronousMessage, type Outcome}
+import dream_postgres/driver/query/step.{type AsynchronousMessage, type Outcome}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the notices, parameter changes and notifications that came while

@@ -4,9 +4,14 @@
 //// lifecycle hooks of a suite, and pick the version of a group with
 //// `choose_version` in its `before_all`.
 
-import dream_postgres/driver/connection.{
-  type Connection, type Outcome, Backoff, ConnectionConfig,
-}
+import dream_postgres/driver/connection
+import dream_postgres/driver/connection/backoff.{Backoff} as connection_backoff
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/extended_query as connection_extended_query
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/settings.{ConnectionConfig} as connection_settings
+import dream_postgres/driver/connection/simple_query as connection_simple_query
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
 import dream_postgres/driver/transport.{NoTls, TransportConfig}
@@ -236,11 +241,11 @@ fn start_session(server: Server) -> Result(ProbeSession, String) {
       login: login_config,
       setup_timeout_milliseconds: 5000,
       cancel_timeout_milliseconds: 2000,
-      reconnect: Backoff(10, 60_000, connection.full_jitter),
+      reconnect: Backoff(10, 60_000, connection_backoff.full_jitter),
       events: None,
       notifications: None,
       notices: None,
-      statements: connection.CacheStatements(limit: 512),
+      statements: connection_settings.CacheStatements(limit: 512),
     ))
     |> result.map_error(string.inspect),
   )
@@ -258,17 +263,17 @@ fn prepare_session(
   started: Connection,
 ) -> Result(Dict(Int, TypeDescription), String) {
   use _ <- result.try(
-    connection.run_simple_query(
+    connection_simple_query.run_simple_query(
       started,
-      connection.statement(session_setup),
+      connection_statement.statement(session_setup),
       deadline_milliseconds,
     )
     |> result.map_error(string.inspect),
   )
   use outcome <- result.try(
-    connection.run(
+    connection_extended_query.run(
       started,
-      connection.statement(catalog_query),
+      connection_statement.statement(catalog_query),
       [],
       [],
       deadline_milliseconds,

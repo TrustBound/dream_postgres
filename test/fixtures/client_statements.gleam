@@ -2,11 +2,11 @@
 //// a division by zero, and a read of a setting.
 
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, affected, all, one, parameter, query,
-  single,
-}
 import dream_postgres/codec
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{affected, all, one, parameter, query}
+import dream_postgres/row.{single}
 
 /// Inserts a row with `id` into `table`, and gives the row count.
 ///

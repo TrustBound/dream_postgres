@@ -12,9 +12,12 @@
 import dream_postgres/driver/catalog.{
   type Catalog, type CatalogError, type CatalogEvent, UnknownType,
 }
-import dream_postgres/driver/connection.{
-  type Connection, type Outcome, type SimpleQueryError, run_simple_query, stop,
-}
+import dream_postgres/driver/connection.{stop}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/request_failure.{type SimpleQueryError}
+import dream_postgres/driver/connection/simple_query.{run_simple_query}
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/internal/cell.{type TypeDescription}
 import dream_test/context.{type Context}
 import driver/server_connection.{
@@ -350,7 +353,7 @@ pub fn block_connection(
   use _locked <- try(run_control_simple_query(control, lock))
   let blocker =
     start_caller(fn() {
-      run_simple_query(blocked, connection.statement(lock), 10_000)
+      run_simple_query(blocked, connection_statement.statement(lock), 10_000)
     })
   use _waited <- try(wait_for_lock_waiter(control, key))
   Ok(BlockedConnection(control:, blocked:, key:, blocker:))

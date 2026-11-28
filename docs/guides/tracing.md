@@ -30,10 +30,11 @@ Give a query a name with `named`. The name becomes the name of the span, and the
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, named, one, parameter, query, single,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query}
+import dream_postgres/row.{single}
 
 /// The span of this query is named `user.find_by_email`.
 pub fn find_user_id(
@@ -55,8 +56,11 @@ A query with no name gets the name `{operation} {database}` when the span ends, 
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, one, query, single}
 import dream_postgres/codec.{int}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 
 /// This query has no name, so its span is named after the operation and
 /// the database, for example `SELECT app`.

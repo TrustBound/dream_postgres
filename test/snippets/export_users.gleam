@@ -1,5 +1,8 @@
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, copy_to, query}
+import dream_postgres/copy.{copy_to}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{query}
 import gleam/list
 import gleam/result
 import snippets/copy_users.{type User, user_row}

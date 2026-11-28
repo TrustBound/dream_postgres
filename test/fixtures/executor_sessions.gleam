@@ -5,9 +5,10 @@
 //// `choose_version` in its `before_all`.
 
 import dream_postgres/driver/catalog.{type Catalog}
-import dream_postgres/driver/connection.{
-  type Connection, Backoff, ConnectionConfig,
-}
+import dream_postgres/driver/connection
+import dream_postgres/driver/connection/backoff.{Backoff} as connection_backoff
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/settings.{ConnectionConfig} as connection_settings
 import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message
 import dream_postgres/driver/transport.{NoTls, TransportConfig}
@@ -124,11 +125,11 @@ fn start_session(server: Server) -> Result(ExecutorSession, String) {
       login: login_config,
       setup_timeout_milliseconds: 5000,
       cancel_timeout_milliseconds: 2000,
-      reconnect: Backoff(10, 60_000, connection.full_jitter),
+      reconnect: Backoff(10, 60_000, connection_backoff.full_jitter),
       events: None,
       notifications: None,
       notices: None,
-      statements: connection.CacheStatements(limit: 512),
+      statements: connection_settings.CacheStatements(limit: 512),
     ))
     |> result.map_error(string.inspect),
   )

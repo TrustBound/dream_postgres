@@ -1,7 +1,8 @@
 //// A matcher that starts a pool on the server of the chosen version with
 //// a changed config, runs work on it, and stops it.
 
-import dream_postgres.{type Config, type Connection}
+import dream_postgres/config.{type Config}
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -18,7 +19,7 @@ import matchers/run_on_started_pool.{run_on_started_pool}
 /// ```gleam
 /// pools
 /// |> should
-/// |> run_on_configured_pool(dream_postgres.pool_size(_, 1), fn(connection) {
+/// |> run_on_configured_pool(pool_size(_, 1), fn(connection) {
 ///   query("SELECT 1") |> one(single(codec.int), connection)
 /// })
 /// |> be_ok()

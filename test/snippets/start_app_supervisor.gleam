@@ -1,5 +1,6 @@
-import dream_postgres.{type Config, type PoolName, record, supervised}
+import dream_postgres/config.{type Config, record}
 import dream_postgres/error.{describe}
+import dream_postgres/pool.{type PoolName, supervised}
 import dream_postgres/recorder.{type Recorder}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}

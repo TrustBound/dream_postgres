@@ -3,9 +3,12 @@
 //// in place of the server, as no PostgreSQL server answers a housekeeping
 //// statement, or breaks the connection.
 
-import dream_postgres/driver/connection.{
-  ConnectionEnded, ConnectionLost, HousekeepingAnswerUnexpected,
-  HousekeepingFailed, SocketFailed, run_housekeeping,
+import dream_postgres/driver/connection/event.{ConnectionLost, SocketFailed}
+import dream_postgres/driver/connection/extended_query.{run_housekeeping}
+import dream_postgres/driver/connection/request_failure.{
+  ConnectionEnded, HousekeepingAnswerUnexpected, HousekeepingFailed,
+}
+import dream_postgres/driver/connection/simple_query.{
   run_housekeeping_simple_query,
 }
 import dream_postgres/driver/housekeeping_sql.{catalog_load, health_check}

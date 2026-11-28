@@ -4,14 +4,16 @@
 //// tracer records the spans of the test's own process only.
 
 import dream_postgres/driver/catalog
-import dream_postgres/driver/connection.{
-  type Connection, copy_from, copy_to, named, prepare, run, run_simple_query,
-  statement, stop,
-}
+import dream_postgres/driver/connection.{stop}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/copy_caller.{copy_from, copy_to}
+import dream_postgres/driver/connection/extended_query.{prepare, run}
+import dream_postgres/driver/connection/simple_query.{run_simple_query}
+import dream_postgres/driver/connection/statement.{named, statement}
 import dream_postgres/driver/listener.{type Listener}
 import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
-import dream_postgres/driver/pool
+import dream_postgres/driver/pool/holds as pool_holds
 import dream_postgres/driver/trace.{SpanQuery, SpanTarget, Worked}
 import dream_postgres/internal/cell.{Text}
 import dream_test/context
@@ -90,15 +92,21 @@ fn watch_housekeeping() -> Result(Housekeeping, String) {
     process.new_subject(),
   ))
   use Nil <- try(wait_for_member_free_count(proxied.pool_events, 3))
-  use types <- try(pool.catalog(proxied.pool) |> map_error(inspect))
+  use types <- try(pool_holds.catalog(proxied.pool) |> map_error(inspect))
   use _int4 <- try(
-    pool.hold(proxied.pool, 5000, catalog.describe(types, _, 23, 5000))
+    pool_holds.hold(proxied.pool, 5000, catalog.describe(types, _, 23, 5000))
     |> map_error(inspect)
     |> result.map(map_error(_, inspect))
     |> result.flatten,
   )
   use _outcome <- try(
-    pool.hold(proxied.pool, 5000, run(_, statement("SELECT 1"), [], [], 5000))
+    pool_holds.hold(proxied.pool, 5000, run(
+      _,
+      statement("SELECT 1"),
+      [],
+      [],
+      5000,
+    ))
     |> map_error(inspect)
     |> result.map(map_error(_, inspect))
     |> result.flatten,

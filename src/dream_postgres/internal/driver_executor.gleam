@@ -5,12 +5,18 @@
 import dream_postgres/driver/catalog.{type Catalog, type CatalogError}
 import dream_postgres/driver/catalog_table.{type RowError}
 import dream_postgres/driver/channel_binding.{type CertificateError}
-import dream_postgres/driver/connection.{
-  type ChunkError, type ConnectError, type Connection, type ConnectionEnd,
-  type ConnectionStateError, type CopyError, type HousekeepingError,
-  type LossReason, type PrepareError, type RequestFailure, type RunError,
-  type SimpleQueryError, type Statement, type Violation,
-}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/event.{
+  type ConnectError, type ConnectionEnd, type LossReason,
+} as connection_event
+import dream_postgres/driver/connection/extended_query as connection_extended_query
+import dream_postgres/driver/connection/outcome.{type Violation} as connection_outcome
+import dream_postgres/driver/connection/request_failure.{
+  type ChunkError, type ConnectionStateError, type CopyError,
+  type HousekeepingError, type PrepareError, type RequestFailure, type RunError,
+  type SimpleQueryError,
+} as connection_request_failure
+import dream_postgres/driver/connection/statement.{type Statement} as connection_statement
 import dream_postgres/driver/listener.{
   type ListenFailure, type ListenerError, type UnsubscribeError,
 }
@@ -20,8 +26,8 @@ import dream_postgres/driver/login.{
 import dream_postgres/driver/message.{
   type BackendMessage, type EncodeError, type ProtocolError,
 }
-import dream_postgres/driver/pool.{type HoldError, type StartError}
-import dream_postgres/driver/query.{type Phase}
+import dream_postgres/driver/pool/pool_failure.{type HoldError, type StartError}
+import dream_postgres/driver/query/step.{type Phase} as query_step
 import dream_postgres/driver/scram.{type ServerFinalError, type ServerFirstError}
 import dream_postgres/driver/transport.{
   type AddressError, type SendError, type SocketError, type TlsFailure,
@@ -57,12 +63,16 @@ pub fn executor(
   Executor(
     prepare: fn(sql, name) {
       use remaining <- result.try(remaining_milliseconds(deadline_at))
-      connection.prepare(connection, statement(sql, name, secrets), remaining)
+      connection_extended_query.prepare(
+        connection,
+        statement(sql, name, secrets),
+        remaining,
+      )
       |> result.map_error(prepare_error_reason(_, endpoint))
     },
     describe_current: fn(sql, name) {
       use remaining <- result.try(remaining_milliseconds(deadline_at))
-      connection.describe_current(
+      connection_extended_query.describe_current(
         connection,
         statement(sql, name, secrets),
         remaining,
@@ -78,7 +88,7 @@ pub fn executor(
       use remaining <- result.try(
         remaining_milliseconds(deadline_at) |> result.map_error(RunFailed),
       )
-      connection.run(
+      connection_extended_query.run(
         connection,
         statement(sql, name, secrets),
         parameters,
@@ -102,10 +112,10 @@ pub fn statement(
   secrets: Secrets,
 ) -> Statement {
   let spanned =
-    connection.statement(sql)
-    |> connection.span_text(text: secrets.replace_text(secrets, sql))
+    connection_statement.statement(sql)
+    |> connection_statement.span_text(text: secrets.replace_text(secrets, sql))
   case name {
-    Some(name) -> connection.named(spanned, name)
+    Some(name) -> connection_statement.named(spanned, name)
     None -> spanned
   }
 }
@@ -114,13 +124,13 @@ pub fn statement(
 @internal
 pub fn run_failure(run_error: RunError, endpoint: Endpoint) -> RunFailure {
   case run_error {
-    connection.RunStatementChanged(description:) ->
+    connection_request_failure.RunStatementChanged(description:) ->
       StatementChanged(description:)
-    connection.RunFailed(..)
-    | connection.RunNotConnected(..)
-    | connection.RunUnencodable(..)
-    | connection.RunRefused(..)
-    | connection.RunCopyRefused ->
+    connection_request_failure.RunFailed(..)
+    | connection_request_failure.RunNotConnected(..)
+    | connection_request_failure.RunUnencodable(..)
+    | connection_request_failure.RunRefused(..)
+    | connection_request_failure.RunCopyRefused ->
       RunFailed(run_error_reason(run_error, endpoint))
   }
 }
@@ -148,10 +158,12 @@ pub type Endpoint {
 @internal
 pub fn request_failure_reason(failure: RequestFailure) -> Reason {
   case failure {
-    connection.ConnectionProcessDown -> error.ConnectionProcessDown
-    connection.DeadlinePassed(cancelled:) ->
+    connection_request_failure.ConnectionProcessDown ->
+      error.ConnectionProcessDown
+    connection_request_failure.DeadlinePassed(cancelled:) ->
       error.QueryTimeout(stopped_on_server: cancelled)
-    connection.ConnectionEnded(end:) -> connection_end_reason(end)
+    connection_request_failure.ConnectionEnded(end:) ->
+      connection_end_reason(end)
   }
 }
 
@@ -159,11 +171,12 @@ pub fn request_failure_reason(failure: RequestFailure) -> Reason {
 @internal
 pub fn connection_end_reason(end: ConnectionEnd) -> Reason {
   case end {
-    connection.ConnectionLost(reason:) ->
+    connection_event.ConnectionLost(reason:) ->
       error.ConnectionLost(loss_reason(reason))
-    connection.ServerEndedConnection(report:) ->
+    connection_event.ServerEndedConnection(report:) ->
       error.Server(error.server_error_from_report(report))
-    connection.ProtocolViolation(violation:) -> violation_reason(violation)
+    connection_event.ProtocolViolation(violation:) ->
+      violation_reason(violation)
   }
 }
 
@@ -174,12 +187,13 @@ pub fn prepare_error_reason(
   endpoint: Endpoint,
 ) -> Reason {
   case prepare_error {
-    connection.PrepareFailed(failure:) -> request_failure_reason(failure)
-    connection.PrepareNotConnected(error: connect_error) ->
+    connection_request_failure.PrepareFailed(failure:) ->
+      request_failure_reason(failure)
+    connection_request_failure.PrepareNotConnected(error: connect_error) ->
       not_connected_reason(connect_error, endpoint)
-    connection.PrepareUnencodable(error: encode_error) ->
+    connection_request_failure.PrepareUnencodable(error: encode_error) ->
       error.RequestNotWritable(request_fault(encode_error))
-    connection.PrepareRefused(report:, transaction_status: _) ->
+    connection_request_failure.PrepareRefused(report:, transaction_status: _) ->
       error.Server(error.server_error_from_report(report))
   }
 }
@@ -188,15 +202,17 @@ pub fn prepare_error_reason(
 @internal
 pub fn run_error_reason(run_error: RunError, endpoint: Endpoint) -> Reason {
   case run_error {
-    connection.RunFailed(failure:) -> request_failure_reason(failure)
-    connection.RunNotConnected(error: connect_error) ->
+    connection_request_failure.RunFailed(failure:) ->
+      request_failure_reason(failure)
+    connection_request_failure.RunNotConnected(error: connect_error) ->
       not_connected_reason(connect_error, endpoint)
-    connection.RunUnencodable(error: encode_error) ->
+    connection_request_failure.RunUnencodable(error: encode_error) ->
       error.RequestNotWritable(request_fault(encode_error))
-    connection.RunRefused(report:, transaction_status: _) ->
+    connection_request_failure.RunRefused(report:, transaction_status: _) ->
       error.Server(error.server_error_from_report(report))
-    connection.RunCopyRefused -> error.CopyStatementRefused(statements_run: 0)
-    connection.RunStatementChanged(description: _) ->
+    connection_request_failure.RunCopyRefused ->
+      error.CopyStatementRefused(statements_run: 0)
+    connection_request_failure.RunStatementChanged(description: _) ->
       error.StatementChangedDuringRun
   }
 }
@@ -208,20 +224,26 @@ pub fn simple_query_error_reason(
   endpoint: Endpoint,
 ) -> Reason {
   case simple_query_error {
-    connection.SimpleQueryRequestFailed(failure:) ->
+    connection_request_failure.SimpleQueryRequestFailed(failure:) ->
       request_failure_reason(failure)
-    connection.SimpleQueryNotConnected(error: connect_error) ->
+    connection_request_failure.SimpleQueryNotConnected(error: connect_error) ->
       not_connected_reason(connect_error, endpoint)
-    connection.SimpleQueryUnencodable(error: encode_error) ->
+    connection_request_failure.SimpleQueryUnencodable(error: encode_error) ->
       error.RequestNotWritable(request_fault(encode_error))
-    connection.SimpleQueryRefused(report:, transaction_status: _) ->
-      error.Server(error.server_error_from_report(report))
-    connection.SimpleQueryFailed(completed:, report:, transaction_status: _) ->
+    connection_request_failure.SimpleQueryRefused(
+      report:,
+      transaction_status: _,
+    ) -> error.Server(error.server_error_from_report(report))
+    connection_request_failure.SimpleQueryFailed(
+      completed:,
+      report:,
+      transaction_status: _,
+    ) ->
       error.SqlStatementFailed(
         statements_run: list.length(completed),
         server_error: error.server_error_from_report(report),
       )
-    connection.SimpleQueryCopyRefused(completed:) ->
+    connection_request_failure.SimpleQueryCopyRefused(completed:) ->
       error.CopyStatementRefused(statements_run: list.length(completed))
   }
 }
@@ -235,15 +257,16 @@ pub fn copy_error_reason(
   endpoint: Endpoint,
 ) -> Reason {
   case copy_error {
-    connection.AppFailed(reason:) -> reason
-    connection.CopyFailed(failure:) -> request_failure_reason(failure)
-    connection.CopyNotConnected(error: connect_error) ->
+    connection_request_failure.AppFailed(reason:) -> reason
+    connection_request_failure.CopyFailed(failure:) ->
+      request_failure_reason(failure)
+    connection_request_failure.CopyNotConnected(error: connect_error) ->
       not_connected_reason(connect_error, endpoint)
-    connection.CopyUnencodable(error: encode_error) ->
+    connection_request_failure.CopyUnencodable(error: encode_error) ->
       error.RequestNotWritable(request_fault(encode_error))
-    connection.CopyRefused(report:, transaction_status: _) ->
+    connection_request_failure.CopyRefused(report:, transaction_status: _) ->
       error.Server(error.server_error_from_report(report))
-    connection.CopyNotStarted(completed:) ->
+    connection_request_failure.CopyNotStarted(completed:) ->
       error.CopyNotStarted(statement_ran: option.is_some(completed))
   }
 }
@@ -252,9 +275,10 @@ pub fn copy_error_reason(
 @internal
 pub fn chunk_error_reason(chunk_error: ChunkError) -> Reason {
   case chunk_error {
-    connection.ChunkFailed(failure:) -> request_failure_reason(failure)
-    connection.ChunkCopyNotRunning -> error.CopyNotRunning
-    connection.ChunkRefused(report:, transaction_status: _) ->
+    connection_request_failure.ChunkFailed(failure:) ->
+      request_failure_reason(failure)
+    connection_request_failure.ChunkCopyNotRunning -> error.CopyNotRunning
+    connection_request_failure.ChunkRefused(report:, transaction_status: _) ->
       error.Server(error.server_error_from_report(report))
   }
 }
@@ -266,8 +290,9 @@ pub fn connection_state_error_reason(
   state_error: ConnectionStateError,
 ) -> Reason {
   case state_error {
-    connection.ProcessGone -> error.ConnectionProcessDown
-    connection.NoAnswerInTime -> error.QueryTimeout(stopped_on_server: False)
+    connection_request_failure.ProcessGone -> error.ConnectionProcessDown
+    connection_request_failure.NoAnswerInTime ->
+      error.QueryTimeout(stopped_on_server: False)
   }
 }
 
@@ -289,12 +314,15 @@ pub fn housekeeping_error_reason(
   endpoint: Endpoint,
 ) -> Reason {
   case housekeeping_error {
-    connection.HousekeepingFailed(failure:) -> request_failure_reason(failure)
-    connection.HousekeepingNotConnected(error: connect_error) ->
+    connection_request_failure.HousekeepingFailed(failure:) ->
+      request_failure_reason(failure)
+    connection_request_failure.HousekeepingNotConnected(error: connect_error) ->
       not_connected_reason(connect_error, endpoint)
-    connection.HousekeepingRefused(report:, transaction_status: _) ->
-      error.Server(error.server_error_from_report(report))
-    connection.HousekeepingAnswerUnexpected ->
+    connection_request_failure.HousekeepingRefused(
+      report:,
+      transaction_status: _,
+    ) -> error.Server(error.server_error_from_report(report))
+    connection_request_failure.HousekeepingAnswerUnexpected ->
       error.UnreadableCatalog(error.UnexpectedCatalogAnswer)
   }
 }
@@ -318,10 +346,10 @@ pub fn catalog_error_reason(
 
 fn loss_reason(loss: LossReason) -> error.LostReason {
   case loss {
-    connection.SocketFailed(error: socket_error) ->
+    connection_event.SocketFailed(error: socket_error) ->
       socket_lost_reason(socket_error)
-    connection.ServerStoppedReading -> error.SendTimedOut
-    connection.ClosedAfterDeadline -> error.ClosedAfterDeadline
+    connection_event.ServerStoppedReading -> error.SendTimedOut
+    connection_event.ClosedAfterDeadline -> error.ClosedAfterDeadline
   }
 }
 
@@ -364,14 +392,14 @@ fn tls_failure(failure: TlsFailure) -> error.TlsFailure {
 
 fn violation_reason(violation: Violation) -> Reason {
   case violation {
-    connection.UndecodableMessage(error: protocol_error) ->
+    connection_outcome.UndecodableMessage(error: protocol_error) ->
       error.UndecodableServerMessage(message_fault(protocol_error))
-    connection.UnexpectedServerMessage(error: unexpected) ->
+    connection_outcome.UnexpectedServerMessage(error: unexpected) ->
       error.UnexpectedServerMessage(
         message: server_message_kind(unexpected.message),
         step: protocol_step(unexpected.phase),
       )
-    connection.UnexpectedIdleMessage(message:) ->
+    connection_outcome.UnexpectedIdleMessage(message:) ->
       error.UnexpectedIdleMessage(server_message_kind(message))
   }
 }
@@ -468,21 +496,22 @@ fn server_message_kind(
 
 fn protocol_step(phase: Phase) -> error.ProtocolStep {
   case phase {
-    query.AwaitingParseComplete -> error.AwaitingParseComplete
-    query.AwaitingParameterDescription -> error.AwaitingParameterDescription
-    query.AwaitingStatementColumns -> error.AwaitingStatementColumns
-    query.AwaitingBindComplete -> error.AwaitingBindComplete
-    query.AwaitingPortalColumns -> error.AwaitingPortalColumns
-    query.ReadingExecuteRows -> error.ReadingExecuteRows
-    query.AwaitingStatementResult -> error.AwaitingStatementResult
-    query.ReadingSimpleQueryRows -> error.ReadingSqlRows
-    query.ReadingCopyOut -> error.ReadingCopyOut
-    query.AwaitingCopyComplete -> error.AwaitingCopyComplete
-    query.AwaitingReadyForQuery -> error.AwaitingReadyForQuery
-    query.AwaitingReadyForQueryAfterError ->
+    query_step.AwaitingParseComplete -> error.AwaitingParseComplete
+    query_step.AwaitingParameterDescription ->
+      error.AwaitingParameterDescription
+    query_step.AwaitingStatementColumns -> error.AwaitingStatementColumns
+    query_step.AwaitingBindComplete -> error.AwaitingBindComplete
+    query_step.AwaitingPortalColumns -> error.AwaitingPortalColumns
+    query_step.ReadingExecuteRows -> error.ReadingExecuteRows
+    query_step.AwaitingStatementResult -> error.AwaitingStatementResult
+    query_step.ReadingSimpleQueryRows -> error.ReadingSqlRows
+    query_step.ReadingCopyOut -> error.ReadingCopyOut
+    query_step.AwaitingCopyComplete -> error.AwaitingCopyComplete
+    query_step.AwaitingReadyForQuery -> error.AwaitingReadyForQuery
+    query_step.AwaitingReadyForQueryAfterError ->
       error.AwaitingReadyForQueryAfterError
-    query.AwaitingCloseComplete -> error.AwaitingCloseComplete
-    query.CopyingIn -> error.CopyingIn
+    query_step.AwaitingCloseComplete -> error.AwaitingCloseComplete
+    query_step.CopyingIn -> error.CopyingIn
   }
 }
 
@@ -497,11 +526,11 @@ pub fn checkout_error_reason(
   port: Int,
 ) -> Reason {
   case checkout_error {
-    pool.HoldDeadlinePassed -> error.NoConnection
-    pool.ConnectFailed(error: connect_error) ->
+    pool_failure.HoldDeadlinePassed -> error.NoConnection
+    pool_failure.ConnectFailed(error: connect_error) ->
       error.ConnectFailed(connect_failure(connect_error, host, port))
-    pool.PoolStopped -> error.PoolStopped
-    pool.NoDatabase -> error.PoolHasNoDatabase
+    pool_failure.PoolStopped -> error.PoolStopped
+    pool_failure.NoDatabase -> error.PoolHasNoDatabase
   }
 }
 
@@ -509,10 +538,11 @@ pub fn checkout_error_reason(
 @internal
 pub fn start_error_reason(start_error: StartError) -> Reason {
   case start_error {
-    pool.InvalidSize(size:) -> error.InvalidConfig(error.InvalidPoolSize(size:))
-    pool.InvalidHealthCheckInterval(milliseconds:) ->
+    pool_failure.InvalidSize(size:) ->
+      error.InvalidConfig(error.InvalidPoolSize(size:))
+    pool_failure.InvalidHealthCheckInterval(milliseconds:) ->
       error.InvalidConfig(error.InvalidHealthCheckInterval(milliseconds:))
-    pool.PoolProcessStartFailed(error: actor_error) ->
+    pool_failure.PoolProcessStartFailed(error: actor_error) ->
       error.PoolStartFailed(pool_start_failure(actor_error))
   }
 }
@@ -630,18 +660,19 @@ pub fn connect_failure(
   port: Int,
 ) -> error.ConnectFailure {
   case connect_error {
-    connection.TransportRefused(error: transport_error) ->
+    connection_event.TransportRefused(error: transport_error) ->
       transport_connect_failure(transport_error, host, port)
-    connection.LoginSocketFailed(error: socket_error) ->
+    connection_event.LoginSocketFailed(error: socket_error) ->
       error.ConnectionBroke(socket_lost_reason(socket_error))
-    connection.LoginSendFailed(error: send_error) ->
+    connection_event.LoginSendFailed(error: send_error) ->
       error.LoginSendFailed(send_lost_reason(send_error))
-    connection.LoginRequiresTls -> error.ChannelBindingRequiresTls
-    connection.LoginRefused(error: login_error) -> login_failure(login_error)
-    connection.LoginUndecodable(error: protocol_error) ->
+    connection_event.LoginRequiresTls -> error.ChannelBindingRequiresTls
+    connection_event.LoginRefused(error: login_error) ->
+      login_failure(login_error)
+    connection_event.LoginUndecodable(error: protocol_error) ->
       error.UndecodableLoginMessage(message_fault(protocol_error))
-    connection.SetupTimedOut -> error.SetupTimedOut
-    connection.SetupExited -> error.SetupProcessExited
+    connection_event.SetupTimedOut -> error.SetupTimedOut
+    connection_event.SetupExited -> error.SetupProcessExited
   }
 }
 

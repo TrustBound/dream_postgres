@@ -25,7 +25,9 @@ When no connection is free, the call waits in a queue, oldest first. It gets the
 ### A pool for many short queries <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/busy_service.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Config, checkout_timeout, pool_size, query_timeout}
+import dream_postgres/config.{
+  type Config, checkout_timeout, pool_size, query_timeout,
+}
 
 /// A pool for a service with many short queries: 20 connections, at most
 /// 2 seconds for each query, and at most 500 ms of wait for a free
@@ -87,7 +89,7 @@ A value below 1 is an `InvalidConfig` error at `start` and at `supervised`, with
 ### A pool on a distant server <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/distant_server.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{
+import dream_postgres/config.{
   type Config, cancel_timeout, connect_timeout, health_check_interval, host,
   return_rollback_timeout, setup_timeout,
 }

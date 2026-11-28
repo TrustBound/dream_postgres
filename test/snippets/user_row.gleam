@@ -1,5 +1,5 @@
-import dream_postgres.{type Row, column, row}
 import dream_postgres/codec.{int, text}
+import dream_postgres/row.{type Row, column, row}
 
 pub type User {
   User(id: Int, email: String, name: String)

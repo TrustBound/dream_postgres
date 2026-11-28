@@ -12,15 +12,25 @@
 //// connections open on the shared servers until it stops, so every start
 //// has a stop.
 
-import dream_postgres/driver/connection.{
-  type Connection, type ConnectionEvent, type Outcome, type SimpleQueryError,
-  Backoff, Connected, ConnectionConfig, Disconnected, ReconnectFailed,
-  run_simple_query, stop, transaction_status,
+import dream_postgres/driver/connection.{stop}
+import dream_postgres/driver/connection/backoff.{Backoff}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/event.{
+  type ConnectionEvent, Connected, Disconnected, ReconnectFailed,
 }
-import dream_postgres/driver/pool.{
-  type HoldError, type Pool, type PoolConfig, type PoolEvent, type PoolMessage,
-  type PoolStatus, MemberFree, PoolConfig,
-}
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/request_failure.{type SimpleQueryError}
+import dream_postgres/driver/connection/settings.{ConnectionConfig} as connection_settings
+import dream_postgres/driver/connection/simple_query.{run_simple_query}
+import dream_postgres/driver/connection/statement as connection_statement
+import dream_postgres/driver/connection/status.{transaction_status}
+import dream_postgres/driver/pool
+import dream_postgres/driver/pool/holds as pool_holds
+import dream_postgres/driver/pool/pool_event.{type PoolEvent, MemberFree}
+import dream_postgres/driver/pool/pool_failure.{type HoldError}
+import dream_postgres/driver/pool/pool_message.{type Pool, type PoolMessage}
+import dream_postgres/driver/pool/pool_settings.{type PoolConfig, PoolConfig}
+import dream_postgres/driver/pool/pool_status.{type PoolStatus}
 import dream_postgres/internal/cell.{type TransactionStatus}
 import dream_test/context.{type Context}
 import driver/proxy.{type Proxy, start_proxy, stop_proxy}
@@ -49,7 +59,9 @@ import gleam/string.{inspect}
 
 /// The settings of a pool of connections with `connection`, with no health
 /// check in the time of a test, and deadlines of 5 seconds.
-pub fn pool_config(connection: connection.ConnectionConfig) -> PoolConfig(Nil) {
+pub fn pool_config(
+  connection: connection_settings.ConnectionConfig,
+) -> PoolConfig(Nil) {
   PoolConfig(
     connection:,
     health_check_interval_milliseconds: 60_000,
@@ -205,7 +217,7 @@ fn unique_lock_key() -> Int
 ///   before_each(start_test_pool(first_driver_server, 1)),
 ///   after_each(stop_pool_session),
 ///   it("gives its status", fn(session: PoolSession) {
-///     pool.status(session.pool)
+///     pool_holds.status(session.pool)
 ///     |> should
 ///     |> be_ok
 ///     |> or_fail_with("Expected the status")
@@ -378,7 +390,7 @@ pub fn hold_connection(
   pool: Pool(attachment),
   callback: fn(Connection) -> Result(value, String),
 ) -> Result(value, String) {
-  pool.hold(pool, 5000, callback)
+  pool_holds.hold(pool, 5000, callback)
   |> map_error(fn(error) { "could not hold a connection: " <> inspect(error) })
   |> flatten
 }
@@ -390,7 +402,7 @@ pub fn held_backend_pid(pool: Pool(attachment)) -> Result(String, String) {
 
 /// The status of the pool.
 pub fn pool_status(pool: Pool(attachment)) -> Result(PoolStatus, String) {
-  pool.status(pool)
+  pool_holds.status(pool)
   |> map_error(fn(error) { "could not ask for the status: " <> inspect(error) })
 }
 
@@ -497,7 +509,11 @@ pub fn simple_query_in_hold(
   sql: String,
 ) -> fn() -> Result(Result(List(Outcome), SimpleQueryError), HoldError) {
   fn() {
-    pool.hold(pool, 5000, run_simple_query(_, connection.statement(sql), 5000))
+    pool_holds.hold(pool, 5000, run_simple_query(
+      _,
+      connection_statement.statement(sql),
+      5000,
+    ))
   }
 }
 
@@ -534,7 +550,10 @@ pub fn start_holder(
   let answer = process.new_subject()
   let pid =
     process.spawn_unlinked(fn() {
-      process.send(answer, pool.hold(pool, 5000, keep_held(_, prepare, ready)))
+      process.send(
+        answer,
+        pool_holds.hold(pool, 5000, keep_held(_, prepare, ready)),
+      )
     })
   process.receive(ready, 5000)
   |> result.map(fn(held) { Holder(held.0, held.1, answer, pid) })
@@ -1066,7 +1085,7 @@ pub fn event_after_status_without_database(
 ) -> Result(Result(PoolEvent, Nil), String) {
   use named <- try(start_pool_without_database(port))
   let event = {
-    use _status <- try(pool.status(named.handle) |> map_error(inspect))
+    use _status <- try(pool_holds.status(named.handle) |> map_error(inspect))
     Ok(process.receive(named.pool_events, 0))
   }
   use Nil <- try(stop_named_pool(named))

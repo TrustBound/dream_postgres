@@ -1,9 +1,11 @@
 //// A pool under the app's supervisor: its child specification, the
 //// connection from its name, and the name after a restart.
 
-import dream_postgres.{all, named_connection, query, single}
 import dream_postgres/codec
 import dream_postgres/error
+import dream_postgres/pool.{named_connection}
+import dream_postgres/query.{all, query}
+import dream_postgres/row.{single}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -57,7 +59,7 @@ pub fn tests() -> TestSuite {
     it("refuses a config that cannot start, before any supervisor", fn() {
       // Act and assert
       server_pools.config(70_000)
-      |> dream_postgres.supervised(name: process.new_name("supervised_bad_port"))
+      |> pool.supervised(name: process.new_name("supervised_bad_port"))
       |> should
       |> be_error()
       |> have_cause()

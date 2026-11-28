@@ -1,8 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, all, parameter, query, single,
-}
 import dream_postgres/codec.{array, int}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, parameter, query}
+import dream_postgres/row.{single}
 
 /// The ids of the list that a post has.
 pub fn existing_post_ids(

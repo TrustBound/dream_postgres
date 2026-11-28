@@ -1,6 +1,6 @@
 //// Extracts the request failure of a simple query.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/request_failure.{
   type RequestFailure, type SimpleQueryError, SimpleQueryRequestFailed,
 }
 import dream_test/types.{

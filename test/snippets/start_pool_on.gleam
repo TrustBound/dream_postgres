@@ -1,7 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, default_config, host, start,
-}
+import dream_postgres/config.{default_config, host}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
 
 pub fn start_pool_on(
   server_host: String,

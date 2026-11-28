@@ -1,8 +1,9 @@
 //// A matcher that starts a listener on the server of the chosen version,
 //// runs work with it and the pool of that server, and stops it.
 
-import dream_postgres.{type Connection, type Listener}
 import dream_postgres/error
+import dream_postgres/listener.{type Listener}
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -46,14 +47,14 @@ fn run_on_chosen(
   let started = {
     use pool <- result.try(server_pools.chosen(pools))
     server_pools.config(pool.port)
-    |> dream_postgres.start_listener
+    |> listener.start_listener
     |> result.map(fn(listener) { #(listener, pool.connection) })
     |> result.map_error(error.describe)
   }
   case started {
     Ok(#(listener, connection)) -> {
       let outcome = work(listener, connection)
-      dream_postgres.stop_listener(listener)
+      listener.stop_listener(listener)
       MatchOk(outcome)
     }
     Error(reason) ->

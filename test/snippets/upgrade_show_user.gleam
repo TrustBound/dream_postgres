@@ -1,5 +1,5 @@
 import dream_errors.{type Error, NotFound}
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 import snippets/upgrade_find_user.{type FindUserRow}
 
 pub type Response {

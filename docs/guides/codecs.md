@@ -85,10 +85,11 @@ A codec reads a NULL column as an error: `UnexpectedNull`, which names the colum
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, all, column, query, row,
-}
 import dream_postgres/codec.{int, nullable, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, query}
+import dream_postgres/row.{column, row}
 import gleam/option.{type Option}
 
 /// Gives the email of each user and the balance of the user's account. A
@@ -116,10 +117,10 @@ pub fn balances(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, all, parameter, query,
-}
 import dream_postgres/codec.{array, int}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, parameter, query}
 import snippets/user_row.{type User, user_row}
 
 /// Gives the users with the ids. The list goes to PostgreSQL as one array
@@ -240,10 +241,10 @@ A custom codec uses the text format, so a composite type cannot hold it.
 ### A composite codec <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/address_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{column, row}
 import dream_postgres/codec.{
   type Codec, type Field, composite, field, nullable, text,
 }
+import dream_postgres/row.{column, row}
 import gleam/option.{type Option, None}
 
 /// The values of the PostgreSQL composite type

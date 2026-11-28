@@ -1,7 +1,8 @@
 //// A matcher that runs a simple query of SQL statements on the driver connection
 //// of the chosen version, and goes on with the same sessions.
 
-import dream_postgres/driver/connection
+import dream_postgres/driver/connection/simple_query as connection_simple_query
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -43,9 +44,9 @@ fn run_on_chosen(
 ) -> MatchResult(ExecutorSessions) {
   let ran = {
     use session <- result.try(executor_sessions.chosen(sessions))
-    connection.run_simple_query(
+    connection_simple_query.run_simple_query(
       session.connection,
-      connection.statement(sql),
+      connection_statement.statement(sql),
       executor_sessions.deadline_milliseconds,
     )
     |> result.map_error(string.inspect)

@@ -6,10 +6,11 @@
 ////
 //// ```gleam
 //// import dream_errors.{type Error}
-//// import dream_postgres.{
-////   type Connection, type PostgresError, all, parameter, query, single,
-//// }
 //// import dream_postgres/codec.{array, int}
+//// import dream_postgres/error.{type PostgresError}
+//// import dream_postgres/pool.{type Connection}
+//// import dream_postgres/query.{all, parameter, query}
+//// import dream_postgres/row.{single}
 ////
 //// /// The ids of the list that a post has.
 //// pub fn existing_post_ids(
@@ -64,17 +65,16 @@ pub type Codec(a) =
   codec_type.Codec(a)
 
 /// A value of the codec's type, for a query that is built only to be
-/// checked, such as a query of `dream_postgres.checked`. A check uses the
+/// checked, such as a query of `boot_check.checked`. A check uses the
 /// codec of a parameter, never its value.
 ///
 /// ### Make the checks of the queries of a module <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_checks.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres.{
-///   type QueryCheck, checked, checked_command, column, named, parameter, query,
-///   row,
-/// }
+/// import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
 /// import dream_postgres/codec.{int, placeholder, text}
+/// import dream_postgres/query.{named, parameter, query}
+/// import dream_postgres/row.{column, row}
 ///
 /// /// The checks of the queries of the user module. A check uses the codec of
 /// /// each parameter, not its value, so each value is a placeholder.
@@ -145,20 +145,7 @@ pub fn array(element: Codec(a)) -> Codec(List(a)) {
     gleam_type: "List(" <> element.gleam_type <> ")",
     format: element.format,
     accepts: fn(description, lookup) {
-      case description.kind {
-        Array(element_type_id:) ->
-          case lookup(element_type_id) {
-            Ok(element_type) -> accepts(element, element_type, lookup)
-            Error(Nil) -> False
-          }
-        Base
-        | Enum(..)
-        | Composite(..)
-        | Domain(..)
-        | Range(..)
-        | Multirange(..)
-        | Pseudo -> False
-      }
+      array_accepts(element, description, lookup)
     },
     encode: fn(values, description, lookup) {
       use element_type <- result.try(array_element_type(description, lookup))
@@ -188,6 +175,35 @@ pub fn array(element: Codec(a)) -> Codec(List(a)) {
     },
     placeholder: [],
   )
+}
+
+fn array_accepts(
+  element: Codec(a),
+  description: TypeDescription,
+  lookup: TypeLookup,
+) -> Bool {
+  case description.kind {
+    Array(element_type_id:) ->
+      element_type_accepted(element, element_type_id, lookup)
+    Base
+    | Enum(..)
+    | Composite(..)
+    | Domain(..)
+    | Range(..)
+    | Multirange(..)
+    | Pseudo -> False
+  }
+}
+
+fn element_type_accepted(
+  element: Codec(a),
+  element_type_id: Int,
+  lookup: TypeLookup,
+) -> Bool {
+  case lookup(element_type_id) {
+    Ok(element_type) -> accepts(element, element_type, lookup)
+    Error(Nil) -> False
+  }
 }
 
 fn array_element_type(
@@ -243,39 +259,59 @@ pub fn enum(
     gleam_type: type_name,
     format: BinaryFormat,
     accepts: fn(description, _lookup) {
-      case description.kind {
-        Enum(labels: database_labels) ->
-          description.name == type_name
-          && list.sort(database_labels, string.compare)
-          == list.sort(labels, string.compare)
-        Base
-        | Composite(..)
-        | Domain(..)
-        | Range(..)
-        | Multirange(..)
-        | Array(..)
-        | Pseudo -> False
-      }
+      accepts_enum(description, type_name, labels)
     },
     encode: fn(value, _description, _lookup) {
-      case list.find(values, fn(pair) { pair.0 == value }) {
-        Ok(#(_, label)) -> Ok(Binary(bit_array.from_string(label)))
-        Error(Nil) ->
-          Error("the value is not one of the labels of " <> type_name)
-      }
+      encode_enum_label(values, value, type_name)
     },
     decode: fn(value, _description, _lookup) {
       use label <- result.try(utf8_text(value))
-      case list.find(values, fn(pair) { pair.1 == label }) {
-        Ok(#(found, _)) -> Ok(found)
-        Error(Nil) ->
-          Error(Malformed(
-            "the label " <> label <> " is not a label of the codec",
-          ))
-      }
+      decode_enum_label(values, label)
     },
     placeholder: first.0,
   )
+}
+
+fn accepts_enum(
+  description: TypeDescription,
+  type_name: String,
+  labels: List(String),
+) -> Bool {
+  case description.kind {
+    Enum(labels: database_labels) ->
+      description.name == type_name
+      && list.sort(database_labels, string.compare)
+      == list.sort(labels, string.compare)
+    Base
+    | Composite(..)
+    | Domain(..)
+    | Range(..)
+    | Multirange(..)
+    | Array(..)
+    | Pseudo -> False
+  }
+}
+
+fn encode_enum_label(
+  values: List(#(a, String)),
+  value: a,
+  type_name: String,
+) -> Result(Cell, String) {
+  case list.find(values, fn(pair) { pair.0 == value }) {
+    Ok(#(_, label)) -> Ok(Binary(bit_array.from_string(label)))
+    Error(Nil) -> Error("the value is not one of the labels of " <> type_name)
+  }
+}
+
+fn decode_enum_label(
+  values: List(#(a, String)),
+  label: String,
+) -> Result(a, DecodeIssue) {
+  case list.find(values, fn(pair) { pair.1 == label }) {
+    Ok(#(found, _)) -> Ok(found)
+    Error(Nil) ->
+      Error(Malformed("the label " <> label <> " is not a label of the codec"))
+  }
 }
 
 /// A codec of a type that dream_postgres has no codec for, such as an
@@ -575,10 +611,10 @@ pub fn field(codec: Codec(a), value: a) -> Field {
 /// ### A codec of a composite type <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/address_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres.{column, row}
 /// import dream_postgres/codec.{
 ///   type Codec, type Field, composite, field, nullable, text,
 /// }
+/// import dream_postgres/row.{column, row}
 /// import gleam/option.{type Option, None}
 ///
 /// /// The values of the PostgreSQL composite type
@@ -691,12 +727,15 @@ fn encode_float(
   _lookup: TypeLookup,
 ) -> Result(Cell, String) {
   case description.name {
-    "float4" ->
-      case value >. largest_float4 || value <. 0.0 -. largest_float4 {
-        True -> Error(float.to_string(value) <> " is out of range for float4")
-        False -> Ok(Binary(<<value:float-size(32)>>))
-      }
+    "float4" -> encode_float4(value)
     _ -> Ok(Binary(<<value:float-size(64)>>))
+  }
+}
+
+fn encode_float4(value: Float) -> Result(Cell, String) {
+  case value >. largest_float4 || value <. 0.0 -. largest_float4 {
+    True -> Error(float.to_string(value) <> " is out of range for float4")
+    False -> Ok(Binary(<<value:float-size(32)>>))
   }
 }
 
@@ -989,35 +1028,44 @@ fn decode_binary_elements(
   case remaining, bytes {
     0, <<>> -> Ok(list.reverse(decoded))
     0, _ -> Error(Malformed("the array has bytes after its last element"))
-    _, <<-1:signed-size(32), rest:bits>> -> {
-      use value <- result.try(decode(element, Null, element_type, lookup))
-      decode_binary_elements(
+    _, <<-1:signed-size(32), rest:bits>> ->
+      decode_binary_element(
         element,
+        Null,
         rest,
-        remaining - 1,
+        remaining,
         element_type,
         lookup,
-        [value, ..decoded],
+        decoded,
       )
-    }
-    _, <<length:size(32), item:bytes-size(length), rest:bits>> -> {
-      use value <- result.try(decode(
+    _, <<length:size(32), item:bytes-size(length), rest:bits>> ->
+      decode_binary_element(
         element,
         Binary(item),
-        element_type,
-        lookup,
-      ))
-      decode_binary_elements(
-        element,
         rest,
-        remaining - 1,
+        remaining,
         element_type,
         lookup,
-        [value, ..decoded],
+        decoded,
       )
-    }
     _, _ -> Error(Malformed("the array's elements are cut short"))
   }
+}
+
+fn decode_binary_element(
+  element: Codec(a),
+  cell: Cell,
+  rest: BitArray,
+  remaining: Int,
+  element_type: TypeDescription,
+  lookup: TypeLookup,
+  decoded: List(a),
+) -> Result(List(a), DecodeIssue) {
+  use value <- result.try(decode(element, cell, element_type, lookup))
+  decode_binary_elements(element, rest, remaining - 1, element_type, lookup, [
+    value,
+    ..decoded
+  ])
 }
 
 // The text form of an array: `{a,"b c",NULL}`. Each element is quoted, with
@@ -1088,12 +1136,15 @@ fn decode_text_array(
 fn parse_text_array(text: String) -> Result(List(Option(String)), DecodeIssue) {
   case text {
     "{}" -> Ok([])
-    "{" <> body ->
-      case string.ends_with(body, "}") {
-        True -> parse_items(string.to_graphemes(string.drop_end(body, 1)), [])
-        False -> Error(Malformed("the array text has no closing brace"))
-      }
+    "{" <> body -> parse_array_body(body)
     _ -> Error(Malformed("the array text does not start with a brace"))
+  }
+}
+
+fn parse_array_body(body: String) -> Result(List(Option(String)), DecodeIssue) {
+  case string.ends_with(body, "}") {
+    True -> parse_items(string.to_graphemes(string.drop_end(body, 1)), [])
+    False -> Error(Malformed("the array text has no closing brace"))
   }
 }
 
@@ -1112,12 +1163,15 @@ fn parse_items(
     }
     _ -> {
       let #(item, after) = parse_unquoted(characters, "")
-      let value = case string.trim(item) {
-        "NULL" -> None
-        other -> Some(other)
-      }
-      finish_item(after, [value, ..items])
+      finish_item(after, [unquoted_item(item), ..items])
     }
+  }
+}
+
+fn unquoted_item(item: String) -> Option(String) {
+  case string.trim(item) {
+    "NULL" -> None
+    other -> Some(other)
   }
 }
 

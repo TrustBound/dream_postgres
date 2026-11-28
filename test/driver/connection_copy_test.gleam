@@ -8,14 +8,23 @@
 //// setups and teardowns start and stop every connection, proxy and
 //// caller.
 
-import dream_postgres/driver/connection.{
-  type ChunkError, type Connection, type ConnectionStateError, type CopyError,
-  type Outcome, type SimpleQueryError, AppFailed, ChunkCopyNotRunning,
-  ChunkFailed, ConnectionEnded, ConnectionLost, ConnectionProcessDown,
-  CopyFailed, CopyNotStarted, CopyUnencodable, DeadlinePassed, Outcome,
-  ServerStoppedReading, SimpleQueryRequestFailed, SocketFailed, copy_from,
-  copy_to, run_simple_query, send_chunk, transaction_status,
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/copy_caller.{
+  copy_from, copy_to, send_chunk,
 }
+import dream_postgres/driver/connection/event.{
+  ConnectionLost, ServerStoppedReading, SocketFailed,
+}
+import dream_postgres/driver/connection/outcome.{type Outcome, Outcome}
+import dream_postgres/driver/connection/request_failure.{
+  type ChunkError, type ConnectionStateError, type CopyError,
+  type SimpleQueryError, AppFailed, ChunkCopyNotRunning, ChunkFailed,
+  ConnectionEnded, ConnectionProcessDown, CopyFailed, CopyNotStarted,
+  CopyUnencodable, DeadlinePassed, SimpleQueryRequestFailed,
+}
+import dream_postgres/driver/connection/simple_query.{run_simple_query}
+import dream_postgres/driver/connection/statement as connection_statement
+import dream_postgres/driver/connection/status.{transaction_status}
 import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{SocketClosed}
 import dream_postgres/internal/cell.{
@@ -152,7 +161,7 @@ fn store_tests() -> List(ContextNode(Connection)) {
           let stored =
             copy_from(
               connection,
-              connection.statement("COPY copied FROM STDIN"),
+              connection_statement.statement("COPY copied FROM STDIN"),
               5000,
               send_three_rows,
             )
@@ -172,7 +181,7 @@ fn store_tests() -> List(ContextNode(Connection)) {
           let rows =
             run_simple_query(
               connection,
-              connection.statement(
+              connection_statement.statement(
                 "SELECT id::text, name FROM copied ORDER BY id",
               ),
               5000,
@@ -199,7 +208,7 @@ fn store_tests() -> List(ContextNode(Connection)) {
       let rows =
         copy_to(
           connection,
-          connection.statement(
+          connection_statement.statement(
             "COPY (SELECT n, 'r' || n FROM generate_series(1, 3) n) TO STDOUT",
           ),
           5000,
@@ -219,7 +228,9 @@ fn store_tests() -> List(ContextNode(Connection)) {
       let sizes =
         copy_to(
           connection,
-          connection.statement("COPY (SELECT repeat('x', 4000000)) TO STDOUT"),
+          connection_statement.statement(
+            "COPY (SELECT repeat('x', 4000000)) TO STDOUT",
+          ),
           5000,
           [],
           collect_size,
@@ -246,7 +257,7 @@ fn both_ways_tests() -> List(ContextNode(Connection)) {
         let stored =
           copy_from(
             connection,
-            connection.statement("COPY csv FROM STDIN (FORMAT csv)"),
+            connection_statement.statement("COPY csv FROM STDIN (FORMAT csv)"),
             5000,
             send_csv,
           )
@@ -265,7 +276,7 @@ fn both_ways_tests() -> List(ContextNode(Connection)) {
           let rows =
             copy_to(
               connection,
-              connection.statement("COPY csv TO STDOUT (FORMAT csv)"),
+              connection_statement.statement("COPY csv TO STDOUT (FORMAT csv)"),
               5000,
               [],
               collect_row,
@@ -287,7 +298,7 @@ fn both_ways_tests() -> List(ContextNode(Connection)) {
         let stored =
           copy_from(
             connection,
-            connection.statement("COPY b FROM STDIN (FORMAT binary)"),
+            connection_statement.statement("COPY b FROM STDIN (FORMAT binary)"),
             5000,
             send_binary,
           )
@@ -309,7 +320,7 @@ fn both_ways_tests() -> List(ContextNode(Connection)) {
           let data =
             copy_to(
               connection,
-              connection.statement("COPY b TO STDOUT (FORMAT binary)"),
+              connection_statement.statement("COPY b TO STDOUT (FORMAT binary)"),
               5000,
               <<>>,
               append_row,
@@ -342,7 +353,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
             let copied =
               copy_from(
                 connection,
-                connection.statement("COPY kept FROM STDIN"),
+                connection_statement.statement("COPY kept FROM STDIN"),
                 5000,
                 send_three_rows,
               )
@@ -367,7 +378,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
           let count =
             run_simple_query(
               connection,
-              connection.statement("SELECT count(*)::text FROM kept"),
+              connection_statement.statement("SELECT count(*)::text FROM kept"),
               5000,
             )
 
@@ -394,7 +405,7 @@ fn transaction_tests() -> List(ContextNode(Connection)) {
         let failed =
           copy_from(
             connection,
-            connection.statement("COPY failing FROM STDIN"),
+            connection_statement.statement("COPY failing FROM STDIN"),
             5000,
             send_then_fail,
           )
@@ -438,7 +449,7 @@ fn committed_tests() -> List(ContextNode(Connection)) {
           let copied =
             copy_from(
               connection,
-              connection.statement("COPY kept FROM STDIN"),
+              connection_statement.statement("COPY kept FROM STDIN"),
               5000,
               send_three_rows,
             )
@@ -465,7 +476,7 @@ fn committed_tests() -> List(ContextNode(Connection)) {
           let count =
             run_simple_query(
               connection,
-              connection.statement("SELECT count(*)::text FROM kept"),
+              connection_statement.statement("SELECT count(*)::text FROM kept"),
               5000,
             )
 
@@ -497,7 +508,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
           let refused =
             copy_from(
               connection,
-              connection.statement("COPY refused FROM STDIN"),
+              connection_statement.statement("COPY refused FROM STDIN"),
               5000,
               send_until_refused,
             )
@@ -524,7 +535,9 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
             let count =
               run_simple_query(
                 connection,
-                connection.statement("SELECT count(*)::text FROM refused"),
+                connection_statement.statement(
+                  "SELECT count(*)::text FROM refused",
+                ),
                 5000,
               )
 
@@ -552,7 +565,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
           let refused =
             copy_from(
               connection,
-              connection.statement("COPY bad FROM STDIN"),
+              connection_statement.statement("COPY bad FROM STDIN"),
               5000,
               send_bad_row,
             )
@@ -587,7 +600,7 @@ fn refusal_tests() -> List(ContextNode(Connection)) {
         let refused =
           copy_from(
             connection,
-            connection.statement("COPY no_such_table FROM STDIN"),
+            connection_statement.statement("COPY no_such_table FROM STDIN"),
             5000,
             send_three_rows,
           )
@@ -615,7 +628,7 @@ fn app_failure_tests() -> List(ContextNode(Connection)) {
         let failed =
           copy_from(
             connection,
-            connection.statement("COPY abandoned FROM STDIN"),
+            connection_statement.statement("COPY abandoned FROM STDIN"),
             5000,
             send_then_fail,
           )
@@ -638,7 +651,9 @@ fn app_failure_tests() -> List(ContextNode(Connection)) {
           let count =
             run_simple_query(
               connection,
-              connection.statement("SELECT count(*)::text FROM abandoned"),
+              connection_statement.statement(
+                "SELECT count(*)::text FROM abandoned",
+              ),
               5000,
             )
 
@@ -659,7 +674,7 @@ fn app_failure_tests() -> List(ContextNode(Connection)) {
       let failed =
         copy_to(
           connection,
-          connection.statement(
+          connection_statement.statement(
             "COPY (SELECT n FROM generate_series(1, 100000) n) TO STDOUT",
           ),
           5000,
@@ -686,7 +701,11 @@ fn app_failure_tests() -> List(ContextNode(Connection)) {
         fn(connection) {
           // Act
           let next =
-            run_simple_query(connection, connection.statement("SELECT 7"), 5000)
+            run_simple_query(
+              connection,
+              connection_statement.statement("SELECT 7"),
+              5000,
+            )
 
           // Assert
           next
@@ -708,7 +727,7 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
       let select =
         copy_from(
           connection,
-          connection.statement("SELECT 1"),
+          connection_statement.statement("SELECT 1"),
           5000,
           send_three_rows,
         )
@@ -741,7 +760,7 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
           let out =
             copy_from(
               connection,
-              connection.statement("COPY other TO STDOUT"),
+              connection_statement.statement("COPY other TO STDOUT"),
               5000,
               send_three_rows,
             )
@@ -771,7 +790,7 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
           let into =
             copy_to(
               connection,
-              connection.statement("COPY other FROM STDIN"),
+              connection_statement.statement("COPY other FROM STDIN"),
               5000,
               [],
               collect_row,
@@ -801,7 +820,7 @@ fn no_copy_tests() -> List(ContextNode(Connection)) {
           let count =
             run_simple_query(
               connection,
-              connection.statement("SELECT count(*)::text FROM other"),
+              connection_statement.statement("SELECT count(*)::text FROM other"),
               5000,
             )
 
@@ -835,7 +854,7 @@ fn memory_tests() -> List(ContextNode(Connection)) {
         let stored =
           copy_from(
             connection,
-            connection.statement("COPY loaded FROM STDIN"),
+            connection_statement.statement("COPY loaded FROM STDIN"),
             5000,
             load_chunks_sampling(_, connection_pid, peaks),
           )
@@ -858,7 +877,7 @@ fn memory_tests() -> List(ContextNode(Connection)) {
       let counted =
         copy_to(
           connection,
-          connection.statement(
+          connection_statement.statement(
             "COPY (SELECT n, 'some text' FROM generate_series(1, 1000000) n) TO STDOUT",
           ),
           60_000,
@@ -883,7 +902,11 @@ fn caller_tests() -> List(ContextNode(Connection)) {
       // Act
       send_stray_down(pid_of(connection))
       let next =
-        run_simple_query(connection, connection.statement("SELECT 10"), 5000)
+        run_simple_query(
+          connection,
+          connection_statement.statement("SELECT 10"),
+          5000,
+        )
 
       // Assert
       next
@@ -900,7 +923,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
         let copied =
           copy_to(
             connection,
-            connection.statement(
+            connection_statement.statement(
               "COPY (SELECT generate_series(1, 10)) TO STDOUT",
             ),
             5000,
@@ -928,7 +951,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
         let stored =
           copy_from(
             connection,
-            connection.statement("COPY stale FROM STDIN"),
+            connection_statement.statement("COPY stale FROM STDIN"),
             5000,
             keep_sender(_, senders),
           )
@@ -974,7 +997,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
           let refused =
             copy_from(
               connection,
-              connection.statement("COPY again FROM STDIN"),
+              connection_statement.statement("COPY again FROM STDIN"),
               5000,
               send_twice_after_error,
             )
@@ -997,7 +1020,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
           let refused =
             copy_from(
               connection,
-              connection.statement("COPY again FROM STDIN"),
+              connection_statement.statement("COPY again FROM STDIN"),
               5000,
               send_twice_after_error,
             )
@@ -1022,7 +1045,7 @@ fn caller_tests() -> List(ContextNode(Connection)) {
         let refused =
           copy_from(
             connection,
-            connection.statement("COPY t FROM STDIN\u{0000}"),
+            connection_statement.statement("COPY t FROM STDIN\u{0000}"),
             5000,
             send_three_rows,
           )
@@ -1060,7 +1083,7 @@ fn session_end_tests(server: Server) -> ContextNode(ControlledConnection) {
         let ended =
           copy_from(
             controlled.connection,
-            connection.statement("COPY ended FROM STDIN"),
+            connection_statement.statement("COPY ended FROM STDIN"),
             5000,
             send_after_end(_, controlled.control, controlled.backend_pid),
           )
@@ -1106,7 +1129,7 @@ fn proxied_tests() -> TestSuite {
               start_caller(fn() {
                 run_simple_query(
                   proxied.connection,
-                  connection.statement("SELECT 1"),
+                  connection_statement.statement("SELECT 1"),
                   5000,
                 )
               })
@@ -1150,7 +1173,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         fn(proxied: ProxiedConnection) {
           copy_from(
             proxied.connection,
-            connection.statement("COPY lost FROM STDIN"),
+            connection_statement.statement("COPY lost FROM STDIN"),
             5000,
             send_across_close(_, proxied.proxy),
           )
@@ -1171,7 +1194,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         fn(proxied: ProxiedConnection) {
           copy_from(
             proxied.connection,
-            connection.statement("COPY broken FROM STDIN"),
+            connection_statement.statement("COPY broken FROM STDIN"),
             5000,
             send_across_violation(_, proxied.proxy),
           )
@@ -1196,7 +1219,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         let refused =
           copy_from(
             proxied.connection,
-            connection.statement("COPY ended FROM STDIN"),
+            connection_statement.statement("COPY ended FROM STDIN"),
             5000,
             send_bad_row,
           )
@@ -1222,7 +1245,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
         let lost =
           copy_from(
             proxied.connection,
-            connection.statement("COPY t FROM STDIN"),
+            connection_statement.statement("COPY t FROM STDIN"),
             5000,
             send_until_error(_, chunk, 1_000_000),
           )
@@ -1241,7 +1264,7 @@ fn loss_tests() -> List(ContextNode(ProxiedConnection)) {
       fn(proxied: ProxiedConnection) {
         copy_to(
           proxied.connection,
-          connection.statement(
+          connection_statement.statement(
             "COPY (SELECT n FROM generate_series(1, 1000000) n) TO STDOUT",
           ),
           5000,
@@ -1272,7 +1295,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
             start_caller(fn() {
               run_simple_query(
                 proxied.connection,
-                connection.statement("SELECT 1"),
+                connection_statement.statement("SELECT 1"),
                 5000,
               )
             })
@@ -1313,7 +1336,7 @@ fn write_failure_tests() -> List(ContextNode(ProxiedConnection)) {
               start_caller(fn() {
                 copy_from(
                   proxied.connection,
-                  connection.statement("COPY gated FROM STDIN"),
+                  connection_statement.statement("COPY gated FROM STDIN"),
                   5000,
                   send_after_go(_, started),
                 )
@@ -1380,14 +1403,14 @@ fn copy_past_deadline(
   let copied =
     copy_from(
       connection,
-      connection.statement("COPY late FROM STDIN"),
+      connection_statement.statement("COPY late FROM STDIN"),
       300,
       send_until_error(_, chunk, 1_000_000),
     )
   let next =
     run_simple_query(
       connection,
-      connection.statement("SELECT count(*)::text FROM late"),
+      connection_statement.statement("SELECT count(*)::text FROM late"),
       5000,
     )
   Ok(CopyAndNext(copied:, next:))
@@ -1439,14 +1462,14 @@ fn copy_slowly(
   let copied =
     copy_from(
       controlled.connection,
-      connection.statement("COPY idle FROM STDIN"),
+      connection_statement.statement("COPY idle FROM STDIN"),
       300,
       send_after_idle(_, controlled.control, controlled.backend_pid),
     )
   let next =
     run_simple_query(
       controlled.connection,
-      connection.statement("SELECT count(*)::text FROM idle"),
+      connection_statement.statement("SELECT count(*)::text FROM idle"),
       5000,
     )
   Ok(CopyAndNext(copied:, next:))
@@ -1493,7 +1516,7 @@ fn read_slowly(
   let copied =
     copy_to(
       controlled.connection,
-      connection.statement(
+      connection_statement.statement(
         "COPY (SELECT n FROM generate_series(1, 10000000) n) TO STDOUT",
       ),
       300,
@@ -1505,7 +1528,7 @@ fn read_slowly(
   let next =
     run_simple_query(
       controlled.connection,
-      connection.statement("SELECT 8"),
+      connection_statement.statement("SELECT 8"),
       5000,
     )
   Ok(CopyAndNext(copied:, next:))
@@ -1551,7 +1574,7 @@ fn read_after_failed_fold(
   let copied =
     copy_to(
       connection,
-      connection.statement(
+      connection_statement.statement(
         "COPY (SELECT n FROM generate_series(1, 10000000) n) TO STDOUT",
       ),
       300,
@@ -1559,7 +1582,11 @@ fn read_after_failed_fold(
       fail_at_first_row,
     )
   let next =
-    run_simple_query(connection, connection.statement("SELECT 9"), 5000)
+    run_simple_query(
+      connection,
+      connection_statement.statement("SELECT 9"),
+      5000,
+    )
   Ok(CopyAndNext(copied:, next:))
 }
 
@@ -1606,7 +1633,7 @@ fn hold_first_row(
   Ok(
     copy_to(
       controlled.connection,
-      connection.statement(
+      connection_statement.statement(
         "COPY (SELECT generate_series(1, 10000000)) TO STDOUT",
       ),
       300,
@@ -1652,7 +1679,9 @@ fn read_from_suspended(
   let copied =
     copy_to(
       connection,
-      connection.statement("COPY (SELECT generate_series(1, 10)) TO STDOUT"),
+      connection_statement.statement(
+        "COPY (SELECT generate_series(1, 10)) TO STDOUT",
+      ),
       300,
       False,
       fn(suspended, row) { suspend_at_first_row(suspended, row, connection) },
@@ -1693,7 +1722,7 @@ fn end_on_suspended(
   let copied =
     copy_from(
       connection,
-      connection.statement("COPY suspended FROM STDIN"),
+      connection_statement.statement("COPY suspended FROM STDIN"),
       300,
       suspend_and_send_nothing(_, connection),
     )
@@ -1738,14 +1767,20 @@ fn fail_fold_in_transaction(
   let copied =
     copy_to(
       connection,
-      connection.statement("COPY (SELECT generate_series(1, 100000)) TO STDOUT"),
+      connection_statement.statement(
+        "COPY (SELECT generate_series(1, 100000)) TO STDOUT",
+      ),
       5000,
       0,
       fail_at_first_row,
     )
   let status = transaction_status(connection)
   let next =
-    run_simple_query(connection, connection.statement("SELECT 9"), 5000)
+    run_simple_query(
+      connection,
+      connection_statement.statement("SELECT 9"),
+      5000,
+    )
   Ok(AfterFailedFold(copied:, status:, next:))
 }
 
@@ -1809,7 +1844,7 @@ fn copy_inside_copy(
   Ok(
     copy_from(
       connection,
-      connection.statement("COPY waiting FROM STDIN"),
+      connection_statement.statement("COPY waiting FROM STDIN"),
       5000,
       copy_inside(_, connection),
     ),
@@ -1877,7 +1912,7 @@ fn copy_stopping_its_connection(
   let copied =
     copy_from(
       connection,
-      connection.statement("COPY stopped FROM STDIN"),
+      connection_statement.statement("COPY stopped FROM STDIN"),
       5000,
       stop_then_send(_, connection, told),
     )
@@ -1977,7 +2012,11 @@ fn end_caller(
   let told = caller_told(hung.caller)
   process.kill(hung.caller.pid)
   let next =
-    run_simple_query(hung.connection, connection.statement(next_sql), 5000)
+    run_simple_query(
+      hung.connection,
+      connection_statement.statement(next_sql),
+      5000,
+    )
   Ok(CallerEnd(told:, next:))
 }
 

@@ -1,6 +1,6 @@
 //// A matcher that gives the client reason of a failed run.
 
-import dream_postgres/driver/connection.{type RunError}
+import dream_postgres/driver/connection/request_failure.{type RunError}
 import dream_postgres/error.{type Reason}
 import dream_postgres/internal/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
@@ -11,7 +11,7 @@ import fixtures/endpoints
 /// ## Example
 ///
 /// ```gleam
-/// connection.RunCopyRefused
+/// connection_request_failure.RunCopyRefused
 /// |> should
 /// |> map_run_error()
 /// |> be_equal(error.CopyStatementRefused(statements_run: 0))

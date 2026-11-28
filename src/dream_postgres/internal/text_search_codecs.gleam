@@ -155,6 +155,16 @@ fn decode_text_search_vector(
   }
 }
 
+fn read_positions(
+  word: String,
+  bytes: BitArray,
+) -> Result(#(List(#(Int, Weight)), BitArray), DecodeIssue) {
+  case bytes {
+    <<count:size(16), rest:bits>> -> decode_positions(rest, count, [])
+    _ -> Error(Malformed("the lexeme " <> word <> " is cut short"))
+  }
+}
+
 fn decode_lexemes(
   bytes: BitArray,
   remaining: Int,
@@ -165,10 +175,7 @@ fn decode_lexemes(
     0, _ -> Error(Malformed("the vector has bytes after its last lexeme"))
     _, _ -> {
       use #(word, rest) <- result.try(read_word(bytes, <<>>))
-      use #(positions, rest) <- result.try(case rest {
-        <<count:size(16), rest:bits>> -> decode_positions(rest, count, [])
-        _ -> Error(Malformed("the lexeme " <> word <> " is cut short"))
-      })
+      use #(positions, rest) <- result.try(read_positions(word, rest))
       decode_lexemes(rest, remaining - 1, [Lexeme(word, positions), ..lexemes])
     }
   }
@@ -226,11 +233,13 @@ fn encode_text_search_query(
 ) -> Result(Cell, String) {
   case value {
     EmptyQuery -> Ok(Binary(<<0:size(32)>>))
-    _ -> {
-      use #(items, count) <- result.try(encode_items(value))
-      Ok(Binary(<<count:size(32), items:bits>>))
-    }
+    _ -> encode_query_items(value)
   }
+}
+
+fn encode_query_items(value: TsQuery) -> Result(Cell, String) {
+  use #(items, count) <- result.try(encode_items(value))
+  Ok(Binary(<<count:size(32), items:bits>>))
 }
 
 // The items of the query in prefix order, and how many there are.
@@ -238,35 +247,51 @@ fn encode_items(query: TsQuery) -> Result(#(BitArray, Int), String) {
   case query {
     EmptyQuery ->
       Error("an empty query can only be the whole query, not a part of one")
-    Term(word:, weights:, prefix:) -> {
-      use bytes <- result.try(word_bytes(word))
-      let prefix_flag = case prefix {
-        True -> 1
-        False -> 0
-      }
-      let weight_bits =
-        list.fold(weights, 0, fn(bits, weight) {
-          int.bitwise_or(bits, query_weight(weight))
-        })
-      Ok(#(<<1, weight_bits, prefix_flag, bytes:bits, 0>>, 1))
-    }
+    Term(word:, weights:, prefix:) -> encode_term(word, weights, prefix)
     Not(operand) -> {
       use #(items, count) <- result.try(encode_items(operand))
       Ok(#(<<2, 1, items:bits>>, count + 1))
     }
     And(left, right) -> encode_operator(<<2, 2>>, left, right)
     Or(left, right) -> encode_operator(<<2, 3>>, left, right)
-    Phrase(distance:, left:, right:) ->
-      case distance < 0 || distance > max_phrase_distance {
-        True ->
-          Error(
-            "the phrase distance "
-            <> int.to_string(distance)
-            <> " is outside 0 to "
-            <> int.to_string(max_phrase_distance),
-          )
-        False -> encode_operator(<<2, 4, distance:size(16)>>, left, right)
-      }
+    Phrase(distance:, left:, right:) -> encode_phrase(distance, left, right)
+  }
+}
+
+fn encode_term(
+  word: String,
+  weights: List(Weight),
+  prefix: Bool,
+) -> Result(#(BitArray, Int), String) {
+  use bytes <- result.try(word_bytes(word))
+  let weight_bits =
+    list.fold(weights, 0, fn(bits, weight) {
+      int.bitwise_or(bits, query_weight(weight))
+    })
+  Ok(#(<<1, weight_bits, prefix_flag(prefix), bytes:bits, 0>>, 1))
+}
+
+fn prefix_flag(prefix: Bool) -> Int {
+  case prefix {
+    True -> 1
+    False -> 0
+  }
+}
+
+fn encode_phrase(
+  distance: Int,
+  left: TsQuery,
+  right: TsQuery,
+) -> Result(#(BitArray, Int), String) {
+  case distance < 0 || distance > max_phrase_distance {
+    True ->
+      Error(
+        "the phrase distance "
+        <> int.to_string(distance)
+        <> " is outside 0 to "
+        <> int.to_string(max_phrase_distance),
+      )
+    False -> encode_operator(<<2, 4, distance:size(16)>>, left, right)
   }
 }
 
@@ -292,6 +317,14 @@ fn query_weight(weight: Weight) -> Int {
   }
 }
 
+fn decode_whole_query(items: BitArray) -> Result(TsQuery, DecodeIssue) {
+  use #(query, rest) <- result.try(decode_item(items))
+  case rest {
+    <<>> -> Ok(query)
+    _ -> Error(Malformed("the query has bytes after its last item"))
+  }
+}
+
 fn decode_text_search_query(
   value: Cell,
   description: TypeDescription,
@@ -300,13 +333,7 @@ fn decode_text_search_query(
   use bytes <- result.try(binary_bytes(value))
   case bytes {
     <<0:size(32)>> -> Ok(EmptyQuery)
-    <<_count:size(32), items:bits>> -> {
-      use #(query, rest) <- result.try(decode_item(items))
-      case rest {
-        <<>> -> Ok(query)
-        _ -> Error(Malformed("the query has bytes after its last item"))
-      }
-    }
+    <<_count:size(32), items:bits>> -> decode_whole_query(items)
     _ -> Error(codec_type.wrong_size(description, bytes))
   }
 }

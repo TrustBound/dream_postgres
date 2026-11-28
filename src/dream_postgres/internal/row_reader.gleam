@@ -1,6 +1,6 @@
 //// Row readers: the type, the functions that build one, the check of a
 //// reader against the columns of a prepared statement, and the read of a
-//// row. The module `dream_postgres` gives the public functions. A
+//// row. The module `dream_postgres/row` gives the public functions. A
 //// composite codec reads the fields of a value with the same readers.
 ////
 //// The check runs a reader with each codec's placeholder in place of the
@@ -235,14 +235,7 @@ fn by_selector(
     [step, ..rest] -> {
       use match <- result.try(column_of(step.selector, numbered, column_count))
       let #(index, described) = match
-      use Nil <- result.try(case set.contains(seen, index) {
-        True ->
-          Error(ColumnReadTwice(
-            position: index + 1,
-            name: described.column.name,
-          ))
-        False -> Ok(Nil)
-      })
+      use Nil <- result.try(unseen_column(seen, index, described))
       by_selector(
         rest,
         numbered,
@@ -254,6 +247,18 @@ fn by_selector(
   }
 }
 
+fn unseen_column(
+  seen: Set(Int),
+  index: Int,
+  described: DescribedColumn,
+) -> Result(Nil, Reason) {
+  case set.contains(seen, index) {
+    True ->
+      Error(ColumnReadTwice(position: index + 1, name: described.column.name))
+    False -> Ok(Nil)
+  }
+}
+
 fn column_of(
   selector: Selector,
   numbered: List(#(Int, DescribedColumn)),
@@ -261,18 +266,30 @@ fn column_of(
 ) -> Result(#(Int, DescribedColumn), Reason) {
   case selector {
     Next -> Error(MixedColumnReaders)
-    At(position:) ->
-      case list.filter(numbered, fn(pair) { pair.0 == position - 1 }) {
-        [match, ..] -> Ok(match)
-        [] -> Error(NoColumnAtPosition(position:, columns: column_count))
-      }
-    Named(name:) ->
-      case list.filter(numbered, fn(pair) { { pair.1 }.column.name == name }) {
-        [] -> Error(NoColumnNamed(name:))
-        [match] -> Ok(match)
-        matches ->
-          Error(AmbiguousColumnName(name:, count: list.length(matches)))
-      }
+    At(position:) -> column_at_position(numbered, position, column_count)
+    Named(name:) -> column_of_name(numbered, name)
+  }
+}
+
+fn column_at_position(
+  numbered: List(#(Int, DescribedColumn)),
+  position: Int,
+  column_count: Int,
+) -> Result(#(Int, DescribedColumn), Reason) {
+  case list.filter(numbered, fn(pair) { pair.0 == position - 1 }) {
+    [match, ..] -> Ok(match)
+    [] -> Error(NoColumnAtPosition(position:, columns: column_count))
+  }
+}
+
+fn column_of_name(
+  numbered: List(#(Int, DescribedColumn)),
+  name: String,
+) -> Result(#(Int, DescribedColumn), Reason) {
+  case list.filter(numbered, fn(pair) { { pair.1 }.column.name == name }) {
+    [] -> Error(NoColumnNamed(name:))
+    [match] -> Ok(match)
+    matches -> Error(AmbiguousColumnName(name:, count: list.length(matches)))
   }
 }
 

@@ -1,5 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, run_sql}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{run_sql}
 
 /// Makes the tables of the examples: users, and the accounts of users.
 pub fn create_tables(

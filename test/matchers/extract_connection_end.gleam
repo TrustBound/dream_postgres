@@ -1,7 +1,8 @@
 //// Takes the end of the connection out of a request failure.
 
-import dream_postgres/driver/connection.{
-  type ConnectionEnd, type RequestFailure, ConnectionEnded,
+import dream_postgres/driver/connection/event.{type ConnectionEnd}
+import dream_postgres/driver/connection/request_failure.{
+  type RequestFailure, ConnectionEnded,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,

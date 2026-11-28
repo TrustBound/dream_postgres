@@ -3,11 +3,19 @@
 //// COPY and never end by themselves, and the setup hooks that run a COPY
 //// before a test.
 
-import dream_postgres/driver/connection.{
-  type ChunkError, type Connection, type CopyError, type CopySender,
-  type Outcome, type SimpleQueryError, ChunkFailed, ConnectionEnded,
-  ConnectionLost, SocketFailed, copy_from, copy_to, run_simple_query, send_chunk,
+import dream_postgres/driver/connection
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/copy_caller.{
+  type CopySender, copy_from, copy_to, send_chunk,
 }
+import dream_postgres/driver/connection/event.{ConnectionLost, SocketFailed}
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/request_failure.{
+  type ChunkError, type CopyError, type SimpleQueryError, ChunkFailed,
+  ConnectionEnded,
+}
+import dream_postgres/driver/connection/simple_query.{run_simple_query}
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/driver/transport.{SocketClosed}
 import driver/proxy.{type Proxy, close_client, inject}
 import driver/server_connection.{
@@ -108,7 +116,7 @@ pub fn send_after_end(
   use Nil <- try(send_chunk(sender, <<"1\tone\n":utf8>>))
   let sql = "SELECT pg_terminate_backend(" <> pid <> ", 5000)"
   use _terminated <- try(
-    run_simple_query(control, connection.statement(sql), 5000)
+    run_simple_query(control, connection_statement.statement(sql), 5000)
     |> result.replace_error(no_answer()),
   )
   send_chunk(sender, <<"2\ttwo\n":utf8>>)
@@ -181,11 +189,11 @@ pub fn copy_inside(
   #(Result(List(Outcome), SimpleQueryError), Result(Int, CopyError(ChunkError))),
 ) {
   let inner_simple_query =
-    run_simple_query(connection, connection.statement("SELECT 1"), 50)
+    run_simple_query(connection, connection_statement.statement("SELECT 1"), 50)
   let inner_copy =
     copy_from(
       connection,
-      connection.statement("COPY waiting FROM STDIN"),
+      connection_statement.statement("COPY waiting FROM STDIN"),
       50,
       send_nothing,
     )
@@ -452,7 +460,7 @@ pub fn hang_after_rows(
 ) -> Result(Int, CopyError(ChunkError)) {
   copy_from(
     connection,
-    connection.statement("COPY hung FROM STDIN"),
+    connection_statement.statement("COPY hung FROM STDIN"),
     5000,
     send_and_hang(_, started),
   )
@@ -475,7 +483,7 @@ pub fn hang_after_refusal(
 ) -> Result(Int, CopyError(ChunkError)) {
   copy_from(
     connection,
-    connection.statement("COPY hung FROM STDIN"),
+    connection_statement.statement("COPY hung FROM STDIN"),
     5000,
     refuse_and_hang(_, started),
   )
@@ -497,7 +505,7 @@ pub fn hang_at_first_row(
 ) -> Result(Nil, CopyError(Nil)) {
   copy_to(
     connection,
-    connection.statement(
+    connection_statement.statement(
       "COPY (SELECT n FROM generate_series(1, 1000000) n) TO STDOUT",
     ),
     5000,
@@ -524,7 +532,7 @@ pub fn copy_rows_in(
   sql: String,
   produce: fn(CopySender) -> Result(Nil, error),
 ) -> Result(Int, String) {
-  copy_from(connection, connection.statement(sql), 5000, produce)
+  copy_from(connection, connection_statement.statement(sql), 5000, produce)
   |> result.map_error(fn(error) {
     "could not run " <> sql <> ": " <> string.inspect(error)
   })
@@ -546,7 +554,7 @@ pub fn failing_copy_in_setup(
   produce: fn(CopySender) -> Result(Nil, error),
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    copy_from(connection, connection.statement(sql), 5000, produce)
+    copy_from(connection, connection_statement.statement(sql), 5000, produce)
     |> require_failure(connection, sql)
   }
 }
@@ -559,7 +567,13 @@ pub fn failing_copy_out_setup(
   fold: fn(value, BitArray) -> Result(value, error),
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    copy_to(connection, connection.statement(sql), 5000, initial, fold)
+    copy_to(
+      connection,
+      connection_statement.statement(sql),
+      5000,
+      initial,
+      fold,
+    )
     |> require_failure(connection, sql)
   }
 }

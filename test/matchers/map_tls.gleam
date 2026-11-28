@@ -1,6 +1,6 @@
 //// A matcher that maps a TLS setting of the client to the TLS setting of the driver.
 
-import dream_postgres.{type Tls}
+import dream_postgres/config.{type Tls}
 import dream_postgres/driver/transport
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
@@ -18,6 +18,6 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 pub fn map_tls(result: MatchResult(Tls)) -> MatchResult(transport.Tls) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
-    MatchOk(value) -> MatchOk(dream_postgres.transport_tls(value))
+    MatchOk(value) -> MatchOk(config.transport_tls(value))
   }
 }

@@ -1,7 +1,7 @@
 //// The boot check `verify` on PostgreSQL 16 to 19: each query is
 //// prepared and checked against the live database, and none runs.
 
-import dream_postgres.{verify}
+import dream_postgres/boot_check.{verify}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

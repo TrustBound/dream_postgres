@@ -1,6 +1,6 @@
 //// Checks that a query step waits for the next message.
 
-import dream_postgres/driver/query.{type Step, Wait}
+import dream_postgres/driver/query/step.{type Step, Wait}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

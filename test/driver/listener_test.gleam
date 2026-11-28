@@ -8,7 +8,9 @@
 //// test sleeps. Setup hooks start each listener and stop it after the
 //// test.
 
-import dream_postgres/driver/connection.{Backoff, Notification, TransportRefused}
+import dream_postgres/driver/connection/backoff.{Backoff}
+import dream_postgres/driver/connection/event.{TransportRefused}
+import dream_postgres/driver/connection/outcome.{Notification}
 import dream_postgres/driver/listener.{
   type ListenerConfig, type ListenerMessage, ChannelHasZeroByte, ChannelTooLong,
   ConnectFailed, ListenAnswerUnexpected, ListenDeadlinePassed, ListenFailed,

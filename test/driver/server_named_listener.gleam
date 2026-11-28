@@ -2,7 +2,9 @@
 //// not linked to the test, the supervisor calls that restart it, and the
 //// acts that crash its session or its registry.
 
-import dream_postgres/driver/connection.{type Connection, Backoff}
+import dream_postgres/driver/connection
+import dream_postgres/driver/connection/backoff.{Backoff}
+import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/listener.{
   type Listener, type ListenerConfig, type ListenerMessage,
   type ListenerProcessMessage, from_name, monitor_registry, supervised,

@@ -1,11 +1,13 @@
-//// A matcher for the copy step of `dream_postgres/driver/query`: feeds
+//// A matcher for the copy step of `dream_postgres/driver/query/copy_step`: feeds
 //// inputs to a new copy step, one at a time, and gives what the step gave
 //// for each.
 
-import dream_postgres/driver/query.{
-  type CopyDirection, type CopyState, type CopyStep, type UnexpectedMessage,
-  CopyConnectionEnded, CopyFinished, CopyRow, CopySend, CopyStarted, CopyWait,
-  UnexpectedMessage,
+import dream_postgres/driver/query/copy_step.{
+  type CopyState, type CopyStep, CopyConnectionEnded, CopyFinished, CopyRow,
+  CopySend, CopyStarted, CopyWait,
+} as query_copy_step
+import dream_postgres/driver/query/step.{
+  type CopyDirection, type UnexpectedMessage, UnexpectedMessage,
 }
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import fixtures/copy_step_inputs.{
@@ -42,7 +44,7 @@ pub fn fed_to_copy_step(
 }
 
 fn feed(inputs: List(Input), direction: CopyDirection) -> List(Seen) {
-  let start = query.start_copy("COPY t FROM STDIN", direction)
+  let start = query_copy_step.start_copy("COPY t FROM STDIN", direction)
   let fed = list.fold(inputs, Fed(start.state, [], True), feed_one)
   list.reverse(fed.seen)
 }
@@ -51,10 +53,11 @@ fn feed_one(fed: Fed, input: Input) -> Fed {
   case fed.open, input {
     False, _ -> fed
     True, FromServer(message) ->
-      seen_step(fed, query.step_copy(fed.state, message))
-    True, AppFinishes -> app_step(fed, query.finish_copy(fed.state))
-    True, AppAbandons -> app_step(fed, query.abandon_copy(fed.state))
-    True, DeadlinePasses -> app_step(fed, query.stop_at_deadline(fed.state))
+      seen_step(fed, query_copy_step.step_copy(fed.state, message))
+    True, AppFinishes -> app_step(fed, query_copy_step.finish_copy(fed.state))
+    True, AppAbandons -> app_step(fed, query_copy_step.abandon_copy(fed.state))
+    True, DeadlinePasses ->
+      app_step(fed, query_copy_step.stop_at_deadline(fed.state))
   }
 }
 

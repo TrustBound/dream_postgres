@@ -82,14 +82,22 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/driver/connection.{
-  type ConnectError, type Connection, type ConnectionConfig,
-  type ConnectionEvent, type Notification, type SimpleQueryError, Connected,
-  ConnectionConfig, ConnectionEnded, ConnectionProcessDown, DeadlinePassed,
-  Disconnected, ReconnectFailed, Reconnected, SimpleQueryCopyRefused,
-  SimpleQueryFailed, SimpleQueryNotConnected, SimpleQueryRefused,
-  SimpleQueryRequestFailed, SimpleQueryUnencodable,
+import dream_postgres/driver/connection
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/event.{
+  type ConnectError, type ConnectionEvent, Connected, Disconnected,
+  ReconnectFailed, Reconnected,
+} as connection_event
+import dream_postgres/driver/connection/outcome.{type Notification}
+import dream_postgres/driver/connection/request_failure.{
+  type SimpleQueryError, ConnectionEnded, ConnectionProcessDown, DeadlinePassed,
+  SimpleQueryCopyRefused, SimpleQueryFailed, SimpleQueryNotConnected,
+  SimpleQueryRefused, SimpleQueryRequestFailed, SimpleQueryUnencodable,
 }
+import dream_postgres/driver/connection/settings.{
+  type ConnectionConfig, ConnectionConfig,
+}
+import dream_postgres/driver/connection/simple_query as connection_simple_query
 import dream_postgres/driver/sink.{
   type Delivery, type Sink, Delivered, MapFailed,
 }
@@ -1148,7 +1156,7 @@ fn handle_session_message(
 fn report(state: SessionState, event: ConnectionEvent) -> Nil {
   case event {
     Connected | Reconnected -> send_to_registry(state.registry, SessionUp)
-    connection.ConnectFailed(error) ->
+    connection_event.ConnectFailed(error) ->
       send_to_registry(state.registry, SessionConnectFailed(error))
     ReconnectFailed(_error) -> Nil
     Disconnected(_error) -> send_to_registry(state.registry, SessionLost)
@@ -1190,7 +1198,7 @@ fn listened(result: Result(Nil, SimpleQueryError)) -> Listened {
 }
 
 fn run(state: SessionState, sql: String) -> Result(Nil, SimpleQueryError) {
-  connection.run_listener_simple_query(
+  connection_simple_query.run_listener_simple_query(
     state.connection,
     sql,
     state.deadline_milliseconds,

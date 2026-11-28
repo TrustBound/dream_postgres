@@ -1,10 +1,10 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, one, parameter, query, run, single,
-  transaction,
-}
 import dream_postgres/codec.{int}
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, parameter, query}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{keep_both, run, transaction}
 import gleam/function
 import gleam/result
 

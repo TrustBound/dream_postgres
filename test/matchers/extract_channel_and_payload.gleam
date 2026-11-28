@@ -1,6 +1,6 @@
 //// Extracts `#(channel, payload)` of a notification.
 
-import dream_postgres/driver/connection.{type Notification}
+import dream_postgres/driver/connection/outcome.{type Notification}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the channel and the payload of the notification, without the

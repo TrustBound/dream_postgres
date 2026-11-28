@@ -1,8 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type Connection, type PostgresError, type ServerNotice, notices,
-  start,
-}
+import dream_postgres/config.{type Config, type ServerNotice, notices}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
 import gleam/erlang/process.{type Subject}
 import gleam/pair
 import gleam/result

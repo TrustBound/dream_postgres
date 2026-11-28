@@ -1,7 +1,7 @@
 //// Extracts the connect error of a hold that got no connection.
 
-import dream_postgres/driver/connection.{type ConnectError}
-import dream_postgres/driver/pool.{type HoldError, ConnectFailed}
+import dream_postgres/driver/connection/event.{type ConnectError}
+import dream_postgres/driver/pool/pool_failure.{type HoldError, ConnectFailed}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -12,7 +12,7 @@ import gleam/string.{inspect}
 /// error.
 ///
 /// ```gleam
-/// pool.hold(pool, 5000, backend_pid)
+/// pool_holds.hold(pool, 5000, backend_pid)
 /// |> should
 /// |> be_error
 /// |> extract_connect_failure

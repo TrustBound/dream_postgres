@@ -1,4 +1,5 @@
-//// Tests for `dream_postgres/driver/query`: each query step fed with the
+//// Tests for the steps of `dream_postgres/driver/query/extended_query` and
+//// `dream_postgres/driver/query/simple_query`: each query step fed with the
 //// messages of the flows of the PostgreSQL documentation ("Message Flow"),
 //// one message at a time, with no server. Some flows come as bytes through
 //// `decode_backend`.
@@ -12,7 +13,14 @@ import dream_postgres/driver/message.{
   ParseComplete, Portal, PortalSuspended, Query, ReadyForQuery, ResultColumn,
   RowDescription, Statement, Sync,
 }
-import dream_postgres/driver/query.{
+import dream_postgres/driver/query/extended_query.{
+  start_prepare, start_prepare_and_run, start_prepare_closing, start_run,
+  step_prepare, step_prepare_and_run, step_run,
+}
+import dream_postgres/driver/query/simple_query.{
+  start_simple_query, step_simple_query,
+}
+import dream_postgres/driver/query/step.{
   type UnexpectedMessage, AwaitingBindComplete, AwaitingCloseComplete,
   AwaitingCopyComplete, AwaitingParameterDescription, AwaitingParseComplete,
   AwaitingPortalColumns, AwaitingReadyForQuery, AwaitingReadyForQueryAfterError,
@@ -20,9 +28,6 @@ import dream_postgres/driver/query.{
   CopyNotSupported, Finished, Notice, Notification, Outcome, ParameterChanged,
   ReadingCopyOut, ReadingExecuteRows, ReadingSimpleQueryRows, ServerError,
   SimpleQueryFailure, StatementResult, UnexpectedMessage, failure_report,
-  start_prepare, start_prepare_and_run, start_prepare_closing, start_run,
-  start_simple_query, step_prepare, step_prepare_and_run, step_run,
-  step_simple_query,
 }
 import dream_postgres/internal/cell.{
   type ColumnDescription, type Format, type ServerReport, Binary, BinaryFormat,

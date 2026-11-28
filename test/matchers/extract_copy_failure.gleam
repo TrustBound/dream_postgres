@@ -1,6 +1,6 @@
 //// Extracts the request failure of a COPY.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/request_failure.{
   type CopyError, type RequestFailure, CopyFailed,
 }
 import dream_test/types.{

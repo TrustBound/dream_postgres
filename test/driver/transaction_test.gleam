@@ -1,7 +1,7 @@
 //// Tests for `dream_postgres/driver/transaction`: the transaction status
 //// and the error that aborted a failed transaction, after each outcome.
 
-import dream_postgres/driver/query.{
+import dream_postgres/driver/query/step.{
   type Failure, type Outcome, type SimpleQueryFailure, CopyNotSupported, Outcome,
   ServerError, SimpleQueryFailure,
 }

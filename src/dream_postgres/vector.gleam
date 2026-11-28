@@ -216,11 +216,21 @@ fn pack_floats(
     _ ->
       list.index_fold(floats, Ok(<<>>), fn(packed, value, position) {
         use packed <- result.try(packed)
-        case float_bits(value, size) {
-          Ok(bits) -> Ok(<<packed:bits, bits:bits>>)
-          Error(Nil) -> Error(FloatTooLarge(position, value, maximum))
-        }
+        append_float(packed, value, position, size, maximum)
       })
+  }
+}
+
+fn append_float(
+  packed: BitArray,
+  value: Float,
+  position: Int,
+  size: FloatSize,
+  maximum: Float,
+) -> Result(BitArray, VectorError) {
+  case float_bits(value, size) {
+    Ok(bits) -> Ok(<<packed:bits, bits:bits>>)
+    Error(Nil) -> Error(FloatTooLarge(position, value, maximum))
   }
 }
 
@@ -231,11 +241,14 @@ fn float_bits(value: Float, size: FloatSize) -> Result(BitArray, Nil) {
   case size, value >. max_float2 || value <. 0.0 -. max_float2 {
     TwoBytes, True -> Error(Nil)
     TwoBytes, False -> Ok(<<value:float-size(16)>>)
-    FourBytes, _ ->
-      case value >. max_float4 || value <. 0.0 -. max_float4 {
-        True -> Error(Nil)
-        False -> Ok(<<value:float-size(32)>>)
-      }
+    FourBytes, _ -> four_byte_float_bits(value)
+  }
+}
+
+fn four_byte_float_bits(value: Float) -> Result(BitArray, Nil) {
+  case value >. max_float4 || value <. 0.0 -. max_float4 {
+    True -> Error(Nil)
+    False -> Ok(<<value:float-size(32)>>)
   }
 }
 

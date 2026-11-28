@@ -2,7 +2,7 @@
 //// that each one gives, and URLs with the fault and the message that each
 //// one gives.
 
-import dream_postgres.{
+import dream_postgres/config.{
   type Config, AuthorityFile, CheckAuthority, CheckAuthorityAndHost,
   NoCertificateCheck, SystemAuthorities, TlsOff, TlsPreferred, TlsRequired,
   database, default_config, host, password, port, tls, user,

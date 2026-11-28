@@ -39,11 +39,12 @@ This example has its own cause type, so that a rule can refuse the move:
 
 ```gleam
 import dream_errors.{type Error, Invalid}
-import dream_postgres.{
-  type Connection, type PostgresError, affected, check, commit, one, parameter,
-  query, single, step, transaction,
-}
 import dream_postgres/codec.{int}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{affected, one, parameter, query}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{check, commit, step, transaction}
 import gleam/result
 
 /// Why a move of money failed.
@@ -133,12 +134,14 @@ A plan where every error is a database error uses `function.identity` and `trans
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, commit, one, parameter, query, single,
-  step, step_with, transaction,
-}
 import dream_postgres/codec.{int}
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, parameter, query}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{
+  commit, keep_both, step, step_with, transaction,
+}
 import gleam/function
 import snippets/create_user.{create_user}
 import snippets/user_row.{type User}
@@ -188,12 +191,15 @@ fn open_account(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, commit, isolation, one, query, read_only,
-  single, step, step_with, transaction,
-}
 import dream_postgres/codec.{int}
-import dream_postgres/transaction.{RepeatableRead, keep_both}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{
+  RepeatableRead, commit, isolation, keep_both, read_only, step, step_with,
+  transaction,
+}
 import gleam/function
 import gleam/pair
 import gleam/result
@@ -237,12 +243,12 @@ A serialization failure is a `Retry` error: nothing happened, and a new run of t
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, one, parameter, query, run, single,
-  transaction,
-}
 import dream_postgres/codec.{int}
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, parameter, query}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{keep_both, run, transaction}
 import gleam/function
 import gleam/result
 
@@ -313,10 +319,9 @@ A transaction on the connection of a transaction runs as a savepoint. Its failur
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, commit, run, step, transaction,
-}
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/transaction.{commit, keep_both, run, step, transaction}
 import gleam/function
 import gleam/list
 import gleam/result
@@ -376,10 +381,9 @@ After a statement fails, PostgreSQL ignores every statement up to the end of the
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, commit, step, transaction,
-}
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/transaction.{commit, keep_both, step, transaction}
 import gleam/function
 import snippets/create_user.{create_user}
 

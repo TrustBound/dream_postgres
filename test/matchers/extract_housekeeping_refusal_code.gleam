@@ -1,7 +1,7 @@
 //// Extracts the SQLSTATE code of a housekeeping statement that the server
 //// refused.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/request_failure.{
   type HousekeepingError, HousekeepingRefused,
 }
 import dream_test/types.{

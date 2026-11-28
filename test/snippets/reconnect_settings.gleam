@@ -1,6 +1,5 @@
-import dream_postgres.{
-  type Config, type ReconnectStep, reconnect_delays, reconnect_strategy,
-}
+import dream_postgres/config.{type Config, reconnect_delays, reconnect_strategy}
+import dream_postgres/reconnect.{type ReconnectStep}
 
 /// Waits 500 ms before the first reconnect, doubles the wait after each
 /// failed attempt, and never waits longer than 30 seconds.

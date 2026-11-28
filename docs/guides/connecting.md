@@ -53,10 +53,11 @@ The login uses the method that the server asks for: SCRAM-SHA-256, MD5, a cleart
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, TlsOff, database, default_config, host,
-  password, pool_size, port, start, tls, user,
+import dream_postgres/config.{
+  TlsOff, database, default_config, host, password, pool_size, port, tls, user,
 }
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
 
 /// Starts a pool of 4 connections to the database `dream_test` on this
 /// machine. The local test server has no certificate, so TLS is off.
@@ -95,9 +96,10 @@ The other settings of the config keep their defaults. Change them with the setti
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, config_from_url, pool_size, start,
-}
+import dream_postgres/config.{pool_size}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
+import dream_postgres/url.{config_from_url}
 import gleam/result
 
 /// Starts a pool of 4 connections from a database URL, such as
@@ -188,7 +190,7 @@ When your server has a certificate from your own authority, give the PEM file of
 ### Check the certificate against your own authority <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/verified_tls.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{
+import dream_postgres/config.{
   type Config, AuthorityFile, CheckAuthorityAndHost, TlsRequired, tls,
 }
 
@@ -213,12 +215,12 @@ A pool that runs for the whole life of an app goes under the app's supervisor. `
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type PoolName, type PostgresError, named_connection, one, query,
-  single, supervised,
-}
 import dream_postgres/codec.{text}
-import dream_postgres/error.{describe}
+import dream_postgres/config.{type Config}
+import dream_postgres/error.{type PostgresError, describe}
+import dream_postgres/pool.{type PoolName, named_connection, supervised}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/result
@@ -258,8 +260,9 @@ A config with a recorder in `Playback` mode also works with `supervised`. The po
 ### Play back under a supervisor <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_app_supervisor.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Config, type PoolName, record, supervised}
+import dream_postgres/config.{type Config, record}
 import dream_postgres/error.{describe}
+import dream_postgres/pool.{type PoolName, supervised}
 import dream_postgres/recorder.{type Recorder}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}
@@ -307,9 +310,8 @@ The default strategy, `full_jitter`, waits a random time from 0 to the capped de
 ### Slower reconnects with no jitter <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/reconnect_settings.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{
-  type Config, type ReconnectStep, reconnect_delays, reconnect_strategy,
-}
+import dream_postgres/config.{type Config, reconnect_delays, reconnect_strategy}
+import dream_postgres/reconnect.{type ReconnectStep}
 
 /// Waits 500 ms before the first reconnect, doubles the wait after each
 /// failed attempt, and never waits longer than 30 seconds.
@@ -339,7 +341,7 @@ PgBouncer in transaction mode can send the next transaction to another server se
 ### Behind PgBouncer <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/behind_pgbouncer.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Config, NoStatementCache, statement_cache}
+import dream_postgres/config.{type Config, NoStatementCache, statement_cache}
 
 /// Prepares each statement again for each run, with no name, because
 /// PgBouncer in transaction mode can send the next transaction to another
@@ -358,10 +360,9 @@ A statement can send notices, such as a `NOTICE` or a `WARNING` from `RAISE`. `n
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type Connection, type PostgresError, type ServerNotice, notices,
-  start,
-}
+import dream_postgres/config.{type Config, type ServerNotice, notices}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
 import gleam/erlang/process.{type Subject}
 import gleam/pair
 import gleam/result
@@ -411,12 +412,13 @@ This example starts a pool with a subject for its events, and turns each event i
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type Connection, type PoolEvent, type PostgresError,
-  ConnectFailed, Connected, Disconnected, Free, Held, Reconnected, Refused,
-  Replacing, Returned, Stopping, Waiting, pool_events, start,
+import dream_postgres/config.{
+  type Config, type PoolEvent, ConnectFailed, Connected, Disconnected, Free,
+  Held, Reconnected, Refused, Replacing, Returned, Stopping, Waiting,
+  pool_events,
 }
-import dream_postgres/error.{describe}
+import dream_postgres/error.{type PostgresError, describe}
+import dream_postgres/pool.{type Connection, start}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/pair

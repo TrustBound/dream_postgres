@@ -1,6 +1,6 @@
 //// Extracts the error of a failed reconnect event of the connection process.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/event.{
   type ConnectError, type ConnectionEvent, ReconnectFailed,
 }
 import dream_test/types.{

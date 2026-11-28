@@ -2,11 +2,14 @@
 //// a SCRAM login on the transport: prepare, run, simple query, errors,
 //// transactions, notices, parameter changes, notifications and COPY.
 
-import dream_postgres/driver/query.{
-  CopyNotSupported, start_prepare, start_prepare_and_run, start_run,
-  start_simple_query, step_prepare, step_prepare_and_run, step_run,
-  step_simple_query,
+import dream_postgres/driver/query/extended_query.{
+  start_prepare, start_prepare_and_run, start_run, step_prepare,
+  step_prepare_and_run, step_run,
 }
+import dream_postgres/driver/query/simple_query.{
+  start_simple_query, step_simple_query,
+}
+import dream_postgres/driver/query/step.{CopyNotSupported}
 import dream_postgres/internal/cell.{
   Binary, BinaryFormat, ColumnDescription, CommandResult, Idle,
   InFailedTransaction, Null, ParameterDescription, StatementDescription, Text,

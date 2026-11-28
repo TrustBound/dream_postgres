@@ -6,15 +6,17 @@
 //// temporary table on it, so no table stays on the server.
 
 import dream_errors.{Invalid, Unavailable}
-import dream_postgres.{
-  affected, all, check, column, column_at, column_named, commit, isolation,
-  maybe_one, named, one, parameter, query, read_only, row, run, run_sql, single,
-  step, step_with, transaction, with_connection, with_interceptor,
-}
 import dream_postgres/codec
+import dream_postgres/config
 import dream_postgres/error
+import dream_postgres/pool.{with_connection, with_interceptor}
+import dream_postgres/query.{
+  affected, all, maybe_one, named, one, parameter, query, run_sql,
+}
+import dream_postgres/row.{column, column_at, column_named, row, single}
 import dream_postgres/transaction.{
-  ReadCommitted, RepeatableRead, Serializable, keep_both,
+  ReadCommitted, RepeatableRead, Serializable, check, commit, isolation,
+  keep_both, read_only, run, step, step_with, transaction,
 }
 import dream_test/context
 import dream_test/matchers.{
@@ -154,7 +156,7 @@ pub fn tests() -> TestSuite {
               })
               |> result.flatten,
             )
-            dream_postgres.stop(held)
+            pool.stop(held)
             Ok(inner)
           })
           |> leave_rows([1])
@@ -889,9 +891,9 @@ pub fn unit_tests() -> TestSuite {
     unit.group("config", [
       unit.it("an empty host is InvalidConfig", fn() {
         // Act and assert
-        dream_postgres.default_config()
-        |> dream_postgres.host("")
-        |> dream_postgres.start
+        config.default_config()
+        |> config.host("")
+        |> pool.start
         |> should
         |> be_error()
         |> summarise_error()
@@ -900,9 +902,9 @@ pub fn unit_tests() -> TestSuite {
       }),
       unit.it("a port of 0 is InvalidConfig", fn() {
         // Act and assert
-        dream_postgres.default_config()
-        |> dream_postgres.port(0)
-        |> dream_postgres.start
+        config.default_config()
+        |> config.port(0)
+        |> pool.start
         |> should
         |> be_error()
         |> summarise_error()
@@ -911,9 +913,9 @@ pub fn unit_tests() -> TestSuite {
       }),
       unit.it("an empty user is InvalidConfig", fn() {
         // Act and assert
-        dream_postgres.default_config()
-        |> dream_postgres.user("")
-        |> dream_postgres.start
+        config.default_config()
+        |> config.user("")
+        |> pool.start
         |> should
         |> be_error()
         |> summarise_error()
@@ -922,9 +924,9 @@ pub fn unit_tests() -> TestSuite {
       }),
       unit.it("a password with a zero byte is InvalidConfig", fn() {
         // Act and assert
-        dream_postgres.default_config()
-        |> dream_postgres.password("a\u{0000}b")
-        |> dream_postgres.start
+        config.default_config()
+        |> config.password("a\u{0000}b")
+        |> pool.start
         |> should
         |> be_error()
         |> summarise_error()
@@ -933,9 +935,9 @@ pub fn unit_tests() -> TestSuite {
       }),
       unit.it("a pool size of 0 is InvalidConfig", fn() {
         // Act and assert
-        dream_postgres.default_config()
-        |> dream_postgres.pool_size(0)
-        |> dream_postgres.start
+        config.default_config()
+        |> config.pool_size(0)
+        |> pool.start
         |> should
         |> be_error()
         |> summarise_error()
@@ -946,7 +948,7 @@ pub fn unit_tests() -> TestSuite {
     unit.group("the answer to COMMIT", [
       unit.it("COMMIT is a commit", fn() {
         // Act and assert
-        dream_postgres.commit_answer(["COMMIT"], None)
+        transaction.commit_answer(["COMMIT"], None)
         |> should
         |> be_ok()
         |> be_equal(Nil)
@@ -956,7 +958,7 @@ pub fn unit_tests() -> TestSuite {
         "ROLLBACK is CommitRolledBack with the report that failed it",
         fn() {
           // Act and assert
-          dream_postgres.commit_answer(
+          transaction.commit_answer(
             ["ROLLBACK"],
             Some(
               error.server_error_from_report(server_reports.division_by_zero()),
@@ -971,7 +973,7 @@ pub fn unit_tests() -> TestSuite {
       ),
       unit.it("ROLLBACK with no report is CommitRolledBack with no cause", fn() {
         // Act and assert
-        dream_postgres.commit_answer(["ROLLBACK"], None)
+        transaction.commit_answer(["ROLLBACK"], None)
         |> should
         |> be_error()
         |> summarise_error()
@@ -980,7 +982,7 @@ pub fn unit_tests() -> TestSuite {
       }),
       unit.it("other tags are UnexpectedCommitAnswer", fn() {
         // Act and assert
-        dream_postgres.commit_answer(["COMMIT", "COMMIT"], None)
+        transaction.commit_answer(["COMMIT", "COMMIT"], None)
         |> should
         |> be_error()
         |> summarise_error()
@@ -993,12 +995,12 @@ pub fn unit_tests() -> TestSuite {
         // Arrange
         // Nothing listens on port 5449 on localhost.
         let config =
-          dream_postgres.default_config()
-          |> dream_postgres.host("localhost")
-          |> dream_postgres.port(5449)
-          |> dream_postgres.pool_size(1)
-          |> dream_postgres.checkout_timeout(300)
-          |> dream_postgres.query_timeout(1000)
+          config.default_config()
+          |> config.host("localhost")
+          |> config.port(5449)
+          |> config.pool_size(1)
+          |> config.checkout_timeout(300)
+          |> config.query_timeout(1000)
 
         // Act and assert
         config

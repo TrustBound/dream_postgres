@@ -1,7 +1,7 @@
 //// A matcher that reads the channel and the payload of each message of a
 //// subscription.
 
-import dream_postgres.{
+import dream_postgres/listener.{
   type ListenMessage, ListenFailed, Listening, NotListening, NotificationArrived,
 }
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}

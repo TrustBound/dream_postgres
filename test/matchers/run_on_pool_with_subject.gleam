@@ -1,7 +1,7 @@
 //// A matcher that runs work on a started pool and the subject that came
 //// with it, and stops the pool after it.
 
-import dream_postgres.{type Connection}
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Run `work` on the pool and its subject, such as the subject of its
@@ -27,7 +27,7 @@ pub fn run_on_pool_with_subject(
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(#(connection, subject)) -> {
       let outcome = work(connection, subject)
-      dream_postgres.stop(connection)
+      pool.stop(connection)
       MatchOk(outcome)
     }
   }

@@ -1,6 +1,6 @@
 //// Extracts the text of each notice from asynchronous messages.
 
-import dream_postgres/driver/query.{type AsynchronousMessage, Notice}
+import dream_postgres/driver/query/step.{type AsynchronousMessage, Notice}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{filter_map}
 

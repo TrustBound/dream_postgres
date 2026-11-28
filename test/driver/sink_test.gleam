@@ -4,8 +4,11 @@
 //// driver server. Each test waits for the message it expects, and no test
 //// sleeps.
 
-import dream_postgres/driver/connection.{Connected, stop}
-import dream_postgres/driver/pool.{type PoolEvent, MemberConnected}
+import dream_postgres/driver/connection.{stop}
+import dream_postgres/driver/connection/event.{Connected}
+import dream_postgres/driver/pool
+import dream_postgres/driver/pool/holds as pool_holds
+import dream_postgres/driver/pool/pool_event.{type PoolEvent, MemberConnected}
 import dream_postgres/driver/sink
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -295,7 +298,8 @@ fn pool_tests() -> TestSuite {
           use _first_event <- try(receive_sent(witness))
           use _held <- try(hold_text(started, "SELECT 'held'"))
           use _status <- try(
-            pool.status(started) |> map_error(fn(error) { inspect(error) }),
+            pool_holds.status(started)
+            |> map_error(fn(error) { inspect(error) }),
           )
           Ok(process.receive(witness, 0))
         }

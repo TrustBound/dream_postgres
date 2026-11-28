@@ -1,6 +1,6 @@
 //// A matcher that gives the client reason of a failed prepare.
 
-import dream_postgres/driver/connection.{type PrepareError}
+import dream_postgres/driver/connection/request_failure.{type PrepareError}
 import dream_postgres/error.{type Reason}
 import dream_postgres/internal/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
@@ -11,7 +11,7 @@ import fixtures/endpoints
 /// ## Example
 ///
 /// ```gleam
-/// connection.PrepareFailed(connection.ConnectionProcessDown)
+/// connection_request_failure.PrepareFailed(connection_request_failure.ConnectionProcessDown)
 /// |> should
 /// |> map_prepare_error()
 /// |> be_equal(error.ConnectionProcessDown)

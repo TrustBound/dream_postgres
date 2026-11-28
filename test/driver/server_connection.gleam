@@ -14,12 +14,23 @@
 //// servers keep a connection open until it ends, so every start has a
 //// stop.
 
-import dream_postgres/driver/connection.{
-  type Connection, type ConnectionConfig, type ConnectionEvent, type Outcome,
-  type SimpleQueryError, type StatementCaching, Backoff, CacheStatements,
-  Connected, ConnectionConfig, LoginRefused, Outcome, ReconnectFailed,
-  Reconnected, run, run_simple_query, server_parameter, start, stop, supervised,
-  transaction_status,
+import dream_postgres/driver/connection.{start, stop, supervised}
+import dream_postgres/driver/connection/backoff.{Backoff}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/event.{
+  type ConnectionEvent, Connected, LoginRefused, ReconnectFailed, Reconnected,
+}
+import dream_postgres/driver/connection/extended_query.{run}
+import dream_postgres/driver/connection/outcome.{type Outcome, Outcome}
+import dream_postgres/driver/connection/request_failure.{type SimpleQueryError}
+import dream_postgres/driver/connection/settings.{
+  type ConnectionConfig, type StatementCaching, CacheStatements,
+  ConnectionConfig,
+}
+import dream_postgres/driver/connection/simple_query.{run_simple_query}
+import dream_postgres/driver/connection/statement as connection_statement
+import dream_postgres/driver/connection/status.{
+  server_parameter, transaction_status,
 }
 import dream_postgres/driver/login.{
   type ChannelBindingSetting, type LoginConfig, type Password,
@@ -349,7 +360,7 @@ pub fn run_control_simple_query(
   connection: Connection,
   sql: String,
 ) -> Result(Nil, String) {
-  run_simple_query(connection, connection.statement(sql), 5000)
+  run_simple_query(connection, connection_statement.statement(sql), 5000)
   |> replace(Nil)
   |> map_error(fn(error) { "could not run " <> sql <> ": " <> inspect(error) })
 }
@@ -365,7 +376,7 @@ pub fn run_control_simple_query(
 ///   before_each(start_test_connection(first_driver_server)),
 ///   after_each(stop_connection),
 ///   it("runs a simple query", fn(connection) {
-///     run_simple_query(connection, connection.statement("SELECT 1"), 5000)
+///     run_simple_query(connection, connection_statement.statement("SELECT 1"), 5000)
 ///     |> should
 ///     |> be_ok
 ///     |> or_fail_with("Expected the outcome")
@@ -427,7 +438,7 @@ pub fn run_setup_statement(
   sql: String,
 ) -> fn(Connection) -> Result(Connection, String) {
   setup_step(fn(connection) {
-    run(connection, connection.statement(sql), [], [], 5000)
+    run(connection, connection_statement.statement(sql), [], [], 5000)
     |> map_error(fn(error) { "could not run " <> sql <> ": " <> inspect(error) })
   })
 }
@@ -438,7 +449,7 @@ pub fn run_failing_simple_query(
   sql: String,
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    run_simple_query(connection, connection.statement(sql), 5000)
+    run_simple_query(connection, connection_statement.statement(sql), 5000)
     |> require_failure(connection, sql)
   }
 }
@@ -459,7 +470,7 @@ pub fn run_failing_statement_within(
   deadline: Int,
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    run(connection, connection.statement(sql), [], [], deadline)
+    run(connection, connection_statement.statement(sql), [], [], deadline)
     |> require_failure(connection, sql)
   }
 }
@@ -471,7 +482,7 @@ pub fn run_failing_statement_with_parameters(
   parameters: List(Cell),
 ) -> fn(Connection) -> Result(Connection, String) {
   fn(connection) {
-    run(connection, connection.statement(sql), parameters, [], 5000)
+    run(connection, connection_statement.statement(sql), parameters, [], 5000)
     |> require_failure(connection, sql)
   }
 }
@@ -739,7 +750,7 @@ pub fn lock_request(
   fn() {
     run_simple_query(
       proxied.connection,
-      connection.statement(advisory_lock_sql(proxied.lock_key)),
+      connection_statement.statement(advisory_lock_sql(proxied.lock_key)),
       5000,
     )
   }
@@ -1023,7 +1034,8 @@ pub fn query_text(
   connection: Connection,
   sql: String,
 ) -> Result(String, String) {
-  run_simple_query(connection, connection.statement(sql), 5000) |> single_text
+  run_simple_query(connection, connection_statement.statement(sql), 5000)
+  |> single_text
 }
 
 /// The backend process ID of the session that waits for the advisory lock
@@ -1182,7 +1194,10 @@ fn wait_for_one(
   sql: String,
   attempts: Int,
 ) -> Result(Nil, String) {
-  case run_simple_query(control, connection.statement(sql), 5000), attempts {
+  case
+    run_simple_query(control, connection_statement.statement(sql), 5000),
+    attempts
+  {
     Ok([Outcome(result: CommandResult(rows: [[Text(<<"1">>)]], ..), ..)]), _ ->
       Ok(Nil)
     Error(error), _ -> Error("could not ask for waiters: " <> inspect(error))

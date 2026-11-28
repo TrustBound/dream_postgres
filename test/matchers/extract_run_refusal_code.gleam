@@ -1,6 +1,8 @@
 //// Extracts the SQLSTATE code of a run that the server refused.
 
-import dream_postgres/driver/connection.{type RunError, RunRefused}
+import dream_postgres/driver/connection/request_failure.{
+  type RunError, RunRefused,
+}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

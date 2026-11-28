@@ -3,8 +3,9 @@
 //// of a subject while the listener runs, and stops it.
 
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type Listener}
 import dream_postgres/error.{type PostgresError}
+import dream_postgres/listener.{type Listener}
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -55,13 +56,13 @@ fn collect_on_chosen(
     use pool <- result.try(server_pools.chosen(pools))
     use listener <- result.try(
       server_pools.config(pool.port)
-      |> dream_postgres.start_listener
+      |> listener.start_listener
       |> result.map_error(error.describe),
     )
     let worked =
       work(listener, pool.connection) |> result.map_error(error.describe)
     let messages = collect(subject, milliseconds, [])
-    dream_postgres.stop_listener(listener)
+    listener.stop_listener(listener)
     result.replace(worked, messages)
   }
   case collected {

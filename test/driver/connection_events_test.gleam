@@ -1,6 +1,6 @@
 //// Proves the first event of a connection process.
 
-import dream_postgres/driver/connection.{Connected}
+import dream_postgres/driver/connection/event.{Connected}
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}

@@ -2,7 +2,7 @@
 //// for the tests of `check` and of the error that a transaction gives.
 
 import dream_errors.{type Error, Invalid}
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 
 /// The cause of the error of a plan that needs more than some number of
 /// rows.

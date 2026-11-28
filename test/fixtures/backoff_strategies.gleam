@@ -1,6 +1,6 @@
 //// Backoff strategies with no randomness, so a test knows each wait.
 
-import dream_postgres/driver/connection.{type BackoffStep}
+import dream_postgres/driver/connection/backoff.{type BackoffStep}
 
 /// Waits exactly the capped delay: the first delay, doubled for each
 /// failed attempt, up to the longest.

@@ -1,10 +1,10 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type PoolName, type PostgresError, named_connection, one, query,
-  single, supervised,
-}
 import dream_postgres/codec.{text}
-import dream_postgres/error.{describe}
+import dream_postgres/config.{type Config}
+import dream_postgres/error.{type PostgresError, describe}
+import dream_postgres/pool.{type PoolName, named_connection, supervised}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/result

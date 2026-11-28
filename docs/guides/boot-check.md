@@ -23,11 +23,10 @@ A check uses the codec of each parameter, not its value. So a query that is buil
 ### Make the checks of the queries of a module <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_checks.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{
-  type QueryCheck, checked, checked_command, column, named, parameter, query,
-  row,
-}
+import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
 import dream_postgres/codec.{int, placeholder, text}
+import dream_postgres/query.{named, parameter, query}
+import dream_postgres/row.{column, row}
 
 /// The checks of the queries of the user module. A check uses the codec of
 /// each parameter, not its value, so each value is a placeholder.
@@ -59,7 +58,9 @@ Give each query the name of the query that the app runs, with `named`. The messa
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, verify}
+import dream_postgres/boot_check.{verify}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
 import snippets/user_checks.{queries}
 
 /// Checks each query of the app against the database, at boot.

@@ -1,6 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, one, query, single}
 import dream_postgres/codec.{int}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 
 /// This query has no name, so its span is named after the operation and
 /// the database, for example `SELECT app`.

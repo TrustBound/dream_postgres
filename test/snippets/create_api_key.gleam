@@ -1,9 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, type Row, column, named, one, parameter,
-  query, row, secret_parameter,
-}
 import dream_postgres/codec.{int, text, timestamp_with_time_zone, uuid}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query, secret_parameter}
+import dream_postgres/row.{type Row, column, row}
 import dream_uuid.{type Uuid}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}

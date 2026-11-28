@@ -1,4 +1,4 @@
-import dream_postgres.{
+import dream_postgres/config.{
   type Config, cancel_timeout, connect_timeout, health_check_interval, host,
   return_rollback_timeout, setup_timeout,
 }

@@ -1,7 +1,7 @@
 //// Gives backend messages to a query step, one at a time.
 
 import dream_postgres/driver/message.{type BackendMessage}
-import dream_postgres/driver/query.{
+import dream_postgres/driver/query/step.{
   type Step, type UnexpectedMessage, Send, Wait,
 }
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}

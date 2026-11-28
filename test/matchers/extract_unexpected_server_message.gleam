@@ -1,8 +1,9 @@
 //// Extracts the message of a protocol violation during a request.
 
-import dream_postgres/driver/connection.{
-  type RequestFailure, ConnectionEnded, ProtocolViolation,
-  UnexpectedServerMessage,
+import dream_postgres/driver/connection/event.{ProtocolViolation}
+import dream_postgres/driver/connection/outcome.{UnexpectedServerMessage}
+import dream_postgres/driver/connection/request_failure.{
+  type RequestFailure, ConnectionEnded,
 }
 import dream_postgres/driver/message.{type BackendMessage}
 import dream_test/types.{

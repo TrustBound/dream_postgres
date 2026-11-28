@@ -1,8 +1,10 @@
 //// Extracts the violation of a connection that the server broke the protocol
 //// on.
 
-import dream_postgres/driver/connection.{
-  type RequestFailure, type Violation, ConnectionEnded, ProtocolViolation,
+import dream_postgres/driver/connection/event.{ProtocolViolation}
+import dream_postgres/driver/connection/outcome.{type Violation}
+import dream_postgres/driver/connection/request_failure.{
+  type RequestFailure, ConnectionEnded,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,

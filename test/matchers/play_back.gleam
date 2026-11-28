@@ -1,7 +1,8 @@
 //// A matcher that plays back one recording of the recorder tests on a
 //// connection with no database, and gives what the code under test gave.
 
-import dream_postgres.{type Connection}
+import dream_postgres/config
+import dream_postgres/pool.{type Connection}
 import dream_postgres/recorder
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -58,12 +59,12 @@ fn play_back_runs(
     use connection <- result.try(
       server_pools.config(recorded_scenarios.closed_port)
       |> settings.app_settings
-      |> dream_postgres.record(test_recorder)
-      |> dream_postgres.start
+      |> config.record(test_recorder)
+      |> pool.start
       |> result.map_error(string.inspect),
     )
     let ran = scenario(connection)
-    dream_postgres.stop(connection)
+    pool.stop(connection)
     Ok(ran)
   }
   case played {

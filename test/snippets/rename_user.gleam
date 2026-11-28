@@ -1,8 +1,8 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, affected, parameter, query,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{affected, parameter, query}
 
 /// Gives the user a new name, and gives the number of rows that changed:
 /// 0 when no user has the id.

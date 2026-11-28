@@ -1,7 +1,8 @@
 //// A matcher that runs work on a pool that a supervisor starts under a
 //// name, and stops the supervisor after it.
 
-import dream_postgres.{type Config, type PoolName}
+import dream_postgres/config.{type Config}
+import dream_postgres/pool.{type PoolName}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -44,7 +45,7 @@ pub fn run_on_supervised_pool(
 
 fn start_supervisor(config: Config, name: PoolName) -> Result(Pid, String) {
   use child <- result.try(
-    dream_postgres.supervised(config, name:)
+    pool.supervised(config, name:)
     |> result.map_error(string.inspect),
   )
   static_supervisor.new(static_supervisor.OneForOne)

@@ -1,8 +1,7 @@
-import dream_postgres.{
-  type QueryCheck, checked, checked_command, column, named, parameter, query,
-  row,
-}
+import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
 import dream_postgres/codec.{int, placeholder, text}
+import dream_postgres/query.{named, parameter, query}
+import dream_postgres/row.{column, row}
 
 /// The checks of the queries of the user module. A check uses the codec of
 /// each parameter, not its value, so each value is a placeholder.

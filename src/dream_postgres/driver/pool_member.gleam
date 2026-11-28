@@ -19,11 +19,18 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/driver/connection.{
-  type ConnectError, type Connection, type ConnectionConfig, type ConnectionEnd,
-  type ConnectionEvent, ConnectFailed, Connected, ConnectionConfig, Disconnected,
-  ReconnectFailed, Reconnected,
+import dream_postgres/driver/connection
+import dream_postgres/driver/connection/backoff as connection_backoff
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/event.{
+  type ConnectError, type ConnectionEnd, type ConnectionEvent, ConnectFailed,
+  Connected, Disconnected, ReconnectFailed, Reconnected,
 }
+import dream_postgres/driver/connection/settings.{
+  type ConnectionConfig, ConnectionConfig,
+}
+import dream_postgres/driver/connection/simple_query as connection_simple_query
+import dream_postgres/driver/connection/status as connection_status
 import dream_postgres/driver/housekeeping_sql.{health_check, rollback}
 import dream_postgres/driver/sink.{type Delivery, Delivered, MapFailed}
 import dream_postgres/internal/cell.{Idle}
@@ -255,7 +262,7 @@ fn connect(
     Error(error) -> {
       report(state, MemberConnectFailed(state.slot, error))
       let wait =
-        connection.backoff_wait(
+        connection_backoff.backoff_wait(
           state.config.connection.reconnect,
           attempt,
           previous_wait_milliseconds,
@@ -272,7 +279,7 @@ fn connect(
 /// stopped waiting still runs, and may begin a transaction.
 fn reset_connection(state: State, held: Connection) -> State {
   let deadline = state.config.rollback_deadline_milliseconds
-  case connection.settled_transaction_status(held, deadline) {
+  case connection_status.settled_transaction_status(held, deadline) {
     Ok(Idle) -> ready(state)
     _in_transaction_or_down -> roll_back(state, held)
   }
@@ -280,7 +287,13 @@ fn reset_connection(state: State, held: Connection) -> State {
 
 fn roll_back(state: State, held: Connection) -> State {
   let deadline = state.config.rollback_deadline_milliseconds
-  case connection.run_housekeeping_simple_query(held, rollback, deadline) {
+  case
+    connection_simple_query.run_housekeeping_simple_query(
+      held,
+      rollback,
+      deadline,
+    )
+  {
     Ok(_outcomes) -> ready(state)
     Error(_error) -> replace(state, held)
   }
@@ -288,7 +301,13 @@ fn roll_back(state: State, held: Connection) -> State {
 
 fn check_connection(state: State, idle: Connection) -> State {
   let deadline = state.config.health_check_deadline_milliseconds
-  case connection.run_housekeeping_simple_query(idle, health_check, deadline) {
+  case
+    connection_simple_query.run_housekeeping_simple_query(
+      idle,
+      health_check,
+      deadline,
+    )
+  {
     Ok(_outcomes) -> ready(state)
     Error(_error) -> replace(state, idle)
   }

@@ -4,9 +4,12 @@
 //// server.
 
 import dream_errors.{Failed, Invalid, NotFound, Retry, Timeout, Unavailable}
-import dream_postgres.{ReconnectStep, one, parameter, query, run_sql, single}
 import dream_postgres/codec
+import dream_postgres/config
 import dream_postgres/error
+import dream_postgres/query.{one, parameter, query, run_sql}
+import dream_postgres/reconnect.{ReconnectStep}
+import dream_postgres/row.{single}
 import dream_postgres/sql_state.{UniqueViolation}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
@@ -194,7 +197,7 @@ fn connecting_tests() {
     }),
     it("distant_server.gleam gives the driver each of its times", fn(_pools) {
       // Act and assert
-      dream_postgres.default_config()
+      config.default_config()
       |> distant_server
       |> should
       |> extract_driver_times()
@@ -222,7 +225,7 @@ fn connecting_tests() {
     it("pool_events.gleam sends the first connect to the subject", fn(_pools) {
       // Act and assert
       server_pools.config(first_driver_server.port)
-      |> dream_postgres.pool_size(1)
+      |> config.pool_size(1)
       |> start_with_pool_events
       |> should
       |> be_ok()

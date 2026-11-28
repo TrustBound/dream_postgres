@@ -1,7 +1,8 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, config_from_url, pool_size, start,
-}
+import dream_postgres/config.{pool_size}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
+import dream_postgres/url.{config_from_url}
 import gleam/result
 
 /// Starts a pool of 4 connections from a database URL, such as

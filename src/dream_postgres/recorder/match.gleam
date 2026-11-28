@@ -9,7 +9,7 @@
 ////
 //// ```gleam
 //// import dream_errors.{type Error}
-//// import dream_postgres.{type PostgresError}
+//// import dream_postgres/error.{type PostgresError}
 //// import dream_postgres/recorder.{
 ////   type Mode, type Recorder, intercept, match_on, mode, new, start,
 //// }
@@ -50,7 +50,7 @@ import gleam/string
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/recorder.{
 ///   type Mode, type Recorder, intercept, match_on, mode, new, start,
 /// }
@@ -99,7 +99,7 @@ pub fn sql_and_parameters(request: Request) -> String {
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres.{type PostgresError}
+/// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/recorder.{
 ///   type Mode, type Recorder, match_on, mode, new, start,
 /// }

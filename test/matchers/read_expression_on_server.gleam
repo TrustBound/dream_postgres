@@ -2,7 +2,8 @@
 //// expression of the chain, and reads the value with a codec.
 
 import dream_postgres/codec.{type Codec}
-import dream_postgres/driver/connection
+import dream_postgres/driver/connection/extended_query as connection_extended_query
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/internal/codec_type
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -67,9 +68,9 @@ fn read_value(
 ) -> Result(a, ReadFailure) {
   let sql = "SELECT " <> expression
   use outcome <- result.try(
-    connection.run(
+    connection_extended_query.run(
       session.connection,
-      connection.statement(sql),
+      connection_statement.statement(sql),
       [],
       [codec_type.format(codec)],
       probe_sessions.deadline_milliseconds,

@@ -9,11 +9,13 @@ import dream_postgres/codec
 import dream_postgres/driver/catalog
 import dream_postgres/driver/catalog_table
 import dream_postgres/driver/channel_binding
-import dream_postgres/driver/connection
+import dream_postgres/driver/connection/event as connection_event
+import dream_postgres/driver/connection/outcome as connection_outcome
+import dream_postgres/driver/connection/request_failure as connection_request_failure
 import dream_postgres/driver/login
 import dream_postgres/driver/message
-import dream_postgres/driver/pool
-import dream_postgres/driver/query as driver_query
+import dream_postgres/driver/pool/pool_failure
+import dream_postgres/driver/query/step as query_step
 import dream_postgres/driver/scram
 import dream_postgres/driver/transport
 import dream_postgres/error.{PostgresError}
@@ -481,7 +483,7 @@ pub fn mapping_tests() -> TestSuite {
         let report = server_reports.administrator_shutdown()
 
         // Act and assert
-        connection.RunRefused(report, Idle)
+        connection_request_failure.RunRefused(report, Idle)
         |> should
         |> map_run_error()
         |> be_equal(error.Server(error.server_error_from_report(report)))
@@ -494,7 +496,7 @@ pub fn mapping_tests() -> TestSuite {
           let report = server_reports.administrator_shutdown()
 
           // Act and assert
-          connection.SimpleQueryFailed(
+          connection_request_failure.SimpleQueryFailed(
             [driver_outcomes.insert_outcome()],
             report,
             Idle,
@@ -515,7 +517,9 @@ pub fn mapping_tests() -> TestSuite {
         let report = server_reports.administrator_shutdown()
 
         // Act and assert
-        connection.ConnectionEnded(connection.ServerEndedConnection(report))
+        connection_request_failure.ConnectionEnded(
+          connection_event.ServerEndedConnection(report),
+        )
         |> should
         |> map_request_failure()
         |> be_equal(error.Server(error.server_error_from_report(report)))
@@ -525,7 +529,9 @@ pub fn mapping_tests() -> TestSuite {
         "a statement that changed where the client cannot check it again is StatementChangedDuringRun",
         fn() {
           // Act and assert
-          connection.RunStatementChanged(cell.StatementDescription([], []))
+          connection_request_failure.RunStatementChanged(
+            cell.StatementDescription([], []),
+          )
           |> should
           |> map_run_error()
           |> be_equal(error.StatementChangedDuringRun)
@@ -548,7 +554,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a passed deadline is QueryTimeout", fn() {
         // Act and assert
-        connection.DeadlinePassed(True)
+        connection_request_failure.DeadlinePassed(True)
         |> should
         |> map_request_failure()
         |> be_equal(error.QueryTimeout(stopped_on_server: True))
@@ -558,7 +564,7 @@ pub fn mapping_tests() -> TestSuite {
         "SQL that ran to its end and started no COPY is CopyNotStarted",
         fn() {
           // Act and assert
-          connection.CopyNotStarted(
+          connection_request_failure.CopyNotStarted(
             completed: Some(driver_outcomes.insert_outcome()),
           )
           |> should
@@ -571,7 +577,7 @@ pub fn mapping_tests() -> TestSuite {
         "a passed deadline with no confirmed cancel is QueryTimeout",
         fn() {
           // Act and assert
-          connection.DeadlinePassed(False)
+          connection_request_failure.DeadlinePassed(False)
           |> should
           |> map_request_failure()
           |> be_equal(error.QueryTimeout(stopped_on_server: False))
@@ -580,7 +586,7 @@ pub fn mapping_tests() -> TestSuite {
       ),
       unit.it("SQL that starts no COPY is CopyNotStarted", fn() {
         // Act and assert
-        connection.CopyNotStarted(completed: None)
+        connection_request_failure.CopyNotStarted(completed: None)
         |> should
         |> map_copy_error()
         |> be_equal(error.CopyNotStarted(statement_ran: False))
@@ -588,7 +594,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a chunk for a COPY that ended is CopyNotRunning", fn() {
         // Act and assert
-        connection.ChunkCopyNotRunning
+        connection_request_failure.ChunkCopyNotRunning
         |> should
         |> map_chunk_error()
         |> be_equal(error.CopyNotRunning)
@@ -596,7 +602,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a failed COPY function gives its own reason", fn() {
         // Act and assert
-        connection.AppFailed(error.CopyQueryHasParameters(1))
+        connection_request_failure.AppFailed(error.CopyQueryHasParameters(1))
         |> should
         |> map_copy_error()
         |> be_equal(error.CopyQueryHasParameters(1))
@@ -604,7 +610,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a COPY that failed on its connection gives its reason", fn() {
         // Act and assert
-        connection.CopyFailed(connection.DeadlinePassed(False))
+        connection_request_failure.CopyFailed(
+          connection_request_failure.DeadlinePassed(False),
+        )
         |> should
         |> map_copy_error()
         |> be_equal(error.QueryTimeout(stopped_on_server: False))
@@ -612,7 +620,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a process that is down is ConnectionProcessDown", fn() {
         // Act and assert
-        connection.ConnectionProcessDown
+        connection_request_failure.ConnectionProcessDown
         |> should
         |> map_request_failure()
         |> be_equal(error.ConnectionProcessDown)
@@ -632,10 +640,10 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a message between requests is UnexpectedIdleMessage", fn() {
         // Act and assert
-        connection.ConnectionEnded(
-          connection.ProtocolViolation(connection.UnexpectedIdleMessage(
-            message.BindComplete,
-          )),
+        connection_request_failure.ConnectionEnded(
+          connection_event.ProtocolViolation(
+            connection_outcome.UnexpectedIdleMessage(message.BindComplete),
+          ),
         )
         |> should
         |> map_request_failure()
@@ -646,9 +654,9 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("loss reasons", [
       unit.it("a close after a deadline is ConnectionLost", fn() {
         // Act and assert
-        connection.ConnectionEnded(connection.ConnectionLost(
-          connection.ClosedAfterDeadline,
-        ))
+        connection_request_failure.ConnectionEnded(
+          connection_event.ConnectionLost(connection_event.ClosedAfterDeadline),
+        )
         |> should
         |> map_request_failure()
         |> be_equal(error.ConnectionLost(error.ClosedAfterDeadline))
@@ -656,9 +664,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a server that stopped reading is ConnectionLost", fn() {
         // Act and assert
-        connection.ConnectionEnded(connection.ConnectionLost(
-          connection.ServerStoppedReading,
-        ))
+        connection_request_failure.ConnectionEnded(
+          connection_event.ConnectionLost(connection_event.ServerStoppedReading),
+        )
         |> should
         |> map_request_failure()
         |> be_equal(error.ConnectionLost(error.SendTimedOut))
@@ -666,8 +674,8 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a closed socket is ConnectionLost", fn() {
         // Act and assert
-        connection.ConnectionEnded(
-          connection.ConnectionLost(connection.SocketFailed(
+        connection_request_failure.ConnectionEnded(
+          connection_event.ConnectionLost(connection_event.SocketFailed(
             transport.SocketClosed,
           )),
         )
@@ -678,8 +686,8 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a reset is ConnectionLost", fn() {
         // Act and assert
-        connection.ConnectionEnded(
-          connection.ConnectionLost(connection.SocketFailed(
+        connection_request_failure.ConnectionEnded(
+          connection_event.ConnectionLost(connection_event.SocketFailed(
             transport.ConnectionReset,
           )),
         )
@@ -690,9 +698,11 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a TLS alert is ConnectionLost", fn() {
         // Act and assert
-        connection.ConnectionEnded(
-          connection.ConnectionLost(
-            connection.SocketFailed(transport.TlsAlertRaised("bad_record_mac")),
+        connection_request_failure.ConnectionEnded(
+          connection_event.ConnectionLost(
+            connection_event.SocketFailed(transport.TlsAlertRaised(
+              "bad_record_mac",
+            )),
           ),
         )
         |> should
@@ -706,9 +716,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a listed OS error is ConnectionLost", fn() {
         // Act and assert
-        connection.ConnectionEnded(
-          connection.ConnectionLost(
-            connection.SocketFailed(transport.Unlisted("ehostunreach")),
+        connection_request_failure.ConnectionEnded(
+          connection_event.ConnectionLost(
+            connection_event.SocketFailed(transport.Unlisted("ehostunreach")),
           ),
         )
         |> should
@@ -718,9 +728,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an OS error that is not listed is ConnectionLost", fn() {
         // Act and assert
-        connection.ConnectionEnded(
-          connection.ConnectionLost(
-            connection.SocketFailed(transport.Unlisted("errno_999")),
+        connection_request_failure.ConnectionEnded(
+          connection_event.ConnectionLost(
+            connection_event.SocketFailed(transport.Unlisted("errno_999")),
           ),
         )
         |> should
@@ -736,7 +746,9 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("prepare errors", [
       unit.it("a failed request is its reason", fn() {
         // Act and assert
-        connection.PrepareFailed(connection.ConnectionProcessDown)
+        connection_request_failure.PrepareFailed(
+          connection_request_failure.ConnectionProcessDown,
+        )
         |> should
         |> map_prepare_error()
         |> be_equal(error.ConnectionProcessDown)
@@ -744,9 +756,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a connection that has not logged in yet is ConnectFailed", fn() {
         // Act and assert
-        connection.PrepareNotConnected(connection.TransportRefused(
-          transport.ConnectRefused,
-        ))
+        connection_request_failure.PrepareNotConnected(
+          connection_event.TransportRefused(transport.ConnectRefused),
+        )
         |> should
         |> map_prepare_error()
         |> be_equal(
@@ -761,7 +773,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unwritable statement is RequestNotWritable", fn() {
         // Act and assert
-        connection.PrepareUnencodable(message.ZeroByteInString("query"))
+        connection_request_failure.PrepareUnencodable(message.ZeroByteInString(
+          "query",
+        ))
         |> should
         |> map_prepare_error()
         |> be_equal(error.RequestNotWritable(error.ZeroByteInString("query")))
@@ -771,7 +785,10 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a refused statement is Server", fn() {
         // Act and assert
-        connection.PrepareRefused(server_reports.administrator_shutdown(), Idle)
+        connection_request_failure.PrepareRefused(
+          server_reports.administrator_shutdown(),
+          Idle,
+        )
         |> should
         |> map_prepare_error()
         |> be_equal(
@@ -787,7 +804,9 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("run errors", [
       unit.it("a failed request is its reason", fn() {
         // Act and assert
-        connection.RunFailed(connection.DeadlinePassed(True))
+        connection_request_failure.RunFailed(
+          connection_request_failure.DeadlinePassed(True),
+        )
         |> should
         |> map_run_error()
         |> be_equal(error.QueryTimeout(stopped_on_server: True))
@@ -795,9 +814,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a connection that has not logged in yet is ConnectFailed", fn() {
         // Act and assert
-        connection.RunNotConnected(connection.TransportRefused(
-          transport.ConnectRefused,
-        ))
+        connection_request_failure.RunNotConnected(
+          connection_event.TransportRefused(transport.ConnectRefused),
+        )
         |> should
         |> map_run_error()
         |> be_equal(
@@ -812,7 +831,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a COPY statement is CopyStatementRefused", fn() {
         // Act and assert
-        connection.RunCopyRefused
+        connection_request_failure.RunCopyRefused
         |> should
         |> map_run_error()
         |> be_equal(error.CopyStatementRefused(statements_run: 0))
@@ -822,7 +841,9 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("run failures for the runner", [
       unit.it("a changed statement goes back to the runner", fn() {
         // Act and assert
-        connection.RunStatementChanged(cell.StatementDescription([], []))
+        connection_request_failure.RunStatementChanged(
+          cell.StatementDescription([], []),
+        )
         |> should
         |> map_run_failure()
         |> be_equal(runner.StatementChanged(cell.StatementDescription([], [])))
@@ -830,7 +851,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a failed request is RunFailed", fn() {
         // Act and assert
-        connection.RunFailed(connection.ConnectionProcessDown)
+        connection_request_failure.RunFailed(
+          connection_request_failure.ConnectionProcessDown,
+        )
         |> should
         |> map_run_failure()
         |> be_equal(runner.RunFailed(error.ConnectionProcessDown))
@@ -838,9 +861,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a connection that has not logged in yet is RunFailed", fn() {
         // Act and assert
-        connection.RunNotConnected(connection.TransportRefused(
-          transport.ConnectRefused,
-        ))
+        connection_request_failure.RunNotConnected(
+          connection_event.TransportRefused(transport.ConnectRefused),
+        )
         |> should
         |> map_run_failure()
         |> be_equal(
@@ -855,7 +878,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unwritable statement is RunFailed", fn() {
         // Act and assert
-        connection.RunUnencodable(message.ZeroByteInString("query"))
+        connection_request_failure.RunUnencodable(message.ZeroByteInString(
+          "query",
+        ))
         |> should
         |> map_run_failure()
         |> be_equal(
@@ -869,7 +894,10 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a refused statement is RunFailed", fn() {
         // Act and assert
-        connection.RunRefused(server_reports.administrator_shutdown(), Idle)
+        connection_request_failure.RunRefused(
+          server_reports.administrator_shutdown(),
+          Idle,
+        )
         |> should
         |> map_run_failure()
         |> be_equal(
@@ -885,7 +913,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a COPY statement is RunFailed", fn() {
         // Act and assert
-        connection.RunCopyRefused
+        connection_request_failure.RunCopyRefused
         |> should
         |> map_run_failure()
         |> be_equal(
@@ -897,7 +925,9 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("run_sql errors", [
       unit.it("a failed request is its reason", fn() {
         // Act and assert
-        connection.SimpleQueryRequestFailed(connection.ConnectionProcessDown)
+        connection_request_failure.SimpleQueryRequestFailed(
+          connection_request_failure.ConnectionProcessDown,
+        )
         |> should
         |> map_simple_query_error()
         |> be_equal(error.ConnectionProcessDown)
@@ -905,9 +935,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a connection that has not logged in yet is ConnectFailed", fn() {
         // Act and assert
-        connection.SimpleQueryNotConnected(connection.TransportRefused(
-          transport.ConnectRefused,
-        ))
+        connection_request_failure.SimpleQueryNotConnected(
+          connection_event.TransportRefused(transport.ConnectRefused),
+        )
         |> should
         |> map_simple_query_error()
         |> be_equal(
@@ -922,7 +952,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unwritable simple query is RequestNotWritable", fn() {
         // Act and assert
-        connection.SimpleQueryUnencodable(message.ZeroByteInString("query"))
+        connection_request_failure.SimpleQueryUnencodable(
+          message.ZeroByteInString("query"),
+        )
         |> should
         |> map_simple_query_error()
         |> be_equal(error.RequestNotWritable(error.ZeroByteInString("query")))
@@ -932,7 +964,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a refused first statement is Server", fn() {
         // Act and assert
-        connection.SimpleQueryRefused(
+        connection_request_failure.SimpleQueryRefused(
           server_reports.administrator_shutdown(),
           Idle,
         )
@@ -951,7 +983,7 @@ pub fn mapping_tests() -> TestSuite {
         "a COPY statement after two statements is CopyStatementRefused",
         fn() {
           // Act and assert
-          connection.SimpleQueryCopyRefused([
+          connection_request_failure.SimpleQueryCopyRefused([
             driver_outcomes.insert_outcome(),
             driver_outcomes.insert_outcome(),
           ])
@@ -963,7 +995,7 @@ pub fn mapping_tests() -> TestSuite {
       ),
       unit.it("a COPY statement is CopyStatementRefused", fn() {
         // Act and assert
-        connection.SimpleQueryCopyRefused([])
+        connection_request_failure.SimpleQueryCopyRefused([])
         |> should
         |> map_simple_query_error()
         |> be_equal(error.CopyStatementRefused(statements_run: 0))
@@ -973,9 +1005,9 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("copy errors", [
       unit.it("a connection that has not logged in yet is ConnectFailed", fn() {
         // Act and assert
-        connection.CopyNotConnected(connection.TransportRefused(
-          transport.ConnectRefused,
-        ))
+        connection_request_failure.CopyNotConnected(
+          connection_event.TransportRefused(transport.ConnectRefused),
+        )
         |> should
         |> map_copy_error()
         |> be_equal(
@@ -990,7 +1022,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unwritable COPY is RequestNotWritable", fn() {
         // Act and assert
-        connection.CopyUnencodable(message.ZeroByteInString("query"))
+        connection_request_failure.CopyUnencodable(message.ZeroByteInString(
+          "query",
+        ))
         |> should
         |> map_copy_error()
         |> be_equal(error.RequestNotWritable(error.ZeroByteInString("query")))
@@ -1000,7 +1034,10 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a refused COPY is Server", fn() {
         // Act and assert
-        connection.CopyRefused(server_reports.administrator_shutdown(), Idle)
+        connection_request_failure.CopyRefused(
+          server_reports.administrator_shutdown(),
+          Idle,
+        )
         |> should
         |> map_copy_error()
         |> be_equal(
@@ -1016,7 +1053,9 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("chunk errors", [
       unit.it("a failed request is its reason", fn() {
         // Act and assert
-        connection.ChunkFailed(connection.DeadlinePassed(False))
+        connection_request_failure.ChunkFailed(
+          connection_request_failure.DeadlinePassed(False),
+        )
         |> should
         |> map_chunk_error()
         |> be_equal(error.QueryTimeout(stopped_on_server: False))
@@ -1024,7 +1063,10 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a refused chunk is Server", fn() {
         // Act and assert
-        connection.ChunkRefused(server_reports.administrator_shutdown(), Idle)
+        connection_request_failure.ChunkRefused(
+          server_reports.administrator_shutdown(),
+          Idle,
+        )
         |> should
         |> map_chunk_error()
         |> be_equal(
@@ -1040,7 +1082,7 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("connection state errors", [
       unit.it("a process that is gone is ConnectionProcessDown", fn() {
         // Act and assert
-        connection.ProcessGone
+        connection_request_failure.ProcessGone
         |> should
         |> map_connection_state_error()
         |> be_equal(error.ConnectionProcessDown)
@@ -1048,7 +1090,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("no answer in time is QueryTimeout", fn() {
         // Act and assert
-        connection.NoAnswerInTime
+        connection_request_failure.NoAnswerInTime
         |> should
         |> map_connection_state_error()
         |> be_equal(error.QueryTimeout(stopped_on_server: False))
@@ -1660,7 +1702,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingParseComplete is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingParseComplete,
+          query_step.AwaitingParseComplete,
         )
         |> should
         |> map_request_failure()
@@ -1675,7 +1717,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingParameterDescription is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingParameterDescription,
+          query_step.AwaitingParameterDescription,
         )
         |> should
         |> map_request_failure()
@@ -1690,7 +1732,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingStatementColumns is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingStatementColumns,
+          query_step.AwaitingStatementColumns,
         )
         |> should
         |> map_request_failure()
@@ -1705,7 +1747,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingBindComplete is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingBindComplete,
+          query_step.AwaitingBindComplete,
         )
         |> should
         |> map_request_failure()
@@ -1720,7 +1762,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingPortalColumns is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingPortalColumns,
+          query_step.AwaitingPortalColumns,
         )
         |> should
         |> map_request_failure()
@@ -1734,9 +1776,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("ReadingExecuteRows is the step", fn() {
         // Act and assert
-        driver_errors.unexpected_message_in_phase(
-          driver_query.ReadingExecuteRows,
-        )
+        driver_errors.unexpected_message_in_phase(query_step.ReadingExecuteRows)
         |> should
         |> map_request_failure()
         |> be_equal(error.UnexpectedServerMessage(
@@ -1750,7 +1790,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingStatementResult is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingStatementResult,
+          query_step.AwaitingStatementResult,
         )
         |> should
         |> map_request_failure()
@@ -1765,7 +1805,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("ReadingSqlRows is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.ReadingSimpleQueryRows,
+          query_step.ReadingSimpleQueryRows,
         )
         |> should
         |> map_request_failure()
@@ -1779,7 +1819,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("ReadingCopyOut is the step", fn() {
         // Act and assert
-        driver_errors.unexpected_message_in_phase(driver_query.ReadingCopyOut)
+        driver_errors.unexpected_message_in_phase(query_step.ReadingCopyOut)
         |> should
         |> map_request_failure()
         |> be_equal(error.UnexpectedServerMessage(
@@ -1793,7 +1833,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingCopyComplete is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingCopyComplete,
+          query_step.AwaitingCopyComplete,
         )
         |> should
         |> map_request_failure()
@@ -1808,7 +1848,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingReadyForQuery is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingReadyForQuery,
+          query_step.AwaitingReadyForQuery,
         )
         |> should
         |> map_request_failure()
@@ -1823,7 +1863,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingReadyForQueryAfterError is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingReadyForQueryAfterError,
+          query_step.AwaitingReadyForQueryAfterError,
         )
         |> should
         |> map_request_failure()
@@ -1838,7 +1878,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("AwaitingCloseComplete is the step", fn() {
         // Act and assert
         driver_errors.unexpected_message_in_phase(
-          driver_query.AwaitingCloseComplete,
+          query_step.AwaitingCloseComplete,
         )
         |> should
         |> map_request_failure()
@@ -1852,7 +1892,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("CopyingIn is the step", fn() {
         // Act and assert
-        driver_errors.unexpected_message_in_phase(driver_query.CopyingIn)
+        driver_errors.unexpected_message_in_phase(query_step.CopyingIn)
         |> should
         |> map_request_failure()
         |> be_equal(error.UnexpectedServerMessage(
@@ -1867,7 +1907,9 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("encode errors", [
       unit.it("ZeroByteInString(\"query\") is RequestNotWritable", fn() {
         // Act and assert
-        connection.RunUnencodable(message.ZeroByteInString("query"))
+        connection_request_failure.RunUnencodable(message.ZeroByteInString(
+          "query",
+        ))
         |> should
         |> map_run_error()
         |> be_equal(error.RequestNotWritable(error.ZeroByteInString("query")))
@@ -1877,7 +1919,10 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("TooManyItems(\"parameters\", 70000) is RequestNotWritable", fn() {
         // Act and assert
-        connection.RunUnencodable(message.TooManyItems("parameters", 70_000))
+        connection_request_failure.RunUnencodable(message.TooManyItems(
+          "parameters",
+          70_000,
+        ))
         |> should
         |> map_run_error()
         |> be_equal(
@@ -1889,7 +1934,10 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("NumberOutOfRange(\"type OID\", -1) is RequestNotWritable", fn() {
         // Act and assert
-        connection.RunUnencodable(message.NumberOutOfRange("type OID", -1))
+        connection_request_failure.RunUnencodable(message.NumberOutOfRange(
+          "type OID",
+          -1,
+        ))
         |> should
         |> map_run_error()
         |> be_equal(
@@ -1901,7 +1949,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("SecretKeyLengthOutOfRange(2) is RequestNotWritable", fn() {
         // Act and assert
-        connection.RunUnencodable(message.SecretKeyLengthOutOfRange(2))
+        connection_request_failure.RunUnencodable(
+          message.SecretKeyLengthOutOfRange(2),
+        )
         |> should
         |> map_run_error()
         |> be_equal(
@@ -1913,7 +1963,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("MessageTooLong(5000000000) is RequestNotWritable", fn() {
         // Act and assert
-        connection.RunUnencodable(message.MessageTooLong(5_000_000_000))
+        connection_request_failure.RunUnencodable(message.MessageTooLong(
+          5_000_000_000,
+        ))
         |> should
         |> map_run_error()
         |> be_equal(
@@ -1938,7 +1990,9 @@ pub fn mapping_tests() -> TestSuite {
         fn() {
           // Act and assert
           catalog.LoadFailed(
-            connection.HousekeepingFailed(connection.DeadlinePassed(False)),
+            connection_request_failure.HousekeepingFailed(
+              connection_request_failure.DeadlinePassed(False),
+            ),
           )
           |> should
           |> map_catalog_error()
@@ -1951,9 +2005,9 @@ pub fn mapping_tests() -> TestSuite {
         fn() {
           // Act and assert
           catalog.LoadFailed(
-            connection.HousekeepingNotConnected(connection.TransportRefused(
-              transport.ConnectRefused,
-            )),
+            connection_request_failure.HousekeepingNotConnected(
+              connection_event.TransportRefused(transport.ConnectRefused),
+            ),
           )
           |> should
           |> map_catalog_error()
@@ -1970,7 +2024,7 @@ pub fn mapping_tests() -> TestSuite {
       ),
       unit.it("LoadFailed(HousekeepingRefused(report, Idle)) maps", fn() {
         // Act and assert
-        catalog.LoadFailed(connection.HousekeepingRefused(
+        catalog.LoadFailed(connection_request_failure.HousekeepingRefused(
           server_reports.administrator_shutdown(),
           Idle,
         ))
@@ -1987,7 +2041,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("LoadFailed(HousekeepingAnswerUnexpected) maps", fn() {
         // Act and assert
-        catalog.LoadFailed(connection.HousekeepingAnswerUnexpected)
+        catalog.LoadFailed(
+          connection_request_failure.HousekeepingAnswerUnexpected,
+        )
         |> should
         |> map_catalog_error()
         |> be_equal(error.UnreadableCatalog(error.UnexpectedCatalogAnswer))
@@ -2043,7 +2099,7 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("checkout errors", [
       unit.it("a checkout timeout", fn() {
         // Act and assert
-        pool.HoldDeadlinePassed
+        pool_failure.HoldDeadlinePassed
         |> should
         |> map_checkout_error("db", 5432)
         |> be_equal(error.NoConnection)
@@ -2051,7 +2107,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a failed connect", fn() {
         // Act and assert
-        pool.ConnectFailed(connection.SetupTimedOut)
+        pool_failure.ConnectFailed(connection_event.SetupTimedOut)
         |> should
         |> map_checkout_error("db", 5432)
         |> be_equal(error.ConnectFailed(error.SetupTimedOut))
@@ -2059,7 +2115,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a stopped pool", fn() {
         // Act and assert
-        pool.PoolStopped
+        pool_failure.PoolStopped
         |> should
         |> map_checkout_error("db", 5432)
         |> be_equal(error.PoolStopped)
@@ -2067,7 +2123,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a pool with no database", fn() {
         // Act and assert
-        pool.NoDatabase
+        pool_failure.NoDatabase
         |> should
         |> map_checkout_error("db", 5432)
         |> be_equal(error.PoolHasNoDatabase)
@@ -2077,7 +2133,7 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("pool start errors", [
       unit.it("an invalid size", fn() {
         // Act and assert
-        pool.InvalidSize(0)
+        pool_failure.InvalidSize(0)
         |> should
         |> map_pool_start_error()
         |> be_equal(error.InvalidConfig(error.InvalidPoolSize(0)))
@@ -2085,7 +2141,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an invalid health check interval", fn() {
         // Act and assert
-        pool.InvalidHealthCheckInterval(0)
+        pool_failure.InvalidHealthCheckInterval(0)
         |> should
         |> map_pool_start_error()
         |> be_equal(error.InvalidConfig(error.InvalidHealthCheckInterval(0)))
@@ -2093,7 +2149,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an init timeout", fn() {
         // Act and assert
-        pool.PoolProcessStartFailed(actor.InitTimeout)
+        pool_failure.PoolProcessStartFailed(actor.InitTimeout)
         |> should
         |> map_pool_start_error()
         |> be_equal(error.PoolStartFailed(error.PoolStartTimedOut))
@@ -2101,7 +2157,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a failed init", fn() {
         // Act and assert
-        pool.PoolProcessStartFailed(actor.InitFailed("no supervisor"))
+        pool_failure.PoolProcessStartFailed(actor.InitFailed("no supervisor"))
         |> should
         |> map_pool_start_error()
         |> be_equal(
@@ -2113,7 +2169,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a normal exit", fn() {
         // Act and assert
-        pool.PoolProcessStartFailed(actor.InitExited(process.Normal))
+        pool_failure.PoolProcessStartFailed(actor.InitExited(process.Normal))
         |> should
         |> map_pool_start_error()
         |> be_equal(error.PoolStartFailed(error.PoolProcessExited("normal")))
@@ -2123,7 +2179,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a kill", fn() {
         // Act and assert
-        pool.PoolProcessStartFailed(actor.InitExited(process.Killed))
+        pool_failure.PoolProcessStartFailed(actor.InitExited(process.Killed))
         |> should
         |> map_pool_start_error()
         |> be_equal(error.PoolStartFailed(error.PoolProcessExited("killed")))
@@ -2133,7 +2189,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an abnormal exit", fn() {
         // Act and assert
-        pool.PoolProcessStartFailed(
+        pool_failure.PoolProcessStartFailed(
           actor.InitExited(process.Abnormal(dynamic.string("boom"))),
         )
         |> should
@@ -2221,7 +2277,7 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("connect errors", [
       unit.it("a refused connect", fn() {
         // Act and assert
-        connection.TransportRefused(transport.ConnectRefused)
+        connection_event.TransportRefused(transport.ConnectRefused)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.ConnectionRefused("db", 5432))
@@ -2229,7 +2285,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a connect timeout", fn() {
         // Act and assert
-        connection.TransportRefused(transport.ConnectTimedOut)
+        connection_event.TransportRefused(transport.ConnectTimedOut)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.ConnectTimedOut("db", 5432))
@@ -2237,7 +2293,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a failed DNS lookup", fn() {
         // Act and assert
-        connection.TransportRefused(transport.DnsLookupFailed("db.example"))
+        connection_event.TransportRefused(transport.DnsLookupFailed(
+          "db.example",
+        ))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.HostNotFound("db.example"))
@@ -2245,7 +2303,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a failed TLS handshake", fn() {
         // Act and assert
-        connection.TransportRefused(transport.TlsFailed(
+        connection_event.TransportRefused(transport.TlsFailed(
           transport.UnknownAuthority,
         ))
         |> should
@@ -2255,7 +2313,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a server with no TLS", fn() {
         // Act and assert
-        connection.TransportRefused(transport.ServerRefusedTls)
+        connection_event.TransportRefused(transport.ServerRefusedTls)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.TlsFailed(error.ServerHasNoTls))
@@ -2263,7 +2321,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a TLS request answered with an error", fn() {
         // Act and assert
-        connection.TransportRefused(transport.TlsRequestAnsweredWithError)
+        connection_event.TransportRefused(transport.TlsRequestAnsweredWithError)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.TlsFailed(error.TlsRequestAnsweredWithError))
@@ -2271,7 +2329,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unexpected TLS answer", fn() {
         // Act and assert
-        connection.TransportRefused(transport.UnexpectedTlsAnswer(88))
+        connection_event.TransportRefused(transport.UnexpectedTlsAnswer(88))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.TlsFailed(error.UnexpectedTlsAnswer(88)))
@@ -2279,7 +2337,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("bytes before TLS", fn() {
         // Act and assert
-        connection.TransportRefused(transport.BytesBeforeTls)
+        connection_event.TransportRefused(transport.BytesBeforeTls)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.TlsFailed(error.BytesBeforeTlsHandshake))
@@ -2287,7 +2345,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a server that closed the connect", fn() {
         // Act and assert
-        connection.TransportRefused(transport.ConnectClosed)
+        connection_event.TransportRefused(transport.ConnectClosed)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.ConnectClosed("db", 5432))
@@ -2295,7 +2353,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a reset of the connect", fn() {
         // Act and assert
-        connection.TransportRefused(transport.ConnectReset)
+        connection_event.TransportRefused(transport.ConnectReset)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.ConnectReset("db", 5432))
@@ -2303,7 +2361,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a socket that failed during the login", fn() {
         // Act and assert
-        connection.LoginSocketFailed(transport.SocketClosed)
+        connection_event.LoginSocketFailed(transport.SocketClosed)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.ConnectionBroke(error.ClosedByServer))
@@ -2311,7 +2369,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a send timeout during the login", fn() {
         // Act and assert
-        connection.LoginSendFailed(transport.SendTimedOut)
+        connection_event.LoginSendFailed(transport.SendTimedOut)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.LoginSendFailed(error.SendTimedOut))
@@ -2319,7 +2377,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an error of the operating system", fn() {
         // Act and assert
-        connection.TransportRefused(transport.ConnectUnlisted("ehostunreach"))
+        connection_event.TransportRefused(transport.ConnectUnlisted(
+          "ehostunreach",
+        ))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.OsRefused(posix.Ehostunreach))
@@ -2327,7 +2387,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a failed send during the login", fn() {
         // Act and assert
-        connection.LoginSendFailed(transport.SendFailed(
+        connection_event.LoginSendFailed(transport.SendFailed(
           transport.ConnectionReset,
         ))
         |> should
@@ -2337,7 +2397,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("channel binding with no TLS", fn() {
         // Act and assert
-        connection.LoginRequiresTls
+        connection_event.LoginRequiresTls
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.ChannelBindingRequiresTls)
@@ -2345,7 +2405,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a host name mismatch", fn() {
         // Act and assert
-        connection.TransportRefused(transport.TlsFailed(
+        connection_event.TransportRefused(transport.TlsFailed(
           transport.HostNameMismatch,
         ))
         |> should
@@ -2355,7 +2415,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an expired certificate", fn() {
         // Act and assert
-        connection.TransportRefused(transport.TlsFailed(
+        connection_event.TransportRefused(transport.TlsFailed(
           transport.CertificateExpired,
         ))
         |> should
@@ -2365,7 +2425,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unreadable authority file", fn() {
         // Act and assert
-        connection.TransportRefused(
+        connection_event.TransportRefused(
           transport.TlsFailed(transport.AuthorityFileUnreadable(
             "ca.pem",
             "enoent",
@@ -2382,7 +2442,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an empty authority file", fn() {
         // Act and assert
-        connection.TransportRefused(
+        connection_event.TransportRefused(
           transport.TlsFailed(transport.AuthorityFileEmpty("ca.pem")),
         )
         |> should
@@ -2392,7 +2452,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("another TLS failure", fn() {
         // Act and assert
-        connection.TransportRefused(
+        connection_event.TransportRefused(
           transport.TlsFailed(transport.OtherTlsFailure("handshake_failure")),
         )
         |> should
@@ -2402,7 +2462,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an undecodable login message", fn() {
         // Act and assert
-        connection.LoginUndecodable(message.UnknownMessageType(1))
+        connection_event.LoginUndecodable(message.UnknownMessageType(1))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.UndecodableLoginMessage(error.UnknownMessageType(1)))
@@ -2412,7 +2472,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a setup timeout", fn() {
         // Act and assert
-        connection.SetupTimedOut
+        connection_event.SetupTimedOut
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.SetupTimedOut)
@@ -2420,7 +2480,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an exit during the setup", fn() {
         // Act and assert
-        connection.SetupExited
+        connection_event.SetupExited
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.SetupProcessExited)
@@ -2430,7 +2490,7 @@ pub fn mapping_tests() -> TestSuite {
     unit.group("login errors", [
       unit.it("a refused login", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ServerRejectedLogin(server_reports.administrator_shutdown()),
         )
         |> should
@@ -2448,7 +2508,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unexpected login message", fn() {
         // Act and assert
-        connection.LoginRefused(login.UnexpectedMessage(message.NoData))
+        connection_event.LoginRefused(login.UnexpectedMessage(message.NoData))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.UnexpectedLoginMessage(error.NoData))
@@ -2456,7 +2516,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported trust login", fn() {
         // Act and assert
-        connection.LoginRefused(login.UnsupportedLoginMethod(login.TrustLogin))
+        connection_event.LoginRefused(login.UnsupportedLoginMethod(
+          login.TrustLogin,
+        ))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.UnsupportedLoginMethod("trust"))
@@ -2464,7 +2526,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported cleartext login", fn() {
         // Act and assert
-        connection.LoginRefused(login.UnsupportedLoginMethod(
+        connection_event.LoginRefused(login.UnsupportedLoginMethod(
           login.CleartextLogin,
         ))
         |> should
@@ -2476,7 +2538,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported SCRAM mechanism", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.UnsupportedLoginMethod(login.ScramLogin("SCRAM-SHA-1")),
         )
         |> should
@@ -2486,7 +2548,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported SASL login", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.UnsupportedLoginMethod(login.SaslLogin(["A", "B"])),
         )
         |> should
@@ -2496,7 +2558,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported Kerberos login", fn() {
         // Act and assert
-        connection.LoginRefused(login.UnsupportedLoginMethod(
+        connection_event.LoginRefused(login.UnsupportedLoginMethod(
           login.KerberosV5Login,
         ))
         |> should
@@ -2506,7 +2568,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported GSSAPI login", fn() {
         // Act and assert
-        connection.LoginRefused(login.UnsupportedLoginMethod(login.GssLogin))
+        connection_event.LoginRefused(login.UnsupportedLoginMethod(
+          login.GssLogin,
+        ))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.UnsupportedLoginMethod("GSSAPI"))
@@ -2514,7 +2578,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported SSPI login", fn() {
         // Act and assert
-        connection.LoginRefused(login.UnsupportedLoginMethod(login.SspiLogin))
+        connection_event.LoginRefused(login.UnsupportedLoginMethod(
+          login.SspiLogin,
+        ))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.UnsupportedLoginMethod("SSPI"))
@@ -2522,7 +2588,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a missing password", fn() {
         // Act and assert
-        connection.LoginRefused(login.PasswordRequired(login.Md5Login))
+        connection_event.LoginRefused(login.PasswordRequired(login.Md5Login))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.PasswordRequired("MD5"))
@@ -2530,7 +2596,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a password with a zero byte", fn() {
         // Act and assert
-        connection.LoginRefused(login.PasswordHasZeroByte)
+        connection_event.LoginRefused(login.PasswordHasZeroByte)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.PasswordHasZeroByte)
@@ -2538,7 +2604,9 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("channel binding not offered", fn() {
         // Act and assert
-        connection.LoginRefused(login.ChannelBindingNotOffered(login.Md5Login))
+        connection_event.LoginRefused(login.ChannelBindingNotOffered(
+          login.Md5Login,
+        ))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.ChannelBindingNotOffered("MD5"))
@@ -2546,7 +2614,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("channel binding offered with no TLS", fn() {
         // Act and assert
-        connection.LoginRefused(login.ChannelBindingOfferedWithoutTls)
+        connection_event.LoginRefused(login.ChannelBindingOfferedWithoutTls)
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.ChannelBindingOfferedWithoutTls)
@@ -2554,7 +2622,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an invalid certificate", fn() {
         // Act and assert
-        connection.LoginRefused(login.CertificateHashFailed(
+        connection_event.LoginRefused(login.CertificateHashFailed(
           channel_binding.InvalidCertificate,
         ))
         |> should
@@ -2564,7 +2632,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported signature algorithm", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.CertificateHashFailed(
             channel_binding.UnsupportedSignatureAlgorithm([1, 3, 101, 112]),
           ),
@@ -2582,7 +2650,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an unsupported protocol version", fn() {
         // Act and assert
-        connection.LoginRefused(login.UnsupportedProtocolVersion(3, 9))
+        connection_event.LoginRefused(login.UnsupportedProtocolVersion(3, 9))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.UnsupportedProtocolVersion(3, 9))
@@ -2590,7 +2658,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an invalid server-first-message", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ScramServerFirstFailed(scram.InvalidServerFirstMessage(<<"x">>)),
         )
         |> should
@@ -2602,7 +2670,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a mandatory extension", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ScramServerFirstFailed(scram.MandatoryExtension("m")),
         )
         |> should
@@ -2612,7 +2680,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a server nonce that is too long", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ScramServerFirstFailed(scram.ServerNonceTooLong(5000)),
         )
         |> should
@@ -2622,7 +2690,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a password that is too long", fn() {
         // Act and assert
-        connection.LoginRefused(login.PasswordTooLong(5000))
+        connection_event.LoginRefused(login.PasswordTooLong(5000))
         |> should
         |> map_connect_failure("db", 5432)
         |> be_equal(error.PasswordTooLong(5000))
@@ -2630,7 +2698,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a nonce mismatch", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ScramServerFirstFailed(scram.ServerNonceMismatch("abc")),
         )
         |> should
@@ -2640,7 +2708,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an invalid salt", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ScramServerFirstFailed(scram.InvalidSalt("!")),
         )
         |> should
@@ -2650,7 +2718,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an invalid iteration count", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ScramServerFirstFailed(scram.InvalidIterationCount("0")),
         )
         |> should
@@ -2660,7 +2728,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an invalid server-final-message", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ScramServerFinalFailed(scram.InvalidServerFinalMessage(<<"x">>)),
         )
         |> should
@@ -2672,7 +2740,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an error of the server", fn() {
         // Act and assert
-        connection.LoginRefused(
+        connection_event.LoginRefused(
           login.ScramServerFinalFailed(scram.ServerReportedError(
             "invalid-proof",
           )),
@@ -2688,7 +2756,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a signature mismatch", fn() {
         // Act and assert
-        connection.LoginRefused(login.ScramServerFinalFailed(
+        connection_event.LoginRefused(login.ScramServerFinalFailed(
           scram.ServerSignatureMismatch,
         ))
         |> should

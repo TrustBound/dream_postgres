@@ -1,8 +1,9 @@
 //// A matcher that runs work on a pool of the chosen server after the pool
 //// stopped.
 
-import dream_postgres.{type Connection}
+import dream_postgres/config
 import dream_postgres/error
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -42,13 +43,13 @@ fn run_on_new_pool(
   let started = {
     use pool <- result.try(server_pools.chosen(pools))
     server_pools.config(pool.port)
-    |> dream_postgres.pool_size(1)
-    |> dream_postgres.start
+    |> config.pool_size(1)
+    |> pool.start
     |> result.map_error(error.describe)
   }
   case started {
     Ok(connection) -> {
-      dream_postgres.stop(connection)
+      pool.stop(connection)
       MatchOk(work(connection))
     }
     Error(reason) ->

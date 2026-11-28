@@ -99,6 +99,17 @@ pub fn decode(
   codec.decode(value, resolve_domain(description, lookup), lookup)
 }
 
+fn resolve_domain_base(
+  description: TypeDescription,
+  base_type_id: Int,
+  lookup: TypeLookup,
+) -> TypeDescription {
+  case lookup(base_type_id) {
+    Ok(base) -> resolve_domain(base, lookup)
+    Error(Nil) -> description
+  }
+}
+
 // A domain reads and writes as its base type. A domain whose base cannot
 // be found stays a domain, which no codec takes.
 fn resolve_domain(
@@ -107,10 +118,7 @@ fn resolve_domain(
 ) -> TypeDescription {
   case description.kind {
     Domain(base_type_id:) ->
-      case lookup(base_type_id) {
-        Ok(base) -> resolve_domain(base, lookup)
-        Error(Nil) -> description
-      }
+      resolve_domain_base(description, base_type_id, lookup)
     Base
     | Enum(..)
     | Composite(..)

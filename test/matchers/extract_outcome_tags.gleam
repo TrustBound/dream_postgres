@@ -1,6 +1,6 @@
 //// Extracts the command tag of each outcome of the connection process.
 
-import dream_postgres/driver/connection.{type Outcome}
+import dream_postgres/driver/connection/outcome.{type Outcome}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{map}
 

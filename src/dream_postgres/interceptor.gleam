@@ -76,7 +76,7 @@ pub type Request {
   Request(
     /// The SQL text.
     sql: String,
-    /// The name that `dream_postgres.named` gave the query, if any.
+    /// The name that `query.named` gave the query, if any.
     name: Option(String),
     /// The parameters with their codecs, `$1` first. A `run_sql` call has none.
     parameters: List(Parameter),
@@ -96,14 +96,14 @@ pub type RequestKind {
   /// `all`, `one`, `maybe_one` and `affected`.
   Statement
   /// SQL that runs with the simple query protocol: the requests of
-  /// `dream_postgres.run_sql`, and the `BEGIN`, `COMMIT`, `ROLLBACK` and
+  /// `query.run_sql`, and the `BEGIN`, `COMMIT`, `ROLLBACK` and
   /// savepoint commands of a transaction.
   Sql
-  /// A binary `COPY ... FROM STDIN` of `dream_postgres.copy_from`: the
+  /// A binary `COPY ... FROM STDIN` of `copy.copy_from`: the
   /// SQL of the request is the COPY, and the rows are made from the rows
   /// of the app one at a time, when they are sent.
   CopyFrom(table: Table, columns: List(String), rows: RowFeed)
-  /// A binary `COPY (...) TO STDOUT` of `dream_postgres.copy_to`: the SQL
+  /// A binary `COPY (...) TO STDOUT` of `copy.copy_to`: the SQL
   /// of the request is the query inside the COPY.
   CopyTo
 }

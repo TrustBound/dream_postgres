@@ -1,5 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres.{type Config, type PostgresError, record, start, stop}
+import dream_postgres/config.{type Config, record}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{start, stop}
 import dream_postgres/recorder.{type Recorder}
 import gleam/result
 import snippets/app_config.{app_config}

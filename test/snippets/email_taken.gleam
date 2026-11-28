@@ -1,6 +1,5 @@
 import dream_errors.{type Error}
-import dream_postgres.{type PostgresError}
-import dream_postgres/error.{constraint_name, sql_state}
+import dream_postgres/error.{type PostgresError, constraint_name, sql_state}
 import dream_postgres/sql_state.{UniqueViolation}
 import gleam/option.{Some}
 

@@ -1,6 +1,6 @@
 //// Extracts the result of a query outcome.
 
-import dream_postgres/driver/query.{type Outcome}
+import dream_postgres/driver/query/step.{type Outcome}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the `result` field of a query outcome: the value of the query,

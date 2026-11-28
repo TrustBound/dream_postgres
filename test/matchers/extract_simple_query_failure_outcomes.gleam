@@ -1,7 +1,8 @@
 //// Extracts the outcomes of the statements that ran before a statement of a simple query failed.
 
-import dream_postgres/driver/connection.{
-  type Outcome, type SimpleQueryError, SimpleQueryFailed,
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/request_failure.{
+  type SimpleQueryError, SimpleQueryFailed,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,

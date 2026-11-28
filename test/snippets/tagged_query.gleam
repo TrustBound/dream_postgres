@@ -1,8 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, one, query, single, with_interceptor,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, with_interceptor}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 import snippets/request_tagging.{tag_with_app_name}
 
 /// The SQL text that the server runs, with the tag in front of it.

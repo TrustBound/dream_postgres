@@ -4,12 +4,12 @@
 //// holds one connection and makes its own temporary table on it, so no
 //// table stays on the server.
 
-import dream_postgres.{
-  commit, copy_from, copy_to, parameter, query, single, step, table,
-  table_in_schema, transaction,
-}
 import dream_postgres/codec
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/copy.{copy_from, copy_to, table, table_in_schema}
+import dream_postgres/pool
+import dream_postgres/query.{parameter, query}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{commit, keep_both, step, transaction}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -85,7 +85,7 @@ pub fn tests() -> TestSuite {
                 write: copy_users.user_fields,
               ))
               query("SELECT id FROM copy_null_users WHERE email IS NULL")
-              |> dream_postgres.all(single(codec.int), held)
+              |> query.all(single(codec.int), held)
             },
           )
           |> be_ok()
@@ -100,7 +100,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> run_on_pool(fn(pool) {
               copy_from(
-                dream_postgres.with_interceptor(pool, interceptors.make_sql()),
+                pool.with_interceptor(pool, interceptors.make_sql()),
                 into: table("copy_users"),
                 columns: ["id", "email"],
                 rows: copy_users.users(),

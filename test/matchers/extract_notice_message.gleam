@@ -1,6 +1,6 @@
 //// A matcher that reads the message of a notice of the client.
 
-import dream_postgres.{type ServerNotice}
+import dream_postgres/config.{type ServerNotice}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Read the message of the notice. The chain goes on with the message.

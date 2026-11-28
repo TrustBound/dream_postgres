@@ -1,5 +1,5 @@
 //// Database URLs: the parts of a `postgres://` or `postgresql://` URL, read
-//// as libpq reads them. The module `dream_postgres` gives the public
+//// as libpq reads them. The module `dream_postgres/url` gives the public
 //// function `config_from_url`, which makes a config of the parts.
 
 import dream_postgres/error.{

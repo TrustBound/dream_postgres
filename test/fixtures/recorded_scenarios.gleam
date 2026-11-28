@@ -4,17 +4,20 @@
 //// tests play them back with no database. `remove` deletes the directory.
 
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type Connection, type PoolName, type PostgresError, affected, all,
-  commit, copy_from, copy_to, maybe_one, named, one, parameter, query, run,
-  run_sql, single, step, table, transaction, with_connection,
-}
 import dream_postgres/codec
+import dream_postgres/config.{type Config}
+import dream_postgres/copy.{copy_from, copy_to, table}
+import dream_postgres/error.{type PostgresError}
 import dream_postgres/interceptor.{type Request, SqlAnswer}
+import dream_postgres/pool.{type Connection, type PoolName, with_connection}
+import dream_postgres/query.{
+  affected, all, maybe_one, named, one, parameter, query, run_sql,
+}
 import dream_postgres/recorder.{type Recorder, type RecorderBuilder}
 import dream_postgres/recorder/match
 import dream_postgres/recorder/normalize
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{commit, keep_both, run, step, transaction}
 import dream_uuid
 import fixtures/copy_users
 import fixtures/interceptors
@@ -97,11 +100,11 @@ pub fn record_all() -> Result(RecordedRuns, String) {
 fn on_server(sql: String) -> Result(Nil, String) {
   use connection <- result.try(
     server_pools.config(server_port)
-    |> dream_postgres.start
+    |> pool.start
     |> result.map_error(string.inspect),
   )
   let ran = run_sql(sql, connection) |> result.map_error(string.inspect)
-  dream_postgres.stop(connection)
+  pool.stop(connection)
   ran
 }
 
@@ -191,8 +194,8 @@ pub fn start_supervised_playback(
   use pool_child <- result.try(
     server_pools.config(closed_port)
     |> settings.app_settings
-    |> dream_postgres.record(test_recorder)
-    |> dream_postgres.supervised(name: pool_name)
+    |> config.record(test_recorder)
+    |> pool.supervised(name: pool_name)
     |> result.map_error(string.inspect),
   )
   static_supervisor.new(static_supervisor.OneForOne)
@@ -264,12 +267,12 @@ fn record(scenario: Scenario, into: String) -> Result(Nil, String) {
   use connection <- result.try(
     server_pools.config(server_port)
     |> scenario.app_settings
-    |> dream_postgres.record(test_recorder)
-    |> dream_postgres.start
+    |> config.record(test_recorder)
+    |> pool.start
     |> result.map_error(string.inspect),
   )
   let _recorded_result = scenario.run(connection)
-  dream_postgres.stop(connection)
+  pool.stop(connection)
   Ok(Nil)
 }
 
@@ -565,7 +568,7 @@ pub fn check_password_in_plain(connection: Connection) -> ScenarioResult {
   |> inspected
 }
 
-fn series_query(count: Int) -> dream_postgres.Query {
+fn series_query(count: Int) -> query.Query {
   query("SELECT x FROM generate_series(1, $1) AS x")
   |> parameter(codec.int, count)
 }

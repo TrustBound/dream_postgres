@@ -6,7 +6,7 @@
 //// come from, and the reader of the COPY folds over them one at a time.
 //// An interceptor that must see each row adds a watcher.
 
-import dream_postgres/driver/connection.{type Connection}
+import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/error.{type Reason}
 import dream_postgres/internal/cell.{type Cell}
 import dream_postgres/internal/copy_stream

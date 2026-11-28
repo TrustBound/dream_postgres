@@ -12,8 +12,7 @@
 ////
 //// ```gleam
 //// import dream_errors.{type Error}
-//// import dream_postgres.{type PostgresError}
-//// import dream_postgres/error.{column_name, sql_state}
+//// import dream_postgres/error.{type PostgresError, column_name, sql_state}
 //// import dream_postgres/sql_state.{NotNullViolation}
 //// import gleam/option.{Some}
 ////
@@ -36,6 +35,9 @@ import dream_errors.{
   type Error, Conflict, Failed, Invalid, NotFound, Retry, Timeout, Unavailable,
 }
 import dream_postgres/internal/cell.{type Cell, type ServerReport, ServerReport}
+import dream_postgres/internal/error_text.{
+  column_text, statement_ran_text, statements_run_text, timeout_message,
+}
 import dream_postgres/posix.{type Posix}
 import dream_postgres/sql_state.{
   type SqlState, CardinalityViolationClass, CaseNotFoundClass,
@@ -337,11 +339,11 @@ pub type ConfigFault {
   /// The startup message of the login settings has `length` bytes, which
   /// is too long for its 32-bit length field.
   StartupMessageTooLong(length: Int)
-  /// The URL of `dream_postgres.config_from_url` is not valid.
+  /// The URL of `url.config_from_url` is not valid.
   InvalidDatabaseUrl(fault: UrlFault)
 }
 
-/// Why the URL of `dream_postgres.config_from_url` is not valid. No fault
+/// Why the URL of `url.config_from_url` is not valid. No fault
 /// holds the password of the URL.
 pub type UrlFault {
   /// The URL has no `://` after its scheme.
@@ -1570,36 +1572,6 @@ fn server_message(server_error: ServerError) -> String {
       <> constraint
       <> ")"
     None -> server_error.message <> " (" <> code <> ")"
-  }
-}
-
-fn column_text(position: Int, name: String) -> String {
-  "column " <> int.to_string(position) <> " (" <> name <> ")"
-}
-
-fn timeout_message(stopped_on_server: Bool) -> String {
-  case stopped_on_server {
-    True -> "the query did not finish in time"
-    False ->
-      "the query did not finish in time, and the server did not confirm that it stopped"
-  }
-}
-
-fn statements_run_text(statements_run: Int) -> String {
-  case statements_run {
-    0 -> ""
-    _ ->
-      "; the SQL ran "
-      <> int.to_string(statements_run)
-      <> " of its statements before it, and outside a transaction they are committed"
-  }
-}
-
-fn statement_ran_text(statement_ran: Bool) -> String {
-  case statement_ran {
-    True ->
-      "; the statement ran to its end, and outside a transaction it is committed"
-    False -> ""
   }
 }
 

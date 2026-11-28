@@ -2,7 +2,9 @@
 //// work on the connection, and stops the connection with its recorder.
 
 import dream_errors.{type Error}
-import dream_postgres.{type Config, type Connection, type PostgresError}
+import dream_postgres/config.{type Config}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
 import dream_postgres/recorder.{type RecorderBuilder}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -47,11 +49,11 @@ fn run_started(
     use test_recorder <- result.try(recorder.start(builder))
     use connection <- result.try(
       config
-      |> dream_postgres.record(test_recorder)
-      |> dream_postgres.start,
+      |> config.record(test_recorder)
+      |> pool.start,
     )
     let done = work(connection)
-    dream_postgres.stop(connection)
+    pool.stop(connection)
     Ok(done)
   }
   case ran {

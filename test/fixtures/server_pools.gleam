@@ -4,8 +4,9 @@
 //// a suite, and pick the version of a group with `choose_version` in its
 //// `before_all`.
 
-import dream_postgres.{type Config, type Connection}
+import dream_postgres/config.{type Config}
 import dream_postgres/error
+import dream_postgres/pool.{type Connection}
 import driver/servers.{type Server, driver_servers}
 import gleam/int
 import gleam/list
@@ -28,17 +29,17 @@ pub type ServerPools {
 /// ## Example
 ///
 /// ```gleam
-/// server_pools.config(5441) |> dream_postgres.pool_size(1)
+/// server_pools.config(5441) |> pool_size(1)
 /// ```
 pub fn config(port: Int) -> Config {
-  dream_postgres.default_config()
-  |> dream_postgres.host("localhost")
-  |> dream_postgres.port(port)
-  |> dream_postgres.database(servers.database)
-  |> dream_postgres.user("dream")
-  |> dream_postgres.password(servers.password)
-  |> dream_postgres.pool_size(4)
-  |> dream_postgres.tls(dream_postgres.TlsOff)
+  config.default_config()
+  |> config.host("localhost")
+  |> config.port(port)
+  |> config.database(servers.database)
+  |> config.user("dream")
+  |> config.password(servers.password)
+  |> config.pool_size(4)
+  |> config.tls(config.TlsOff)
 }
 
 /// Starts one pool on each driver server. When one cannot start, the
@@ -106,11 +107,11 @@ pub fn chosen(pools: ServerPools) -> Result(ServerPool, String) {
 
 fn start_pool(server: Server) -> Result(ServerPool, String) {
   config(server.port)
-  |> dream_postgres.start
+  |> pool.start
   |> result.map(ServerPool(server.version, server.port, _))
   |> result.map_error(error.describe)
 }
 
 fn stop_pool(pool: ServerPool) -> Nil {
-  dream_postgres.stop(pool.connection)
+  pool.stop(pool.connection)
 }

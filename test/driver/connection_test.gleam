@@ -8,21 +8,38 @@
 //// The setups and teardowns of `driver/server_connection` start and stop
 //// every connection.
 
-import dream_postgres/driver/connection.{
-  type Connection, type ConnectionConfig, type ConnectionEnd,
-  type ConnectionEvent, type ConnectionStateError, type Outcome, type RunError,
-  type SettleError, type SimpleQueryError, Backoff, CacheStatements,
-  ClosedAfterDeadline, ConnectionConfig, ConnectionEnded, ConnectionLost,
-  ConnectionProcessDown, CopyFailed, DeadlinePassed, HousekeepingFailed,
+import dream_postgres/driver/connection.{start, stop, supervised}
+import dream_postgres/driver/connection/backoff.{Backoff}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/copy_caller.{copy_from}
+import dream_postgres/driver/connection/event.{
+  type ConnectionEnd, type ConnectionEvent, ClosedAfterDeadline, ConnectionLost,
   LoginRequiresTls, LoginSendFailed, LoginSocketFailed, LoginUndecodable,
-  NoAnswerInTime, PrepareFailed, PrepareUnencodable, ProcessGone,
-  ProtocolViolation, Reconnected, RunCopyRefused, RunFailed, RunUnencodable,
-  ServerStoppedReading, SettleFailed, SetupTimedOut, SimpleQueryRequestFailed,
-  SimpleQueryUnencodable, SocketFailed, TransportRefused, UndecodableMessage,
-  UnexpectedIdleMessage, UnnamedStatements, aborted_by, copy_from, prepare, run,
-  run_housekeeping, run_housekeeping_simple_query, run_simple_query,
-  server_parameter, settled_transaction_status, start, stop, supervised,
-  transaction_status,
+  ProtocolViolation, Reconnected, ServerStoppedReading, SetupTimedOut,
+  SocketFailed, TransportRefused,
+}
+import dream_postgres/driver/connection/extended_query.{
+  prepare, run, run_housekeeping,
+}
+import dream_postgres/driver/connection/outcome.{
+  type Outcome, UndecodableMessage, UnexpectedIdleMessage,
+}
+import dream_postgres/driver/connection/request_failure.{
+  type ConnectionStateError, type RunError, type SettleError,
+  type SimpleQueryError, ConnectionEnded, ConnectionProcessDown, CopyFailed,
+  DeadlinePassed, HousekeepingFailed, NoAnswerInTime, PrepareFailed,
+  PrepareUnencodable, ProcessGone, RunCopyRefused, RunFailed, RunUnencodable,
+  SettleFailed, SimpleQueryRequestFailed, SimpleQueryUnencodable,
+}
+import dream_postgres/driver/connection/settings.{
+  type ConnectionConfig, CacheStatements, ConnectionConfig, UnnamedStatements,
+}
+import dream_postgres/driver/connection/simple_query.{
+  run_housekeeping_simple_query, run_simple_query,
+}
+import dream_postgres/driver/connection/statement as connection_statement
+import dream_postgres/driver/connection/status.{
+  aborted_by, server_parameter, settled_transaction_status, transaction_status,
 }
 import dream_postgres/driver/housekeeping_sql.{catalog_load, health_check}
 import dream_postgres/driver/message.{
@@ -179,7 +196,11 @@ fn connection_tests() -> TestSuite {
         it("runs a statement over TLS", fn(connection) {
           // Act
           let outcomes =
-            run_simple_query(connection, connection.statement("SELECT 1"), 5000)
+            run_simple_query(
+              connection,
+              connection_statement.statement("SELECT 1"),
+              5000,
+            )
 
           // Assert
           outcomes
@@ -204,7 +225,13 @@ fn connection_tests() -> TestSuite {
             // Act
             suspend_connection(connection)
             let answer =
-              run(connection, connection.statement("SELECT 1"), [], [], 10)
+              run(
+                connection,
+                connection_statement.statement("SELECT 1"),
+                [],
+                [],
+                10,
+              )
             resume_connection(connection)
 
             // Assert
@@ -256,7 +283,8 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
       let sql = "SELECT relname FROM pg_class WHERE oid = $1"
 
       // Act
-      let description = prepare(connection, connection.statement(sql), 5000)
+      let description =
+        prepare(connection, connection_statement.statement(sql), 5000)
 
       // Assert
       description
@@ -276,7 +304,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
         let outcome =
           run(
             connection,
-            connection.statement("SELECT $1::int4 + 1"),
+            connection_statement.statement("SELECT $1::int4 + 1"),
             [Binary(<<41:32>>)],
             [BinaryFormat],
             5000,
@@ -300,7 +328,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
       let outcome =
         run(
           connection,
-          connection.statement("SELECT $1::int4 + 1"),
+          connection_statement.statement("SELECT $1::int4 + 1"),
           [Binary(<<41:32>>)],
           [BinaryFormat],
           5000,
@@ -323,7 +351,11 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
 
         // Act
         let outcomes =
-          run_simple_query(connection, connection.statement(sql), 5000)
+          run_simple_query(
+            connection,
+            connection_statement.statement(sql),
+            5000,
+          )
 
         // Assert
         outcomes
@@ -341,7 +373,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
       let outcomes =
         run_simple_query(
           connection,
-          connection.statement(notice_simple_query),
+          connection_statement.statement(notice_simple_query),
           5000,
         )
 
@@ -358,7 +390,7 @@ fn server_tests(server: Server) -> ContextNode(Connection) {
       let outcomes =
         run_simple_query(
           connection,
-          connection.statement(notice_and_notify_simple_query),
+          connection_statement.statement(notice_and_notify_simple_query),
           5000,
         )
 
@@ -387,7 +419,13 @@ fn failed_transaction_tests() -> ContextNode(Connection) {
     it("fails the statement with 22012", fn(connection) {
       // Act
       let failed =
-        run(connection, connection.statement("SELECT 1/0"), [], [], 5000)
+        run(
+          connection,
+          connection_statement.statement("SELECT 1/0"),
+          [],
+          [],
+          5000,
+        )
 
       // Assert
       failed
@@ -430,7 +468,11 @@ fn failed_transaction_tests() -> ContextNode(Connection) {
         fn(connection) {
           // Act
           let committed =
-            run_simple_query(connection, connection.statement("COMMIT"), 5000)
+            run_simple_query(
+              connection,
+              connection_statement.statement("COMMIT"),
+              5000,
+            )
 
           // Assert
           committed
@@ -526,7 +568,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       // Act
       stop(connection)
       let described =
-        prepare(connection, connection.statement("SELECT 1"), 5000)
+        prepare(connection, connection_statement.statement("SELECT 1"), 5000)
 
       // Assert
       described
@@ -556,7 +598,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       let copied =
         copy_from(
           connection,
-          connection.statement("COPY items FROM STDIN"),
+          connection_statement.statement("COPY items FROM STDIN"),
           5000,
           send_nothing,
         )
@@ -571,7 +613,13 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     it("refuses SQL with a zero byte before it sends anything", fn(connection) {
       // Act
       let answer =
-        run(connection, connection.statement("SELECT 1\u{0000}"), [], [], 5000)
+        run(
+          connection,
+          connection_statement.statement("SELECT 1\u{0000}"),
+          [],
+          [],
+          5000,
+        )
 
       // Assert
       answer
@@ -583,7 +631,11 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
     it("refuses a prepare with a zero byte", fn(connection) {
       // Act
       let answer =
-        prepare(connection, connection.statement("SELECT 1\u{0000}"), 5000)
+        prepare(
+          connection,
+          connection_statement.statement("SELECT 1\u{0000}"),
+          5000,
+        )
 
       // Assert
       answer
@@ -597,7 +649,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       let answer =
         run_simple_query(
           connection,
-          connection.statement("SELECT 1\u{0000}"),
+          connection_statement.statement("SELECT 1\u{0000}"),
           5000,
         )
 
@@ -613,7 +665,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       let refused =
         run_simple_query(
           connection,
-          connection.statement(copy_simple_query),
+          connection_statement.statement(copy_simple_query),
           5000,
         )
 
@@ -631,7 +683,11 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       it("refuses a COPY statement and stays usable", fn(connection) {
         // Act
         let next =
-          run_simple_query(connection, connection.statement("SELECT 5"), 5000)
+          run_simple_query(
+            connection,
+            connection_statement.statement("SELECT 5"),
+            5000,
+          )
 
         // Assert
         next
@@ -647,7 +703,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       let answer =
         run_simple_query(
           connection,
-          connection.statement("SELECT 1; SELECT 1/0"),
+          connection_statement.statement("SELECT 1; SELECT 1/0"),
           5000,
         )
 
@@ -665,7 +721,11 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       fn(connection) {
         // Act
         let answer =
-          run_simple_query(connection, connection.statement("SELECT 1/0"), 5000)
+          run_simple_query(
+            connection,
+            connection_statement.statement("SELECT 1/0"),
+            5000,
+          )
 
         // Assert
         answer
@@ -683,7 +743,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
         let answer =
           run_simple_query(
             connection,
-            connection.statement("SELECT 1; SELECT 1/0"),
+            connection_statement.statement("SELECT 1; SELECT 1/0"),
             5000,
           )
 
@@ -701,7 +761,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       let answer =
         prepare(
           connection,
-          connection.statement("SELECT * FROM no_such_table"),
+          connection_statement.statement("SELECT * FROM no_such_table"),
           5000,
         )
 
@@ -718,7 +778,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       let outcome =
         run(
           connection,
-          connection.statement("SELECT $1::text IS NULL"),
+          connection_statement.statement("SELECT $1::text IS NULL"),
           [Null],
           [],
           5000,
@@ -740,7 +800,11 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
       // Act
       let name = {
         use _outcomes <- try(
-          run_simple_query(connection, connection.statement(sql), 5000)
+          run_simple_query(
+            connection,
+            connection_statement.statement(sql),
+            5000,
+          )
           |> map_error(inspect),
         )
         server_parameter(connection, "application_name") |> map_error(inspect)
@@ -761,7 +825,7 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
         let refused =
           run(
             connection,
-            connection.statement("COPY c FROM STDIN"),
+            connection_statement.statement("COPY c FROM STDIN"),
             [],
             [],
             5000,
@@ -779,7 +843,11 @@ fn first_server_tests() -> List(ContextNode(Connection)) {
         it("refuses COPY FROM STDIN in a run and stays usable", fn(connection) {
           // Act
           let next =
-            run_simple_query(connection, connection.statement("SELECT 6"), 5000)
+            run_simple_query(
+              connection,
+              connection_statement.statement("SELECT 6"),
+              5000,
+            )
 
           // Assert
           next
@@ -1114,7 +1182,7 @@ fn cached_proxied_tests() -> List(ContextNode(ProxiedConnection)) {
         let outcomes =
           run_simple_query(
             proxied.connection,
-            connection.statement("SELECT 1"),
+            connection_statement.statement("SELECT 1"),
             5000,
           )
 
@@ -1187,7 +1255,7 @@ fn running_run_lost_test(name: String) -> ContextNode(ProxiedConnection) {
         start_caller(fn() {
           run(
             proxied.connection,
-            connection.statement(advisory_lock_sql(proxied.lock_key)),
+            connection_statement.statement(advisory_lock_sql(proxied.lock_key)),
             [],
             [],
             5000,
@@ -1232,7 +1300,7 @@ fn running_prepare_lost_tests(
           start_caller(fn() {
             prepare(
               proxied.connection,
-              connection.statement("SELECT x FROM " <> table),
+              connection_statement.statement("SELECT x FROM " <> table),
               5000,
             )
           })
@@ -1288,7 +1356,7 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
           let answer =
             run_simple_query(
               proxied.connection,
-              connection.statement("SELECT 1"),
+              connection_statement.statement("SELECT 1"),
               5000,
             )
 
@@ -1312,7 +1380,11 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
         fn(proxied: ProxiedConnection) {
           // Act
           let answer =
-            prepare(proxied.connection, connection.statement("SELECT 1"), 5000)
+            prepare(
+              proxied.connection,
+              connection_statement.statement("SELECT 1"),
+              5000,
+            )
 
           // Assert
           answer
@@ -1361,7 +1433,7 @@ fn lost_session_tests() -> ContextNode(ProxiedConnection) {
         let answer =
           run_simple_query(
             proxied.connection,
-            connection.statement(large),
+            connection_statement.statement(large),
             5000,
           )
 
@@ -1407,7 +1479,7 @@ fn idle_message_tests() -> ContextNode(ProxiedConnection) {
         let outcomes =
           run_simple_query(
             proxied.connection,
-            connection.statement("SELECT 1"),
+            connection_statement.statement("SELECT 1"),
             5000,
           )
 
@@ -1427,7 +1499,7 @@ fn idle_message_tests() -> ContextNode(ProxiedConnection) {
         let outcomes =
           run_simple_query(
             proxied.connection,
-            connection.statement("SELECT 1"),
+            connection_statement.statement("SELECT 1"),
             5000,
           )
 
@@ -1491,7 +1563,7 @@ fn lock_tests() -> ContextNode(ProxiedConnection) {
           use _released <- try(release_advisory_lock(proxied))
           Ok(run(
             proxied.connection,
-            connection.statement("SELECT 2"),
+            connection_statement.statement("SELECT 2"),
             [],
             [],
             5000,
@@ -1560,7 +1632,11 @@ fn lose_and_reconnect(
   let lost = next_event(proxied.events)
   let back = next_event(proxied.events)
   let outcomes =
-    run_simple_query(proxied.connection, connection.statement("SELECT 1"), 5000)
+    run_simple_query(
+      proxied.connection,
+      connection_statement.statement("SELECT 1"),
+      5000,
+    )
   Ok(LossAndReconnect(lost:, back:, outcomes:))
 }
 
@@ -1729,7 +1805,7 @@ fn lose_with_requests(
     start_caller(fn() {
       run_simple_query(
         proxied.connection,
-        connection.statement("SELECT 1"),
+        connection_statement.statement("SELECT 1"),
         5000,
       )
     })
@@ -1799,7 +1875,7 @@ fn run_two_requests(proxied: ProxiedConnection) -> Result(TwoRequests, String) {
     start_caller(fn() {
       run_simple_query(
         proxied.connection,
-        connection.statement("SELECT 4"),
+        connection_statement.statement("SELECT 4"),
         5000,
       )
     })
@@ -1879,7 +1955,7 @@ fn start_gated_deadline(server: Server) -> Result(GatedDeadline, String) {
       let first =
         run(
           connection,
-          connection.statement("SELECT pg_sleep(0.3)"),
+          connection_statement.statement("SELECT pg_sleep(0.3)"),
           [],
           [],
           50,
@@ -1887,7 +1963,11 @@ fn start_gated_deadline(server: Server) -> Result(GatedDeadline, String) {
       record_gate(gate)
       use second <- try(
         start_announced_caller(fn() {
-          run_simple_query(connection, connection.statement("SELECT 1"), 5000)
+          run_simple_query(
+            connection,
+            connection_statement.statement("SELECT 1"),
+            5000,
+          )
         }),
       )
       use _asked <- try(ask_transaction_status(connection, 20))
@@ -1984,11 +2064,17 @@ fn start_cancel_at_deadline(
   {
     use pid <- try(backend_pid(connection))
     let late =
-      run(connection, connection.statement("SELECT pg_sleep(30)"), [], [], 300)
+      run(
+        connection,
+        connection_statement.statement("SELECT pg_sleep(30)"),
+        [],
+        [],
+        300,
+      )
     let state =
       run_simple_query(
         control,
-        connection.statement(
+        connection_statement.statement(
           "SELECT state FROM pg_stat_activity WHERE pid = " <> pid,
         ),
         5000,
@@ -1998,7 +2084,7 @@ fn start_cancel_at_deadline(
     let next =
       run(
         connection,
-        connection.statement("SELECT pg_sleep(0.3)::text"),
+        connection_statement.statement("SELECT pg_sleep(0.3)::text"),
         [],
         [],
         5000,
@@ -2093,7 +2179,13 @@ fn start_lost_cancel(breaking: fn(Proxy) -> Nil) -> Result(LostCancel, String) {
     ))
     breaking(proxy)
     let answer =
-      run(connection, connection.statement("SELECT pg_sleep(30)"), [], [], 100)
+      run(
+        connection,
+        connection_statement.statement("SELECT pg_sleep(30)"),
+        [],
+        [],
+        100,
+      )
     let event = next_event(events)
     Ok(LostCancel(connection:, proxy:, answer:, event:))
   }
@@ -2185,7 +2277,13 @@ fn keyless_session_tests() -> TestSuite {
         fn(connection) {
           // Act
           let answer =
-            run(connection, connection.statement("SELECT 1"), [], [], 100)
+            run(
+              connection,
+              connection_statement.statement("SELECT 1"),
+              [],
+              [],
+              100,
+            )
 
           // Assert
           answer
@@ -2209,14 +2307,20 @@ fn keyless_session_tests() -> TestSuite {
             suspend_connection(connection)
             let first =
               start_caller(fn() {
-                run(connection, connection.statement("SELECT 1"), [], [], 100)
+                run(
+                  connection,
+                  connection_statement.statement("SELECT 1"),
+                  [],
+                  [],
+                  100,
+                )
               })
             use _first_came <- try(wait_for_message(pid, ["request"], 1_000_000))
             let waiting =
               start_caller(fn() {
                 run_simple_query(
                   connection,
-                  connection.statement("SELECT 2"),
+                  connection_statement.statement("SELECT 2"),
                   5000,
                 )
               })
@@ -2248,7 +2352,13 @@ fn keyless_session_tests() -> TestSuite {
           fn(connection) {
             // Act
             let answer =
-              run(connection, connection.statement("SELECT 1"), [], [], 5000)
+              run(
+                connection,
+                connection_statement.statement("SELECT 1"),
+                [],
+                [],
+                5000,
+              )
 
             // Assert
             answer
@@ -2285,7 +2395,11 @@ fn end_waiting_request(
   let first = start_caller(lock_request(proxied))
   use _waited <- try(wait_for_lock_waiter(proxied.control, proxied.lock_key))
   let waiting =
-    run_simple_query(proxied.connection, connection.statement("SELECT 1"), 100)
+    run_simple_query(
+      proxied.connection,
+      connection_statement.statement("SELECT 1"),
+      100,
+    )
   use _released <- try(release_advisory_lock(proxied))
   Ok(WaitingAtDeadline(waiting:, first: caller_answer(first)))
 }
@@ -2343,7 +2457,9 @@ fn ask_status_while_waiting(
     start_caller(fn() {
       run_simple_query(
         proxied.connection,
-        connection.statement("BEGIN; " <> advisory_lock_sql(proxied.lock_key)),
+        connection_statement.statement(
+          "BEGIN; " <> advisory_lock_sql(proxied.lock_key),
+        ),
         5000,
       )
     })
@@ -2407,7 +2523,13 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
         fn(connection) {
           // Act
           let outcome =
-            run(connection, connection.statement(pg_class_query), [], [], 5000)
+            run(
+              connection,
+              connection_statement.statement(pg_class_query),
+              [],
+              [],
+              5000,
+            )
 
           // Assert
           outcome
@@ -2423,7 +2545,13 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
       it("gives the notice of the rewritten query tree", fn(connection) {
         // Act
         let outcome =
-          run(connection, connection.statement(pg_class_query), [], [], 5000)
+          run(
+            connection,
+            connection_statement.statement(pg_class_query),
+            [],
+            [],
+            5000,
+          )
 
         // Assert
         outcome
@@ -2438,7 +2566,13 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
         fn(connection) {
           // Act
           let outcome =
-            run(connection, connection.statement(pg_class_query), [], [], 5000)
+            run(
+              connection,
+              connection_statement.statement(pg_class_query),
+              [],
+              [],
+              5000,
+            )
 
           // Assert
           outcome
@@ -2453,7 +2587,13 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
       it("gives the row with the rewritten query tree", fn(connection) {
         // Act
         let outcome =
-          run(connection, connection.statement(pg_class_query), [], [], 5000)
+          run(
+            connection,
+            connection_statement.statement(pg_class_query),
+            [],
+            [],
+            5000,
+          )
 
         // Assert
         outcome
@@ -2473,7 +2613,13 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
         fn(connection) {
           // Act
           let outcome =
-            run(connection, connection.statement(noisy_query), [], [], 5000)
+            run(
+              connection,
+              connection_statement.statement(noisy_query),
+              [],
+              [],
+              5000,
+            )
 
           // Assert
           outcome
@@ -2489,7 +2635,13 @@ fn model_tests(server: Server) -> ContextNode(Connection) {
         fn(connection) {
           // Act
           let outcome =
-            run(connection, connection.statement(noisy_query), [], [], 5000)
+            run(
+              connection,
+              connection_statement.statement(noisy_query),
+              [],
+              [],
+              5000,
+            )
 
           // Assert
           outcome
@@ -2539,7 +2691,7 @@ fn cache_tests(server: Server) -> ContextNode(Connection) {
             let refused =
               run(
                 connection,
-                connection.statement("SELECT 1"),
+                connection_statement.statement("SELECT 1"),
                 list.repeat(Null, 65_536),
                 [],
                 5000,
@@ -2566,12 +2718,18 @@ fn cache_tests(server: Server) -> ContextNode(Connection) {
           // Act
           let statements = {
             use _c <- try(
-              run(connection, connection.statement("SELECT 'c'"), [], [], 5000)
+              run(
+                connection,
+                connection_statement.statement("SELECT 'c'"),
+                [],
+                [],
+                5000,
+              )
               |> map_error(inspect),
             )
             run_simple_query(
               connection,
-              connection.statement(prepared_statements),
+              connection_statement.statement(prepared_statements),
               5000,
             )
             |> map_error(inspect)
@@ -2604,16 +2762,28 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
         // Act
         let statements = {
           use _first <- try(
-            run(connection, connection.statement("SELECT 41 + 1"), [], [], 5000)
+            run(
+              connection,
+              connection_statement.statement("SELECT 41 + 1"),
+              [],
+              [],
+              5000,
+            )
             |> map_error(inspect),
           )
           use _second <- try(
-            run(connection, connection.statement("SELECT 41 + 1"), [], [], 5000)
+            run(
+              connection,
+              connection_statement.statement("SELECT 41 + 1"),
+              [],
+              [],
+              5000,
+            )
             |> map_error(inspect),
           )
           run_simple_query(
             connection,
-            connection.statement(prepared_statements),
+            connection_statement.statement(prepared_statements),
             5000,
           )
           |> map_error(inspect)
@@ -2634,16 +2804,16 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
       // Act
       let statements = {
         use _first <- try(
-          prepare(connection, connection.statement("SELECT 1"), 5000)
+          prepare(connection, connection_statement.statement("SELECT 1"), 5000)
           |> map_error(inspect),
         )
         use _second <- try(
-          prepare(connection, connection.statement("SELECT 1"), 5000)
+          prepare(connection, connection_statement.statement("SELECT 1"), 5000)
           |> map_error(inspect),
         )
         run_simple_query(
           connection,
-          connection.statement(prepared_statements),
+          connection_statement.statement(prepared_statements),
           5000,
         )
         |> map_error(inspect)
@@ -2661,8 +2831,10 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
     }),
     it("gives the same description for two prepares", fn(connection) {
       // Act
-      let first = prepare(connection, connection.statement("SELECT 1"), 5000)
-      let second = prepare(connection, connection.statement("SELECT 1"), 5000)
+      let first =
+        prepare(connection, connection_statement.statement("SELECT 1"), 5000)
+      let second =
+        prepare(connection, connection_statement.statement("SELECT 1"), 5000)
 
       // Assert
       second
@@ -2678,7 +2850,13 @@ fn one_statement_cache_tests() -> List(ContextNode(Connection)) {
         fn(connection) {
           // Act
           let outcome =
-            run(connection, connection.statement("SELECT 41 + 1"), [], [], 5000)
+            run(
+              connection,
+              connection_statement.statement("SELECT 41 + 1"),
+              [],
+              [],
+              5000,
+            )
 
           // Assert
           outcome
@@ -2709,7 +2887,7 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
           let outcome =
             run(
               connection,
-              connection.statement("SELECT * FROM changing"),
+              connection_statement.statement("SELECT * FROM changing"),
               [],
               [],
               5000,
@@ -2731,7 +2909,7 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
           let outcome =
             run(
               connection,
-              connection.statement("SELECT * FROM changing"),
+              connection_statement.statement("SELECT * FROM changing"),
               [],
               [],
               5000,
@@ -2757,7 +2935,7 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
         let failed =
           run(
             connection,
-            connection.statement("SELECT * FROM changing"),
+            connection_statement.statement("SELECT * FROM changing"),
             [],
             [],
             5000,
@@ -2778,7 +2956,7 @@ fn changed_table_tests() -> List(ContextNode(Connection)) {
           let failed =
             run(
               connection,
-              connection.statement("SELECT * FROM changing"),
+              connection_statement.statement("SELECT * FROM changing"),
               [],
               [],
               5000,
@@ -2805,7 +2983,11 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
       fn(connection) {
         // Act
         let refused =
-          prepare(connection, connection.statement("SELECT 1\u{0000}"), 5000)
+          prepare(
+            connection,
+            connection_statement.statement("SELECT 1\u{0000}"),
+            5000,
+          )
 
         // Assert
         refused
@@ -2818,7 +3000,13 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
     it("refuses a run with a zero byte with UnnamedStatements", fn(connection) {
       // Act
       let refused =
-        run(connection, connection.statement("SELECT 1\u{0000}"), [], [], 5000)
+        run(
+          connection,
+          connection_statement.statement("SELECT 1\u{0000}"),
+          [],
+          [],
+          5000,
+        )
 
       // Assert
       refused
@@ -2832,7 +3020,13 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
       fn(connection) {
         // Act
         let refused =
-          run(connection, connection.statement("SELECT 1/0"), [], [], 5000)
+          run(
+            connection,
+            connection_statement.statement("SELECT 1/0"),
+            [],
+            [],
+            5000,
+          )
 
         // Assert
         refused
@@ -2847,16 +3041,22 @@ fn unnamed_statement_tests(server: Server) -> List(ContextNode(Connection)) {
       // Act
       let statements = {
         use _first <- try(
-          run(connection, connection.statement("SELECT 1"), [], [], 5000)
+          run(
+            connection,
+            connection_statement.statement("SELECT 1"),
+            [],
+            [],
+            5000,
+          )
           |> map_error(inspect),
         )
         use _second <- try(
-          prepare(connection, connection.statement("SELECT 1"), 5000)
+          prepare(connection, connection_statement.statement("SELECT 1"), 5000)
           |> map_error(inspect),
         )
         run_simple_query(
           connection,
-          connection.statement(prepared_statements),
+          connection_statement.statement(prepared_statements),
           5000,
         )
         |> map_error(inspect)

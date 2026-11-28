@@ -1,7 +1,7 @@
 import dream_errors.{
   type Error, Conflict, Failed, Invalid, NotFound, Retry, Timeout, Unavailable,
 }
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 import snippets/user_row.{type User}
 
 /// The status code and the text that a sign-up page shows for the result

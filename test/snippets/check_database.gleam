@@ -1,5 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, verify}
+import dream_postgres/boot_check.{verify}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
 import snippets/user_checks.{queries}
 
 /// Checks each query of the app against the database, at boot.

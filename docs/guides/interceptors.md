@@ -74,9 +74,9 @@ The last `next` of the chain prepares the SQL of the request, checks the paramet
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type Connection, type PostgresError, intercept, start,
-}
+import dream_postgres/config.{type Config, intercept}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
 import snippets/request_tagging.{log_slow_queries, tag_with_app_name}
 
 pub fn start_tagged_pool(
@@ -95,10 +95,11 @@ pub fn start_tagged_pool(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, one, query, single, with_interceptor,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, with_interceptor}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 import snippets/request_tagging.{tag_with_app_name}
 
 /// The SQL text that the server runs, with the tag in front of it.
@@ -116,7 +117,7 @@ The test of `current_sql` gets `/* billing */ SELECT current_query()` back from 
 
 1. The interceptors of the config, in the order that `intercept` added them. The first one gets the request first.
 2. The interceptors of `with_interceptor`, in the order that they were added.
-3. The recorder of `dream_postgres.record`, in record mode. It runs after all others, so it records the request as it reaches the database.
+3. The recorder of `config.record`, in record mode. It runs after all others, so it records the request as it reaches the database.
 4. The database. On a connection of a recorder in playback mode, the recording answers in its place.
 
 The interceptors of `recorder.intercept` are not in this chain. They change only the copy that the recorder keeps, so the database and the app get the real values. The [recorded queries guide](recorded-queries.md) shows them.
@@ -173,10 +174,11 @@ The code under test reads this answer with its own row reader:
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, type Row, all, column, named, query, row,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, named, query}
+import dream_postgres/row.{type Row, column, row}
 
 /// The id and the title of each post.
 pub fn list_titles(

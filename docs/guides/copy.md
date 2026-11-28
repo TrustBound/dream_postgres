@@ -33,10 +33,11 @@ A `User` has an id and an email that can be NULL. `user_fields` gives the fields
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, type Row, column, copy_from, row, table,
-}
 import dream_postgres/codec.{type Field, field, int, nullable, text}
+import dream_postgres/copy.{copy_from, table}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/row.{type Row, column, row}
 import gleam/option.{type Option}
 
 pub type User {
@@ -83,10 +84,10 @@ For a table in a schema, use `table_in_schema`. It quotes the schema and the nam
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, copy_from, table_in_schema,
-}
 import dream_postgres/codec.{type Field, field, int}
+import dream_postgres/copy.{copy_from, table_in_schema}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
 
 /// Stores one invoice row for each total, in the table `invoices` of the
 /// schema `billing`.
@@ -116,7 +117,10 @@ fn total_fields(total: Int) -> List(Field) {
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, copy_to, query}
+import dream_postgres/copy.{copy_to}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{query}
 import gleam/list
 import gleam/result
 import snippets/copy_users.{type User, user_row}
@@ -147,10 +151,12 @@ A fold does not have to make a list. This one keeps only a sum:
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, copy_to, query, single,
-}
 import dream_postgres/codec.{int}
+import dream_postgres/copy.{copy_to}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{query}
+import dream_postgres/row.{single}
 import gleam/int
 
 /// The sum of the totals of all invoices. The rows come one at a time, and
@@ -178,12 +184,13 @@ This function reads each total with `codec.int`, which takes no NULL. A NULL tot
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, copy_to, one, query, run, single,
-  transaction,
-}
 import dream_postgres/codec.{int}
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/copy.{copy_to}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{keep_both, run, transaction}
 import gleam/function
 import gleam/list
 

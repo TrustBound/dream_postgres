@@ -10,7 +10,7 @@ import dream_postgres/driver/message.{
   type BackendMessage, type EncodeError, type FrontendMessage,
   type ProtocolError, Decoded, NeedMoreBytes, Protocol30,
 }
-import dream_postgres/driver/query.{
+import dream_postgres/driver/query/step.{
   type Start, type Step, type UnexpectedMessage, ConnectionEnded, Finished, Send,
   Wait,
 }
@@ -40,7 +40,7 @@ pub type Session {
   Session(connection: Connection, bytes: BitArray)
 }
 
-/// A step function of `dream_postgres/driver/query`.
+/// A step function of a module of `dream_postgres/driver/query`.
 pub type StepFunction(state, outcome) =
   fn(state, BackendMessage) -> Result(Step(state, outcome), UnexpectedMessage)
 

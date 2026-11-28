@@ -1,6 +1,6 @@
 //// The secrets of a config: text to replace in SQL, and columns whose
 //// values to replace. Declare them once on the config with
-//// `dream_postgres.secrets`. They apply to each copy of a request that
+//// `config.secrets`. They apply to each copy of a request that
 //// leaves the process: the recording of a recorder, the SQL of a
 //// `PostgresError`, and the text of the trace span of each statement. The
 //// database and the app always get the real values.
@@ -8,8 +8,8 @@
 //// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
-//// import dream_postgres.{type Config, intercept, secrets}
 //// import dream_postgres/codec.{text}
+//// import dream_postgres/config.{type Config, intercept, secrets}
 //// import dream_postgres/secrets
 //// import snippets/request_tagging.{tag_with_app_name}
 ////
@@ -61,8 +61,8 @@ type SecretColumn {
 /// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres.{type Config, intercept, secrets}
 /// import dream_postgres/codec.{text}
+/// import dream_postgres/config.{type Config, intercept, secrets}
 /// import dream_postgres/secrets
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
@@ -88,8 +88,8 @@ pub fn new() -> Secrets {
 /// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres.{type Config, intercept, secrets}
 /// import dream_postgres/codec.{text}
+/// import dream_postgres/config.{type Config, intercept, secrets}
 /// import dream_postgres/secrets
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
@@ -123,8 +123,8 @@ pub fn text(
 /// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres.{type Config, intercept, secrets}
 /// import dream_postgres/codec.{text}
+/// import dream_postgres/config.{type Config, intercept, secrets}
 /// import dream_postgres/secrets
 /// import snippets/request_tagging.{tag_with_app_name}
 ///

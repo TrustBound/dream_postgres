@@ -49,10 +49,11 @@ Start a pool. The local test server has no certificate, so this example turns TL
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, TlsOff, database, default_config, host,
-  password, pool_size, port, start, tls, user,
+import dream_postgres/config.{
+  TlsOff, database, default_config, host, password, pool_size, port, tls, user,
 }
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
 
 /// Starts a pool of 4 connections to the database `dream_test` on this
 /// machine. The local test server has no certificate, so TLS is off.
@@ -74,8 +75,8 @@ Read each row into a value with a row reader:
 ### A row reader for users <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/queries.md#a-row-reader-for-users-"><img align="right" alt="Guide: Queries" title="Guide: Queries" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Row, column, row}
 import dream_postgres/codec.{int, text}
+import dream_postgres/row.{type Row, column, row}
 
 pub type User {
   User(id: Int, email: String, name: String)
@@ -96,10 +97,10 @@ Run a query with parameters:
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, one, parameter, query,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, parameter, query}
 import snippets/user_row.{type User, user_row}
 
 /// Stores a new user, and gives the user with the id that the database
@@ -121,10 +122,10 @@ pub fn create_user(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, maybe_one, named, parameter, query,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{maybe_one, named, parameter, query}
 import gleam/option.{type Option}
 import snippets/user_row.{type User, user_row}
 
@@ -147,11 +148,12 @@ Run several statements as one transaction:
 
 ```gleam
 import dream_errors.{type Error, Invalid}
-import dream_postgres.{
-  type Connection, type PostgresError, affected, check, commit, one, parameter,
-  query, single, step, transaction,
-}
 import dream_postgres/codec.{int}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{affected, one, parameter, query}
+import dream_postgres/row.{single}
+import dream_postgres/transaction.{check, commit, step, transaction}
 import gleam/result
 
 /// Why a move of money failed.
@@ -237,7 +239,7 @@ Match on the kind of a failure, and show your own text:
 import dream_errors.{
   type Error, Conflict, Failed, Invalid, NotFound, Retry, Timeout, Unavailable,
 }
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 import snippets/user_row.{type User}
 
 /// The status code and the text that a sign-up page shows for the result

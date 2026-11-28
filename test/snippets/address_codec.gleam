@@ -1,7 +1,7 @@
-import dream_postgres.{column, row}
 import dream_postgres/codec.{
   type Codec, type Field, composite, field, nullable, text,
 }
+import dream_postgres/row.{column, row}
 import gleam/option.{type Option, None}
 
 /// The values of the PostgreSQL composite type

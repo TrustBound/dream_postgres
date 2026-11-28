@@ -1,8 +1,8 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, one, parameter, query,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, parameter, query}
 import snippets/user_row.{type User, user_row}
 
 /// Stores a new user, and gives the user with the id that the database

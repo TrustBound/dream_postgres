@@ -1,6 +1,6 @@
 //// Extracts the report of a session that the server ended.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/event.{
   type ConnectionEnd, ServerEndedConnection,
 }
 import dream_postgres/internal/cell.{type ServerReport}

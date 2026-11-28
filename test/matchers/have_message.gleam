@@ -8,7 +8,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 /// ## Example
 ///
 /// ```gleam
-/// dream_postgres.config_from_url("postgres://ada:hunter2@host:0/app")
+/// config_from_url("postgres://ada:hunter2@host:0/app")
 /// |> should
 /// |> be_error()
 /// |> have_message()

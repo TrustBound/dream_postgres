@@ -1,8 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, commit, step, transaction,
-}
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/transaction.{commit, keep_both, step, transaction}
 import gleam/function
 import snippets/create_user.{create_user}
 

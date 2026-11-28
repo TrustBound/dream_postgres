@@ -2,7 +2,9 @@
 //// answers `attachment`, `status` and `catalog`, refuses each hold with
 //// `NoDatabase` at once, dials nothing, and is a transient child.
 
-import dream_postgres/driver/pool.{NoDatabase, PoolStatus}
+import dream_postgres/driver/pool/holds as pool_holds
+import dream_postgres/driver/pool/pool_failure.{NoDatabase}
+import dream_postgres/driver/pool/pool_status.{PoolStatus}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -45,14 +47,14 @@ fn shared_tests() -> TestSuite {
       it(
         "gives its attachment through a handle of its name",
         fn(named: NamedPool) {
-          pool.attachment(named.handle)
+          pool_holds.attachment(named.handle)
           |> should
           |> be_equal(Ok("the settings of a pool with no database"))
           |> or_fail_with("Expected the attachment")
         },
       ),
       it("shows no connection in its status", fn(named: NamedPool) {
-        pool.status(named.handle)
+        pool_holds.status(named.handle)
         |> should
         |> be_equal(
           Ok(PoolStatus(
@@ -67,7 +69,7 @@ fn shared_tests() -> TestSuite {
         |> or_fail_with("Expected a status of no connection")
       }),
       it("gives its catalog", fn(named: NamedPool) {
-        pool.catalog(named.handle)
+        pool_holds.catalog(named.handle)
         |> replace(Nil)
         |> should
         |> be_equal(Ok(Nil))
@@ -76,7 +78,7 @@ fn shared_tests() -> TestSuite {
       it("refuses a hold with NoDatabase at once", fn(named: NamedPool) {
         // A wait of one minute would time the test out: the answer comes
         // at once.
-        pool.hold(named.handle, 60_000, fn(_connection) { Nil })
+        pool_holds.hold(named.handle, 60_000, fn(_connection) { Nil })
         |> should
         |> be_equal(Error(NoDatabase))
         |> or_fail_with("Expected NoDatabase")
@@ -107,7 +109,7 @@ fn restarted_tests() -> TestSuite {
         fn(named: NamedPool) {
           {
             use Nil <- try(restart_first_child(named.supervisor))
-            pool.attachment(named.handle) |> map_error(inspect)
+            pool_holds.attachment(named.handle) |> map_error(inspect)
           }
           |> should
           |> be_equal(Ok("the settings of a pool with no database"))

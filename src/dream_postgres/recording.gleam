@@ -120,7 +120,7 @@ pub type WrittenParameter {
   /// The cell of the parameter: exactly the bytes that went over the
   /// wire.
   WrittenCell(cell: Cell)
-  /// A parameter of `dream_postgres.secret_parameter`. The file keeps the
+  /// A parameter of `query.secret_parameter`. The file keeps the
   /// name of its codec and no bytes, and playback takes any value with
   /// that codec at that position.
   SecretCell(codec: String)

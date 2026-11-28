@@ -4,8 +4,8 @@
 //// are compared as the text that `string.inspect` prints.
 
 import dream_errors.{Invalid}
-import dream_postgres.{config_from_url}
 import dream_postgres/error.{InvalidConfig, InvalidDatabaseUrl, PostgresError}
+import dream_postgres/url.{config_from_url}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}

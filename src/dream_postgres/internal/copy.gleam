@@ -5,7 +5,9 @@
 //// rows of a query.
 
 import dream_postgres/driver/catalog.{type Catalog}
-import dream_postgres/driver/connection.{type Connection, type CopySender}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/copy_caller.{type CopySender} as connection_copy_caller
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/error.{
   type Reason, CopyNeedsBinaryCodec, CopyQueryHasParameters, InterceptorFailed,
   MalformedCopyStream,
@@ -169,7 +171,7 @@ fn store_rows(
   use remaining <- result.try(driver_executor.remaining_milliseconds(
     deadline_at,
   ))
-  connection.copy_from(
+  connection_copy_caller.copy_from(
     connection,
     driver_executor.statement(sql, None, secrets),
     remaining,
@@ -245,7 +247,7 @@ fn send_full(
 }
 
 fn send(sender: CopySender, chunk: BitArray) -> Result(Nil, Reason) {
-  connection.send_chunk(sender, chunk)
+  connection_copy_caller.send_chunk(sender, chunk)
   |> result.map_error(driver_executor.chunk_error_reason)
 }
 
@@ -433,7 +435,7 @@ fn no_parameters(count: Int) -> Result(Nil, Reason) {
 
 fn stream_database_rows(
   connection: Connection,
-  statement: connection.Statement,
+  statement: connection_statement.Statement,
   deadline_at: Int,
   endpoint: Endpoint,
   start: CopyOut(accumulator),
@@ -443,7 +445,7 @@ fn stream_database_rows(
     deadline_at,
   ))
   use copied <- result.try(
-    connection.copy_to(
+    connection_copy_caller.copy_to(
       connection,
       statement,
       remaining,

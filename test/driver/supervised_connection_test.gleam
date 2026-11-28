@@ -2,14 +2,25 @@
 //// stays up, refuses each kind of request as not connected, and connects
 //// once the server listens.
 
-import dream_postgres/driver/connection.{
-  type ChunkError, type Connection, type ConnectionEvent, type CopyError,
-  type HousekeepingError, type Outcome, type PrepareError, type RunError,
-  type SettleError, type SimpleQueryError, Backoff, ConnectFailed, Connected,
-  ConnectionConfig, CopyNotConnected, HousekeepingNotConnected,
-  PrepareNotConnected, RunNotConnected, SettleNotConnected,
-  SimpleQueryNotConnected, TransportRefused, supervised,
+import dream_postgres/driver/connection.{supervised}
+import dream_postgres/driver/connection/backoff.{Backoff}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/copy_caller as connection_copy_caller
+import dream_postgres/driver/connection/event.{
+  type ConnectionEvent, ConnectFailed, Connected, TransportRefused,
 }
+import dream_postgres/driver/connection/extended_query as connection_extended_query
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/request_failure.{
+  type ChunkError, type CopyError, type HousekeepingError, type PrepareError,
+  type RunError, type SettleError, type SimpleQueryError, CopyNotConnected,
+  HousekeepingNotConnected, PrepareNotConnected, RunNotConnected,
+  SettleNotConnected, SimpleQueryNotConnected,
+}
+import dream_postgres/driver/connection/settings.{ConnectionConfig}
+import dream_postgres/driver/connection/simple_query as connection_simple_query
+import dream_postgres/driver/connection/statement as connection_statement
+import dream_postgres/driver/connection/status as connection_status
 import dream_postgres/driver/housekeeping_sql.{catalog_load, rollback}
 import dream_postgres/driver/transport.{ConnectRefused}
 import dream_postgres/internal/cell.{
@@ -183,33 +194,48 @@ fn watch_late_server(
 ) -> Result(LateServer, String) {
   let first_event = next_event(events)
   let early_simple_query =
-    connection.run_simple_query(
+    connection_simple_query.run_simple_query(
       connection,
-      connection.statement("SELECT 1"),
+      connection_statement.statement("SELECT 1"),
       5000,
     )
   let early_prepare =
-    connection.prepare(connection, connection.statement("SELECT 1"), 5000)
-  let early_run =
-    connection.run(connection, connection.statement("SELECT 1"), [], [], 5000)
-  let early_settle = connection.settled_transaction_status(connection, 5000)
-  let early_copy =
-    connection.copy_from(
+    connection_extended_query.prepare(
       connection,
-      connection.statement("COPY items FROM STDIN"),
+      connection_statement.statement("SELECT 1"),
+      5000,
+    )
+  let early_run =
+    connection_extended_query.run(
+      connection,
+      connection_statement.statement("SELECT 1"),
+      [],
+      [],
+      5000,
+    )
+  let early_settle =
+    connection_status.settled_transaction_status(connection, 5000)
+  let early_copy =
+    connection_copy_caller.copy_from(
+      connection,
+      connection_statement.statement("COPY items FROM STDIN"),
       5000,
       send_nothing,
     )
   let early_housekeeping_run =
-    connection.run_housekeeping(connection, catalog_load, 5000)
+    connection_extended_query.run_housekeeping(connection, catalog_load, 5000)
   let early_housekeeping_simple_query =
-    connection.run_housekeeping_simple_query(connection, rollback, 5000)
+    connection_simple_query.run_housekeeping_simple_query(
+      connection,
+      rollback,
+      5000,
+    )
   use Nil <- try(start_forwarder(port, first_driver_server.port))
   let connected_event = next_event_after_failed_connects(events)
   let late_request =
-    connection.run_simple_query(
+    connection_simple_query.run_simple_query(
       connection,
-      connection.statement("SELECT 1"),
+      connection_statement.statement("SELECT 1"),
       5000,
     )
   Ok(LateServer(

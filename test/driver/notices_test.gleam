@@ -3,9 +3,13 @@
 //// an outcome only when it arrived during that outcome's request. No
 //// notice goes with a later request.
 
-import dream_postgres/driver/connection.{
-  copy_to, prepare, run, run_housekeeping_simple_query, statement, stop,
+import dream_postgres/driver/connection.{stop}
+import dream_postgres/driver/connection/copy_caller.{copy_to}
+import dream_postgres/driver/connection/extended_query.{prepare, run}
+import dream_postgres/driver/connection/simple_query.{
+  run_housekeeping_simple_query,
 }
+import dream_postgres/driver/connection/statement.{statement}
 import dream_postgres/driver/housekeeping_sql.{rollback}
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

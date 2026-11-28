@@ -1,7 +1,8 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type ListenMessage, type Listener, type PostgresError,
-  type Subscription, listen, start_listener,
+import dream_postgres/config.{type Config}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/listener.{
+  type ListenMessage, type Listener, type Subscription, listen, start_listener,
 }
 import gleam/erlang/process.{type Subject}
 import gleam/result

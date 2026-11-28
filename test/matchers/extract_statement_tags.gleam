@@ -1,6 +1,6 @@
 //// Extracts the tag and the row count of each statement result.
 
-import dream_postgres/driver/query.{type StatementResult}
+import dream_postgres/driver/query/step.{type StatementResult}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{map}
 

@@ -1,6 +1,6 @@
 //// Extracts the SQLSTATE code of a simple query that a later statement failed.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/request_failure.{
   type SimpleQueryError, SimpleQueryFailed,
 }
 import dream_test/types.{

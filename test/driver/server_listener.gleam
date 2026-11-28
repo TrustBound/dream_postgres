@@ -12,9 +12,10 @@
 //// The shared servers keep a session open until it ends, so every start
 //// has a stop.
 
-import dream_postgres/driver/connection.{
-  type Backoff, type Connection, Backoff, ConnectionConfig,
-}
+import dream_postgres/driver/connection
+import dream_postgres/driver/connection/backoff.{type Backoff, Backoff}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/settings.{ConnectionConfig}
 import dream_postgres/driver/listener.{
   type Listener, type ListenerConfig, type ListenerMessage, type Subscription,
   ListenerConfig, start, stop, subscribe, unsubscribe,

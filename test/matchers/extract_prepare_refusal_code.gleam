@@ -1,6 +1,8 @@
 //// Extracts the SQLSTATE code of a prepare that the server refused.
 
-import dream_postgres/driver/connection.{type PrepareError, PrepareRefused}
+import dream_postgres/driver/connection/request_failure.{
+  type PrepareError, PrepareRefused,
+}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

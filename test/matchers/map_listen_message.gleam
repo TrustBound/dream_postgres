@@ -1,7 +1,7 @@
 //// A matcher that maps a message of the driver's listener to the listen message of the client.
 
-import dream_postgres.{type ListenMessage}
 import dream_postgres/driver/listener
+import dream_postgres/listener.{type ListenMessage} as postgres_listener
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Map a message of the driver's listener to the listen message of the client. The chain goes on with the result.
@@ -20,6 +20,6 @@ pub fn map_listen_message(
 ) -> MatchResult(ListenMessage) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
-    MatchOk(value) -> MatchOk(dream_postgres.listen_message(value))
+    MatchOk(value) -> MatchOk(postgres_listener.listen_message(value))
   }
 }

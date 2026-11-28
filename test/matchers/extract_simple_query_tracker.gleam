@@ -1,8 +1,10 @@
 //// Runs simple queries on a session, and tracks the transaction after each one.
 
-import dream_postgres/driver/query.{
-  type Outcome, type SimpleQueryFailure, type StatementResult,
+import dream_postgres/driver/query/simple_query.{
   start_simple_query, step_simple_query,
+}
+import dream_postgres/driver/query/step.{
+  type Outcome, type SimpleQueryFailure, type StatementResult,
 }
 import dream_postgres/driver/transaction.{
   type TransactionTracker, new_tracker, track_simple_query,

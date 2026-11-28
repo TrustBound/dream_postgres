@@ -1,11 +1,15 @@
 //// Proves the one deadline of a setup: the deadline itself, a transport
 //// step that it cuts short, and a reconnect that it ends.
 
-import dream_postgres/driver/connection.{
-  ConnectionConfig, ConnectionEnded, ConnectionLost, Disconnected,
-  ReconnectFailed, SetupExited, SetupTimedOut, SimpleQueryRequestFailed,
-  SocketFailed, start_failure,
+import dream_postgres/driver/connection.{start_failure}
+import dream_postgres/driver/connection/event.{
+  ConnectionLost, Disconnected, ReconnectFailed, SetupExited, SetupTimedOut,
+  SocketFailed,
 }
+import dream_postgres/driver/connection/request_failure.{
+  ConnectionEnded, SimpleQueryRequestFailed,
+}
+import dream_postgres/driver/connection/settings.{ConnectionConfig}
 import dream_postgres/driver/deadline.{
   bounded_wait, from_now, has_passed, time_left,
 }

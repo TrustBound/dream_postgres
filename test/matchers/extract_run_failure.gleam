@@ -1,6 +1,6 @@
 //// Extracts the request failure of a run.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/request_failure.{
   type RequestFailure, type RunError, RunFailed,
 }
 import dream_test/types.{

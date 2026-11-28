@@ -1,4 +1,4 @@
-//// Tests for the copy step of `dream_postgres/driver/query`, fed with the
+//// Tests for the copy step of `dream_postgres/driver/query/copy_step`, fed with the
 //// messages of the COPY flows of the PostgreSQL documentation ("Message
 //// Flow", "COPY Operations") and with what the app does, one at a time,
 //// with no server.
@@ -8,7 +8,8 @@ import dream_postgres/driver/message.{
   CopyDoneFromServer, CopyInResponse, DataRow, ErrorResponse, Execute,
   NoticeResponse, Parse, ParseComplete, ReadyForQuery, Sync,
 }
-import dream_postgres/driver/query.{
+import dream_postgres/driver/query/copy_step as query_copy_step
+import dream_postgres/driver/query/step.{
   AwaitingParseComplete, CopyCompleted, CopyFrom, CopyNotSupported, CopyTo,
   CopyingIn, NoCopyStarted, Notice, Outcome, ServerError,
 }
@@ -30,7 +31,7 @@ import matchers/fed_to_copy_step.{fed_to_copy_step}
 
 /// The tests of the copy step.
 pub fn tests() -> TestSuite {
-  describe("dream_postgres/driver/query copy step", [
+  describe("dream_postgres/driver/query/copy_step", [
     group("COPY FROM STDIN", copy_in_tests()),
     group("COPY TO STDOUT", copy_out_tests()),
     group("other statements", other_statement_tests()),
@@ -40,7 +41,7 @@ pub fn tests() -> TestSuite {
 fn copy_in_tests() {
   [
     it("sends Parse, Bind, Execute and Sync", fn() {
-      query.start_copy("COPY t FROM STDIN", CopyFrom).messages
+      query_copy_step.start_copy("COPY t FROM STDIN", CopyFrom).messages
       |> should
       |> be_equal([
         Parse(statement: "", query: "COPY t FROM STDIN", parameter_type_ids: []),
@@ -129,8 +130,8 @@ fn copy_in_tests() {
       let started = started_copy_in()
 
       // Act
-      let #(state, _bytes) = query.stop_at_deadline(started)
-      let accepts = query.accepts_copy_data(state)
+      let #(state, _bytes) = query_copy_step.stop_at_deadline(started)
+      let accepts = query_copy_step.accepts_copy_data(state)
 
       // Assert
       accepts
@@ -143,7 +144,7 @@ fn copy_in_tests() {
       let started = started_copy_in()
 
       // Act
-      let #(_state, bytes) = query.stop_at_deadline(started)
+      let #(_state, bytes) = query_copy_step.stop_at_deadline(started)
 
       // Assert
       bytes
@@ -153,8 +154,8 @@ fn copy_in_tests() {
     }),
     it("takes no data before the start of a COPY FROM STDIN", fn() {
       // Act
-      let start = query.start_copy("COPY t FROM STDIN", CopyFrom)
-      let accepts = query.accepts_copy_data(start.state)
+      let start = query_copy_step.start_copy("COPY t FROM STDIN", CopyFrom)
+      let accepts = query_copy_step.accepts_copy_data(start.state)
 
       // Assert
       accepts
@@ -167,7 +168,7 @@ fn copy_in_tests() {
       let started = started_copy_in()
 
       // Act
-      let accepts = query.accepts_copy_data(started)
+      let accepts = query_copy_step.accepts_copy_data(started)
 
       // Assert
       accepts
@@ -180,8 +181,8 @@ fn copy_in_tests() {
       let started = started_copy_in()
 
       // Act
-      let #(finished_state, _bytes) = query.finish_copy(started)
-      let accepts = query.accepts_copy_data(finished_state)
+      let #(finished_state, _bytes) = query_copy_step.finish_copy(started)
+      let accepts = query_copy_step.accepts_copy_data(finished_state)
 
       // Assert
       accepts
@@ -190,13 +191,13 @@ fn copy_in_tests() {
       |> or_fail_with("Expected no data after the end")
     }),
     it("frames a chunk as CopyData", fn() {
-      query.copy_data(<<"1\n":utf8>>)
+      query_copy_step.copy_data(<<"1\n":utf8>>)
       |> should
       |> be_equal(<<"d", 6:32, "1\n":utf8>>)
       |> or_fail_with("Expected one CopyData")
     }),
     it("frames a chunk longer than the piece limit as two CopyData", fn() {
-      query.copy_data(<<repeated_byte(65_536):bits, "x":utf8>>)
+      query_copy_step.copy_data(<<repeated_byte(65_536):bits, "x":utf8>>)
       |> should
       |> be_equal(<<
         "d",
@@ -209,7 +210,7 @@ fn copy_in_tests() {
       |> or_fail_with("Expected a full piece, then the rest")
     }),
     it("frames an empty chunk as no message", fn() {
-      query.copy_data(<<>>)
+      query_copy_step.copy_data(<<>>)
       |> should
       |> be_equal(<<>>)
       |> or_fail_with("Expected no bytes")

@@ -2,18 +2,20 @@
 //// the setup, and each test plays one back on a connection whose port has
 //// no server, so playback cannot reach a database.
 
-import dream_postgres.{
-  affected, copy_from, copy_to, query, single, table, with_interceptor,
-}
 import dream_postgres/codec
+import dream_postgres/config
+import dream_postgres/copy.{copy_from, copy_to, table}
 import dream_postgres/error.{
   RecordingInUse, RecordingNotFound, RecordingNotRead, RecordingNotWritten,
   SecretColumnNotReplaced,
 }
 import dream_postgres/interceptor.{SqlAnswer, command}
+import dream_postgres/pool.{with_interceptor}
 import dream_postgres/posix
+import dream_postgres/query.{affected, query}
 import dream_postgres/recorder
 import dream_postgres/recorder/normalize
+import dream_postgres/row.{single}
 import dream_postgres/secrets
 import dream_test/context
 import dream_test/matchers.{
@@ -589,7 +591,7 @@ pub fn tests() -> TestSuite {
           runs
           |> should
           |> play_back("all", fn(connection) {
-            dream_postgres.stop(connection)
+            pool.stop(connection)
             recorded_scenarios.select_series(connection)
           })
           |> be_error()
@@ -765,10 +767,10 @@ pub fn tests() -> TestSuite {
             |> recorder.start
             |> result.try(fn(test_recorder) {
               server_pools.config(recorded_scenarios.server_port)
-              |> dream_postgres.record(test_recorder)
-              |> dream_postgres.start
+              |> config.record(test_recorder)
+              |> pool.start
             })
-            |> result.map(dream_postgres.stop)
+            |> result.map(pool.stop)
 
           // Act and assert
           recorder.new(file: path)
@@ -897,7 +899,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_with_recorder(
             server_pools.config(recorded_scenarios.server_port)
-              |> dream_postgres.secrets(
+              |> config.secrets(
                 secrets.new() |> secrets.column("token", codec.int, with: 1),
               ),
             recorded_scenarios.read_token,
@@ -929,8 +931,8 @@ pub fn tests() -> TestSuite {
             )
             use pool_child <- result.try(
               server_pools.config(recorded_scenarios.server_port)
-              |> dream_postgres.record(test_recorder)
-              |> dream_postgres.supervised(name: pool_name)
+              |> config.record(test_recorder)
+              |> pool.supervised(name: pool_name)
               |> result.map_error(string.inspect),
             )
             static_supervisor.new(static_supervisor.OneForOne)
@@ -942,9 +944,7 @@ pub fn tests() -> TestSuite {
           |> be_ok()
           |> run_and_stop_supervisor(fn() {
             let _rows =
-              recorded_scenarios.select_series(dream_postgres.named_connection(
-                pool_name,
-              ))
+              recorded_scenarios.select_series(pool.named_connection(pool_name))
             simplifile.read(path)
           })
           |> be_ok()
@@ -963,9 +963,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> be_ok()
           |> run_and_stop_supervisor(fn() {
-            recorded_scenarios.select_series(dream_postgres.named_connection(
-              pool_name,
-            ))
+            recorded_scenarios.select_series(pool.named_connection(pool_name))
           })
           |> be_ok()
           |> be_equal("[1, 2, 3]")
@@ -977,7 +975,7 @@ pub fn tests() -> TestSuite {
         fn(runs: RecordedRuns) {
           // Arrange
           let pool_name = process.new_name("restarted_pool")
-          let connection = dream_postgres.named_connection(pool_name)
+          let connection = pool.named_connection(pool_name)
 
           // Act and assert
           recorded_scenarios.start_supervised_playback(
@@ -1010,9 +1008,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_with_recorder(
             server_pools.config(recorded_scenarios.server_port)
-              |> dream_postgres.intercept(normalize.timestamps_near_now(
-                window_days: 1,
-              )),
+              |> config.intercept(normalize.timestamps_near_now(window_days: 1)),
             recorded_scenarios.read_series,
           )
           |> be_ok()

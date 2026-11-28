@@ -1,4 +1,4 @@
-import dream_postgres.{
+import dream_postgres/listener.{
   type ListenMessage, ListenFailed, Listening, NotListening, NotificationArrived,
 }
 import gleam/erlang/process.{type Subject}

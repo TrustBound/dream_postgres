@@ -1,7 +1,8 @@
 //// Extracts the reason of a lost connection.
 
-import dream_postgres/driver/connection.{
-  type LossReason, type RequestFailure, ConnectionEnded, ConnectionLost,
+import dream_postgres/driver/connection/event.{type LossReason, ConnectionLost}
+import dream_postgres/driver/connection/request_failure.{
+  type RequestFailure, ConnectionEnded,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,

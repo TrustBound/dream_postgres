@@ -1,7 +1,7 @@
 //// A matcher that gives the time settings that a client config gives the
 //// driver pool.
 
-import dream_postgres.{type Config}
+import dream_postgres/config.{type Config}
 import dream_postgres/error
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
@@ -16,7 +16,7 @@ import gleam/option.{Some}
 /// ## Example
 ///
 /// ```gleam
-/// dream_postgres.default_config()
+/// default_config()
 /// |> should
 /// |> extract_driver_times()
 /// |> be_equal(#(5000, 10_000, 2000, 30_000, 5000))
@@ -32,7 +32,7 @@ pub fn extract_driver_times(
 }
 
 fn driver_times_of(config: Config) -> MatchResult(#(Int, Int, Int, Int, Int)) {
-  case dream_postgres.driver_pool_config(config, Nil) {
+  case config.driver_pool_config(config, Nil) {
     Ok(pool_config) ->
       MatchOk(#(
         pool_config.connection.transport.connect_timeout_milliseconds,

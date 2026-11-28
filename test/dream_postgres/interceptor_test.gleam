@@ -1,11 +1,8 @@
 //// Interceptors: the outcome builders and the chain of the runners with
 //// no server, then the chain of the client on PostgreSQL 16 to 19.
 
-import dream_postgres.{
-  affected, all, commit, named, one, query, run_sql, secret_parameter, single,
-  step, transaction, with_interceptor,
-}
 import dream_postgres/codec
+import dream_postgres/config
 import dream_postgres/error.{
   ColumnTypeMismatch, InterceptorFailed, ParameterTypeMismatch, UnknownType,
 }
@@ -17,8 +14,13 @@ import dream_postgres/internal/cell.{
   CommandResult, StatementDescription, TypeDescription,
 }
 import dream_postgres/internal/runner
+import dream_postgres/pool.{with_interceptor}
+import dream_postgres/query.{
+  affected, all, named, one, query, run_sql, secret_parameter,
+}
+import dream_postgres/row.{single}
 import dream_postgres/sql_state.{DeadlockDetected}
-import dream_postgres/transaction.{keep_both}
+import dream_postgres/transaction.{commit, keep_both, step, transaction}
 import dream_test/context
 import dream_test/matchers.{
   be_equal, be_error, be_ok, contain_string, or_fail_with, should,
@@ -278,7 +280,7 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_on_configured_pool(
-            dream_postgres.intercept(_, interceptors.append_to_sql(" || 'a'")),
+            config.intercept(_, interceptors.append_to_sql(" || 'a'")),
             fn(connection) {
               query("SELECT 'x'::text") |> one(single(codec.text), connection)
             },

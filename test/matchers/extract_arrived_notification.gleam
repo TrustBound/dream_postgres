@@ -1,6 +1,6 @@
 //// Extracts the notification of a listener message.
 
-import dream_postgres/driver/connection.{type Notification}
+import dream_postgres/driver/connection/outcome.{type Notification}
 import dream_postgres/driver/listener.{type ListenerMessage, NotificationArrived}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,

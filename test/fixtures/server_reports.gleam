@@ -25,7 +25,7 @@ pub fn administrator_shutdown() -> ServerReport {
 /// ## Example
 ///
 /// ```gleam
-/// dream_postgres.commit_answer(["ROLLBACK"], Some(server_reports.division_by_zero()))
+/// commit_answer(["ROLLBACK"], Some(server_reports.division_by_zero()))
 /// ```
 pub fn division_by_zero() -> ServerReport {
   report(severity: "ERROR", code: "22012", message: "division by zero")

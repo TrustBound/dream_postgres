@@ -6,16 +6,18 @@
 //// listener test on PostgreSQL 17, so that the two listeners of the
 //// channel `jobs` never get each other's notifications.
 
-import dream_postgres.{
-  type ListenMessage, type PoolEvent, type ServerNotice, Connected, affected,
-  named, named_listener, one, parameter, query, run_sql, single, stop_listener,
-  with_connection,
-}
 import dream_postgres/codec
+import dream_postgres/config.{type PoolEvent, type ServerNotice, Connected}
 import dream_postgres/error
+import dream_postgres/listener.{
+  type ListenMessage, named_listener, stop_listener,
+}
+import dream_postgres/pool.{with_connection}
+import dream_postgres/query.{affected, named, one, parameter, query, run_sql}
 import dream_postgres/range.{Exclusive, Inclusive, Range}
 import dream_postgres/recorder
 import dream_postgres/recording
+import dream_postgres/row.{single}
 import dream_postgres/sql_state
 import dream_test/context
 import dream_test/matchers.{
@@ -237,7 +239,7 @@ pub fn tests() -> TestSuite {
 
           // Act and assert
           start_pool_with_events(
-            server_pools.config(port_16) |> dream_postgres.pool_size(1),
+            server_pools.config(port_16) |> config.pool_size(1),
             events,
           )
           |> should
@@ -540,7 +542,7 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
             |> be_ok()
             |> run_and_stop_supervisor(fn() {
               with_api_keys_table(
-                dream_postgres.named_connection(pool_name),
+                pool.named_connection(pool_name),
                 create_api_key(_, 7, "s3cret"),
               )
               |> result.map(fn(api_key) { dream_uuid.to_string(api_key.id) })
@@ -711,7 +713,7 @@ pub fn unit_tests() -> TestSuite {
       fn() {
         // Act
         let titles =
-          list_titles(dream_postgres.with_interceptor(
+          list_titles(pool.with_interceptor(
             no_database.connection(),
             answer_with_two_posts,
           ))
@@ -729,7 +731,7 @@ pub fn unit_tests() -> TestSuite {
       let count =
         query("UPDATE users SET active = false")
         |> named("user.deactivate_all")
-        |> affected(dream_postgres.with_interceptor(
+        |> affected(pool.with_interceptor(
           no_database.connection(),
           answer_three_updates,
         ))
@@ -757,7 +759,7 @@ pub fn unit_tests() -> TestSuite {
             let outcome =
               query("SELECT 1")
               |> named(name)
-              |> affected(dream_postgres.with_interceptor(
+              |> affected(pool.with_interceptor(
                 no_database.connection(),
                 simulation,
               ))

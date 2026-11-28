@@ -227,12 +227,18 @@ fn decode_bit_string(
 ) -> Result(BitArray, DecodeIssue) {
   use bytes <- result.try(binary_bytes(value))
   case bytes {
-    <<length:size(32), rest:bits>> ->
-      case rest {
-        <<bits:bits-size(length), _padding:bits>> -> Ok(bits)
-        _ -> Error(Malformed("the bit string is shorter than its length"))
-      }
+    <<length:size(32), rest:bits>> -> take_bit_string(rest, length)
     _ -> Error(wrong_size(description, bytes))
+  }
+}
+
+fn take_bit_string(
+  rest: BitArray,
+  length: Int,
+) -> Result(BitArray, DecodeIssue) {
+  case rest {
+    <<bits:bits-size(length), _padding:bits>> -> Ok(bits)
+    _ -> Error(Malformed("the bit string is shorter than its length"))
   }
 }
 

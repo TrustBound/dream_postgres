@@ -3,11 +3,10 @@
 //// for `verify` in the shape of a generated model module: each query is
 //// built with the placeholder of each parameter's codec.
 
-import dream_postgres.{
-  type QueryCheck, checked, checked_command, column, named, parameter, query,
-  row,
-}
+import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
 import dream_postgres/codec
+import dream_postgres/query.{named, parameter, query}
+import dream_postgres/row.{column, row}
 
 /// The columns of the table, as SQL for `CREATE TEMPORARY TABLE`.
 pub const columns = "(id int4, email text, nickname text)"
@@ -94,7 +93,7 @@ pub fn find_with_wrong_codec() -> QueryCheck {
   query("SELECT id FROM checked_users WHERE email = $1")
   |> named("user.find_by_email")
   |> parameter(codec.int, codec.placeholder(codec.int))
-  |> checked(dream_postgres.single(codec.int))
+  |> checked(row.single(codec.int))
 }
 
 /// `user.insert_one`: inserts the row with the id 1 into the table
@@ -123,5 +122,5 @@ pub fn add_one() -> QueryCheck {
   query("SELECT $1::int4 + 1")
   |> named("server.add_one")
   |> parameter(codec.int, codec.placeholder(codec.int))
-  |> checked(dream_postgres.single(codec.int))
+  |> checked(row.single(codec.int))
 }

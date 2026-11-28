@@ -34,10 +34,11 @@ A pool is a set of connections to one database. Build its settings with `default
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, TlsOff, database, default_config, host,
-  password, pool_size, port, start, tls, user,
+import dream_postgres/config.{
+  TlsOff, database, default_config, host, password, pool_size, port, tls, user,
 }
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
 
 /// Starts a pool of 4 connections to the database `dream_test` on this
 /// machine. The local test server has no certificate, so TLS is off.
@@ -66,7 +67,9 @@ The default config requires TLS. It checks the certificate of the server against
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, run_sql}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{run_sql}
 
 /// Makes the tables of the examples: users, and the accounts of users.
 pub fn create_tables(
@@ -97,8 +100,8 @@ A row reader says how to read one row of a result. `column` reads the next colum
 ### A row reader for users <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Row, column, row}
 import dream_postgres/codec.{int, text}
+import dream_postgres/row.{type Row, column, row}
 
 pub type User {
   User(id: Int, email: String, name: String)
@@ -123,10 +126,10 @@ A codec connects a Gleam type and a PostgreSQL type. `codec.int` reads `int2`, `
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, one, parameter, query,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, parameter, query}
 import snippets/user_row.{type User, user_row}
 
 /// Stores a new user, and gives the user with the id that the database
@@ -154,10 +157,10 @@ The server prepares each statement and describes its parameters and columns. Bef
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, maybe_one, named, parameter, query,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{maybe_one, named, parameter, query}
 import gleam/option.{type Option}
 import snippets/user_row.{type User, user_row}
 
@@ -180,7 +183,9 @@ pub fn find_user(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, all, query}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, query}
 import snippets/user_row.{type User, user_row}
 
 /// Gives every user, in the order of their ids.
@@ -201,10 +206,10 @@ pub fn list_users(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, affected, parameter, query,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{affected, parameter, query}
 
 /// Gives the user a new name, and gives the number of rows that changed:
 /// 0 when no user has the id.
@@ -223,7 +228,7 @@ pub fn rename_user(
 
 ## Step 7: Stop the pool
 
-`dream_postgres.stop(connection)` stops the pool and closes its connections. The calls that hold a connection get at most 5 seconds to finish. A pool that runs for the whole life of an app goes under the app's supervisor instead. The [connecting guide](connecting.md#run-the-pool-under-a-supervisor) shows how.
+`pool.stop(connection)` stops the pool and closes its connections. The calls that hold a connection get at most 5 seconds to finish. A pool that runs for the whole life of an app goes under the app's supervisor instead. The [connecting guide](connecting.md#run-the-pool-under-a-supervisor) shows how.
 
 ## Where to go next
 

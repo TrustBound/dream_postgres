@@ -1,5 +1,6 @@
-import dream_postgres.{type Config, type ListenerName, supervised_listener}
+import dream_postgres/config.{type Config}
 import dream_postgres/error.{describe}
+import dream_postgres/listener.{type ListenerName, supervised_listener}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/result

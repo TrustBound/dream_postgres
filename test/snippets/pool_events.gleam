@@ -1,10 +1,11 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type Connection, type PoolEvent, type PostgresError,
-  ConnectFailed, Connected, Disconnected, Free, Held, Reconnected, Refused,
-  Replacing, Returned, Stopping, Waiting, pool_events, start,
+import dream_postgres/config.{
+  type Config, type PoolEvent, ConnectFailed, Connected, Disconnected, Free,
+  Held, Reconnected, Refused, Replacing, Returned, Stopping, Waiting,
+  pool_events,
 }
-import dream_postgres/error.{describe}
+import dream_postgres/error.{type PostgresError, describe}
+import dream_postgres/pool.{type Connection, start}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/pair

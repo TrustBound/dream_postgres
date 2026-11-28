@@ -1,14 +1,16 @@
 //// The listener of the client: LISTEN and NOTIFY on PostgreSQL 16 to 19,
 //// and the mapping of each message and error of the driver's listener.
 
-import dream_postgres.{
-  ListenFailed, Listening, NotListening, NotificationArrived, listen,
-  monitor_listener, named_listener, run_sql, stop_listener, unlisten,
-}
-import dream_postgres/driver/connection
+import dream_postgres/driver/connection/event as connection_event
+import dream_postgres/driver/connection/outcome as connection_outcome
 import dream_postgres/driver/listener
 import dream_postgres/error
 import dream_postgres/internal/cell.{Idle}
+import dream_postgres/listener.{
+  ListenFailed, Listening, NotListening, NotificationArrived, listen,
+  monitor_listener, named_listener, stop_listener, unlisten,
+} as postgres_listener
+import dream_postgres/query.{run_sql}
 import dream_test/context
 import dream_test/matchers.{
   be_empty, be_equal, be_error, be_ok, or_fail_with, should,
@@ -268,7 +270,7 @@ pub fn mapping_tests() -> TestSuite {
         // Act and assert
         // Nothing listens on port 5449 on localhost.
         server_pools.config(5449)
-        |> dream_postgres.start_listener
+        |> postgres_listener.start_listener
         |> should
         |> be_error()
         |> have_cause()
@@ -294,7 +296,7 @@ pub fn mapping_tests() -> TestSuite {
       unit.it("refuses a config that cannot start, before any supervisor", fn() {
         // Act and assert
         server_pools.config(70_000)
-        |> dream_postgres.supervised_listener(name: process.new_name(
+        |> postgres_listener.supervised_listener(name: process.new_name(
           "supervised_listener_bad_port",
         ))
         |> should
@@ -326,7 +328,7 @@ fn listen_message_tests() {
   unit.group("listen messages", [
     unit.it("a notification keeps its channel, payload and process", fn() {
       // Act and assert
-      listener.NotificationArrived(connection.Notification(
+      listener.NotificationArrived(connection_outcome.Notification(
         process_id: 42,
         channel: "jobs",
         payload: "hello",
@@ -463,7 +465,7 @@ fn listener_start_error_tests() {
   unit.group("listener start errors", [
     unit.it("a failed connect is ConnectFailed", fn() {
       // Act and assert
-      listener.ConnectFailed(connection.SetupTimedOut)
+      listener.ConnectFailed(connection_event.SetupTimedOut)
       |> should
       |> map_listener_start_error("db", 5432)
       |> be_equal(error.ConnectFailed(error.SetupTimedOut))

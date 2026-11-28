@@ -1,6 +1,6 @@
 //// Extracts `#(channel, payload)` of each notification from asynchronous messages.
 
-import dream_postgres/driver/query.{type AsynchronousMessage, Notification}
+import dream_postgres/driver/query/step.{type AsynchronousMessage, Notification}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{filter_map}
 

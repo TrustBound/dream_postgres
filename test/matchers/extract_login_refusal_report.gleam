@@ -1,6 +1,6 @@
 //// Extracts the report of a login that the server refused.
 
-import dream_postgres/driver/connection.{type ConnectError, LoginRefused}
+import dream_postgres/driver/connection/event.{type ConnectError, LoginRefused}
 import dream_postgres/driver/login.{ServerRejectedLogin}
 import dream_postgres/internal/cell.{type ServerReport}
 import dream_test/types.{

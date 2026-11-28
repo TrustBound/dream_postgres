@@ -1,8 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, type Row, column, copy_from, row, table,
-}
 import dream_postgres/codec.{type Field, field, int, nullable, text}
+import dream_postgres/copy.{copy_from, table}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/row.{type Row, column, row}
 import gleam/option.{type Option}
 
 pub type User {

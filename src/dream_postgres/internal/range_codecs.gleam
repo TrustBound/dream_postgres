@@ -12,8 +12,8 @@
 //// a multirange is `{[1,3),[5,7)}`.
 
 import dream_postgres/internal/cell.{
-  type TypeDescription, Array, Base, Binary, BinaryFormat, Composite, Domain,
-  Enum, Multirange, Null, Pseudo, Range as RangeKind, Text, TextFormat,
+  type Cell, type TypeDescription, Array, Base, Binary, BinaryFormat, Composite,
+  Domain, Enum, Multirange, Null, Pseudo, Range as RangeKind, Text, TextFormat,
 }
 import dream_postgres/internal/codec_type.{
   type Codec, type DecodeIssue, type TypeLookup, Codec, Malformed, NullValue,
@@ -78,6 +78,53 @@ pub fn range(element: Codec(a)) -> Codec(Range(a)) {
   )
 }
 
+fn decode_binary_multirange(
+  element: Codec(a),
+  bytes: BitArray,
+  element_type: TypeDescription,
+  lookup: TypeLookup,
+) -> Result(List(Range(a)), DecodeIssue) {
+  case bytes {
+    <<count:size(32), rest:bits>> ->
+      decode_binary_ranges(element, rest, count, element_type, lookup, [])
+    _ -> Error(Malformed("the multirange's header is cut short"))
+  }
+}
+
+fn encode_binary_multirange(
+  element: Codec(a),
+  values: List(Range(a)),
+  element_type: TypeDescription,
+  lookup: TypeLookup,
+) -> Result(Cell, String) {
+  use ranges <- result.try(
+    list.try_map(values, encode_binary_range(element, _, element_type, lookup)),
+  )
+  let body =
+    list.fold(ranges, <<>>, fn(bytes, one) {
+      <<bytes:bits, { bit_array.byte_size(one) }:size(32), one:bits>>
+    })
+  Ok(Binary(<<{ list.length(ranges) }:size(32), body:bits>>))
+}
+
+fn encode_text_multirange(
+  element: Codec(a),
+  values: List(Range(a)),
+  element_type: TypeDescription,
+  lookup: TypeLookup,
+) -> Result(Cell, String) {
+  use ranges <- result.try(
+    list.try_map(values, encode_text_range(element, _, element_type, lookup)),
+  )
+  Ok(
+    Text(<<
+      "{":utf8,
+      { bit_array.concat(list.intersperse(ranges, <<",":utf8>>)) }:bits,
+      "}":utf8,
+    >>),
+  )
+}
+
 /// A codec of a multirange of the element codec's type, as a list of
 /// ranges.
 pub fn multirange(element: Codec(a)) -> Codec(List(Range(a))) {
@@ -96,38 +143,10 @@ pub fn multirange(element: Codec(a)) -> Codec(List(Range(a))) {
         lookup,
       ))
       case element.format {
-        BinaryFormat -> {
-          use ranges <- result.try(
-            list.try_map(values, encode_binary_range(
-              element,
-              _,
-              element_type,
-              lookup,
-            )),
-          )
-          let body =
-            list.fold(ranges, <<>>, fn(bytes, one) {
-              <<bytes:bits, { bit_array.byte_size(one) }:size(32), one:bits>>
-            })
-          Ok(Binary(<<{ list.length(ranges) }:size(32), body:bits>>))
-        }
-        TextFormat -> {
-          use ranges <- result.try(
-            list.try_map(values, encode_text_range(
-              element,
-              _,
-              element_type,
-              lookup,
-            )),
-          )
-          Ok(
-            Text(<<
-              "{":utf8,
-              { bit_array.concat(list.intersperse(ranges, <<",":utf8>>)) }:bits,
-              "}":utf8,
-            >>),
-          )
-        }
+        BinaryFormat ->
+          encode_binary_multirange(element, values, element_type, lookup)
+        TextFormat ->
+          encode_text_multirange(element, values, element_type, lookup)
       }
     },
     decode: fn(value, description, lookup) {
@@ -138,18 +157,7 @@ pub fn multirange(element: Codec(a)) -> Codec(List(Range(a))) {
       case value {
         Null -> Error(NullValue)
         Binary(bytes:) ->
-          case bytes {
-            <<count:size(32), rest:bits>> ->
-              decode_binary_ranges(
-                element,
-                rest,
-                count,
-                element_type,
-                lookup,
-                [],
-              )
-            _ -> Error(Malformed("the multirange's header is cut short"))
-          }
+          decode_binary_multirange(element, bytes, element_type, lookup)
         Text(bytes:) -> {
           use text <- result.try(utf8_bytes(bytes))
           decode_text_multirange(element, text, element_type, lookup)
@@ -281,34 +289,67 @@ fn decode_binary_range(
 ) -> Result(Range(a), DecodeIssue) {
   case bytes {
     <<flags, rest:bits>> ->
-      case int.bitwise_and(flags, empty_flag) != 0 {
-        True -> Ok(EmptyRange)
-        False -> {
-          use #(lower, rest) <- result.try(read_bound(
-            element,
-            rest,
-            flags,
-            lower_inclusive_flag,
-            no_lower_flag,
-            element_type,
-            lookup,
-          ))
-          use #(upper, rest) <- result.try(read_bound(
-            element,
-            rest,
-            flags,
-            upper_inclusive_flag,
-            no_upper_flag,
-            element_type,
-            lookup,
-          ))
-          case rest {
-            <<>> -> Ok(Range(lower:, upper:))
-            _ -> Error(Malformed("the range has bytes after its bounds"))
-          }
-        }
-      }
+      decode_flagged_range(element, flags, rest, element_type, lookup)
     _ -> Error(Malformed("the range is empty bytes"))
+  }
+}
+
+fn decode_flagged_range(
+  element: Codec(a),
+  flags: Int,
+  rest: BitArray,
+  element_type: TypeDescription,
+  lookup: TypeLookup,
+) -> Result(Range(a), DecodeIssue) {
+  case int.bitwise_and(flags, empty_flag) != 0 {
+    True -> Ok(EmptyRange)
+    False -> read_range_bounds(element, flags, rest, element_type, lookup)
+  }
+}
+
+fn read_range_bounds(
+  element: Codec(a),
+  flags: Int,
+  rest: BitArray,
+  element_type: TypeDescription,
+  lookup: TypeLookup,
+) -> Result(Range(a), DecodeIssue) {
+  use #(lower, rest) <- result.try(read_bound(
+    element,
+    rest,
+    flags,
+    lower_inclusive_flag,
+    no_lower_flag,
+    element_type,
+    lookup,
+  ))
+  use #(upper, rest) <- result.try(read_bound(
+    element,
+    rest,
+    flags,
+    upper_inclusive_flag,
+    no_upper_flag,
+    element_type,
+    lookup,
+  ))
+  range_without_leftover(lower, upper, rest)
+}
+
+fn range_without_leftover(
+  lower: Bound(a),
+  upper: Bound(a),
+  rest: BitArray,
+) -> Result(Range(a), DecodeIssue) {
+  case rest {
+    <<>> -> Ok(Range(lower:, upper:))
+    _ -> Error(Malformed("the range has bytes after its bounds"))
+  }
+}
+
+fn bound_of(value: a, inclusive: Bool) -> Bound(a) {
+  case inclusive {
+    True -> Inclusive(value)
+    False -> Exclusive(value)
   }
 }
 
@@ -330,10 +371,7 @@ fn read_bound(
         element_type,
         lookup,
       ))
-      case int.bitwise_and(flags, inclusive_flag) != 0 {
-        True -> Ok(#(Inclusive(found), rest))
-        False -> Ok(#(Exclusive(found), rest))
-      }
+      Ok(#(bound_of(found, int.bitwise_and(flags, inclusive_flag) != 0), rest))
     }
     False, _ -> Error(Malformed("a range bound is cut short"))
   }
@@ -464,11 +502,21 @@ fn decode_text_range(
       use #(found, rest) <- result.try(
         parse_range(string.to_graphemes(string.trim(text))),
       )
-      case rest {
-        [] -> text_range_value(element, found, element_type, lookup)
-        _ -> Error(Malformed("the range text has characters after its end"))
-      }
+      text_range_without_leftover(element, found, rest, element_type, lookup)
     }
+  }
+}
+
+fn text_range_without_leftover(
+  element: Codec(a),
+  found: ParsedRange,
+  rest: List(String),
+  element_type: TypeDescription,
+  lookup: TypeLookup,
+) -> Result(Range(a), DecodeIssue) {
+  case rest {
+    [] -> text_range_value(element, found, element_type, lookup)
+    _ -> Error(Malformed("the range text has characters after its end"))
   }
 }
 
@@ -512,10 +560,7 @@ fn text_bound_value(
         element_type,
         lookup,
       ))
-      case inclusive {
-        True -> Ok(Inclusive(value))
-        False -> Ok(Exclusive(value))
-      }
+      Ok(bound_of(value, inclusive))
     }
   }
 }

@@ -2,7 +2,7 @@
 //// gets, the clamp of the strategy's wait, and the range of the default
 //// strategy, full jitter.
 
-import dream_postgres/driver/connection.{
+import dream_postgres/driver/connection/backoff.{
   Backoff, BackoffStep, backoff_wait, full_jitter,
 }
 import dream_test/matchers.{be_equal, or_fail_with, should}

@@ -3,8 +3,10 @@
 //// gate and the pool of that server, and stops the supervisor and the
 //// gate.
 
-import dream_postgres.{type Connection, type ListenerName}
+import dream_postgres/config
 import dream_postgres/error
+import dream_postgres/listener.{type ListenerName}
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -75,11 +77,11 @@ fn run_behind_gate(
 ) -> Result(a, String) {
   use child <- result.try(
     server_pools.config(gate_port)
-    |> dream_postgres.reconnect_delays(
+    |> config.reconnect_delays(
       first_delay_milliseconds: 10,
       longest_delay_milliseconds: 50,
     )
-    |> dream_postgres.supervised_listener(name:)
+    |> listener.supervised_listener(name:)
     |> result.map_error(error.describe),
   )
   use started <- result.try(

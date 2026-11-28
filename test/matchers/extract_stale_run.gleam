@@ -1,7 +1,8 @@
 //// Extracts the answer of the run after a prepare from the cache after a
 //// schema change.
 
-import dream_postgres/driver/connection.{type Outcome, type RunError}
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/request_failure.{type RunError}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import driver/server_prepare.{type StaleOutcome}
 

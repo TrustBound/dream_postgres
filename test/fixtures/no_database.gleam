@@ -1,7 +1,8 @@
 //// A connection with no database: the connection of a recorder in
 //// playback mode on an empty recording.
 
-import dream_postgres.{type Connection}
+import dream_postgres/config
+import dream_postgres/pool.{type Connection}
 import dream_postgres/recorder
 import dream_postgres/recording.{Recording}
 import fixtures/recording_paths
@@ -41,12 +42,12 @@ pub fn connection() -> Connection {
       |> recorder.start
       |> result.map_error(string.inspect),
     )
-    dream_postgres.default_config()
-    |> dream_postgres.record(test_recorder)
-    |> dream_postgres.start
+    config.default_config()
+    |> config.record(test_recorder)
+    |> pool.start
     |> result.map_error(string.inspect)
   }
   |> result.lazy_unwrap(fn() {
-    dream_postgres.named_connection(process.new_name("no_database"))
+    pool.named_connection(process.new_name("no_database"))
   })
 }

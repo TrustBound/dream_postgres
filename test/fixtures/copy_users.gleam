@@ -1,8 +1,8 @@
 //// Rows of a users table `(id int4, email text)` for the COPY tests, with
 //// the functions that write and read them.
 
-import dream_postgres.{type Row, column, row, single}
 import dream_postgres/codec.{type Codec, type Field}
+import dream_postgres/row.{type Row, column, row, single}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}

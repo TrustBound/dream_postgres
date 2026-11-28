@@ -1,6 +1,8 @@
 //// Extracts `#(name, value)` of each parameter change from asynchronous messages.
 
-import dream_postgres/driver/query.{type AsynchronousMessage, ParameterChanged}
+import dream_postgres/driver/query/step.{
+  type AsynchronousMessage, ParameterChanged,
+}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{filter_map}
 

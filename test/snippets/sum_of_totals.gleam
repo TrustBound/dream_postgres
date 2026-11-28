@@ -1,8 +1,10 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, copy_to, query, single,
-}
 import dream_postgres/codec.{int}
+import dream_postgres/copy.{copy_to}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{query}
+import dream_postgres/row.{single}
 import gleam/int
 
 /// The sum of the totals of all invoices. The rows come one at a time, and

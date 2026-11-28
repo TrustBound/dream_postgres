@@ -1,6 +1,6 @@
 //// Extracts `#(channel, payload)` of each notification of each outcome of the connection process.
 
-import dream_postgres/driver/connection.{type Notification, type Outcome}
+import dream_postgres/driver/connection/outcome.{type Notification, type Outcome}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{map}
 

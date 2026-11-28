@@ -12,7 +12,7 @@ pub type Replay {
     /// The outcome of each request.
     answer: fn(Request) -> Outcome,
     /// The server error that failed the open transaction, as
-    /// `dream_postgres.commit` reads it from a connection, or `None`. An
+    /// `transaction.commit` reads it from a connection, or `None`. An
     /// error means the answer cannot be given.
     aborted_by: fn() -> Result(Option(ServerError), Reason),
   )

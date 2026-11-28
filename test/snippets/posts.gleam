@@ -1,9 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, type Row, column, named, one, parameter,
-  query, row,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query}
+import dream_postgres/row.{type Row, column, row}
 
 pub type Post {
   Post(id: Int, user_id: Int, title: String)

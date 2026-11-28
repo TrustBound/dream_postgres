@@ -9,7 +9,7 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/driver/query.{
+import dream_postgres/driver/query/step.{
   type Failure, type Outcome, type SimpleQueryFailure, SimpleQueryFailure,
   failure_report,
 }

@@ -3,10 +3,16 @@
 //// `driver_reconnect_server_ffi.erl`), for the tests of the setup
 //// deadline on a reconnect.
 
-import dream_postgres/driver/connection.{
-  type Connection, type ConnectionEvent, type SimpleQueryError, Backoff,
-  ConnectFailed, ConnectionConfig,
+import dream_postgres/driver/connection
+import dream_postgres/driver/connection/backoff.{Backoff}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/event.{
+  type ConnectionEvent, ConnectFailed,
 }
+import dream_postgres/driver/connection/request_failure.{type SimpleQueryError}
+import dream_postgres/driver/connection/settings.{ConnectionConfig}
+import dream_postgres/driver/connection/simple_query as connection_simple_query
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_test/context.{type Context}
 import driver/server_connection.{
   connection_config, next_event, start_watched, stop_connection,
@@ -136,9 +142,9 @@ fn watch_reconnect(
 ) -> Result(BadReconnect, String) {
   use Nil <- try(wait_for_second_connection(server))
   let waiting_answer =
-    connection.run_simple_query(
+    connection_simple_query.run_simple_query(
       connection,
-      connection.statement("SELECT 1"),
+      connection_statement.statement("SELECT 1"),
       5000,
     )
     |> result.replace(Nil)

@@ -1,10 +1,16 @@
 //// A prepare of one statement before a schema change, and a
 //// `describe_current` or a prepare after it, on a connection of its own.
 
-import dream_postgres/driver/connection.{
-  type Outcome, type PrepareError, type RunError, describe_current, prepare, run,
-  statement, stop,
+import dream_postgres/driver/connection.{stop}
+import dream_postgres/driver/connection/call as connection_call
+import dream_postgres/driver/connection/extended_query.{
+  describe_current, prepare, run,
 }
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/request_failure.{
+  type PrepareError, type RunError,
+}
+import dream_postgres/driver/connection/statement.{statement}
 import dream_postgres/internal/cell.{type StatementDescription}
 import driver/server_connection.{run_control_simple_query, start_connection}
 import gleam/result.{map_error, replace, try}
@@ -60,14 +66,14 @@ pub fn run_after_changed_prepare(
 }
 
 fn prepare_select_all(
-  connection: connection.Connection,
+  connection: connection_call.Connection,
 ) -> Result(StatementDescription, String) {
   prepare(connection, statement(select_all_sql), 5000)
   |> map_error(inspect)
 }
 
 fn describe_select_all(
-  connection: connection.Connection,
+  connection: connection_call.Connection,
 ) -> Result(StatementDescription, String) {
   describe_current(connection, statement(select_all_sql), 5000)
   |> map_error(inspect)

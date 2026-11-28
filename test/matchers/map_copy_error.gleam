@@ -1,7 +1,7 @@
 //// A matcher that gives the client reason of a failed COPY of a driver
 //// connection.
 
-import dream_postgres/driver/connection.{type CopyError}
+import dream_postgres/driver/connection/request_failure.{type CopyError}
 import dream_postgres/error.{type Reason}
 import dream_postgres/internal/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
@@ -12,7 +12,7 @@ import fixtures/endpoints
 /// ## Example
 ///
 /// ```gleam
-/// connection.AppFailed(error.QueryTimeout(stopped_on_server: True))
+/// connection_request_failure.AppFailed(error.QueryTimeout(stopped_on_server: True))
 /// |> should
 /// |> map_copy_error()
 /// |> be_equal(error.QueryTimeout(stopped_on_server: True))

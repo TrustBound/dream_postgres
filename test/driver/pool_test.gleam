@@ -11,18 +11,27 @@
 //// and proxy.
 
 import dream_postgres/driver/catalog.{CatalogProcessDown}
-import dream_postgres/driver/connection.{
-  type ConnectionEvent, type Outcome, type SimpleQueryError, Connected,
-  ConnectionLost, ConnectionProcessDown, Disconnected, SimpleQueryRequestFailed,
-  SocketFailed, TransportRefused,
+import dream_postgres/driver/connection/event.{
+  type ConnectionEvent, Connected, ConnectionLost, Disconnected, SocketFailed,
+  TransportRefused,
 }
-import dream_postgres/driver/pool.{
-  type HoldError, type Pool, type PoolConfig, type PoolEvent,
-  type PoolNotRunning, type PoolStatus, ConnectFailed, HoldDeadlinePassed,
-  HoldRefused, HoldWaiting, InvalidHealthCheckInterval, InvalidSize,
-  MemberConnected, MemberDisconnected, MemberFree, MemberHeld, MemberReplacing,
-  MemberReturned, PoolNotRunning, PoolStatus, PoolStopped, PoolStopping,
+import dream_postgres/driver/connection/outcome.{type Outcome}
+import dream_postgres/driver/connection/request_failure.{
+  type SimpleQueryError, ConnectionProcessDown, SimpleQueryRequestFailed,
 }
+import dream_postgres/driver/pool
+import dream_postgres/driver/pool/holds as pool_holds
+import dream_postgres/driver/pool/pool_event.{
+  type PoolEvent, HoldRefused, HoldWaiting, MemberConnected, MemberDisconnected,
+  MemberFree, MemberHeld, MemberReplacing, MemberReturned, PoolStopping,
+}
+import dream_postgres/driver/pool/pool_failure.{
+  type HoldError, type PoolNotRunning, ConnectFailed, HoldDeadlinePassed,
+  InvalidHealthCheckInterval, InvalidSize, PoolNotRunning, PoolStopped,
+}
+import dream_postgres/driver/pool/pool_message.{type Pool}
+import dream_postgres/driver/pool/pool_settings.{type PoolConfig}
+import dream_postgres/driver/pool/pool_status.{type PoolStatus, PoolStatus}
 import dream_postgres/driver/transport.{ConnectRefused, SocketClosed}
 import dream_postgres/internal/cell.{type TransactionStatus, Idle, InTransaction}
 import dream_test/context
@@ -133,7 +142,7 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
         // Act
         let fourth =
           while_holding(session.pool, 3, fn(_held) {
-            pool.hold(session.pool, 0, backend_pid)
+            pool_holds.hold(session.pool, 0, backend_pid)
           })
 
         // Assert
@@ -252,8 +261,15 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
         fn(session: PoolSession) {
           // Act
           let described = {
-            use types <- try(pool.catalog(session.pool) |> map_error(inspect))
-            pool.hold(session.pool, 5000, catalog.describe(types, _, 23, 5000))
+            use types <- try(
+              pool_holds.catalog(session.pool) |> map_error(inspect),
+            )
+            pool_holds.hold(session.pool, 5000, catalog.describe(
+              types,
+              _,
+              23,
+              5000,
+            ))
             |> map_error(inspect)
           }
 
@@ -270,7 +286,9 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
       it("stops its catalog with the pool", fn(session: PoolSession) {
         // Act
         let after_stop = {
-          use types <- try(pool.catalog(session.pool) |> map_error(inspect))
+          use types <- try(
+            pool_holds.catalog(session.pool) |> map_error(inspect),
+          )
           pool.stop(session.pool, 1000)
           Ok(catalog.describe(types, session.control, 23, 5000))
         }
@@ -286,7 +304,7 @@ fn server_tests(server: Server) -> ContextNode(PoolSession) {
       it("gives no catalog after it stopped", fn(session: PoolSession) {
         // Act
         pool.stop(session.pool, 1000)
-        let answer = pool.catalog(session.pool)
+        let answer = pool_holds.catalog(session.pool)
 
         // Assert
         answer
@@ -303,7 +321,7 @@ fn status_tests() -> ContextNode(PoolSession) {
   group("status", [
     before_each(start_test_pool(first_driver_server, 2)),
     it("gives the attachment of its settings", fn(session: PoolSession) {
-      pool.attachment(session.pool)
+      pool_holds.attachment(session.pool)
       |> should
       |> be_ok
       |> be_equal(Nil)
@@ -312,7 +330,9 @@ fn status_tests() -> ContextNode(PoolSession) {
     it("gives its status", fn(session: PoolSession) {
       // Act
       let status =
-        while_holding(session.pool, 2, fn(_held) { pool.status(session.pool) })
+        while_holding(session.pool, 2, fn(_held) {
+          pool_holds.status(session.pool)
+        })
 
       // Assert
       status
@@ -341,7 +361,7 @@ fn checkout_tests() -> ContextNode(PoolSession) {
         // Act
         let answer = {
           use holder <- try(start_idle_holder(session.pool))
-          let late = pool.hold(session.pool, 20, backend_pid)
+          let late = pool_holds.hold(session.pool, 20, backend_pid)
           use _released <- try(release_holder(holder))
           Ok(late)
         }
@@ -394,7 +414,7 @@ fn connect_error_tests() -> ContextNode(PoolSession) {
       it(
         "gives the connect error of a wrong password",
         fn(session: PoolSession) {
-          pool.hold(session.pool, 5000, backend_pid)
+          pool_holds.hold(session.pool, 5000, backend_pid)
           |> should
           |> be_error
           |> extract_connect_failure
@@ -413,7 +433,7 @@ fn connect_error_tests() -> ContextNode(PoolSession) {
       it(
         "gives the connect error of a server that is down",
         fn(session: PoolSession) {
-          pool.hold(session.pool, 5000, backend_pid)
+          pool_holds.hold(session.pool, 5000, backend_pid)
           |> should
           |> be_error
           |> be_equal(ConnectFailed(TransportRefused(ConnectRefused)))
@@ -632,7 +652,7 @@ fn stop_tests() -> ContextNode(PoolSession) {
     it("gives PoolStopped after it stopped", fn(session: PoolSession) {
       // Act
       pool.stop(session.pool, 1000)
-      let answer = pool.hold(session.pool, 5000, backend_pid)
+      let answer = pool_holds.hold(session.pool, 5000, backend_pid)
 
       // Assert
       answer
@@ -646,7 +666,7 @@ fn stop_tests() -> ContextNode(PoolSession) {
       fn(session: PoolSession) {
         // Act
         pool.stop(session.pool, 1000)
-        let status = pool.status(session.pool)
+        let status = pool_holds.status(session.pool)
 
         // Assert
         status
@@ -851,7 +871,7 @@ fn start_tests() -> TestSuite {
             pool.from_name(process.new_name("pool_test_unused"))
 
           // Act
-          let answer = pool.attachment(handle)
+          let answer = pool_holds.attachment(handle)
 
           // Assert
           answer
@@ -866,7 +886,7 @@ fn start_tests() -> TestSuite {
         let handle = pool.from_name(process.new_name("pool_test_unused"))
 
         // Act
-        let answer = pool.hold(handle, 5000, backend_pid)
+        let answer = pool_holds.hold(handle, 5000, backend_pid)
 
         // Assert
         answer
@@ -927,7 +947,7 @@ fn two_pool_tests() -> TestSuite {
       it(
         "keeps the settings and the catalog of each pool apart",
         fn(pools: TwoPools) {
-          #(pool.catalog(pools.first), pool.catalog(pools.second))
+          #(pool_holds.catalog(pools.first), pool_holds.catalog(pools.second))
           |> should
           |> be_different_parts
           |> or_fail_with("Expected each pool to have its own catalog")
@@ -960,7 +980,7 @@ fn named_tests() -> TestSuite {
     it(
       "gives its attachment through a handle of its name",
       fn(named: NamedPool) {
-        pool.attachment(named.handle)
+        pool_holds.attachment(named.handle)
         |> should
         |> be_ok
         |> be_equal("the settings of a named pool")
@@ -984,7 +1004,7 @@ fn named_tests() -> TestSuite {
     it(
       "ends a hold quietly when its pool stopped during it",
       fn(named: NamedPool) {
-        pool.hold(named.handle, 5000, stop_pool_inside(named.handle))
+        pool_holds.hold(named.handle, 5000, stop_pool_inside(named.handle))
         |> should
         |> be_ok
         |> be_equal("stopped")
@@ -997,10 +1017,10 @@ fn named_tests() -> TestSuite {
         // Act
         let status = {
           use _stopped <- try(
-            pool.hold(named.handle, 5000, stop_pool_inside(named.handle))
+            pool_holds.hold(named.handle, 5000, stop_pool_inside(named.handle))
             |> map_error(fn(error) { "the hold failed: " <> inspect(error) }),
           )
-          Ok(pool.status(named.handle))
+          Ok(pool_holds.status(named.handle))
         }
 
         // Assert
@@ -1046,7 +1066,11 @@ fn restart_named_pool(named: NamedPool) -> Result(RestartedPool, String) {
   let backends =
     held_backend_pid(named.handle)
     |> result.map(fn(second) { #(first, second) })
-  Ok(RestartedPool(named:, backends:, attachment: pool.attachment(named.handle)))
+  Ok(RestartedPool(
+    named:,
+    backends:,
+    attachment: pool_holds.attachment(named.handle),
+  ))
 }
 
 fn stop_restarted_pool(restarted: RestartedPool) -> Result(Nil, String) {
@@ -1083,9 +1107,9 @@ fn restarted_tests() -> TestSuite {
         fn(restarted: RestartedPool) {
           {
             use types <- try(
-              pool.catalog(restarted.named.handle) |> map_error(inspect),
+              pool_holds.catalog(restarted.named.handle) |> map_error(inspect),
             )
-            pool.hold(restarted.named.handle, 5000, catalog.describe(
+            pool_holds.hold(restarted.named.handle, 5000, catalog.describe(
               types,
               _,
               23,
@@ -1119,7 +1143,7 @@ fn lose_server(proxied: ProxiedPool) -> Result(LostServer, String) {
   use _backend <- try(held_backend_pid(proxied.pool))
   stop_proxy(proxied.proxy)
   use _refused <- try(wait_for_failed_reconnect(proxied.events))
-  let hold = pool.hold(proxied.pool, 5000, backend_pid)
+  let hold = pool_holds.hold(proxied.pool, 5000, backend_pid)
   use status <- try(pool_status(proxied.pool))
   Ok(LostServer(hold:, status:))
 }
@@ -1234,7 +1258,7 @@ fn drain_running_hold(session: PoolSession) -> Result(Drain, String) {
   use _waited <- try(wait_for_lock_waiter(session.control, session.lock_key))
   let stopper = start_caller(fn() { pool.stop(session.pool, 5000) })
   use Nil <- try(wait_for_pool_event(session.pool_events, PoolStopping))
-  let refused = pool.hold(session.pool, 5000, backend_pid)
+  let refused = pool_holds.hold(session.pool, 5000, backend_pid)
   use _unlocked <- try(release_pool_lock(session))
   let finished = caller_answer(running)
   Ok(Drain(refused:, finished:, stopped: caller_answer(stopper)))
@@ -1304,7 +1328,7 @@ fn replace_lost_connection(
   let start_events = pool_events_until_free(proxied.pool_events, 0)
   use _first_connected <- try(connection_events_until_connected(proxied.events))
   use lost <- try(
-    pool.hold(proxied.pool, 5000, fn(connection) {
+    pool_holds.hold(proxied.pool, 5000, fn(connection) {
       use backend <- try(backend_pid(connection))
       close_client(proxied.proxy)
       connection_events_until_disconnected(proxied.events)
@@ -1405,12 +1429,12 @@ fn walk_holds_and_stop(session: PoolSession) -> Result(HoldsAndStop, String) {
   use Nil <- try(wait_for_pool_event(session.pool_events, MemberFree(0)))
   use holder <- try(start_idle_holder(session.pool))
   use held <- try(next_pool_event(session.pool_events))
-  let timed_out = pool.hold(session.pool, 50, backend_pid)
+  let timed_out = pool_holds.hold(session.pool, 50, backend_pid)
   use waiting <- try(next_pool_event(session.pool_events))
   use refused <- try(next_pool_event(session.pool_events))
   let stopper = start_caller(fn() { pool.stop(session.pool, 5000) })
   use stopping <- try(next_pool_event(session.pool_events))
-  let after_stop = pool.hold(session.pool, 5000, backend_pid)
+  let after_stop = pool_holds.hold(session.pool, 5000, backend_pid)
   use late_refused <- try(next_pool_event(session.pool_events))
   use Nil <- try(release_holder(holder))
   use returned <- try(next_pool_event(session.pool_events))

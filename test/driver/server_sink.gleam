@@ -2,15 +2,20 @@
 //// and notifications go through the sinks of a test, the subscribe of a
 //// sink to a listener, and the waits for what a sink sends.
 
-import dream_postgres/driver/connection.{
-  type Connection, type ConnectionEvent, type Notification, ConnectionConfig,
-}
+import dream_postgres/driver/connection/call.{type Connection}
+import dream_postgres/driver/connection/event.{type ConnectionEvent}
+import dream_postgres/driver/connection/outcome.{type Notification}
+import dream_postgres/driver/connection/settings.{ConnectionConfig}
 import dream_postgres/driver/listener.{
   type Listener, type ListenerMessage, type Subscription, subscribe,
 }
-import dream_postgres/driver/pool.{
-  type Pool, type PoolEvent, MemberFree, MemberHeld, MemberReplacing, PoolConfig,
+import dream_postgres/driver/pool
+import dream_postgres/driver/pool/holds as pool_holds
+import dream_postgres/driver/pool/pool_event.{
+  type PoolEvent, MemberFree, MemberHeld, MemberReplacing,
 }
+import dream_postgres/driver/pool/pool_message.{type Pool}
+import dream_postgres/driver/pool/pool_settings.{PoolConfig}
 import dream_postgres/driver/sink.{type Sink}
 import dream_postgres/internal/cell.{type ServerReport}
 import driver/server_connection.{
@@ -68,7 +73,7 @@ pub fn start_sunk_pool(
 pub type ReplacedRun(called) {
   ReplacedRun(
     /// The next call of the crashed map after its first one, taken at
-    /// once after a `pool.status`: `Error(Nil)` when there was none.
+    /// once after a `pool_holds.status`: `Error(Nil)` when there was none.
     later_call: Result(called, Nil),
     /// The answers of the two connections after the replacement: the new
     /// one and the other one.
@@ -124,7 +129,7 @@ pub fn raise_across_replacement(
       }),
     )
     use _status <- try(
-      pool.status(pool) |> map_error(fn(error) { inspect(error) }),
+      pool_holds.status(pool) |> map_error(fn(error) { inspect(error) }),
     )
     Ok(ReplacedRun(later_call: process.receive(witness, 0), answers:))
   }
@@ -159,7 +164,7 @@ pub fn replace_after_events_crash(
   let run = {
     use _first_call <- try(receive_sent(witness))
     use _replaced <- try(
-      pool.hold(pool, 5000, fn(held) {
+      pool_holds.hold(pool, 5000, fn(held) {
         kill_connection(held)
         wait_for_replacing(pool_events)
       })
@@ -170,7 +175,7 @@ pub fn replace_after_events_crash(
     use _held <- try(wait_for_pool_event(pool_events, MemberHeld(0)))
     use _free <- try(wait_for_pool_event(pool_events, MemberFree(0)))
     use _status <- try(
-      pool.status(pool) |> map_error(fn(error) { inspect(error) }),
+      pool_holds.status(pool) |> map_error(fn(error) { inspect(error) }),
     )
     Ok(process.receive(witness, 0))
   }
@@ -184,8 +189,8 @@ fn hold_both(
   pool: Pool(Nil),
   use_both: fn(Connection, Connection) -> Result(value, String),
 ) -> Result(value, String) {
-  pool.hold(pool, 5000, fn(first) {
-    pool.hold(pool, 5000, use_both(first, _))
+  pool_holds.hold(pool, 5000, fn(first) {
+    pool_holds.hold(pool, 5000, use_both(first, _))
     |> map_error(fn(error) { "the second hold failed: " <> inspect(error) })
     |> result.flatten
   })
@@ -223,7 +228,7 @@ pub fn raise_notification(connection: Connection) -> Result(String, String) {
 /// Runs `sql` on a connection of the pool, and gives the one text value of
 /// its result.
 pub fn hold_text(pool: Pool(Nil), sql: String) -> Result(String, String) {
-  pool.hold(pool, 5000, query_text(_, sql))
+  pool_holds.hold(pool, 5000, query_text(_, sql))
   |> map_error(fn(error) { "the hold failed: " <> inspect(error) })
   |> result.flatten
 }

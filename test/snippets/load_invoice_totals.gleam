@@ -1,8 +1,8 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, copy_from, table_in_schema,
-}
 import dream_postgres/codec.{type Field, field, int}
+import dream_postgres/copy.{copy_from, table_in_schema}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
 
 /// Stores one invoice row for each total, in the table `invoices` of the
 /// schema `billing`.

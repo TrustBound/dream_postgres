@@ -1,6 +1,6 @@
 # Upgrading to 3.0
 
-dream_postgres 3.0 is a new client. Version 2.x wrapped `dream_postgres_client`, a fork of Pog. Version 3.0 has its own driver, and one module, `dream_postgres`, for the pool, the queries and the transactions. This guide puts each 2.x function next to its 3.0 form. The 2.x code blocks are the files at the release tag 2.0.0. The 3.0 code blocks are files that the tests of this package run against PostgreSQL.
+dream_postgres 3.0 is a new client. Version 2.x wrapped `dream_postgres_client`, a fork of Pog. Version 3.0 has its own driver, and one module for each task: `dream_postgres/config`, `dream_postgres/pool`, `dream_postgres/query`, `dream_postgres/row`, `dream_postgres/transaction` and more. This guide puts each 2.x function next to its 3.0 form. The 2.x code blocks are the files at the release tag 2.0.0. The 3.0 code blocks are files that the tests of this package run against PostgreSQL.
 
 ## Table of Contents
 
@@ -16,7 +16,7 @@ dream_postgres 3.0 is a new client. Version 2.x wrapped `dream_postgres_client`,
 
 ## What changed
 
-- The package no longer depends on `dream_postgres_client` or Pog. Remove `dream_postgres_client` from `gleam.toml`, and import `dream_postgres`.
+- The package no longer depends on `dream_postgres_client` or Pog. Remove `dream_postgres_client` from `gleam.toml`, and import the modules of `dream_postgres`, such as `dream_postgres/pool` and `dream_postgres/query`.
 - A query reads its rows with a row reader and codecs, not with a `gleam/dynamic/decode` decoder. Before each run, the codecs are checked against the types of the parameters and the columns.
 - Every failure is a `dream_errors.Error(PostgresError)`. Its kind, such as `NotFound` or `Conflict`, tells what to do. The cause holds every detail.
 - The default TLS changed. 3.0 requires TLS, and checks the certificate of the server against the authorities of the operating system, and the host name. For a server with no TLS, such as a local test server, set `tls(TlsOff)`. The [connecting guide](connecting.md) shows each TLS setting.
@@ -26,7 +26,7 @@ dream_postgres 3.0 is a new client. Version 2.x wrapped `dream_postgres_client`,
 | 2.x | 3.0 |
 |---|---|
 | `client.new(pool_name)` | `default_config()`. A pool needs a name only under a supervisor: `supervised(config, name:)`. |
-| `client.host`, `port`, `database`, `user`, `password`, `pool_size` | the same names in `dream_postgres` |
+| `client.host`, `port`, `database`, `user`, `password`, `pool_size` | the same names in `dream_postgres/config` |
 | `client.connect(config)` | `start(config)` |
 | `dream_postgres_client.supervised(config)` | `supervised(config, name:)` |
 | `dream_postgres_client.named_connection(name)` | `named_connection(name)` |
@@ -43,8 +43,8 @@ dream_postgres 3.0 is a new client. Version 2.x wrapped `dream_postgres_client`,
 | `dream_postgres_client.transaction(connection, callback)` | `transaction(connection, database:, rollback_also_failed:)`, then `run(plan, callback)`, or a pipe of `step`, `check` and `commit`. The error is a `dream_errors.Error(cause)`, and a failed rollback keeps both errors. See the [transactions guide](transactions.md). |
 | `recorder.new()`, `directory`, `name` | `recorder.new(file: path)`, with the whole path |
 | `recorder.mode`, `recorder.start` | the same names in `dream_postgres/recorder` |
-| `recorder.connect(recorder, config)` | `config \|> dream_postgres.record(recorder) \|> dream_postgres.start` |
-| `recorder.stop(recorder)`, which gave `Result(Nil, String)` | `dream_postgres.stop(connection)`, which also stops the recorder |
+| `recorder.connect(recorder, config)` | `config \|> record(recorder) \|> start` |
+| `recorder.stop(recorder)`, which gave `Result(Nil, String)` | `stop(connection)`, which also stops the recorder |
 | `recorder.Record`, `recorder.Playback`, `recorder.Passthrough` | the same, and `recorder.RecordMissing` |
 | `recorder.parse_mode` | none: the test reads the mode from its own config |
 | `recorder.key` | `recorder.match_on`, with `match.sql_and_parameters`, `match.sql_only` or a function of the app |
@@ -77,10 +77,11 @@ pub fn connect_database() -> Result(postgres.Connection, actor.StartError) {
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, database, default_config, host, password,
-  pool_size, port, start, user,
+import dream_postgres/config.{
+  database, default_config, host, password, pool_size, port, user,
 }
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, start}
 
 /// The pool of the 2.x README, in the 3.0 form. It has no pool name: a
 /// name is only for a pool under a supervisor.
@@ -136,11 +137,11 @@ In 3.0, a row reader reads each column with a codec, and `one` gives the one row
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, type Row, column, named, one, parameter,
-  query, row,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query}
+import dream_postgres/row.{type Row, column, row}
 
 pub type FindUserRow {
   FindUserRow(id: Int, name: String, email: String)
@@ -198,7 +199,7 @@ In 3.0, `one` gives `NotFound` itself. Match on the kind of the error:
 
 ```gleam
 import dream_errors.{type Error, NotFound}
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 import snippets/upgrade_find_user.{type FindUserRow}
 
 pub type Response {
@@ -243,10 +244,11 @@ In 3.0, a unique violation has the kind `Conflict`. `error.constraint_name` give
 
 ```gleam
 import dream_errors.{type Error, Conflict}
-import dream_postgres.{
-  type Connection, type PostgresError, named, one, parameter, query, single,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query}
+import dream_postgres/row.{single}
 import gleam/int
 import snippets/upgrade_show_user.{type Response, Response}
 
@@ -301,12 +303,12 @@ pub fn start_supervised(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type PoolName, type PostgresError, named_connection, one, query,
-  single, supervised,
-}
 import dream_postgres/codec.{text}
-import dream_postgres/error.{describe}
+import dream_postgres/config.{type Config}
+import dream_postgres/error.{type PostgresError, describe}
+import dream_postgres/pool.{type PoolName, named_connection, supervised}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/result
@@ -374,7 +376,7 @@ pub fn connect(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 import dream_postgres/recorder.{
   type Mode, type Recorder, intercept, match_on, mode, new, start,
 }
@@ -395,7 +397,7 @@ pub fn start_api_key_recorder(
 }
 ```
 
-`dream_postgres.record` attaches the recorder to the 3.0 `Config`, and `dream_postgres.start` makes the connection. In playback mode it connects to nothing. The recording file of 2.x has another format, so record each test again in 3.0. The [recorded queries guide](recorded-queries.md) shows the new file.
+`config.record` attaches the recorder to the 3.0 `Config`, and `pool.start` makes the connection. In playback mode it connects to nothing. The recording file of 2.x has another format, so record each test again in 3.0. The [recorded queries guide](recorded-queries.md) shows the new file.
 
 ## What 3.0 does not have
 

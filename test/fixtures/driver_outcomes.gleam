@@ -1,7 +1,7 @@
 //// Outcomes of statements that a driver connection ran, for the tests of
 //// the client reason of a failure after them.
 
-import dream_postgres/driver/connection.{type Outcome, Outcome}
+import dream_postgres/driver/connection/outcome.{type Outcome, Outcome}
 import dream_postgres/internal/cell.{CommandResult, Idle}
 
 /// The outcome of an `INSERT` of one row, outside a transaction.
@@ -9,7 +9,7 @@ import dream_postgres/internal/cell.{CommandResult, Idle}
 /// ## Example
 ///
 /// ```gleam
-/// connection.SimpleQueryCopyRefused([driver_outcomes.insert_outcome()])
+/// connection_request_failure.SimpleQueryCopyRefused([driver_outcomes.insert_outcome()])
 /// ```
 pub fn insert_outcome() -> Outcome {
   Outcome(

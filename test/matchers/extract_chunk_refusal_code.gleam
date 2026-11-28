@@ -1,6 +1,8 @@
 //// Extracts the SQLSTATE code of a chunk whose COPY the server refused.
 
-import dream_postgres/driver/connection.{type ChunkError, ChunkRefused}
+import dream_postgres/driver/connection/request_failure.{
+  type ChunkError, ChunkRefused,
+}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

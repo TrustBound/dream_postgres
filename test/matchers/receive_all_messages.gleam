@@ -13,7 +13,7 @@ import gleam/list
 ///
 /// ```gleam
 /// config
-/// |> dream_postgres.pool_events(events)
+/// |> pool_events(events)
 /// |> should
 /// |> run_on_started_pool(fn(connection) {
 ///   query("SELECT 1") |> all(single(codec.int), connection)

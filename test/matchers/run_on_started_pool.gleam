@@ -1,8 +1,9 @@
 //// A matcher that starts a pool with the config of the chain, runs work on
 //// it, and stops it.
 
-import dream_postgres.{type Config, type Connection}
+import dream_postgres/config.{type Config}
 import dream_postgres/error
+import dream_postgres/pool.{type Connection}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -15,8 +16,8 @@ import gleam/option.{Some}
 /// ## Example
 ///
 /// ```gleam
-/// dream_postgres.default_config()
-/// |> dream_postgres.port(5449)
+/// default_config()
+/// |> port(5449)
 /// |> should
 /// |> run_on_started_pool(fn(connection) {
 ///   query("SELECT 1") |> all(single(codec.int), connection)
@@ -37,10 +38,10 @@ pub fn run_on_started_pool(
 }
 
 fn run_on_pool_of(config: Config, work: fn(Connection) -> a) -> MatchResult(a) {
-  case dream_postgres.start(config) {
+  case pool.start(config) {
     Ok(connection) -> {
       let outcome = work(connection)
-      dream_postgres.stop(connection)
+      pool.stop(connection)
       MatchOk(outcome)
     }
     Error(failure) ->

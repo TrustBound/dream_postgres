@@ -5,7 +5,9 @@
 //// description, and the run after it gives `RunStatementChanged`. On each
 //// driver server.
 
-import dream_postgres/driver/connection.{ConnectionProcessDown, PrepareFailed}
+import dream_postgres/driver/connection/request_failure.{
+  ConnectionProcessDown, PrepareFailed,
+}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}

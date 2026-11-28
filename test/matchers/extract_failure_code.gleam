@@ -1,6 +1,8 @@
 //// Extracts the SQLSTATE code of a query failure.
 
-import dream_postgres/driver/query.{type Failure, CopyNotSupported, ServerError}
+import dream_postgres/driver/query/step.{
+  type Failure, CopyNotSupported, ServerError,
+}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

@@ -1,10 +1,12 @@
 //// The secrets of a config, on text and on the rows of answers, with no
 //// database.
 
-import dream_postgres.{named_connection, one, query, single}
 import dream_postgres/codec
 import dream_postgres/error.{SecretColumnNotReplaced}
 import dream_postgres/internal/cell.{Binary, Null, StatementDescription}
+import dream_postgres/pool.{named_connection}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 import dream_postgres/secrets
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, contain, or_fail_with, should}

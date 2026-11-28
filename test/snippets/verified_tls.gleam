@@ -1,4 +1,4 @@
-import dream_postgres.{
+import dream_postgres/config.{
   type Config, AuthorityFile, CheckAuthorityAndHost, TlsRequired, tls,
 }
 

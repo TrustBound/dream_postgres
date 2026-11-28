@@ -1,6 +1,6 @@
 //// Extracts what the last query step gave.
 
-import dream_postgres/driver/query.{type Step, type UnexpectedMessage}
+import dream_postgres/driver/query/step.{type Step, type UnexpectedMessage}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import matchers/extract_query_feed.{type QueryFeed}
 

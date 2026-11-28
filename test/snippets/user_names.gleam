@@ -1,8 +1,9 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, all, column_at, column_named, query, row,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, query}
+import dream_postgres/row.{column_at, column_named, row}
 
 /// Gives the id and the name of each user. The reader reads the first
 /// column by position and the name column by name, and skips the email.

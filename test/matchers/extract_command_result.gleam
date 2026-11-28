@@ -1,6 +1,6 @@
 //// Extracts the command result of an outcome of the connection process.
 
-import dream_postgres/driver/connection.{type Outcome}
+import dream_postgres/driver/connection/outcome.{type Outcome}
 import dream_postgres/internal/cell.{type CommandResult}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 

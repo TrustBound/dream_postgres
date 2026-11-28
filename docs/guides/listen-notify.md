@@ -34,9 +34,10 @@ The channel name is exact: `Jobs` and `jobs` are two channels.
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Config, type ListenMessage, type Listener, type PostgresError,
-  type Subscription, listen, start_listener,
+import dream_postgres/config.{type Config}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/listener.{
+  type ListenMessage, type Listener, type Subscription, listen, start_listener,
 }
 import gleam/erlang/process.{type Subject}
 import gleam/result
@@ -59,7 +60,7 @@ A notification comes to the subject as a `ListenMessage`. This function waits fo
 ### Wait for the next notification <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/next_job.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{
+import dream_postgres/listener.{
   type ListenMessage, ListenFailed, Listening, NotListening, NotificationArrived,
 }
 import gleam/erlang/process.{type Subject}
@@ -107,8 +108,9 @@ When the connection is lost, each subscriber gets `NotListening` at once, and th
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Listener, type PostgresError, type Subscription, stop_listener, unlisten,
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/listener.{
+  type Listener, type Subscription, stop_listener, unlisten,
 }
 import gleam/result
 
@@ -130,8 +132,9 @@ pub fn stop_listening(
 ### Start a listener under a supervisor <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_listener_supervisor.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Config, type ListenerName, supervised_listener}
+import dream_postgres/config.{type Config}
 import dream_postgres/error.{describe}
+import dream_postgres/listener.{type ListenerName, supervised_listener}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}
 import gleam/result
@@ -161,9 +164,10 @@ The start does not wait for the server. Until the connection is up, each subscri
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type ListenMessage, type ListenerName, type PostgresError, type Subscription,
-  listen, named_listener,
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/listener.{
+  type ListenMessage, type ListenerName, type Subscription, listen,
+  named_listener,
 }
 import gleam/erlang/process.{type Subject}
 
@@ -196,9 +200,9 @@ This selector gives the messages of the subject and the end of the registry:
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type ListenMessage, type ListenerName, type PostgresError, monitor_listener,
-  named_listener,
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/listener.{
+  type ListenMessage, type ListenerName, monitor_listener, named_listener,
 }
 import gleam/erlang/process.{type Down, type Selector, type Subject}
 import gleam/result

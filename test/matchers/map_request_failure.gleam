@@ -1,6 +1,6 @@
 //// A matcher that gives the client reason of a request that failed on its connection.
 
-import dream_postgres/driver/connection.{type RequestFailure}
+import dream_postgres/driver/connection/request_failure.{type RequestFailure}
 import dream_postgres/error.{type Reason}
 import dream_postgres/internal/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
@@ -10,7 +10,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 /// ## Example
 ///
 /// ```gleam
-/// connection.ConnectionProcessDown
+/// connection_request_failure.ConnectionProcessDown
 /// |> should
 /// |> map_request_failure()
 /// |> be_equal(error.ConnectionProcessDown)

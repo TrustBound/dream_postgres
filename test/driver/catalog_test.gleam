@@ -13,7 +13,8 @@ import dream_postgres/driver/catalog.{
   type CatalogError, type CatalogEvent, CatalogProcessDown, LoadStarted,
   UnknownType, supervised,
 }
-import dream_postgres/driver/connection.{run}
+import dream_postgres/driver/connection/extended_query.{run}
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/internal/cell.{
   type TypeDescription, Array, Base, Composite, Domain, Enum, Multirange, Pseudo,
   Range, TypeDescription,
@@ -504,7 +505,7 @@ fn failed_load_tests() {
         let division =
           run(
             session.connection,
-            connection.statement("SELECT 1/0"),
+            connection_statement.statement("SELECT 1/0"),
             [],
             [],
             5000,

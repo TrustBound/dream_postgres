@@ -1,7 +1,7 @@
 //// The map functions of the sink tests: conversions from the driver's
 //// event types to the messages of the test process, and maps that crash.
 
-import dream_postgres/driver/connection.{type Notification}
+import dream_postgres/driver/connection/outcome.{type Notification}
 import dream_postgres/driver/listener.{
   type ListenerMessage, ListenFailed, Listening, NotListening,
   NotificationArrived,

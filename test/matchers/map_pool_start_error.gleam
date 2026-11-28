@@ -1,6 +1,6 @@
 //// A matcher that gives the client reason of an error of a pool start.
 
-import dream_postgres/driver/pool.{type StartError}
+import dream_postgres/driver/pool/pool_failure.{type StartError}
 import dream_postgres/error.{type Reason}
 import dream_postgres/internal/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
@@ -11,7 +11,7 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 /// ## Example
 ///
 /// ```gleam
-/// pool.InvalidSize(0)
+/// pool_failure.InvalidSize(0)
 /// |> should
 /// |> map_pool_start_error()
 /// |> be_equal(error.InvalidConfig(error.InvalidPoolSize(0)))

@@ -1,7 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, run_sql, with_connection,
-}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection, with_connection}
+import dream_postgres/query.{run_sql}
 import gleam/result
 
 /// Runs the work on one connection that has a temporary table `api_keys`,

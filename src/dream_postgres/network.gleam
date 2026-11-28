@@ -68,17 +68,29 @@ fn parse_network_text(text: String) -> Result(IpNetwork, Nil) {
     Ok(#(address_text, length_text)) -> {
       use address <- result.try(parse_address(address_text))
       use length <- result.try(int.parse(length_text))
-      let network = IpNetwork(address: address, prefix_length: length)
-      case int.to_string(length) == length_text && valid_ip_network(network) {
-        True -> Ok(network)
-        False -> Error(Nil)
-      }
+      checked_network(
+        IpNetwork(address: address, prefix_length: length),
+        length_text,
+      )
     }
     Error(Nil) ->
       parse_address(text)
       |> result.map(fn(address) {
         IpNetwork(address: address, prefix_length: full_prefix_length(address))
       })
+  }
+}
+
+fn checked_network(
+  network: IpNetwork,
+  length_text: String,
+) -> Result(IpNetwork, Nil) {
+  case
+    int.to_string(network.prefix_length) == length_text
+    && valid_ip_network(network)
+  {
+    True -> Ok(network)
+    False -> Error(Nil)
   }
 }
 
@@ -154,22 +166,25 @@ fn longest_zero_run(
   current: #(Int, Int),
 ) -> #(Int, Int) {
   case parts {
-    [] -> {
-      let best = longer_run(best, current)
-      case best.1 >= 2 {
-        True -> best
-        False -> #(0, 0)
-      }
-    }
-    [0, ..rest] -> {
-      let current = case current.1 {
-        0 -> #(index, 1)
-        length -> #(current.0, length + 1)
-      }
-      longest_zero_run(rest, index + 1, best, current)
-    }
+    [] -> zero_run_worth_shortening(longer_run(best, current))
+    [0, ..rest] ->
+      longest_zero_run(rest, index + 1, best, extended_run(current, index))
     [_, ..rest] ->
       longest_zero_run(rest, index + 1, longer_run(best, current), #(0, 0))
+  }
+}
+
+fn zero_run_worth_shortening(run: #(Int, Int)) -> #(Int, Int) {
+  case run.1 >= 2 {
+    True -> run
+    False -> #(0, 0)
+  }
+}
+
+fn extended_run(current: #(Int, Int), index: Int) -> #(Int, Int) {
+  case current.1 {
+    0 -> #(index, 1)
+    length -> #(current.0, length + 1)
   }
 }
 
@@ -177,6 +192,20 @@ fn longer_run(best: #(Int, Int), current: #(Int, Int)) -> #(Int, Int) {
   case current.1 > best.1 {
     True -> current
     False -> best
+  }
+}
+
+fn run_colon(text: String, at_start: Bool) -> String {
+  case at_start {
+    True -> text <> ":"
+    False -> text
+  }
+}
+
+fn part_separator(index: Int) -> String {
+  case index {
+    0 -> ""
+    _ -> ":"
   }
 }
 
@@ -190,13 +219,15 @@ fn ipv6_parts_text(
 ) -> String {
   case parts {
     [] -> text
-    [_, ..rest] if index >= start && index < start + length -> {
-      let text = case index == start {
-        True -> text <> ":"
-        False -> text
-      }
-      ipv6_parts_text(rest, index + 1, start, length, ipv4_end, text)
-    }
+    [_, ..rest] if index >= start && index < start + length ->
+      ipv6_parts_text(
+        rest,
+        index + 1,
+        start,
+        length,
+        ipv4_end,
+        run_colon(text, index == start),
+      )
     [high, low] if index == 6 && ipv4_end ->
       text
       <> ":"
@@ -205,11 +236,8 @@ fn ipv6_parts_text(
         ".",
       )
     [part, ..rest] -> {
-      let separator = case index {
-        0 -> ""
-        _ -> ":"
-      }
-      let text = text <> separator <> string.lowercase(int.to_base16(part))
+      let text =
+        text <> part_separator(index) <> string.lowercase(int.to_base16(part))
       ipv6_parts_text(rest, index + 1, start, length, ipv4_end, text)
     }
   }

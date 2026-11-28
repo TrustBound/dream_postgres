@@ -18,10 +18,10 @@ This guide shows how to build a query, how to read its rows, which function runs
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, one, parameter, query,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, parameter, query}
 import snippets/user_row.{type User, user_row}
 
 /// Stores a new user, and gives the user with the id that the database
@@ -47,10 +47,10 @@ A parameter goes to the server apart from the SQL text, so a value never becomes
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, maybe_one, named, parameter, query,
-}
 import dream_postgres/codec.{text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{maybe_one, named, parameter, query}
 import gleam/option.{type Option}
 import snippets/user_row.{type User, user_row}
 
@@ -73,11 +73,11 @@ pub fn find_user(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, named, one, parameter, query,
-  secret_parameter, single,
-}
 import dream_postgres/codec.{bool, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{named, one, parameter, query, secret_parameter}
+import dream_postgres/row.{single}
 
 /// Checks a password against its stored SHA-256 hash in hex. The password
 /// is a secret parameter, so a recording of this query never holds it.
@@ -101,10 +101,10 @@ A list goes to the server as one array parameter. `codec.array` makes the codec 
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, all, parameter, query,
-}
 import dream_postgres/codec.{array, int}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, parameter, query}
 import snippets/user_row.{type User, user_row}
 
 /// Gives the users with the ids. The list goes to PostgreSQL as one array
@@ -137,8 +137,8 @@ Use `column` with `use`, one line for each column, and end with `row`:
 ### A row reader for users <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres.{type Row, column, row}
 import dream_postgres/codec.{int, text}
+import dream_postgres/row.{type Row, column, row}
 
 pub type User {
   User(id: Int, email: String, name: String)
@@ -159,10 +159,11 @@ pub fn user_row() -> Row(User) {
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, all, column_at, column_named, query, row,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{all, query}
+import dream_postgres/row.{column_at, column_named, row}
 
 /// Gives the id and the name of each user. The reader reads the first
 /// column by position and the name column by name, and skips the email.
@@ -188,8 +189,11 @@ A reader cannot mix `column` with `column_at` or `column_named`. A reader that r
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type Connection, type PostgresError, one, query, single}
 import dream_postgres/codec.{int}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{one, query}
+import dream_postgres/row.{single}
 
 /// Gives the number of users. The result has one column, so `single`
 /// reads it.
@@ -219,10 +223,10 @@ Four functions run a query. Each takes the query, a row reader where it reads ro
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{
-  type Connection, type PostgresError, affected, parameter, query,
-}
 import dream_postgres/codec.{int, text}
+import dream_postgres/error.{type PostgresError}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/query.{affected, parameter, query}
 
 /// Gives the user a new name, and gives the number of rows that changed:
 /// 0 when no user has the id.
@@ -277,7 +281,7 @@ Match on the kind, and show your own text. The message of the error is for devel
 import dream_errors.{
   type Error, Conflict, Failed, Invalid, NotFound, Retry, Timeout, Unavailable,
 }
-import dream_postgres.{type PostgresError}
+import dream_postgres/error.{type PostgresError}
 import snippets/user_row.{type User}
 
 /// The status code and the text that a sign-up page shows for the result
@@ -318,8 +322,7 @@ Each gives `None` when PostgreSQL sent no such field, for example for a lost con
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres.{type PostgresError}
-import dream_postgres/error.{constraint_name, sql_state}
+import dream_postgres/error.{type PostgresError, constraint_name, sql_state}
 import dream_postgres/sql_state.{UniqueViolation}
 import gleam/option.{Some}
 

@@ -1,6 +1,8 @@
 //// Extracts the reason of a COPY that the app's function failed.
 
-import dream_postgres/driver/connection.{type CopyError, AppFailed}
+import dream_postgres/driver/connection/request_failure.{
+  type CopyError, AppFailed,
+}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
