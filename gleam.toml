@@ -46,10 +46,10 @@ gleam_otp = ">= 1.0.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
 gleam_time = ">= 1.0.0 and < 2.0.0"
 opentelemetry_api = ">= 1.5.0 and < 2.0.0"
+dream_errors = ">= 1.0.0 and < 2.0.0"
 # Not on Hex yet. A path dependency for development only: the release
-# (SVC-835) needs both on Hex first, and no published package may have a
-# path or git dependency.
-dream_errors = { path = "../dream_errors-retry" }
+# needs it on Hex first, and no published package may have a path or git
+# dependency.
 dream_uuid = { path = "../dream_uuid" }
 
 [dev-dependencies]

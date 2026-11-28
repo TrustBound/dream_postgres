@@ -7,7 +7,7 @@
 # You should check this file into your source control repository.
 
 packages = [
-  { name = "dream_errors", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../dream_errors-retry" },
+  { name = "dream_errors", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "dream_errors", source = "hex", outer_checksum = "360CFBA4B88458151675523961B33EEFABCBD8F62C3A7C075332EAFEA9370934" },
   { name = "dream_snippets", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib", "simplifile", "tom"], otp_app = "dream_snippets", source = "hex", outer_checksum = "77912484128E2B5791115E920FA651B78D0D7139A0BD9C222EECD1CC8372EDFC" },
   { name = "dream_test", version = "3.0.0", build_tools = ["gleam"], requirements = ["gleam_erlang", "gleam_json", "gleam_otp", "gleam_regexp", "gleam_stdlib"], otp_app = "dream_test", source = "hex", outer_checksum = "879355A0F8180EE7160F672C1F9E6672ED38E5001D6C0125BEA8E4B95C3AFF4B" },
   { name = "dream_uuid", version = "1.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../dream_uuid" },
@@ -24,14 +24,14 @@ packages = [
 ]
 
 [requirements]
-dream_errors = { path = "../dream_errors-retry" }
+dream_errors = { version = ">= 1.0.0 and < 2.0.0" }
 dream_snippets = { version = ">= 1.0.0 and < 2.0.0" }
 dream_test = { version = ">= 3.0.0 and < 4.0.0" }
 dream_uuid = { path = "../dream_uuid" }
 gleam_erlang = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_json = { version = ">= 3.0.0 and < 4.0.0" }
-gleam_regexp = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_otp = { version = ">= 1.0.0 and < 2.0.0" }
+gleam_regexp = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_stdlib = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_time = { version = ">= 1.0.0 and < 2.0.0" }
 opentelemetry_api = { version = ">= 1.5.0 and < 2.0.0" }
