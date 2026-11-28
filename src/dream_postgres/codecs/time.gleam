@@ -11,11 +11,11 @@
 //// The largest and the smallest value of the integer are `infinity` and
 //// `-infinity` for `date`, `timestamp` and `timestamptz`.
 
-import dream_postgres/internal/cell.{type Cell, type TypeDescription, Binary}
-import dream_postgres/internal/codec_type.{
+import dream_postgres/codecs/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, OutOfRange, binary_bytes, is_base,
   wrong_size,
 }
+import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
 import dream_postgres/time.{
   type Interval, type MaybeInfinite, type TimeWithOffset, Finite, Interval,
   NegativeInfinity, PositiveInfinity, TimeWithOffset,

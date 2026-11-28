@@ -9,13 +9,13 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/cell.{
+  type ServerReport, type TransactionStatus, Idle, InFailedTransaction,
+  InTransaction,
+}
 import dream_postgres/driver/query/step.{
   type Failure, type Outcome, type SimpleQueryFailure, SimpleQueryFailure,
   failure_report,
-}
-import dream_postgres/internal/cell.{
-  type ServerReport, type TransactionStatus, Idle, InFailedTransaction,
-  InTransaction,
 }
 import gleam/option.{type Option, None, or}
 

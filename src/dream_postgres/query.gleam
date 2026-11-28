@@ -40,30 +40,30 @@
 import dream_errors.{type Error}
 import dream_postgres/codec.{type Codec}
 import dream_postgres/error.{type PostgresError}
+import dream_postgres/error/failure.{failure}
 import dream_postgres/interceptor.{type Interceptor}
-import dream_postgres/internal/connection_state.{
+import dream_postgres/pool.{type Connection}
+import dream_postgres/pool/connection_state.{
   chain_of, hold, lowest_layer, run_held_sql, secret_free_error,
 }
-import dream_postgres/internal/failure.{failure}
-import dream_postgres/internal/query as internal_query
-import dream_postgres/internal/runner.{type LowestLayer}
-import dream_postgres/pool.{type Connection}
+import dream_postgres/query/definition
+import dream_postgres/query/runner.{type LowestLayer}
 import dream_postgres/row.{type Row}
 import gleam/option.{type Option, None, Some}
 import gleam/result
 
 /// A query: the SQL, its parameters, and an optional name.
 pub type Query =
-  internal_query.Query
+  definition.Query
 
 /// A query of the SQL, with no parameters yet.
 pub fn query(sql: String) -> Query {
-  internal_query.query(sql)
+  definition.query(sql)
 }
 
 /// Adds the next parameter: the first call gives `$1`, the next `$2`.
 pub fn parameter(query: Query, codec: Codec(a), value: a) -> Query {
-  internal_query.parameter(query, codec, value)
+  definition.parameter(query, codec, value)
 }
 
 /// Adds the next parameter as `parameter` does, and marks it secret, for
@@ -99,12 +99,12 @@ pub fn parameter(query: Query, codec: Codec(a), value: a) -> Query {
 /// }
 /// ```
 pub fn secret_parameter(query: Query, codec: Codec(a), value: a) -> Query {
-  internal_query.secret_parameter(query, codec, value)
+  definition.secret_parameter(query, codec, value)
 }
 
 /// Gives the query a name, which errors and logs show with the SQL.
 pub fn named(query: Query, name: String) -> Query {
-  internal_query.named(query, name)
+  definition.named(query, name)
 }
 
 /// Runs a query and reads every row.
@@ -156,8 +156,8 @@ fn with_executor(
 ) -> Result(a, Error(PostgresError)) {
   hold(connection, fn(held) { body(lowest_layer(held), chain_of(held)) })
   |> result.map_error(failure(
-    internal_query.name(query),
-    Some(internal_query.sql(query)),
+    definition.name(query),
+    Some(definition.sql(query)),
     _,
   ))
   |> result.flatten

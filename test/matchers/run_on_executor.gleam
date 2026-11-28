@@ -1,7 +1,7 @@
 //// A matcher that runs work on the executor of a driver connection of the
 //// chosen version.
 
-import dream_postgres/internal/runner.{type Executor}
+import dream_postgres/query/runner.{type Executor}
 import dream_test/types.{type MatchResult}
 import fixtures/executor_sessions.{type ExecutorSessions}
 import matchers/run_on_executor_with_deadline.{run_on_executor_with_deadline}

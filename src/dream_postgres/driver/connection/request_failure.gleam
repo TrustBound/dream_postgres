@@ -1,13 +1,13 @@
 //// Why a request to a connection process failed, for each kind of request.
 
+import dream_postgres/driver/cell.{
+  type ServerReport, type StatementDescription, type TransactionStatus,
+}
 import dream_postgres/driver/connection/event.{
   type ConnectError, type ConnectionEnd,
 }
 import dream_postgres/driver/connection/outcome.{type Outcome}
 import dream_postgres/driver/message.{type EncodeError}
-import dream_postgres/internal/cell.{
-  type ServerReport, type StatementDescription, type TransactionStatus,
-}
 import gleam/option.{type Option}
 
 /// A failure that any request can meet on its connection: the process is

@@ -2,16 +2,16 @@
 //// and the read of the rows.
 
 import dream_postgres/codec
+import dream_postgres/driver/cell.{
+  Binary, BinaryFormat, ParameterDescription, StatementDescription, TextFormat,
+}
 import dream_postgres/error.{
   ColumnCountMismatch, DecodeFailed, ParameterCountMismatch, PostgresError,
   QueryTimeout, StatementChangedDuringRun, TooManyRows,
 }
-import dream_postgres/internal/cell.{
-  Binary, BinaryFormat, ParameterDescription, StatementDescription, TextFormat,
-}
-import dream_postgres/internal/query
-import dream_postgres/internal/row_reader.{single}
-import dream_postgres/internal/runner.{RunFailed, StatementChanged}
+import dream_postgres/query/definition
+import dream_postgres/query/runner.{RunFailed, StatementChanged}
+import dream_postgres/row/reader.{single}
 import dream_test/matchers.{
   be_equal, be_error, be_none, be_ok, be_some, or_fail_with, should,
 }
@@ -86,7 +86,7 @@ pub fn tests() -> TestSuite {
       // Act
       let found =
         runner.all(
-          posts.query() |> query.named("post.find"),
+          posts.query() |> definition.named("post.find"),
           posts.reader(),
           runner.DatabaseLayer(executor),
           [],
@@ -122,7 +122,7 @@ pub fn tests() -> TestSuite {
     }),
     it("gives NotFound with the query's name when one finds no row", fn() {
       // Arrange
-      let subject = posts.query() |> query.named("post.find")
+      let subject = posts.query() |> definition.named("post.find")
       let executor = fake_executor.returning(posts.statement(), [])
 
       // Act
@@ -211,8 +211,8 @@ pub fn tests() -> TestSuite {
     it("gives the row count of a command", fn() {
       // Arrange
       let subject =
-        query.query("UPDATE posts SET title = title WHERE user_id = $1")
-        |> query.parameter(codec.int, 7)
+        definition.query("UPDATE posts SET title = title WHERE user_id = $1")
+        |> definition.parameter(codec.int, 7)
       let executor =
         fake_executor.returning(
           StatementDescription(
@@ -236,7 +236,7 @@ pub fn tests() -> TestSuite {
       "asks for text for each column of a command, and describes every part of each type",
       fn() {
         // Arrange
-        let subject = query.query("SELECT ...")
+        let subject = definition.query("SELECT ...")
         let executor =
           fake_executor.returning_for(
             StatementDescription(parameters: [], columns: [
@@ -295,7 +295,7 @@ pub fn tests() -> TestSuite {
     }),
     it("gives the failure of a type description", fn() {
       // Arrange
-      let subject = query.query("SELECT 1")
+      let subject = definition.query("SELECT 1")
       let executor =
         fake_executor.returning(
           StatementDescription(parameters: [], columns: [
@@ -330,7 +330,7 @@ pub fn tests() -> TestSuite {
     }),
     it("refuses parameters that do not fit the statement, before the run", fn() {
       // Arrange
-      let subject = query.query(posts.sql())
+      let subject = definition.query(posts.sql())
       let executor =
         fake_executor.returning(posts.statement(), [posts.cells(1, "First")])
 

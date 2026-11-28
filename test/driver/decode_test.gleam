@@ -3,6 +3,10 @@
 //// documentation ("Message Formats"); every cut of each message; and each
 //// way that bytes can fail to be a message.
 
+import dream_postgres/driver/cell.{
+  BinaryFormat, ColumnDescription, Idle, InFailedTransaction, InTransaction,
+  ParameterDescription, ServerReport, TextFormat,
+}
 import dream_postgres/driver/decode.{
   decode_backend, decode_gss_encryption_answer, decode_ssl_answer,
 }
@@ -22,10 +26,6 @@ import dream_postgres/driver/message.{
   PortalSuspended, ReadyForQuery, ResultColumn, RowDescription, UnknownAnswer,
   UnknownAuthenticationRequest, UnknownFormatCode, UnknownMessageType,
   UnknownTransactionStatus,
-}
-import dream_postgres/internal/cell.{
-  BinaryFormat, ColumnDescription, Idle, InFailedTransaction, InTransaction,
-  ParameterDescription, ServerReport, TextFormat,
 }
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

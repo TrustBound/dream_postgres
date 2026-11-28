@@ -1,6 +1,9 @@
 //// The answer of the process to a caller when a step of the Extended Query
 //// protocol ends.
 
+import dream_postgres/driver/cell.{
+  type ServerReport, type StatementDescription, type TransactionStatus,
+}
 import dream_postgres/driver/connection/notices.{
   after_step, plain_outcome, take_pending,
 }
@@ -20,9 +23,6 @@ import dream_postgres/driver/query/step.{
 } as query_step
 import dream_postgres/driver/transaction.{
   type TransactionTracker, track, track_step,
-}
-import dream_postgres/internal/cell.{
-  type ServerReport, type StatementDescription, type TransactionStatus,
 }
 import gleam/option
 import gleam/result.{map_error}

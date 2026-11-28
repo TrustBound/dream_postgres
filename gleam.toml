@@ -3,9 +3,24 @@ version = "3.0.0"
 description = "A PostgreSQL client for Gleam, with queries that are checked against the database before they run"
 licences = ["MIT"]
 repository = { type = "github", user = "TrustBound", repo = "dream_postgres" }
-# The modules that are not part of the public API: the shared internal
-# types and the driver.
-internal_modules = ["dream_postgres/internal/*", "dream_postgres/driver/*"]
+# The modules that are not part of the public API. Each sits in the folder
+# of the public module that it serves.
+internal_modules = [
+    "dream_postgres/codecs/*",
+    "dream_postgres/copy/*",
+    "dream_postgres/driver/*",
+    "dream_postgres/error/*",
+    "dream_postgres/pool/*",
+    "dream_postgres/query/*",
+    "dream_postgres/recorder/recorded_answer",
+    "dream_postgres/recorder/recorder_process",
+    "dream_postgres/recorder/recorder_state",
+    "dream_postgres/recorder/recording_file",
+    "dream_postgres/recorder/replay",
+    "dream_postgres/recorder/written_entry",
+    "dream_postgres/row/*",
+    "dream_postgres/url/*",
+]
 links = [
     { title = "Documentation", href = "https://hexdocs.pm/dream_postgres" },
     { title = "GitHub", href = "https://github.com/TrustBound/dream_postgres" },

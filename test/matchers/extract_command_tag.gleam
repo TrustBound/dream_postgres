@@ -1,6 +1,6 @@
 //// Extracts the tag of a command result.
 
-import dream_postgres/internal/cell.{type CommandResult}
+import dream_postgres/driver/cell.{type CommandResult}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the tag that PostgreSQL sent for the command, for example

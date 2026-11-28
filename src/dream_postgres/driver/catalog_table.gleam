@@ -18,7 +18,7 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, type TypeKind, Array, Base, Composite, Domain,
   Enum, Multirange, Null, Pseudo, Range, Text, TypeDescription,
 }

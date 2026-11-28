@@ -2,6 +2,9 @@
 //// stays up, refuses each kind of request as not connected, and connects
 //// once the server listens.
 
+import dream_postgres/driver/cell.{
+  type StatementDescription, type TransactionStatus,
+}
 import dream_postgres/driver/connection.{supervised}
 import dream_postgres/driver/connection/backoff.{Backoff}
 import dream_postgres/driver/connection/call.{type Connection}
@@ -23,9 +26,6 @@ import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/driver/connection/status as connection_status
 import dream_postgres/driver/housekeeping_sql.{catalog_load, rollback}
 import dream_postgres/driver/transport.{ConnectRefused}
-import dream_postgres/internal/cell.{
-  type StatementDescription, type TransactionStatus,
-}
 import dream_test/context.{type Context}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

@@ -6,11 +6,11 @@ import dream_postgres/config.{type Config, pool_config}
 import dream_postgres/driver/listener as driver_listener
 import dream_postgres/driver/sink
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/internal/connection_state.{
+import dream_postgres/error/failure.{failure_with_no_query}
+import dream_postgres/pool/connection_state.{
   settings_host, settings_port, settings_query_timeout_milliseconds,
 }
-import dream_postgres/internal/driver_executor
-import dream_postgres/internal/failure.{failure_with_no_query}
+import dream_postgres/query/driver_executor
 import gleam/erlang/process.{type Monitor, type Subject}
 import gleam/option.{None}
 import gleam/otp/supervision.{type ChildSpecification}

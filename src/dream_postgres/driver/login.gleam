@@ -22,6 +22,7 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/cell.{type ServerReport, type TransactionStatus}
 import dream_postgres/driver/channel_binding.{
   type CertificateError, server_end_point_hash,
 }
@@ -41,7 +42,6 @@ import dream_postgres/driver/scram.{
   ServerWithoutChannelBinding, client_final, client_final_message, client_first,
   client_first_message, verify_server_final,
 }
-import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{base16_encode, byte_size}
 import gleam/bool.{guard}
 import gleam/dict.{type Dict}

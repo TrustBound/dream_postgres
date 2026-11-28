@@ -10,15 +10,15 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/cell.{
+  type Cell, type Format, Binary, BinaryFormat, Null, Text, TextFormat,
+}
 import dream_postgres/driver/message.{
   type EncodeError, type FrontendMessage, type Target, Bind, CancelRequest,
   Close, CopyData, CopyDone, CopyFail, Describe, Execute, Flush, FunctionCall,
   GssEncryptionRequest, GssResponse, MessageTooLong, NumberOutOfRange, Parse,
   Portal, Query, SecretKeyLengthOutOfRange, SslRequest, Statement, Sync,
   Terminate, TooManyItems, ZeroByteInString,
-}
-import dream_postgres/internal/cell.{
-  type Cell, type Format, Binary, BinaryFormat, Null, Text, TextFormat,
 }
 import gleam/bit_array.{byte_size}
 import gleam/bool.{guard}

@@ -2,13 +2,13 @@
 
 import dream_errors.{type Error}
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/internal/connection_state.{
+import dream_postgres/error/failure.{failure}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/pool/connection_state.{
   type HeldConnection, hold, lowest_layer,
 }
-import dream_postgres/internal/failure.{failure}
-import dream_postgres/internal/runner
-import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{type Query}
+import dream_postgres/query/runner
 import dream_postgres/row.{type Row}
 import gleam/list
 import gleam/option.{None}

@@ -2,7 +2,7 @@
 //// (`type_catalog.address()`), and the bytes of its values.
 
 import dream_postgres/codec.{type Codec}
-import dream_postgres/internal/row_reader.{column, row}
+import dream_postgres/row/reader.{column, row}
 import gleam/option.{type Option, None}
 
 /// An address: a street and a city that can be NULL.

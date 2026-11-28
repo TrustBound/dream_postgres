@@ -1,7 +1,7 @@
 //// Extracts the result columns of an outcome of the connection process.
 
+import dream_postgres/driver/cell.{type ColumnDescription}
 import dream_postgres/driver/connection/outcome.{type Outcome}
-import dream_postgres/internal/cell.{type ColumnDescription}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the description of each result column of the outcome, in order.

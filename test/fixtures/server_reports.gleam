@@ -1,7 +1,7 @@
 //// Server reports (ErrorResponse fields) of the kind that a server sends,
 //// for the tests that need one with no server.
 
-import dream_postgres/internal/cell.{type ServerReport, ServerReport}
+import dream_postgres/driver/cell.{type ServerReport, ServerReport}
 import gleam/option.{None, Some}
 
 /// The FATAL report of a server that an administrator shuts down

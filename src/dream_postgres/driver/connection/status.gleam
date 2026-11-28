@@ -1,6 +1,7 @@
 //// What a caller reads of the connection without a request to the server: its
 //// transaction status and its server parameters.
 
+import dream_postgres/driver/cell.{type ServerReport, type TransactionStatus}
 import dream_postgres/driver/connection/call.{type Connection, request, snapshot}
 import dream_postgres/driver/connection/process_message.{
   type Snapshot, SettledStatusRequest,
@@ -8,7 +9,6 @@ import dream_postgres/driver/connection/process_message.{
 import dream_postgres/driver/connection/request_failure.{
   type ConnectionStateError, type SettleError, SettleFailed,
 }
-import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/dict
 import gleam/option.{type Option}
 import gleam/result

@@ -2,6 +2,7 @@
 //// and notifications go through the sinks of a test, the subscribe of a
 //// sink to a listener, and the waits for what a sink sends.
 
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/event.{type ConnectionEvent}
 import dream_postgres/driver/connection/outcome.{type Notification}
@@ -17,7 +18,6 @@ import dream_postgres/driver/pool/pool_event.{
 import dream_postgres/driver/pool/pool_message.{type Pool}
 import dream_postgres/driver/pool/pool_settings.{PoolConfig}
 import dream_postgres/driver/sink.{type Sink}
-import dream_postgres/internal/cell.{type ServerReport}
 import driver/server_connection.{
   connection_config, query_text, run_control_simple_query, start_configured,
 }

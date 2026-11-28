@@ -2,17 +2,17 @@
 //// the secrets, with cells written already as a recorder sees them.
 
 import dream_postgres/codec
+import dream_postgres/copy/request.{CopyRows, RecordedRows}
+import dream_postgres/driver/cell.{
+  type Cell, type TypeDescription, Base, Binary, CommandResult,
+  StatementDescription, TypeDescription,
+}
 import dream_postgres/error.{InterceptorFailed}
 import dream_postgres/interceptor.{
   type Outcome, type Request, CopyFrom, CopyToAnswer, Request, SqlAnswer,
   Statement, StatementAnswer,
 }
-import dream_postgres/internal/cell.{
-  type Cell, type TypeDescription, Base, Binary, CommandResult,
-  StatementDescription, TypeDescription,
-}
-import dream_postgres/internal/copy_request.{CopyRows, RecordedRows}
-import dream_postgres/internal/query.{type Value}
+import dream_postgres/query/definition.{type Value}
 import dream_postgres/recorder/match
 import fixtures/column_description
 import gleam/list
@@ -125,7 +125,11 @@ pub fn copied_rows_of(type_name: String, rows: List(List(Cell))) -> Outcome {
 /// normalize_inputs.written("uuid", Binary(normalize_inputs.uuid_bytes()))
 /// ```
 pub fn written(type_name: String, cell: Cell) -> Value {
-  query.written_as(codec.field(codec.bytea, <<>>), type_named(type_name), cell)
+  definition.written_as(
+    codec.field(codec.bytea, <<>>),
+    type_named(type_name),
+    cell,
+  )
 }
 
 /// The parameters of a query with one secret value of the codec `text`,
@@ -137,10 +141,10 @@ pub fn written(type_name: String, cell: Cell) -> Value {
 /// normalize_inputs.statement("SELECT $1", normalize_inputs.written_secret())
 /// ```
 pub fn written_secret() -> List(Value) {
-  query.query("SELECT $1")
-  |> query.secret_parameter(codec.text, "hunter2")
-  |> query.values
-  |> list.map(query.written_as(
+  definition.query("SELECT $1")
+  |> definition.secret_parameter(codec.text, "hunter2")
+  |> definition.values
+  |> list.map(definition.written_as(
     _,
     type_named("text"),
     Binary(<<"hunter2":utf8>>),
@@ -182,9 +186,9 @@ pub fn copy_from(rows: List(List(Value))) -> Request {
     name: None,
     parameters: [],
     kind: CopyFrom(
-      table: copy_request.table("items"),
+      table: request.table("items"),
       columns: ["value"],
-      rows: copy_request.feed(rows, fn(row) { row }),
+      rows: request.feed(rows, fn(row) { row }),
     ),
   )
 }

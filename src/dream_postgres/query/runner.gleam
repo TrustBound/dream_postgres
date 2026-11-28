@@ -6,6 +6,12 @@
 //// last step of the chain prepares, checks and runs it.
 
 import dream_errors.{type Error}
+import dream_postgres/codecs/codec_type.{type TypeLookup}
+import dream_postgres/driver/cell.{
+  type Cell, type ColumnDescription, type CommandResult, type Format,
+  type StatementDescription, type TypeDescription, Array, Base, Composite,
+  Domain, Enum, Multirange, Pseudo, Range,
+}
 import dream_postgres/error.{
   type PostgresError, type Reason, InterceptorFailed, PostgresError, TooManyRows,
   UnknownType,
@@ -14,16 +20,8 @@ import dream_postgres/interceptor.{
   type Answer, type Interceptor, type Outcome, type Request, CopyFromAnswer,
   CopyToAnswer, Request, SqlAnswer, Statement, StatementAnswer,
 }
-import dream_postgres/internal/cell.{
-  type Cell, type ColumnDescription, type CommandResult, type Format,
-  type StatementDescription, type TypeDescription, Array, Base, Composite,
-  Domain, Enum, Multirange, Pseudo, Range,
-}
-import dream_postgres/internal/codec_type.{type TypeLookup}
-import dream_postgres/internal/query.{type Query}
-import dream_postgres/internal/row_reader.{
-  type CheckedRow, type Row, DescribedColumn,
-}
+import dream_postgres/query/definition.{type Query}
+import dream_postgres/row/reader.{type CheckedRow, type Row, DescribedColumn}
 import gleam/dict.{type Dict}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -83,7 +81,7 @@ pub fn all(
       }),
     )
     list.try_map(ran.result.rows, fn(cells) {
-      row_reader.read(ran.checked, cells, ran.lookup)
+      reader.read(ran.checked, cells, ran.lookup)
     })
   }
   |> result.map_error(failure(query, _))
@@ -100,7 +98,7 @@ pub fn one(
   use found <- result.try(maybe_one(query, reader, lowest, interceptors))
   case found {
     Some(value) -> Ok(value)
-    None -> Error(error.no_rows(query.name(query)))
+    None -> Error(error.no_rows(definition.name(query)))
   }
 }
 
@@ -194,9 +192,9 @@ fn run_command(
 ) -> Result(Ran(checked), Reason) {
   let request =
     Request(
-      sql: query.sql(query),
-      name: query.name(query),
-      parameters: query.values(query),
+      sql: definition.sql(query),
+      name: definition.name(query),
+      parameters: definition.values(query),
       kind: Statement,
     )
   use answer <- result.try(
@@ -260,16 +258,16 @@ fn check_statement(
 ) -> Result(Nil, Error(PostgresError)) {
   {
     use description <- result.try(executor.describe_current(
-      query.sql(query),
-      query.name(query),
+      definition.sql(query),
+      definition.name(query),
     ))
     use #(parameter_types, cache) <- result.try(describe_all(
       list.map(description.parameters, fn(parameter) { parameter.type_id }),
       TypeCache(describe_type: executor.describe_type, types: dict.new()),
     ))
     let lookup = lookup_of(cache)
-    use Nil <- result.try(query.check_values(
-      query.values(query),
+    use Nil <- result.try(definition.check_values(
+      definition.values(query),
       parameter_types,
       lookup,
     ))
@@ -322,7 +320,7 @@ fn answer_described(
     cache,
   ))
   let lookup = lookup_of(cache)
-  use written <- result.try(query.write_values(
+  use written <- result.try(definition.write_values(
     request.parameters,
     parameter_types,
     lookup,
@@ -360,8 +358,8 @@ fn check_reader(
     |> list.map(fn(pair) {
       DescribedColumn(column: pair.0, type_description: pair.1)
     })
-  use checked <- result.try(row_reader.check(reader, described, lookup))
-  Ok(#(checked, row_reader.result_formats(checked)))
+  use checked <- result.try(reader.check(reader, described, lookup))
+  Ok(#(checked, reader.result_formats(checked)))
 }
 
 fn no_reader(
@@ -477,8 +475,8 @@ fn part_type_ids(type_description: TypeDescription) -> List(Int) {
 
 fn failure(query: Query, reason: Reason) -> Error(PostgresError) {
   PostgresError(
-    query_name: query.name(query),
-    sql: Some(query.sql(query)),
+    query_name: definition.name(query),
+    sql: Some(definition.sql(query)),
     reason:,
   )
   |> error.to_dream_error

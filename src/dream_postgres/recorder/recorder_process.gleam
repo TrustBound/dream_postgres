@@ -1,15 +1,15 @@
 //// The process of a recorder: it keeps the recording, and writes it when a
 //// request ends.
 
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_postgres/error.{type Reason, RecordingNotWritten}
 import dream_postgres/interceptor.{type Outcome, type Request, Request}
-import dream_postgres/internal/cell.{type TypeDescription}
-import dream_postgres/internal/recorder/recorded_answer.{intercepted_copy, take}
-import dream_postgres/internal/recorder/recorder_state.{
+import dream_postgres/recorder/recorded_answer.{intercepted_copy, take}
+import dream_postgres/recorder/recorder_state.{
   type Message, type State, AbortedBy, OwnerDown, Save, State, Stop, Take,
 }
-import dream_postgres/internal/recorder/recording_file.{write_recording}
-import dream_postgres/internal/recorder/written_entry.{
+import dream_postgres/recorder/recording_file.{write_recording}
+import dream_postgres/recorder/written_entry.{
   recorded_request, secret_free_outcome,
 }
 import dream_postgres/recording.{RecordedEntry}

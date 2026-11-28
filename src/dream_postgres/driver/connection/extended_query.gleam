@@ -1,6 +1,9 @@
 //// The caller's side of the Extended Query protocol: Parse and Describe, then
 //// Bind and Execute.
 
+import dream_postgres/driver/cell.{
+  type Cell, type Format, type StatementDescription,
+}
 import dream_postgres/driver/connection/call.{
   type Connection, prepare_request, request, run_request,
 }
@@ -17,9 +20,6 @@ import dream_postgres/driver/connection/tracing.{
   outcome_ending, prepare_ending, traced,
 }
 import dream_postgres/driver/housekeeping_sql.{type HousekeepingSql}
-import dream_postgres/internal/cell.{
-  type Cell, type Format, type StatementDescription,
-}
 import gleam/result
 
 /// Prepares a statement and describes it, before any run. A statement

@@ -5,6 +5,7 @@
 //// to `pool.start` or `pool.supervised`.
 
 import dream_errors.{type Error}
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/backoff as connection_backoff
 import dream_postgres/driver/connection/settings as connection_settings
 import dream_postgres/driver/login
@@ -14,14 +15,13 @@ import dream_postgres/driver/pool/pool_settings.{type PoolConfig}
 import dream_postgres/driver/sink
 import dream_postgres/driver/transport
 import dream_postgres/error.{type PostgresError, type Severity, InvalidConfig}
+import dream_postgres/error/failure.{failure, failure_with_no_query}
 import dream_postgres/interceptor.{type Interceptor}
-import dream_postgres/internal/cell.{type ServerReport}
-import dream_postgres/internal/connection_state
-import dream_postgres/internal/driver_executor
-import dream_postgres/internal/failure.{failure, failure_with_no_query}
-import dream_postgres/internal/replay.{type Replay}
+import dream_postgres/pool/connection_state
+import dream_postgres/query/driver_executor
 import dream_postgres/reconnect.{type ReconnectStep, ReconnectStep, full_jitter}
 import dream_postgres/recorder.{type Recorder}
+import dream_postgres/recorder/replay.{type Replay}
 import dream_postgres/secrets.{type Secrets}
 import dream_postgres/sql_state.{type SqlState}
 import gleam/erlang/process.{type Subject}

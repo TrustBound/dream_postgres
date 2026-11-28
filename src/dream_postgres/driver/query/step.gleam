@@ -31,11 +31,11 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/driver/message.{type BackendMessage, type FrontendMessage}
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type ColumnDescription, type CommandResult, type ServerReport,
   type TransactionStatus,
 }
+import dream_postgres/driver/message.{type BackendMessage, type FrontendMessage}
 import gleam/option.{type Option, Some}
 
 /// A message that the server can send at any time, and that a step gives

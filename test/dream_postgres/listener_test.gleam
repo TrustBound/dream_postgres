@@ -1,11 +1,11 @@
 //// The listener of the client: LISTEN and NOTIFY on PostgreSQL 16 to 19,
 //// and the mapping of each message and error of the driver's listener.
 
+import dream_postgres/driver/cell.{Idle}
 import dream_postgres/driver/connection/event as connection_event
 import dream_postgres/driver/connection/outcome as connection_outcome
 import dream_postgres/driver/listener
 import dream_postgres/error
-import dream_postgres/internal/cell.{Idle}
 import dream_postgres/listener.{
   ListenFailed, Listening, NotListening, NotificationArrived, listen,
   monitor_listener, named_listener, stop_listener, unlisten,

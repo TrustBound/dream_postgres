@@ -3,7 +3,7 @@
 //// type with no built-in codec.
 
 import dream_postgres/codec.{type Codec}
-import dream_postgres/internal/row_reader.{column, row}
+import dream_postgres/row/reader.{column, row}
 import gleam/option.{type Option, None}
 
 /// A value of the enum `probe_mood`.

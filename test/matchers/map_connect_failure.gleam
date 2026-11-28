@@ -3,7 +3,7 @@
 
 import dream_postgres/driver/connection/event.{type ConnectError}
 import dream_postgres/error.{type ConnectFailure}
-import dream_postgres/internal/driver_executor
+import dream_postgres/query/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the client failure of an error of a connect to the server at

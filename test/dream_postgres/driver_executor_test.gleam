@@ -8,6 +8,7 @@
 import dream_postgres/codec
 import dream_postgres/driver/catalog
 import dream_postgres/driver/catalog_table
+import dream_postgres/driver/cell.{BinaryFormat, Idle, Text}
 import dream_postgres/driver/channel_binding
 import dream_postgres/driver/connection/event as connection_event
 import dream_postgres/driver/connection/outcome as connection_outcome
@@ -19,12 +20,11 @@ import dream_postgres/driver/query/step as query_step
 import dream_postgres/driver/scram
 import dream_postgres/driver/transport
 import dream_postgres/error.{PostgresError}
-import dream_postgres/internal/cell.{BinaryFormat, Idle, Text}
-import dream_postgres/internal/driver_executor
-import dream_postgres/internal/query
-import dream_postgres/internal/row_reader.{column, row, single}
-import dream_postgres/internal/runner
 import dream_postgres/posix
+import dream_postgres/query/definition
+import dream_postgres/query/driver_executor
+import dream_postgres/query/runner
+import dream_postgres/row/reader.{column, row, single}
 import dream_postgres/sql_state.{SyntaxError, UniqueViolation}
 import dream_test/context
 import dream_test/matchers.{
@@ -82,7 +82,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> run_on_executor(fn(executor) {
               runner.all(
-                query.query(
+                definition.query(
                   "SELECT * FROM (VALUES "
                   <> "(1, 'one'::text, NULL::int4, 1.50::numeric, ARRAY[1, 2]), "
                   <> "(2, 'two'::text, 7, 0.25, ARRAY[]::int4[])"
@@ -114,7 +114,8 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_executor(fn(executor) {
             runner.one(
-              query.query("SELECT 41 + $1") |> query.parameter(codec.int, 1),
+              definition.query("SELECT 41 + $1")
+                |> definition.parameter(codec.int, 1),
               single(codec.int),
               runner.DatabaseLayer(executor),
               [],
@@ -130,8 +131,8 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
-              query.query("SELECT generate_series(1, $1)")
-                |> query.parameter(codec.int, 0),
+              definition.query("SELECT generate_series(1, $1)")
+                |> definition.parameter(codec.int, 0),
               single(codec.int),
               runner.DatabaseLayer(executor),
               [],
@@ -147,8 +148,8 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
-              query.query("SELECT generate_series(1, $1)")
-                |> query.parameter(codec.int, 1),
+              definition.query("SELECT generate_series(1, $1)")
+                |> definition.parameter(codec.int, 1),
               single(codec.int),
               runner.DatabaseLayer(executor),
               [],
@@ -165,8 +166,8 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
-              query.query("SELECT generate_series(1, $1)")
-                |> query.parameter(codec.int, 2),
+              definition.query("SELECT generate_series(1, $1)")
+                |> definition.parameter(codec.int, 2),
               single(codec.int),
               runner.DatabaseLayer(executor),
               [],
@@ -188,7 +189,7 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             use inserted <- result.try(
               runner.affected(
-                query.query(
+                definition.query(
                   "INSERT INTO executor_counts SELECT generate_series(1, 3)",
                 ),
                 runner.DatabaseLayer(executor),
@@ -197,10 +198,10 @@ pub fn tests() -> TestSuite {
             )
             use updated <- result.try(
               runner.affected(
-                query.query(
+                definition.query(
                   "UPDATE executor_counts SET id = id + 10 WHERE id > $1",
                 )
-                  |> query.parameter(codec.int, 1),
+                  |> definition.parameter(codec.int, 1),
                 runner.DatabaseLayer(executor),
                 [],
               ),
@@ -223,14 +224,14 @@ pub fn tests() -> TestSuite {
             |> run_on_executor(fn(executor) {
               let inserted =
                 runner.affected(
-                  query.query("INSERT INTO executor_mismatch VALUES ($1)")
-                    |> query.parameter(codec.text, "1"),
+                  definition.query("INSERT INTO executor_mismatch VALUES ($1)")
+                    |> definition.parameter(codec.text, "1"),
                   runner.DatabaseLayer(executor),
                   [],
                 )
               use count <- result.try(
                 runner.one(
-                  query.query("SELECT count(*) FROM executor_mismatch"),
+                  definition.query("SELECT count(*) FROM executor_mismatch"),
                   single(codec.int),
                   runner.DatabaseLayer(executor),
                   [],
@@ -268,7 +269,7 @@ pub fn tests() -> TestSuite {
             |> run_on_executor(fn(executor) {
               let inserted =
                 runner.one(
-                  query.query(
+                  definition.query(
                     "INSERT INTO executor_returning VALUES (5) RETURNING id",
                   ),
                   single(codec.text),
@@ -277,7 +278,7 @@ pub fn tests() -> TestSuite {
                 )
               use count <- result.try(
                 runner.one(
-                  query.query("SELECT count(*) FROM executor_returning"),
+                  definition.query("SELECT count(*) FROM executor_returning"),
                   single(codec.int),
                   runner.DatabaseLayer(executor),
                   [],
@@ -314,7 +315,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> run_on_executor(fn(executor) {
               runner.one(
-                query.query("SELECT NULL::int4 AS total"),
+                definition.query("SELECT NULL::int4 AS total"),
                 single(codec.int),
                 runner.DatabaseLayer(executor),
                 [],
@@ -340,8 +341,8 @@ pub fn tests() -> TestSuite {
             )
             |> run_on_executor(fn(executor) {
               runner.affected(
-                query.query("INSERT INTO executor_unique VALUES ($1)")
-                  |> query.parameter(codec.int, 1),
+                definition.query("INSERT INTO executor_unique VALUES ($1)")
+                  |> definition.parameter(codec.int, 1),
                 runner.DatabaseLayer(executor),
                 [],
               )
@@ -358,7 +359,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_executor(fn(executor) {
             runner.all(
-              query.query("SELEC 1"),
+              definition.query("SELEC 1"),
               single(codec.int),
               runner.DatabaseLayer(executor),
               [],
@@ -381,7 +382,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> run_on_executor_with_deadline(500, fn(executor) {
               runner.affected(
-                query.query("SELECT pg_sleep(5)"),
+                definition.query("SELECT pg_sleep(5)"),
                 runner.DatabaseLayer(executor),
                 [],
               )
@@ -405,7 +406,7 @@ pub fn tests() -> TestSuite {
               "CREATE TEMP TABLE changing_table (id int4); INSERT INTO changing_table VALUES (1)",
             )
             |> run_on_executor(fn(executor) {
-              let select_all = query.query("SELECT * FROM changing_table")
+              let select_all = definition.query("SELECT * FROM changing_table")
               use _first <- result.try(
                 runner.all(
                   select_all,
@@ -416,7 +417,9 @@ pub fn tests() -> TestSuite {
               )
               use _altered <- result.try(
                 runner.affected(
-                  query.query("ALTER TABLE changing_table ADD COLUMN note text"),
+                  definition.query(
+                    "ALTER TABLE changing_table ADD COLUMN note text",
+                  ),
                   runner.DatabaseLayer(executor),
                   [],
                 ),
@@ -441,7 +444,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_executor(fn(executor) {
             runner.affected(
-              query.query("SELECT 1\u{0000}"),
+              definition.query("SELECT 1\u{0000}"),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -458,7 +461,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_executor(fn(executor) {
             runner.affected(
-              query.query("COPY (SELECT 1) TO STDOUT"),
+              definition.query("COPY (SELECT 1) TO STDOUT"),
               runner.DatabaseLayer(executor),
               [],
             )

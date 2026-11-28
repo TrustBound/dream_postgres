@@ -1,6 +1,7 @@
 //// The COPY protocol: CopyIn and CopyOut, the CopyData that the app sends, and
 //// the end of the COPY.
 
+import dream_postgres/driver/cell.{type ServerReport, type TransactionStatus}
 import dream_postgres/driver/encode.{
   copy_abandonment, copy_data_messages, copy_done, sync,
 }
@@ -19,7 +20,6 @@ import dream_postgres/driver/query/step.{
   AwaitingParseComplete, CopyCompleted, CopyTo, NoCopyStarted,
   ReadingExecuteRows, Start,
 }
-import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/list.{reverse}
 import gleam/option.{None}
 import gleam/result

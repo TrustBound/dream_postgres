@@ -1,7 +1,7 @@
 //// Extracts the transaction_status of a login outcome.
 
+import dream_postgres/driver/cell.{type TransactionStatus}
 import dream_postgres/driver/login.{type LoginOutcome}
-import dream_postgres/internal/cell.{type TransactionStatus}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the `transaction_status` field of the outcome of a login.

@@ -1,9 +1,9 @@
 //// The normalizers of a recorder, on requests and answers with cells
 //// that are written already, with no database.
 
+import dream_postgres/driver/cell.{Binary, Null, Text}
 import dream_postgres/error.{InterceptorFailed}
 import dream_postgres/interceptor.{CopyFromAnswer}
-import dream_postgres/internal/cell.{Binary, Null, Text}
 import dream_postgres/recorder/normalize
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

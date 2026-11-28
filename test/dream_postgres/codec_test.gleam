@@ -3,11 +3,11 @@
 //// the driver.
 
 import dream_postgres/codec
-import dream_postgres/internal/cell.{
+import dream_postgres/codecs/codec_type.{Malformed, NullValue, OutOfRange}
+import dream_postgres/driver/cell.{
   Array, Base, Binary, BinaryFormat, Composite, Domain, Enum, Multirange, Null,
   Pseudo, Range, Text, TextFormat, TypeDescription,
 }
-import dream_postgres/internal/codec_type.{Malformed, NullValue, OutOfRange}
 import dream_postgres/json
 import dream_test/matchers.{
   be_empty, be_equal, be_error, be_false, be_none, be_ok, be_some, be_true,

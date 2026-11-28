@@ -1,9 +1,9 @@
 //// Extracts the report of a session that the server ended.
 
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/event.{
   type ConnectionEnd, ServerEndedConnection,
 }
-import dream_postgres/internal/cell.{type ServerReport}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

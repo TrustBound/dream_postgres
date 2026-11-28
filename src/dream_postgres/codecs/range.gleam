@@ -11,13 +11,13 @@
 //// the text format: `empty`, or `[lower,upper)` with each bound quoted, and
 //// a multirange is `{[1,3),[5,7)}`.
 
-import dream_postgres/internal/cell.{
-  type Cell, type TypeDescription, Array, Base, Binary, BinaryFormat, Composite,
-  Domain, Enum, Multirange, Null, Pseudo, Range as RangeKind, Text, TextFormat,
-}
-import dream_postgres/internal/codec_type.{
+import dream_postgres/codecs/codec_type.{
   type Codec, type DecodeIssue, type TypeLookup, Codec, Malformed, NullValue,
   accepts, decode, encode, utf8_bytes,
+}
+import dream_postgres/driver/cell.{
+  type Cell, type TypeDescription, Array, Base, Binary, BinaryFormat, Composite,
+  Domain, Enum, Multirange, Null, Pseudo, Range as RangeKind, Text, TextFormat,
 }
 import dream_postgres/range.{
   type Bound, type Range, EmptyRange, Exclusive, Inclusive, Range, Unbounded,

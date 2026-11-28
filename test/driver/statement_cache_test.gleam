@@ -1,10 +1,10 @@
 //// Tests for `dream_postgres/driver/statement_cache`, the pure cache of
 //// named statements of one connection.
 
+import dream_postgres/driver/cell.{StatementDescription}
 import dream_postgres/driver/statement_cache.{
   CachedStatement, forget, insert, lookup, make_room, new, new_name, take_stale,
 }
-import dream_postgres/internal/cell.{StatementDescription}
 import dream_test/matchers.{be_equal, be_none, be_some, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}

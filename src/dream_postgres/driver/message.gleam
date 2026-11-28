@@ -17,7 +17,7 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type Cell, type ColumnDescription, type Format, type ParameterDescription,
   type ServerReport, type TransactionStatus,
 }

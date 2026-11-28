@@ -1,6 +1,6 @@
 //// Extracts the kind of a type description.
 
-import dream_postgres/internal/cell.{type TypeDescription, type TypeKind}
+import dream_postgres/driver/cell.{type TypeDescription, type TypeKind}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the `kind` field of the type description.

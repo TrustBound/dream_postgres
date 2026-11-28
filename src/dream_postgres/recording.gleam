@@ -23,6 +23,13 @@
 //// }
 //// ```
 
+import dream_postgres/driver/cell.{
+  type Cell, type ColumnDescription, type CommandResult,
+  type StatementDescription, type TypeDescription, type TypeKind, Array, Base,
+  Binary, ColumnDescription, CommandResult, Composite, Domain, Enum, Multirange,
+  Null, ParameterDescription, Pseudo, Range, StatementDescription, Text,
+  TypeDescription,
+}
 import dream_postgres/error.{
   type Reason, type ServerError, type Severity, AmbiguousColumnName,
   CatalogProcessDown, ChannelTooLong, ColumnCountMismatch, ColumnReadTwice,
@@ -43,13 +50,6 @@ import dream_postgres/error.{
   UndecodableServerMessage, UnexpectedCommitAnswer, UnexpectedIdleMessage,
   UnexpectedListenAnswer, UnexpectedNull, UnexpectedServerMessage, UnknownType,
   UnlistedSeverity, UnreadableCatalog, ValueOutOfRange, WarningSeverity,
-}
-import dream_postgres/internal/cell.{
-  type Cell, type ColumnDescription, type CommandResult,
-  type StatementDescription, type TypeDescription, type TypeKind, Array, Base,
-  Binary, ColumnDescription, CommandResult, Composite, Domain, Enum, Multirange,
-  Null, ParameterDescription, Pseudo, Range, StatementDescription, Text,
-  TypeDescription,
 }
 import dream_postgres/sql_state
 import gleam/bit_array

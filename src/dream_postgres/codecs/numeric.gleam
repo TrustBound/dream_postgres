@@ -15,10 +15,10 @@
 //// takes the texts that PostgreSQL's `numeric_in` takes, and gives the
 //// bytes that its `numeric_send` gives for that value.
 
-import dream_postgres/internal/cell.{type Cell, type TypeDescription, Binary}
-import dream_postgres/internal/codec_type.{
+import dream_postgres/codecs/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
 }
+import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
 import gleam/bit_array
 import gleam/int
 import gleam/list

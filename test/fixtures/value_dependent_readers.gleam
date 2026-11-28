@@ -3,7 +3,7 @@
 //// codec, 0 for `codec.int`, so a read must refuse another branch.
 
 import dream_postgres/codec
-import dream_postgres/internal/row_reader.{type Row, column, row}
+import dream_postgres/row/reader.{type Row, column, row}
 import gleam/option.{type Option, None, Some}
 
 /// A reader of `kind int4, name text` that reads the name only when the

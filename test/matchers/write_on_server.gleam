@@ -2,12 +2,12 @@
 //// and gives the server's text of it.
 
 import dream_postgres/codec.{type Codec}
-import dream_postgres/driver/connection/extended_query as connection_extended_query
-import dream_postgres/driver/connection/statement as connection_statement
-import dream_postgres/internal/cell.{
+import dream_postgres/codecs/codec_type
+import dream_postgres/driver/cell.{
   type TypeDescription, Binary, Null, Text, TextFormat,
 }
-import dream_postgres/internal/codec_type
+import dream_postgres/driver/connection/extended_query as connection_extended_query
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

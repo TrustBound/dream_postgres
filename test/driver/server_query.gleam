@@ -3,6 +3,7 @@
 //// step's messages, decodes each message of the server, gives it to the
 //// step function, and sends what the step asks, until the step is done.
 
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
 import dream_postgres/driver/login.{PreferChannelBinding}
@@ -17,7 +18,6 @@ import dream_postgres/driver/query/step.{
 import dream_postgres/driver/transport.{
   type Connection, type ReceiveError, type SendError, NoTls, receive, send,
 }
-import dream_postgres/internal/cell.{type ServerReport}
 import driver/server_login.{type LoginFailure, TestLogin, open_logged_in}
 import driver/servers.{type Server}
 import gleam/bit_array.{concat}

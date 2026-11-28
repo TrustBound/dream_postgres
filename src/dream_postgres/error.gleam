@@ -34,8 +34,8 @@
 import dream_errors.{
   type Error, Conflict, Failed, Invalid, NotFound, Retry, Timeout, Unavailable,
 }
-import dream_postgres/internal/cell.{type Cell, type ServerReport, ServerReport}
-import dream_postgres/internal/error_text.{
+import dream_postgres/driver/cell.{type Cell, type ServerReport, ServerReport}
+import dream_postgres/error/messages.{
   column_text, statement_ran_text, statements_run_text, timeout_message,
 }
 import dream_postgres/posix.{type Posix}

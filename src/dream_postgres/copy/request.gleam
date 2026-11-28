@@ -6,11 +6,11 @@
 //// come from, and the reader of the COPY folds over them one at a time.
 //// An interceptor that must see each row adds a watcher.
 
+import dream_postgres/copy/binary_format
+import dream_postgres/driver/cell.{type Cell}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/error.{type Reason}
-import dream_postgres/internal/cell.{type Cell}
-import dream_postgres/internal/copy_stream
-import dream_postgres/internal/query.{type Value}
+import dream_postgres/query/definition.{type Value}
 import dream_postgres/secrets.{type Secrets}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -37,11 +37,11 @@ pub fn table_in_schema(schema: String, name: String) -> Table {
 /// The table as SQL, each part quoted as an identifier.
 pub fn table_sql(table: Table) -> String {
   case table {
-    Table(name:) -> copy_stream.quote_identifier(name)
+    Table(name:) -> binary_format.quote_identifier(name)
     TableInSchema(schema:, name:) ->
-      copy_stream.quote_identifier(schema)
+      binary_format.quote_identifier(schema)
       <> "."
-      <> copy_stream.quote_identifier(name)
+      <> binary_format.quote_identifier(name)
   }
 }
 

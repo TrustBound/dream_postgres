@@ -1,6 +1,6 @@
 //// Extracts the severity of a server report.
 
-import dream_postgres/internal/cell.{type ServerReport}
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the severity of the report, for example `FATAL`.

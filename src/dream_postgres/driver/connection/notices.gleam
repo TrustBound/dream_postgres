@@ -1,6 +1,7 @@
 //// The notices and the notifications that the server sends: kept, and given to
 //// the caller with the outcome of the next request.
 
+import dream_postgres/driver/cell.{type ServerReport, type TransactionStatus}
 import dream_postgres/driver/connection/outcome.{
   type Notification, type Outcome, Notification, Outcome,
 }
@@ -11,7 +12,6 @@ import dream_postgres/driver/query/step.{
 } as query_step
 import dream_postgres/driver/sink.{type Delivery, Delivered, MapFailed}
 import dream_postgres/driver/trace
-import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/dict
 import gleam/list.{filter_map, fold, reverse}
 import gleam/option.{None, Some}

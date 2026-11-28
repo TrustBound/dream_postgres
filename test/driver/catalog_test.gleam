@@ -13,12 +13,12 @@ import dream_postgres/driver/catalog.{
   type CatalogError, type CatalogEvent, CatalogProcessDown, LoadStarted,
   UnknownType, supervised,
 }
-import dream_postgres/driver/connection/extended_query.{run}
-import dream_postgres/driver/connection/statement as connection_statement
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type TypeDescription, Array, Base, Composite, Domain, Enum, Multirange, Pseudo,
   Range, TypeDescription,
 }
+import dream_postgres/driver/connection/extended_query.{run}
+import dream_postgres/driver/connection/statement as connection_statement
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

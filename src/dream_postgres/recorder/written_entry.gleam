@@ -1,24 +1,20 @@
 //// The entry that the recorder writes for a request that went to the server:
 //// its SQL, its parameters, its rows and its ending.
 
+import dream_postgres/copy/request.{type RowFeed, CopyRows, RecordedRows}
+import dream_postgres/driver/cell.{
+  type Cell, type CommandResult, type StatementDescription, type TypeDescription,
+  CommandResult,
+}
 import dream_postgres/error.{type Reason}
 import dream_postgres/interceptor.{
   type Outcome, type Request, CopyFrom, CopyFromAnswer, CopyTo, CopyToAnswer,
   Request, Sql, SqlAnswer, Statement, StatementAnswer,
 }
-import dream_postgres/internal/cell.{
-  type Cell, type CommandResult, type StatementDescription, type TypeDescription,
-  CommandResult,
-}
-import dream_postgres/internal/copy_request.{
-  type RowFeed, CopyRows, RecordedRows,
-}
-import dream_postgres/internal/query.{
+import dream_postgres/query/definition.{
   type Value, type WriteEvent, SecretWritten, TypeChecked, TypeLookedUp, Written,
 }
-import dream_postgres/internal/recorder/recorder_state.{
-  type WriteSeen, WriteSeen,
-}
+import dream_postgres/recorder/recorder_state.{type WriteSeen, WriteSeen}
 import dream_postgres/recording.{
   type RecordedFailure, type RecordedRequest, type WrittenParameter,
   type WrittenParameters, type WrittenRows, RecordedCopyFrom, RecordedCopyTo,
@@ -41,7 +37,7 @@ pub fn watched_request(request: Request, seen: Subject(WriteSeen)) -> Request {
         kind: CopyFrom(
           table:,
           columns:,
-          rows: copy_request.map_rows(rows, fn(row_number, values) {
+          rows: request.map_rows(rows, fn(row_number, values) {
             watched_values(values, row_number, seen)
           }),
         ),
@@ -60,7 +56,7 @@ fn watched_values(
   seen: Subject(WriteSeen),
 ) -> List(Value) {
   list.index_map(values, fn(value, position) {
-    query.watch(value, fn(event) {
+    definition.watch(value, fn(event) {
       process.send(seen, WriteSeen(row_number:, position:, event:))
     })
   })
@@ -90,7 +86,7 @@ pub fn written_request(request: Request, events: List(WriteSeen)) -> Request {
             |> list.index_map(fn(values, row_number) {
               written_values(values, events, row_number)
             })
-            |> copy_request.feed(fn(values) { values }),
+            |> request.feed(fn(values) { values }),
         ),
       )
     Statement | Sql | CopyTo ->
@@ -128,9 +124,9 @@ fn written_value(
 ) -> Value {
   case checked, write {
     Ok(type_description), Ok(Written(cell:)) ->
-      query.written_as(value, type_description, cell)
+      definition.written_as(value, type_description, cell)
     Ok(type_description), Ok(SecretWritten(..)) ->
-      query.written_secret(value, type_description)
+      definition.written_secret(value, type_description)
     Ok(_), Ok(TypeChecked(..))
     | Ok(_), Ok(TypeLookedUp(..))
     | Ok(_), Error(Nil)
@@ -177,7 +173,7 @@ fn event_type(event: WriteEvent) -> Result(TypeDescription, Nil) {
 }
 
 pub fn feed_rows(rows: RowFeed, read: List(List(Value))) -> List(List(Value)) {
-  case copy_request.next_row(rows) {
+  case request.next_row(rows) {
     Some(#(values, rest)) -> feed_rows(rest, [values, ..read])
     None -> list.reverse(read)
   }
@@ -324,11 +320,11 @@ fn recorded_ending(
 fn written_parameters(values: List(Value)) -> Option(WrittenParameters) {
   values
   |> list.try_map(fn(value) {
-    case query.written(value) {
-      Some(query.WrittenCell(type_description:, cell:)) ->
+    case definition.written(value) {
+      Some(definition.WrittenCell(type_description:, cell:)) ->
         Ok(#(type_description, recording.WrittenCell(cell:)))
-      Some(query.WrittenSecret(type_description:)) ->
-        Ok(#(type_description, SecretCell(codec: query.codec_name(value))))
+      Some(definition.WrittenSecret(type_description:)) ->
+        Ok(#(type_description, SecretCell(codec: definition.codec_name(value))))
       None -> Error(Nil)
     }
   })
@@ -345,10 +341,10 @@ fn written_rows(rows: RowFeed) -> Option(WrittenRows) {
   feed_rows(rows, [])
   |> list.try_map(fn(values) {
     list.try_map(values, fn(value) {
-      case query.written(value) {
-        Some(query.WrittenCell(type_description:, cell:)) ->
+      case definition.written(value) {
+        Some(definition.WrittenCell(type_description:, cell:)) ->
           Ok(#(type_description, cell))
-        Some(query.WrittenSecret(..)) | None -> Error(Nil)
+        Some(definition.WrittenSecret(..)) | None -> Error(Nil)
       }
     })
   })

@@ -6,6 +6,9 @@
 //// through a proxy, a pool, a pool through a proxy, nothing, or a
 //// supervised connection. Each start is in a setup whose teardown stops it.
 
+import dream_postgres/driver/cell.{
+  type Cell, Binary, BinaryFormat, Null, Text, TextFormat,
+}
 import dream_postgres/driver/connection.{start}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/event.{
@@ -25,9 +28,6 @@ import dream_postgres/driver/transport.{
   ConnectionReset, DnsLookupFailed, InvalidPort, NoCertificateCheck,
   PostgresNegotiation, RequireTls, ServerRefusedTls, SocketClosed, TlsFailed,
   address,
-}
-import dream_postgres/internal/cell.{
-  type Cell, Binary, BinaryFormat, Null, Text, TextFormat,
 }
 import dream_test/context
 import dream_test/matchers.{

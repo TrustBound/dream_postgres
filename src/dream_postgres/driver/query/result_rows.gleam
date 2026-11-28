@@ -1,6 +1,10 @@
 //// The rows and the command results of a statement: RowDescription, DataRow and
 //// CommandComplete.
 
+import dream_postgres/driver/cell.{
+  type Cell, type ColumnDescription, type Format, Binary, BinaryFormat, Null,
+  Text, TextFormat,
+}
 import dream_postgres/driver/message.{
   type ResultColumn, CommandComplete, DataRow,
 }
@@ -10,10 +14,6 @@ import dream_postgres/driver/query/machine.{
 }
 import dream_postgres/driver/query/step.{
   type UnexpectedMessage, AwaitingStatementResult, StatementResult,
-}
-import dream_postgres/internal/cell.{
-  type Cell, type ColumnDescription, type Format, Binary, BinaryFormat, Null,
-  Text, TextFormat,
 }
 import gleam/bool.{guard}
 import gleam/int.{parse}

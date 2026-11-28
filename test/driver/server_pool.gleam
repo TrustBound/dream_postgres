@@ -12,6 +12,7 @@
 //// connections open on the shared servers until it stops, so every start
 //// has a stop.
 
+import dream_postgres/driver/cell.{type TransactionStatus}
 import dream_postgres/driver/connection.{stop}
 import dream_postgres/driver/connection/backoff.{Backoff}
 import dream_postgres/driver/connection/call.{type Connection}
@@ -31,7 +32,6 @@ import dream_postgres/driver/pool/pool_failure.{type HoldError}
 import dream_postgres/driver/pool/pool_message.{type Pool, type PoolMessage}
 import dream_postgres/driver/pool/pool_settings.{type PoolConfig, PoolConfig}
 import dream_postgres/driver/pool/pool_status.{type PoolStatus}
-import dream_postgres/internal/cell.{type TransactionStatus}
 import dream_test/context.{type Context}
 import driver/proxy.{type Proxy, start_proxy, stop_proxy}
 import driver/server_connection.{

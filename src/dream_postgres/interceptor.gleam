@@ -50,16 +50,16 @@
 //// is `Retry`, and in a transaction it rolls the transaction back.
 
 import dream_postgres/codec.{type Field}
+import dream_postgres/copy/request
+import dream_postgres/driver/cell.{
+  type CommandResult, type StatementDescription, type TypeDescription, Base,
+  ColumnDescription, CommandResult, StatementDescription, TypeDescription,
+}
 import dream_postgres/error.{
   type Reason, ClosedByServer, ConnectionLost, ErrorSeverity, InterceptorFailed,
   QueryTimeout, Server, ServerError,
 }
-import dream_postgres/internal/cell.{
-  type CommandResult, type StatementDescription, type TypeDescription, Base,
-  ColumnDescription, CommandResult, StatementDescription, TypeDescription,
-}
-import dream_postgres/internal/copy_request
-import dream_postgres/internal/query
+import dream_postgres/query/definition
 import dream_postgres/sql_state.{type SqlState}
 import gleam/int
 import gleam/list
@@ -110,16 +110,16 @@ pub type RequestKind {
 
 /// The table of a `CopyFrom` request.
 pub type Table =
-  copy_request.Table
+  request.Table
 
 /// The rows of a `CopyFrom` request.
 pub type RowFeed =
-  copy_request.RowFeed
+  request.RowFeed
 
 /// The rows of a `CopyToAnswer`: where they come from, and the watchers
 /// that see each of them.
 pub type CopyRows =
-  copy_request.CopyRows
+  request.CopyRows
 
 /// The outcome of a request: the answer, or why there is none.
 pub type Outcome =
@@ -224,7 +224,7 @@ pub fn rows(columns: List(Column), values: List(List(Field))) -> Outcome {
   let lookup = fn(_type_id) { Error(Nil) }
   use cells <- result.try(
     list.try_map(values, fn(row_values) {
-      query.write_values(row_values, types, lookup)
+      definition.write_values(row_values, types, lookup)
       |> result.map(fn(written) { written.values })
     }),
   )

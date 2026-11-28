@@ -2,7 +2,7 @@
 
 import dream_postgres/driver/transport.{type AddressError}
 import dream_postgres/error.{type ConfigFault}
-import dream_postgres/internal/driver_executor
+import dream_postgres/query/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the config fault of an error of a server address, as the client

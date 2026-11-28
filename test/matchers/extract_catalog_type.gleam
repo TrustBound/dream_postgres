@@ -1,7 +1,7 @@
 //// Looks up a type in a table of type descriptions.
 
 import dream_postgres/driver/catalog_table.{type CatalogTable, find}
-import dream_postgres/internal/cell.{type TypeDescription}
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/option.{type Option}
 

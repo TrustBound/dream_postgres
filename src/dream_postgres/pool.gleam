@@ -10,10 +10,10 @@ import dream_postgres/config.{
 import dream_postgres/driver/pool as driver_pool
 import dream_postgres/driver/pool/pool_message
 import dream_postgres/error.{type PostgresError}
+import dream_postgres/error/failure.{failure_with_no_query}
 import dream_postgres/interceptor.{type Interceptor}
-import dream_postgres/internal/connection_state
-import dream_postgres/internal/driver_executor
-import dream_postgres/internal/failure.{failure_with_no_query}
+import dream_postgres/pool/connection_state
+import dream_postgres/query/driver_executor
 import dream_postgres/recorder
 import gleam/erlang/process
 import gleam/option.{None, Some}

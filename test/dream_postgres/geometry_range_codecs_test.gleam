@@ -2,11 +2,11 @@
 //// texts of PostgreSQL's formats.
 
 import dream_postgres/codec
+import dream_postgres/codecs/codec_type.{Malformed, NullValue, OutOfRange}
+import dream_postgres/driver/cell.{Binary, Null, Text}
 import dream_postgres/geometry.{
   Box, Circle, Line, LineSegment, Path, Point, Polygon,
 }
-import dream_postgres/internal/cell.{Binary, Null, Text}
-import dream_postgres/internal/codec_type.{Malformed, NullValue, OutOfRange}
 import dream_postgres/range.{EmptyRange, Exclusive, Inclusive, Unbounded}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,

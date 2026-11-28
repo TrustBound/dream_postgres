@@ -2,8 +2,8 @@
 //// database.
 
 import dream_postgres/codec
+import dream_postgres/driver/cell.{Binary, Null, StatementDescription}
 import dream_postgres/error.{SecretColumnNotReplaced}
-import dream_postgres/internal/cell.{Binary, Null, StatementDescription}
 import dream_postgres/pool.{named_connection}
 import dream_postgres/query.{one, query}
 import dream_postgres/row.{single}

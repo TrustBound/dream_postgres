@@ -38,11 +38,11 @@
 import dream_postgres/driver/catalog_table.{
   type CatalogTable, type RowError, find, find_underlying,
 }
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/extended_query as connection_extended_query
 import dream_postgres/driver/connection/request_failure.{type HousekeepingError}
 import dream_postgres/driver/housekeeping_sql
-import dream_postgres/internal/cell.{type TypeDescription}
 import gleam/erlang/process.{type Down, type Pid, type Subject}
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor

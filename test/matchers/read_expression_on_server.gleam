@@ -2,9 +2,9 @@
 //// expression of the chain, and reads the value with a codec.
 
 import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs/codec_type
 import dream_postgres/driver/connection/extended_query as connection_extended_query
 import dream_postgres/driver/connection/statement as connection_statement
-import dream_postgres/internal/codec_type
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

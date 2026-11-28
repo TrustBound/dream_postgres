@@ -12,11 +12,11 @@
 ////   byte. An operator is 2, then 1 for NOT, 2 for AND, 3 for OR or 4 for
 ////   a phrase, and for a phrase its distance (16 bits).
 
-import dream_postgres/internal/cell.{type Cell, type TypeDescription, Binary}
-import dream_postgres/internal/codec_type.{
+import dream_postgres/codecs/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
   utf8_bytes,
 }
+import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
 import dream_postgres/text_search.{
   type Lexeme, type TsQuery, type TsVector, type Weight, And, EmptyQuery, Lexeme,
   Not, Or, Phrase, Term, WeightA, WeightB, WeightC, WeightD,

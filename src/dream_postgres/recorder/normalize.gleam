@@ -34,16 +34,16 @@
 //// }
 //// ```
 
+import dream_postgres/copy/request
+import dream_postgres/driver/cell.{
+  type Cell, type CommandResult, type StatementDescription, type TypeDescription,
+  Binary, CommandResult, Null, Text,
+}
 import dream_postgres/interceptor.{
   type Answer, type Interceptor, type Request, CopyFrom, CopyFromAnswer, CopyTo,
   CopyToAnswer, Request, Sql, SqlAnswer, Statement, StatementAnswer,
 }
-import dream_postgres/internal/cell.{
-  type Cell, type CommandResult, type StatementDescription, type TypeDescription,
-  Binary, CommandResult, Null, Text,
-}
-import dream_postgres/internal/copy_request
-import dream_postgres/internal/query
+import dream_postgres/query/definition
 import dream_uuid
 import gleam/bit_array
 import gleam/dict.{type Dict}
@@ -164,7 +164,7 @@ fn changing_cells(
       Request(
         ..request,
         sql: change_text(request.sql),
-        parameters: list.map(request.parameters, query.change_cell(
+        parameters: list.map(request.parameters, definition.change_cell(
           _,
           typed_change,
         )),
@@ -183,8 +183,8 @@ fn changed_kind(
       CopyFrom(
         table:,
         columns:,
-        rows: copy_request.map_rows(rows, fn(_row_number, values) {
-          list.map(values, query.change_cell(_, change))
+        rows: request.map_rows(rows, fn(_row_number, values) {
+          list.map(values, definition.change_cell(_, change))
         }),
       )
     Statement | Sql | CopyTo -> request.kind
@@ -223,7 +223,7 @@ fn changed_answer(
       CopyToAnswer(
         description:,
         types:,
-        rows: copy_request.change_recorded_rows(rows, changed_rows(
+        rows: request.change_recorded_rows(rows, changed_rows(
           _,
           column_types(description, types),
           change,

@@ -82,6 +82,7 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/cell.{type ServerReport, type TransactionStatus}
 import dream_postgres/driver/connection
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/event.{
@@ -101,7 +102,6 @@ import dream_postgres/driver/connection/simple_query as connection_simple_query
 import dream_postgres/driver/sink.{
   type Delivery, type Sink, Delivered, MapFailed,
 }
-import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/bit_array.{byte_size}
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}

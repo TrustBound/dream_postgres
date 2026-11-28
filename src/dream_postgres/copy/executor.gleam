@@ -4,7 +4,16 @@
 //// the same checks before anything is sent, as the parameters and the
 //// rows of a query.
 
+import dream_postgres/codecs/codec_type.{type TypeLookup}
+import dream_postgres/copy/binary_format.{type StreamReader}
+import dream_postgres/copy/request.{
+  type CopyRows, type RowFeed, type RowWatcher, type Table, CopyRows,
+  DatabaseRows, RecordedRows,
+}
 import dream_postgres/driver/catalog.{type Catalog}
+import dream_postgres/driver/cell.{
+  type Cell, type StatementDescription, type TypeDescription, Binary, Null, Text,
+}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/copy_caller.{type CopySender} as connection_copy_caller
 import dream_postgres/driver/connection/statement as connection_statement
@@ -17,21 +26,10 @@ import dream_postgres/interceptor.{
   CopyFromAnswer, CopyTo, CopyToAnswer, Request, Sql, SqlAnswer, Statement,
   StatementAnswer,
 }
-import dream_postgres/internal/cell.{
-  type Cell, type StatementDescription, type TypeDescription, Binary, Null, Text,
-}
-import dream_postgres/internal/codec_type.{type TypeLookup}
-import dream_postgres/internal/copy_request.{
-  type CopyRows, type RowFeed, type RowWatcher, type Table, CopyRows,
-  DatabaseRows, RecordedRows,
-}
-import dream_postgres/internal/copy_stream.{type StreamReader}
-import dream_postgres/internal/driver_executor.{type Endpoint, Endpoint}
-import dream_postgres/internal/query.{type Query, type Value}
-import dream_postgres/internal/row_reader.{
-  type CheckedRow, type Row, DescribedColumn,
-}
-import dream_postgres/internal/runner.{type Executor}
+import dream_postgres/query/definition.{type Query, type Value}
+import dream_postgres/query/driver_executor.{type Endpoint, Endpoint}
+import dream_postgres/query/runner.{type Executor}
+import dream_postgres/row/reader.{type CheckedRow, type Row, DescribedColumn}
 import dream_postgres/secrets.{type Secrets}
 import gleam/bit_array
 import gleam/list
@@ -70,9 +68,9 @@ type CopyOut(accumulator) {
 /// as an identifier.
 pub fn copy_from_sql(table: Table, columns: List(String)) -> String {
   "COPY "
-  <> copy_request.table_sql(table)
+  <> request.table_sql(table)
   <> " ("
-  <> copy_stream.quote_identifiers(columns)
+  <> binary_format.quote_identifiers(columns)
   <> ") FROM STDIN (FORMAT binary)"
 }
 
@@ -97,7 +95,7 @@ pub fn copy_from(
       sql: copy_from_sql(table, columns),
       name: None,
       parameters: [],
-      kind: CopyFrom(table:, columns:, rows: copy_request.feed(rows, write)),
+      kind: CopyFrom(table:, columns:, rows: request.feed(rows, write)),
     )
   use answer <- result.try(runner.intercept(interceptors, request, last))
   case answer {
@@ -187,9 +185,9 @@ fn target(
 ) -> Result(Target, Reason) {
   use description <- result.try(executor.prepare(
     "SELECT "
-      <> copy_stream.quote_identifiers(columns)
+      <> binary_format.quote_identifiers(columns)
       <> " FROM "
-      <> copy_request.table_sql(table),
+      <> request.table_sql(table),
     None,
   ))
   use #(types, lookup) <- result.try(runner.describe_types(
@@ -208,12 +206,12 @@ fn start_stream(
   rows: RowFeed,
   target: Target,
 ) -> Result(#(BitArray, RowFeed), Reason) {
-  case copy_request.next_row(rows) {
-    None -> Ok(#(copy_stream.header(), rows))
+  case request.next_row(rows) {
+    None -> Ok(#(binary_format.header(), rows))
     Some(#(first, rest)) ->
       encode_row(first, target)
       |> result.map(fn(tuple) {
-        #(<<copy_stream.header():bits, tuple:bits>>, rest)
+        #(<<binary_format.header():bits, tuple:bits>>, rest)
       })
   }
 }
@@ -224,8 +222,8 @@ fn send_rows(
   target: Target,
   pending: BitArray,
 ) -> Result(Nil, Reason) {
-  case copy_request.next_row(rows) {
-    None -> send(sender, <<pending:bits, copy_stream.trailer():bits>>)
+  case request.next_row(rows) {
+    None -> send(sender, <<pending:bits, binary_format.trailer():bits>>)
     Some(#(row, rest)) -> {
       use tuple <- result.try(encode_row(row, target))
       use pending <- result.try(send_full(sender, <<pending:bits, tuple:bits>>))
@@ -253,7 +251,7 @@ fn send(sender: CopySender, chunk: BitArray) -> Result(Nil, Reason) {
 
 fn encode_row(values: List(Value), target: Target) -> Result(BitArray, Reason) {
   write_row(values, target.types, target.lookup, target.names)
-  |> result.map(copy_stream.encode_tuple)
+  |> result.map(binary_format.encode_tuple)
 }
 
 /// Checks and writes the fields of a row of a binary COPY against the
@@ -266,7 +264,7 @@ pub fn write_row(
   lookup: TypeLookup,
   names: List(String),
 ) -> Result(List(Option(BitArray)), Reason) {
-  use written <- result.try(query.write_values(values, types, lookup))
+  use written <- result.try(definition.write_values(values, types, lookup))
   list.zip(list.zip(values, names), written.values)
   |> list.index_map(fn(field, index) { #(index + 1, field) })
   |> list.try_map(binary_field)
@@ -283,7 +281,7 @@ fn binary_field(
       Error(CopyNeedsBinaryCodec(
         position:,
         name:,
-        codec: query.codec_name(value),
+        codec: definition.codec_name(value),
       ))
   }
 }
@@ -309,11 +307,11 @@ pub fn copy_to(
   initial: accumulator,
   fold: fn(accumulator, a) -> accumulator,
 ) -> Result(accumulator, Reason) {
-  use Nil <- result.try(no_parameters(query.parameter_count(query)))
+  use Nil <- result.try(no_parameters(definition.parameter_count(query)))
   let request =
     Request(
-      sql: query.sql(query),
-      name: query.name(query),
+      sql: definition.sql(query),
+      name: definition.name(query),
       parameters: [],
       kind: CopyTo,
     )
@@ -324,14 +322,14 @@ pub fn copy_to(
     types,
     list.map(description.columns, fn(column) { column.type_id }),
   ))
-  use checked <- result.try(row_reader.check(
+  use checked <- result.try(reader.check(
     reader,
     list.map2(description.columns, column_types, DescribedColumn),
     lookup,
   ))
-  use Nil <- result.try(row_reader.require_binary_reads(checked))
+  use Nil <- result.try(reader.require_binary_reads(checked))
   let reading = Reading(checked:, lookup:, fold:)
-  let start = CopyOut(copy_stream.new_reader(), initial, rows.watchers)
+  let start = CopyOut(binary_format.new_reader(), initial, rows.watchers)
   let streamed = case rows.source {
     DatabaseRows(connection:, sql:, name:, deadline_at:, host:, port:, secrets:) ->
       stream_database_rows(
@@ -454,7 +452,7 @@ fn stream_database_rows(
     )
     |> result.map_error(driver_executor.copy_error_reason(_, endpoint)),
   )
-  copy_stream.finish(copied.reader)
+  binary_format.finish(copied.reader)
   |> result.map_error(MalformedCopyStream)
   |> result.replace(copied)
 }
@@ -465,7 +463,7 @@ fn read_chunk(
   reading: Reading(a, accumulator),
 ) -> Result(CopyOut(accumulator), Reason) {
   use #(reader, tuples) <- result.try(
-    copy_stream.read_chunk(copy_out.reader, chunk)
+    binary_format.read_chunk(copy_out.reader, chunk)
     |> result.map_error(MalformedCopyStream),
   )
   list.try_fold(tuples, CopyOut(..copy_out, reader:), fn(next, cells) {
@@ -481,11 +479,7 @@ fn read_row(
 ) -> Result(CopyOut(accumulator), Reason) {
   let watchers =
     list.map(copy_out.watchers, fn(watcher) { watcher.take(cells) })
-  use value <- result.try(row_reader.read(
-    reading.checked,
-    cells,
-    reading.lookup,
-  ))
+  use value <- result.try(reader.read(reading.checked, cells, reading.lookup))
   Ok(
     CopyOut(
       ..copy_out,

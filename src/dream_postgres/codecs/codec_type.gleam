@@ -1,7 +1,7 @@
 //// The codec type and its helpers, for the modules of dream_postgres that
 //// define codecs. An app uses `dream_postgres/codec` and never this module.
 
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type Cell, type Format, type TypeDescription, Array, Base, Binary, Composite,
   Domain, Enum, Multirange, Null, Pseudo, Range, Text,
 }

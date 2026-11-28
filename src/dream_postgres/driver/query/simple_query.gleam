@@ -1,6 +1,7 @@
 //// The Simple Query protocol: one Query message, and the results of each of its
 //// statements.
 
+import dream_postgres/driver/cell.{type TransactionStatus}
 import dream_postgres/driver/housekeeping_sql.{type HousekeepingSql}
 import dream_postgres/driver/message.{type BackendMessage, Query}
 import dream_postgres/driver/query/extended_query.{to_step}
@@ -13,7 +14,6 @@ import dream_postgres/driver/query/step.{
   type StatementResult, type Step, type UnexpectedMessage,
   AwaitingStatementResult, HousekeepingStart, SimpleQueryFailure, Start,
 }
-import dream_postgres/internal/cell.{type TransactionStatus}
 import gleam/list.{reverse}
 import gleam/result
 

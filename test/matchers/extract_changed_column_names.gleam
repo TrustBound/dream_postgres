@@ -1,9 +1,9 @@
 //// Extracts the column names of the new description of a changed statement.
 
+import dream_postgres/driver/cell.{type ColumnDescription}
 import dream_postgres/driver/connection/request_failure.{
   type RunError, RunStatementChanged,
 }
-import dream_postgres/internal/cell.{type ColumnDescription}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

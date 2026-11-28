@@ -8,18 +8,18 @@
 //// comes. The read of a row then follows that list, and refuses a reader
 //// that reads other columns for some values.
 
+import dream_postgres/codecs/codec_type.{
+  type Codec, type DecodeIssue, type TypeLookup, Malformed, NullValue,
+  OutOfRange,
+}
+import dream_postgres/driver/cell.{
+  type Cell, type ColumnDescription, type Format, type TypeDescription,
+}
 import dream_postgres/error.{
   type Reason, AmbiguousColumnName, ColumnCountMismatch, ColumnReadTwice,
   ColumnTypeMismatch, CopyNeedsBinaryCodec, DecodeFailed, MixedColumnReaders,
   NoColumnAtPosition, NoColumnNamed, ProtocolViolation, ReaderDependsOnValue,
   UnexpectedNull, ValueOutOfRange,
-}
-import dream_postgres/internal/cell.{
-  type Cell, type ColumnDescription, type Format, type TypeDescription,
-}
-import dream_postgres/internal/codec_type.{
-  type Codec, type DecodeIssue, type TypeLookup, Malformed, NullValue,
-  OutOfRange,
 }
 import gleam/dict
 import gleam/int

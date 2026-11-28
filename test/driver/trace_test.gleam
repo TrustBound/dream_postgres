@@ -4,6 +4,7 @@
 //// tracer records the spans of the test's own process only.
 
 import dream_postgres/driver/catalog
+import dream_postgres/driver/cell.{Text}
 import dream_postgres/driver/connection.{stop}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/copy_caller.{copy_from, copy_to}
@@ -15,7 +16,6 @@ import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
 import dream_postgres/driver/pool/holds as pool_holds
 import dream_postgres/driver/trace.{SpanQuery, SpanTarget, Worked}
-import dream_postgres/internal/cell.{Text}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

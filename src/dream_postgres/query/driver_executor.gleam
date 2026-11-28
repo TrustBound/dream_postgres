@@ -34,10 +34,10 @@ import dream_postgres/driver/transport.{
   type TransportError,
 }
 import dream_postgres/error.{type Reason}
-import dream_postgres/internal/runner.{
+import dream_postgres/posix
+import dream_postgres/query/runner.{
   type Executor, type RunFailure, Executor, RunFailed, StatementChanged,
 }
-import dream_postgres/posix
 import dream_postgres/secrets.{type Secrets}
 import gleam/erlang/process
 import gleam/list

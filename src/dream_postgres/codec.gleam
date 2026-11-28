@@ -28,27 +28,27 @@
 //// that PostgreSQL gives the parameter or the column. A codec that does not
 //// take that type stops the query before anything runs.
 
-import dream_postgres/internal/cell.{
-  type Cell, type TypeDescription, Array, Base, Binary, BinaryFormat, Composite,
-  Domain, Enum, Multirange, Null, Pseudo, Range, Text, TextFormat,
-}
-import dream_postgres/internal/codec_type.{
+import dream_postgres/codecs/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, NullValue, OutOfRange,
   accepts, binary_bytes, decode, encode, is_base, special_float, utf8_bytes,
   utf8_text, wrong_size,
 }
-import dream_postgres/internal/composite_codecs
-import dream_postgres/internal/geometry_codecs
-import dream_postgres/internal/network_codecs
-import dream_postgres/internal/numeric_codec
-import dream_postgres/internal/query
-import dream_postgres/internal/range_codecs
-import dream_postgres/internal/row_reader.{type Row}
-import dream_postgres/internal/text_search_codecs
-import dream_postgres/internal/time_codecs
-import dream_postgres/internal/vector_codecs
+import dream_postgres/codecs/composite as composite_codecs
+import dream_postgres/codecs/geometry as geometry_codecs
+import dream_postgres/codecs/network as network_codecs
+import dream_postgres/codecs/numeric as numeric_codec
+import dream_postgres/codecs/range as range_codecs
+import dream_postgres/codecs/text_search as text_search_codecs
+import dream_postgres/codecs/time as time_codecs
+import dream_postgres/codecs/vector as vector_codecs
+import dream_postgres/driver/cell.{
+  type Cell, type TypeDescription, Array, Base, Binary, BinaryFormat, Composite,
+  Domain, Enum, Multirange, Null, Pseudo, Range, Text, TextFormat,
+}
 import dream_postgres/json.{type Json}
+import dream_postgres/query/definition
 import dream_postgres/range.{type Range}
+import dream_postgres/row/reader.{type Row}
 import dream_uuid.{type Uuid}
 import gleam/bit_array
 import gleam/dict.{type Dict}
@@ -595,12 +595,12 @@ pub const sparse_vector = vector_codecs.sparse_vector
 /// A field of a composite value, with its codec, for the `write` function
 /// of `composite`.
 pub type Field =
-  query.Value
+  definition.Value
 
 /// A field of a composite value: its codec and its value. The fields go in
 /// the order of the type's fields.
 pub fn field(codec: Codec(a), value: a) -> Field {
-  query.value_of(codec, value)
+  definition.value_of(codec, value)
 }
 
 /// A codec of a composite type. It reads a value with a row reader, the

@@ -1,6 +1,10 @@
 //// The Extended Query protocol: Parse and Describe to prepare a statement, Bind
 //// and Execute to run it, and both in one round trip.
 
+import dream_postgres/driver/cell.{
+  type Cell, type CommandResult, type Format, type ServerReport,
+  type StatementDescription, type TransactionStatus, StatementDescription,
+}
 import dream_postgres/driver/housekeeping_sql.{type HousekeepingSql}
 import dream_postgres/driver/message.{
   type BackendMessage, type FrontendMessage, Bind, Close, Describe, Execute,
@@ -17,10 +21,6 @@ import dream_postgres/driver/query/step.{
   AwaitingCloseComplete, AwaitingParameterDescription, AwaitingParseComplete,
   AwaitingPortalColumns, AwaitingStatementColumns, ConnectionEnded, Finished,
   HousekeepingStart, ReadingExecuteRows, Send, Start, StatementResult, Wait,
-}
-import dream_postgres/internal/cell.{
-  type Cell, type CommandResult, type Format, type ServerReport,
-  type StatementDescription, type TransactionStatus, StatementDescription,
 }
 import gleam/list.{map, reverse}
 import gleam/option.{None, Some}

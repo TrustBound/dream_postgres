@@ -3,6 +3,9 @@
 //// Flow", "COPY Operations") and with what the app does, one at a time,
 //// with no server.
 
+import dream_postgres/driver/cell.{
+  CommandResult, Idle, InFailedTransaction, Text, TextFormat,
+}
 import dream_postgres/driver/message.{
   Bind, BindComplete, CommandComplete, CopyBothResponse, CopyDataFromServer,
   CopyDoneFromServer, CopyInResponse, DataRow, ErrorResponse, Execute,
@@ -12,9 +15,6 @@ import dream_postgres/driver/query/copy_step as query_copy_step
 import dream_postgres/driver/query/step.{
   AwaitingParseComplete, CopyCompleted, CopyFrom, CopyNotSupported, CopyTo,
   CopyingIn, NoCopyStarted, Notice, Outcome, ServerError,
-}
-import dream_postgres/internal/cell.{
-  CommandResult, Idle, InFailedTransaction, Text, TextFormat,
 }
 import dream_test/matchers.{be_equal, be_false, be_true, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

@@ -2,7 +2,7 @@
 
 import dream_postgres/driver/connection/request_failure.{type RunError}
 import dream_postgres/error.{type Reason}
-import dream_postgres/internal/driver_executor
+import dream_postgres/query/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import fixtures/endpoints
 

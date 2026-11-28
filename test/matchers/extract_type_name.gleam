@@ -1,6 +1,6 @@
 //// Extracts the name of a type description.
 
-import dream_postgres/internal/cell.{type TypeDescription}
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the name of the type that the description describes.

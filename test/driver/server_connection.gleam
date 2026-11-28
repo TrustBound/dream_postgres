@@ -14,6 +14,7 @@
 //// servers keep a connection open until it ends, so every start has a
 //// stop.
 
+import dream_postgres/driver/cell.{type Cell, CommandResult, Text}
 import dream_postgres/driver/connection.{start, stop, supervised}
 import dream_postgres/driver/connection/backoff.{Backoff}
 import dream_postgres/driver/connection/call.{type Connection}
@@ -41,7 +42,6 @@ import dream_postgres/driver/statement_cache.{default_limit}
 import dream_postgres/driver/transport.{
   type Address, type Tls, NoTls, TransportConfig, address,
 }
-import dream_postgres/internal/cell.{type Cell, CommandResult, Text}
 import dream_test/context.{type Context}
 import driver/proxy.{type Proxy, inject, start_proxy, stop_proxy}
 import driver/servers.{type Server}

@@ -1,8 +1,8 @@
 //// The time codecs against the exact bytes of PostgreSQL's binary formats.
 
 import dream_postgres/codec
-import dream_postgres/internal/cell.{Binary, Null}
-import dream_postgres/internal/codec_type.{Malformed, NullValue, OutOfRange}
+import dream_postgres/codecs/codec_type.{Malformed, NullValue, OutOfRange}
+import dream_postgres/driver/cell.{Binary, Null}
 import dream_postgres/time.{
   Finite, Interval, NegativeInfinity, PositiveInfinity, TimeWithOffset,
 }

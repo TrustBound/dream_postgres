@@ -1,14 +1,14 @@
 //// The binary COPY format with no server: the quoting of identifiers, the
 //// SQL of each COPY, the writer, and the reader of a stream in chunks.
 
+import dream_postgres/copy/binary_format
+import dream_postgres/copy/executor
+import dream_postgres/copy/request
+import dream_postgres/driver/cell.{Binary}
 import dream_postgres/error.{
   BytesAfterCopyTrailer, CopyStreamCutShort, InvalidCopyFieldCount,
   InvalidCopyFieldLength, InvalidCopySignature, UnsupportedCopyFlags,
 }
-import dream_postgres/internal/cell.{Binary}
-import dream_postgres/internal/copy
-import dream_postgres/internal/copy_request
-import dream_postgres/internal/copy_stream
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -21,14 +21,14 @@ pub fn tests() -> TestSuite {
     group("identifiers and SQL", [
       it("an identifier is quoted with its double quotes doubled", fn() {
         // Act and assert
-        copy_stream.quote_identifier("Odd \"Name\".x")
+        binary_format.quote_identifier("Odd \"Name\".x")
         |> should
         |> be_equal("\"Odd \"\"Name\"\".x\"")
         |> or_fail_with("Expected the name in quotes, its quotes doubled")
       }),
       it("copy_from_sql quotes the table and each column", fn() {
         // Act and assert
-        copy.copy_from_sql(copy_request.table("public.users"), ["id", "Email"])
+        executor.copy_from_sql(request.table("public.users"), ["id", "Email"])
         |> should
         |> be_equal(
           "COPY \"public.users\" (\"id\", \"Email\") FROM STDIN (FORMAT binary)",
@@ -37,7 +37,7 @@ pub fn tests() -> TestSuite {
       }),
       it("copy_from_sql quotes the schema and the table on their own", fn() {
         // Act and assert
-        copy.copy_from_sql(copy_request.table_in_schema("billing", "Invoices"), [
+        executor.copy_from_sql(request.table_in_schema("billing", "Invoices"), [
           "id",
         ])
         |> should
@@ -48,7 +48,7 @@ pub fn tests() -> TestSuite {
       }),
       it("copy_to_sql puts the query in a binary COPY TO STDOUT", fn() {
         // Act and assert
-        copy.copy_to_sql("SELECT 1")
+        executor.copy_to_sql("SELECT 1")
         |> should
         |> be_equal("COPY (SELECT 1) TO STDOUT (FORMAT binary)")
         |> or_fail_with("Expected the query inside COPY TO STDOUT")
@@ -58,13 +58,13 @@ pub fn tests() -> TestSuite {
       it("a stream is the header, the tuples and the trailer", fn() {
         // Act and assert
         <<
-          copy_stream.header():bits,
-          copy_stream.encode_tuple([
+          binary_format.header():bits,
+          binary_format.encode_tuple([
             Some(<<7:size(32)>>),
             Some(<<"Ada":utf8>>),
           ]):bits,
-          copy_stream.encode_tuple([Some(<<8:size(32)>>), None]):bits,
-          copy_stream.trailer():bits,
+          binary_format.encode_tuple([Some(<<8:size(32)>>), None]):bits,
+          binary_format.trailer():bits,
         >>
         |> should
         |> be_equal(copy_streams.stream())
@@ -72,7 +72,7 @@ pub fn tests() -> TestSuite {
       }),
       it("a tuple of no fields is the field count 0", fn() {
         // Act and assert
-        copy_stream.encode_tuple([])
+        binary_format.encode_tuple([])
         |> should
         |> be_equal(<<0:size(16)>>)
         |> or_fail_with("Expected the field count 0 alone")

@@ -2,8 +2,8 @@
 //// binary formats, and the vector values' checks.
 
 import dream_postgres/codec
-import dream_postgres/internal/cell.{Binary, Null}
-import dream_postgres/internal/codec_type.{Malformed, NullValue}
+import dream_postgres/codecs/codec_type.{Malformed, NullValue}
+import dream_postgres/driver/cell.{Binary, Null}
 import dream_postgres/text_search.{
   And, EmptyQuery, Lexeme, Not, Phrase, Term, WeightA, WeightB, WeightC, WeightD,
 }

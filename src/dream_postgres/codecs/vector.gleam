@@ -7,10 +7,10 @@
 ////   bits (32 bits each), then the 0-based index of each element (32 bits
 ////   each), then a float4 for each element.
 
-import dream_postgres/internal/cell.{type Cell, type TypeDescription, Binary}
-import dream_postgres/internal/codec_type.{
+import dream_postgres/codecs/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
 }
+import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
 import dream_postgres/vector.{type HalfVector, type SparseVector, type Vector}
 import gleam/bit_array
 import gleam/result

@@ -5,7 +5,7 @@ import dream_postgres/driver/catalog_table.{
   type CatalogTable, CircularDomain, MissingPart, UnknownTypeKind, UnreadableRow,
   empty, find, from_rows,
 }
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, type TypeKind, Array, Base, Binary, Composite,
   Domain, Enum, Multirange, Null, Pseudo, Range, Text, TypeDescription,
 }

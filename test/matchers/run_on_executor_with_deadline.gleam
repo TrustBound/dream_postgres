@@ -1,8 +1,8 @@
 //// A matcher that runs work on the executor of a driver connection of the
 //// chosen version, with a deadline for each query.
 
-import dream_postgres/internal/driver_executor
-import dream_postgres/internal/runner.{type Executor}
+import dream_postgres/query/driver_executor
+import dream_postgres/query/runner.{type Executor}
 import dream_postgres/secrets
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,

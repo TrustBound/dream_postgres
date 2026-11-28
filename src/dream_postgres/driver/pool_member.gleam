@@ -19,6 +19,7 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/cell.{Idle}
 import dream_postgres/driver/connection
 import dream_postgres/driver/connection/backoff as connection_backoff
 import dream_postgres/driver/connection/call.{type Connection}
@@ -33,7 +34,6 @@ import dream_postgres/driver/connection/simple_query as connection_simple_query
 import dream_postgres/driver/connection/status as connection_status
 import dream_postgres/driver/housekeeping_sql.{health_check, rollback}
 import dream_postgres/driver/sink.{type Delivery, Delivered, MapFailed}
-import dream_postgres/internal/cell.{Idle}
 import gleam/erlang/process.{
   type ExitMessage, type Pid, type Subject, ExitMessage, Normal,
 }

@@ -1,12 +1,12 @@
 //// The outcome of a request: its result, the notices and the notifications that
 //// came with it.
 
-import dream_postgres/driver/message.{type BackendMessage, type ProtocolError}
-import dream_postgres/driver/query/step.{type UnexpectedMessage}
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type ColumnDescription, type CommandResult, type ServerReport,
   type TransactionStatus,
 }
+import dream_postgres/driver/message.{type BackendMessage, type ProtocolError}
+import dream_postgres/driver/query/step.{type UnexpectedMessage}
 
 /// The result of one statement.
 pub type Outcome {

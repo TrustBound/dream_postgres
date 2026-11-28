@@ -5,7 +5,9 @@
 //// work on this state.
 
 import dream_errors.{type Error}
+import dream_postgres/copy/executor
 import dream_postgres/driver/catalog.{type Catalog}
+import dream_postgres/driver/cell.{type CommandResult}
 import dream_postgres/driver/connection/call as connection_call
 import dream_postgres/driver/connection/simple_query as connection_simple_query
 import dream_postgres/driver/connection/status as connection_status
@@ -16,17 +18,15 @@ import dream_postgres/driver/pool/pool_message.{type Pool}
 import dream_postgres/error.{
   type PostgresError, type Reason, type ServerError, InterceptorFailed,
 }
+import dream_postgres/error/failure.{failure}
 import dream_postgres/interceptor.{
   type Answer, type Interceptor, type Outcome, type Request, CopyFromAnswer,
   CopyToAnswer, Request, Sql, SqlAnswer, StatementAnswer,
 }
-import dream_postgres/internal/cell.{type CommandResult}
-import dream_postgres/internal/copy as internal_copy
-import dream_postgres/internal/driver_executor
-import dream_postgres/internal/failure.{failure}
-import dream_postgres/internal/replay.{type Replay}
-import dream_postgres/internal/runner.{type LowestLayer}
+import dream_postgres/query/driver_executor
+import dream_postgres/query/runner.{type LowestLayer}
 import dream_postgres/recorder.{type Recorder}
+import dream_postgres/recorder/replay.{type Replay}
 import dream_postgres/secrets.{type Secrets}
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -159,7 +159,7 @@ pub fn lowest_layer(held: HeldConnection) -> LowestLayer {
 pub fn copy_from_end(held: HeldConnection) -> fn(Request) -> Outcome {
   case held.session {
     DatabaseSession(connection:, catalog:, settings:) ->
-      internal_copy.copy_from_database(
+      executor.copy_from_database(
         connection,
         catalog,
         endpoint_of(settings),
@@ -173,7 +173,7 @@ pub fn copy_from_end(held: HeldConnection) -> fn(Request) -> Outcome {
 pub fn copy_to_end(held: HeldConnection) -> fn(Request) -> Outcome {
   case held.session {
     DatabaseSession(connection:, catalog:, settings:) ->
-      internal_copy.copy_to_database(
+      executor.copy_to_database(
         connection,
         catalog,
         endpoint_of(settings),

@@ -12,10 +12,10 @@
 //// - `<version>_rows.bin`: the answer to
 ////   `SELECT c.relname, NULL::int4, ''::text, ctid FROM pg_class c WHERE relname = 'pg_class'`.
 
+import dream_postgres/driver/cell.{ColumnDescription, TextFormat}
 import dream_postgres/driver/message.{
   type ResultColumn, NegotiateProtocolVersion, ResultColumn,
 }
-import dream_postgres/internal/cell.{ColumnDescription, TextFormat}
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}

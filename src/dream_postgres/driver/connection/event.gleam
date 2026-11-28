@@ -1,13 +1,13 @@
 //// What a connection process tells its subscriber: that it connected, lost its
 //// connection, or could not connect.
 
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/outcome.{type Violation}
 import dream_postgres/driver/login.{type LoginError}
 import dream_postgres/driver/message.{type ProtocolError}
 import dream_postgres/driver/transport.{
   type SendError, type SocketError, type TransportError,
 }
-import dream_postgres/internal/cell.{type ServerReport}
 
 /// What the process tells its subscriber about the connection.
 ///

@@ -8,6 +8,7 @@
 //// test sleeps. Setup hooks start each listener and stop it after the
 //// test.
 
+import dream_postgres/driver/cell.{Idle}
 import dream_postgres/driver/connection/backoff.{Backoff}
 import dream_postgres/driver/connection/event.{TransportRefused}
 import dream_postgres/driver/connection/outcome.{Notification}
@@ -20,7 +21,6 @@ import dream_postgres/driver/listener.{
   unsubscribe,
 }
 import dream_postgres/driver/transport.{ConnectRefused}
-import dream_postgres/internal/cell.{Idle}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

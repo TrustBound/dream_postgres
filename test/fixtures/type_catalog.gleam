@@ -4,7 +4,7 @@
 //// The ids 99_999 and up are in no catalog, so a type that refers to them
 //// refers to a type that is not known.
 
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type TypeDescription, Array, Base, Composite, Domain, Enum, Multirange, Pseudo,
   Range, TypeDescription,
 }

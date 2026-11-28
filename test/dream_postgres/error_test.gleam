@@ -3,8 +3,8 @@
 import dream_errors.{
   Conflict, Failed, Invalid, NotFound, Retry, Timeout, Unavailable,
 }
+import dream_postgres/driver/cell
 import dream_postgres/error.{PostgresError, ServerError}
-import dream_postgres/internal/cell
 import dream_postgres/posix
 import dream_postgres/sql_state
 import dream_postgres/transaction

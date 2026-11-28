@@ -10,11 +10,11 @@
 //// - `hstore`: the number of pairs (32 bits), then each key and value as a
 ////   length (32 bits, -1 for a NULL value) and its bytes.
 
-import dream_postgres/internal/cell.{type Cell, type TypeDescription, Binary}
-import dream_postgres/internal/codec_type.{
+import dream_postgres/codecs/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
   utf8_bytes, wrong_size,
 }
+import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
 import dream_postgres/network.{
   type IpAddress, type IpNetwork, type MacAddress, IpNetwork, Ipv4, Ipv6,
 }

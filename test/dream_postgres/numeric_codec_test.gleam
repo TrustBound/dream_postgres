@@ -3,8 +3,8 @@
 //// the text that numeric_recv and numeric_out give for the bytes.
 
 import dream_postgres/codec
-import dream_postgres/internal/cell.{Binary, BinaryFormat, Null}
-import dream_postgres/internal/codec_type.{Malformed, NullValue}
+import dream_postgres/codecs/codec_type.{Malformed, NullValue}
+import dream_postgres/driver/cell.{Binary, BinaryFormat, Null}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,
 }

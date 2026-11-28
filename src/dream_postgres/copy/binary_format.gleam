@@ -8,12 +8,12 @@
 //// count (16 bits), then for each field its length (32 bits, -1 for NULL)
 //// and its bytes. The trailer is the field count -1.
 
+import dream_postgres/driver/cell.{type Cell, Binary, Null}
 import dream_postgres/error.{
   type CopyStreamFault, BytesAfterCopyTrailer, CopyStreamCutShort,
   InvalidCopyFieldCount, InvalidCopyFieldLength, InvalidCopySignature,
   UnsupportedCopyFlags,
 }
-import dream_postgres/internal/cell.{type Cell, Binary, Null}
 import gleam/bit_array
 import gleam/int
 import gleam/list

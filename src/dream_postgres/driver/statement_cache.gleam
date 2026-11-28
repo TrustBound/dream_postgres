@@ -14,7 +14,7 @@
 ////
 //// This module is internal to dream_postgres.
 
-import dream_postgres/internal/cell.{type StatementDescription}
+import dream_postgres/driver/cell.{type StatementDescription}
 import gleam/dict.{type Dict}
 import gleam/int.{to_string}
 import gleam/list.{fold}

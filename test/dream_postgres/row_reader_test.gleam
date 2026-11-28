@@ -2,15 +2,13 @@
 //// and the read of a row.
 
 import dream_postgres/codec
+import dream_postgres/driver/cell.{Binary, BinaryFormat, Null, TextFormat}
 import dream_postgres/error.{
   AmbiguousColumnName, ColumnCountMismatch, ColumnReadTwice, ColumnTypeMismatch,
   DecodeFailed, MixedColumnReaders, NoColumnAtPosition, NoColumnNamed,
   ProtocolViolation, ReaderDependsOnValue, UnexpectedNull, ValueOutOfRange,
 }
-import dream_postgres/internal/cell.{Binary, BinaryFormat, Null, TextFormat}
-import dream_postgres/internal/row_reader.{
-  column, column_at, column_named, row, single,
-}
+import dream_postgres/row/reader.{column, column_at, column_named, row, single}
 import dream_test/matchers.{
   be_equal, be_error, be_none, be_ok, or_fail_with, should,
 }

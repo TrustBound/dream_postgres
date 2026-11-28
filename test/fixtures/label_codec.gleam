@@ -3,10 +3,10 @@
 //// format.
 
 import dream_postgres/codec
-import dream_postgres/internal/codec_type.{type Codec}
-import dream_postgres/internal/composite_codecs
-import dream_postgres/internal/query
-import dream_postgres/internal/row_reader.{column, row}
+import dream_postgres/codecs/codec_type.{type Codec}
+import dream_postgres/codecs/composite as composite_codecs
+import dream_postgres/query/definition
+import dream_postgres/row/reader.{column, row}
 import fixtures/ltree_codec.{ltree_codec}
 
 /// A codec for the composite type `label`: a name and an `ltree` path. A
@@ -34,5 +34,8 @@ pub fn label_codec() -> Codec(#(String, String)) {
 }
 
 fn label_fields(label: #(String, String)) -> List(codec.Field) {
-  [query.value_of(codec.text, label.0), query.value_of(ltree_codec(), label.1)]
+  [
+    definition.value_of(codec.text, label.0),
+    definition.value_of(ltree_codec(), label.1),
+  ]
 }

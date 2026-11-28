@@ -1,9 +1,9 @@
 //// A matcher that checks and writes the parameters of the query of the
 //// chain, for the parameter types of a prepared statement.
 
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_postgres/error.{type Reason}
-import dream_postgres/internal/cell.{type TypeDescription}
-import dream_postgres/internal/query.{type Query, type WrittenParameters}
+import dream_postgres/query/definition.{type Query, type WrittenParameters}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import fixtures/type_catalog
 
@@ -28,7 +28,7 @@ pub fn write_parameters(
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(subject) ->
-      MatchOk(query.write_parameters(
+      MatchOk(definition.write_parameters(
         subject,
         parameter_types,
         type_catalog.lookup,

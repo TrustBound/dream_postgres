@@ -7,14 +7,14 @@
 ////   then the points. `polygon`: the number of points, then the points.
 //// - `circle`: the center, then the radius.
 
+import dream_postgres/codecs/codec_type.{
+  type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
+  read_float8,
+}
+import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
 import dream_postgres/geometry.{
   type Box, type Circle, type Line, type LineSegment, type Path, type Point,
   type Polygon, Box, Circle, Line, LineSegment, Path, Point, Polygon,
-}
-import dream_postgres/internal/cell.{type Cell, type TypeDescription, Binary}
-import dream_postgres/internal/codec_type.{
-  type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
-  read_float8,
 }
 import gleam/list
 import gleam/result

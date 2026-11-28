@@ -8,6 +8,7 @@
 //// 17 and the server nonce suffix `server-nonce`. The MD5 value is
 //// `"md5" + md5(md5("pencil" + "ada").hexdigest() + "\x01\x02\x03\x04")`.
 
+import dream_postgres/driver/cell.{Idle, ServerReport}
 import dream_postgres/driver/channel_binding.{UnsupportedSignatureAlgorithm}
 import dream_postgres/driver/login.{
   type ChannelBindingSetting, type ConfigError, type LoginConfig,
@@ -35,7 +36,6 @@ import dream_postgres/driver/message.{
 import dream_postgres/driver/scram.{
   InvalidServerFirstMessage, ServerNonceTooLong, ServerSignatureMismatch,
 }
-import dream_postgres/internal/cell.{Idle, ServerReport}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}

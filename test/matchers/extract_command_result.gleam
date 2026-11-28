@@ -1,7 +1,7 @@
 //// Extracts the command result of an outcome of the connection process.
 
+import dream_postgres/driver/cell.{type CommandResult}
 import dream_postgres/driver/connection/outcome.{type Outcome}
-import dream_postgres/internal/cell.{type CommandResult}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the rows, the tag and the row count of the outcome.

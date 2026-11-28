@@ -3,6 +3,9 @@
 
 import dream_postgres/codec
 import dream_postgres/config
+import dream_postgres/driver/cell.{
+  CommandResult, StatementDescription, TypeDescription,
+}
 import dream_postgres/error.{
   ColumnTypeMismatch, InterceptorFailed, ParameterTypeMismatch, UnknownType,
 }
@@ -10,14 +13,11 @@ import dream_postgres/interceptor.{
   SqlAnswer, StatementAnswer, column, command, connection_lost, refuse, rows,
   server_error, timeout,
 }
-import dream_postgres/internal/cell.{
-  CommandResult, StatementDescription, TypeDescription,
-}
-import dream_postgres/internal/runner
 import dream_postgres/pool.{with_interceptor}
 import dream_postgres/query.{
   affected, all, named, one, query, run_sql, secret_parameter,
 }
+import dream_postgres/query/runner
 import dream_postgres/row.{single}
 import dream_postgres/sql_state.{DeadlockDetected}
 import dream_postgres/transaction.{commit, keep_both, step, transaction}

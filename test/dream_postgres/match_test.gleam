@@ -1,8 +1,8 @@
 //// The keys of a recorder, on requests with cells that are written
 //// already, with no database.
 
+import dream_postgres/driver/cell.{Binary, Null, Text}
 import dream_postgres/interceptor.{CopyTo, Request, Sql}
-import dream_postgres/internal/cell.{Binary, Null, Text}
 import dream_postgres/recorder/match
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

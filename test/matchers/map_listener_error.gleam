@@ -2,7 +2,7 @@
 
 import dream_postgres/driver/listener.{type ListenerError}
 import dream_postgres/error.{type Reason}
-import dream_postgres/internal/driver_executor
+import dream_postgres/query/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Map a refused subscribe of the driver to its client reason. The chain goes on with the result.

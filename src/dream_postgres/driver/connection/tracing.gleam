@@ -1,5 +1,6 @@
 //// The span of a request: its target, its ending, and the text of its failures.
 
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/copy_exchange.{type CopyDone}
 import dream_postgres/driver/connection/event.{
@@ -24,7 +25,6 @@ import dream_postgres/driver/trace.{
   type SpanEnd, type SpanTarget, Failed, SpanQuery, SpanTarget, Worked,
 }
 import dream_postgres/driver/transport
-import dream_postgres/internal/cell.{type ServerReport}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 

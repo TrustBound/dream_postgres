@@ -11,11 +11,11 @@ import dream_postgres/error.{
   InvalidConfig, InvalidDatabaseUrl, RootCertificateNeedsCertificateCheck,
   SystemRootCertificateNeedsVerifyFull,
 }
-import dream_postgres/internal/database_url.{
+import dream_postgres/error/failure.{failure_with_no_query}
+import dream_postgres/url/database_url.{
   type DatabaseUrl, type RootCertificate, type SslMode, DefaultRootCertificate,
   RootCertificateFile, SystemRootCertificate,
 }
-import dream_postgres/internal/failure.{failure_with_no_query}
 import gleam/result
 
 /// The config of a `postgres://` or `postgresql://` URL, read as libpq

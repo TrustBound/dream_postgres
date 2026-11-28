@@ -1,6 +1,11 @@
 //// The state machine that every step shares: its state, and the small moves
 //// between the phases of a flow.
 
+import dream_postgres/driver/cell.{
+  type Cell, type ColumnDescription, type CommandResult, type Format,
+  type ParameterDescription, type ServerReport, type TransactionStatus,
+  CommandResult,
+}
 import dream_postgres/driver/encode.{sync}
 import dream_postgres/driver/message.{type BackendMessage, ErrorResponse}
 import dream_postgres/driver/query/step.{
@@ -9,11 +14,6 @@ import dream_postgres/driver/query/step.{
   AwaitingReadyForQuery, AwaitingReadyForQueryAfterError, CopyNotSupported,
   CopyingIn, Outcome, ServerError, UnexpectedMessage,
   connection_ending_severities,
-}
-import dream_postgres/internal/cell.{
-  type Cell, type ColumnDescription, type CommandResult, type Format,
-  type ParameterDescription, type ServerReport, type TransactionStatus,
-  CommandResult,
 }
 import gleam/bool.{guard}
 import gleam/list.{contains, reverse}

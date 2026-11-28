@@ -3,11 +3,11 @@
 //// maps each value case of the fork to its test.
 
 import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs/codec_type.{OutOfRange}
+import dream_postgres/driver/cell.{Binary}
 import dream_postgres/geometry.{type Point}
-import dream_postgres/internal/cell.{Binary}
-import dream_postgres/internal/codec_type.{OutOfRange}
-import dream_postgres/internal/row_reader.{column, row}
 import dream_postgres/range.{Inclusive, Unbounded}
+import dream_postgres/row/reader.{column, row}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,
 }

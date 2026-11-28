@@ -43,13 +43,13 @@ import dream_postgres/error.{
   OptionsInNestedTransaction, PostgresError, RollbackAlsoFailed,
   UnexpectedCommitAnswer,
 }
-import dream_postgres/internal/connection_state.{
+import dream_postgres/error/failure.{failure}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/pool/connection_state.{
   type HeldConnection, HeldInsideTransaction, HeldOutsideTransaction, NotHeld,
   failed_statement, hold, in_open_transaction, placement, run_held_sql,
   run_held_sql_with_postgres_error,
 }
-import dream_postgres/internal/failure.{failure}
-import dream_postgres/pool.{type Connection}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}

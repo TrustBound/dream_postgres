@@ -1,9 +1,9 @@
 //// A matcher that checks the row reader of the chain against the columns
 //// of a result, and reads a row with it.
 
+import dream_postgres/driver/cell.{type Cell}
 import dream_postgres/error.{type Reason}
-import dream_postgres/internal/cell.{type Cell}
-import dream_postgres/internal/row_reader.{type DescribedColumn, type Row}
+import dream_postgres/row/reader.{type DescribedColumn, type Row}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import fixtures/type_catalog
 import gleam/result
@@ -39,10 +39,6 @@ fn check_and_read(
   columns: List(DescribedColumn),
   cells: List(Cell),
 ) -> Result(a, Reason) {
-  use checked <- result.try(row_reader.check(
-    reader,
-    columns,
-    type_catalog.lookup,
-  ))
-  row_reader.read(checked, cells, type_catalog.lookup)
+  use checked <- result.try(reader.check(reader, columns, type_catalog.lookup))
+  reader.read(checked, cells, type_catalog.lookup)
 }

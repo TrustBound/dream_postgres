@@ -8,6 +8,11 @@
 //// The setups and teardowns of `driver/server_connection` start and stop
 //// every connection.
 
+import dream_postgres/driver/cell.{
+  type TransactionStatus, Binary, BinaryFormat, ColumnDescription, CommandResult,
+  Idle, InFailedTransaction, InTransaction, Null, ParameterDescription,
+  StatementDescription, Text,
+}
 import dream_postgres/driver/connection.{start, stop, supervised}
 import dream_postgres/driver/connection/backoff.{Backoff}
 import dream_postgres/driver/connection/call.{type Connection}
@@ -47,11 +52,6 @@ import dream_postgres/driver/message.{
 }
 import dream_postgres/driver/transport.{
   ConnectRefused, ConnectionReset, SendFailed, SendTimedOut, SocketClosed,
-}
-import dream_postgres/internal/cell.{
-  type TransactionStatus, Binary, BinaryFormat, ColumnDescription, CommandResult,
-  Idle, InFailedTransaction, InTransaction, Null, ParameterDescription,
-  StatementDescription, Text,
 }
 import dream_test/context
 import dream_test/matchers.{

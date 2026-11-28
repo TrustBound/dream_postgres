@@ -1,6 +1,10 @@
 //// The messages that a connection process receives, and the requests that they
 //// carry.
 
+import dream_postgres/driver/cell.{
+  type Cell, type Format, type ServerReport, type StatementDescription,
+  type TransactionStatus,
+}
 import dream_postgres/driver/connection/copy_exchange.{
   type CopyNotice, type CopyPush, type CopyStartError,
 }
@@ -16,10 +20,6 @@ import dream_postgres/driver/message.{type EncodeError}
 import dream_postgres/driver/query/step.{type CopyDirection}
 import dream_postgres/driver/transport.{
   type ReceiveError, type SendError, type TransportError,
-}
-import dream_postgres/internal/cell.{
-  type Cell, type Format, type ServerReport, type StatementDescription,
-  type TransactionStatus,
 }
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}

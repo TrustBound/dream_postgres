@@ -4,6 +4,11 @@
 //// lifecycle hooks of a suite, and pick the version of a group with
 //// `choose_version` in its `before_all`.
 
+import dream_postgres/codecs/codec_type.{type DecodeIssue}
+import dream_postgres/driver/cell.{
+  type Cell, type TypeDescription, type TypeKind, Binary, Null, Text,
+  TypeDescription,
+}
 import dream_postgres/driver/connection
 import dream_postgres/driver/connection/backoff.{Backoff} as connection_backoff
 import dream_postgres/driver/connection/call.{type Connection}
@@ -15,11 +20,6 @@ import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/driver/login.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
 import dream_postgres/driver/transport.{NoTls, TransportConfig}
-import dream_postgres/internal/cell.{
-  type Cell, type TypeDescription, type TypeKind, Binary, Null, Text,
-  TypeDescription,
-}
-import dream_postgres/internal/codec_type.{type DecodeIssue}
 import driver/servers.{type Server, driver_servers}
 import gleam/bit_array
 import gleam/dict.{type Dict}

@@ -1,6 +1,6 @@
 //// Extracts the rows of a command result.
 
-import dream_postgres/internal/cell.{type Cell, type CommandResult}
+import dream_postgres/driver/cell.{type Cell, type CommandResult}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the rows of a command result, one cell per column.

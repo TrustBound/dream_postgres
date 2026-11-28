@@ -8,6 +8,10 @@
 //// setups and teardowns start and stop every connection, proxy and
 //// caller.
 
+import dream_postgres/driver/cell.{
+  type TransactionStatus, CommandResult, Idle, InFailedTransaction,
+  InTransaction, Text,
+}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/copy_caller.{
   copy_from, copy_to, send_chunk,
@@ -27,10 +31,6 @@ import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/driver/connection/status.{transaction_status}
 import dream_postgres/driver/message.{ZeroByteInString}
 import dream_postgres/driver/transport.{SocketClosed}
-import dream_postgres/internal/cell.{
-  type TransactionStatus, CommandResult, Idle, InFailedTransaction,
-  InTransaction, Text,
-}
 import dream_test/context.{type Context}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

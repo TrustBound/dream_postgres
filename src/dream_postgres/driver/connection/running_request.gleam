@@ -2,6 +2,10 @@
 //// the server message by message, and goes on to the next step, or to the next
 //// request.
 
+import dream_postgres/driver/cell.{
+  type CommandResult, type ServerReport, type StatementDescription,
+  type TransactionStatus, Idle,
+}
 import dream_postgres/driver/connection/cancel.{confirm_cancel}
 import dream_postgres/driver/connection/copy_exchange.{
   type CopyPush, type CopySession, type CopyStartError, CopySession,
@@ -84,10 +88,6 @@ import dream_postgres/driver/transaction.{
   track_step, transaction_status as tracked_status,
 }
 import dream_postgres/driver/transport.{type SendError}
-import dream_postgres/internal/cell.{
-  type CommandResult, type ServerReport, type StatementDescription,
-  type TransactionStatus, Idle,
-}
 import gleam/bool.{guard}
 import gleam/erlang/process.{type Pid}
 import gleam/erlang/reference.{type Reference}

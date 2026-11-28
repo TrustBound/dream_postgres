@@ -1,13 +1,13 @@
 //// The COPY types that the caller and the connection process share, and the
 //// pushes of the process to the caller.
 
+import dream_postgres/driver/cell.{type ServerReport, type TransactionStatus}
 import dream_postgres/driver/connection/outcome.{type Outcome}
 import dream_postgres/driver/connection/reply.{type CallFailure, type ReplyTo}
 import dream_postgres/driver/connection/request_failure.{
   type ChunkError, type Refusal, type RequestFailure,
 }
 import dream_postgres/driver/message.{type EncodeError}
-import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import gleam/erlang/process.{type Monitor, type Pid}
 import gleam/erlang/reference.{type Reference}
 import gleam/option.{type Option}

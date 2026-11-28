@@ -3,13 +3,11 @@
 //// a query runs, its parameters are checked against the types that the
 //// server gave in the prepared statement's description, then written.
 
+import dream_postgres/codecs/codec_type.{type Codec, type TypeLookup}
+import dream_postgres/driver/cell.{type Cell, type Format, type TypeDescription}
 import dream_postgres/error.{
   type Reason, EncodeFailed, ParameterCountMismatch, ParameterTypeMismatch,
 }
-import dream_postgres/internal/cell.{
-  type Cell, type Format, type TypeDescription,
-}
-import dream_postgres/internal/codec_type.{type Codec, type TypeLookup}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result

@@ -1,13 +1,13 @@
 //// The state of a recorder process and the messages that it receives.
 
 import dream_errors.{type Error}
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_postgres/error.{
   type PostgresError, type Reason, type ServerError, PostgresError,
   RecorderStopped,
 }
 import dream_postgres/interceptor.{type Interceptor, type Outcome, type Request}
-import dream_postgres/internal/cell.{type TypeDescription}
-import dream_postgres/internal/query.{type WriteEvent}
+import dream_postgres/query/definition.{type WriteEvent}
 import dream_postgres/recording.{type RecordedEntry}
 import dream_postgres/secrets.{type Secrets}
 import gleam/erlang/process.{type Down, type Subject}

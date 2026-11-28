@@ -47,6 +47,12 @@
 //// mode, and the saved answer in `Playback` mode.
 
 import dream_errors.{type Error}
+import dream_postgres/copy/request.{
+  type RowWatcher, CopyRows, RecordedRows, RowWatcher,
+}
+import dream_postgres/driver/cell.{
+  type Cell, type StatementDescription, type TypeDescription,
+}
 import dream_postgres/error.{
   type PostgresError, type Reason, RecorderNotStarted, RecordingInUse,
   RecordingNotFound, RecordingNotWritten,
@@ -55,26 +61,20 @@ import dream_postgres/interceptor.{
   type Interceptor, type Outcome, type Request, CopyFromAnswer, CopyToAnswer,
   SqlAnswer, StatementAnswer,
 }
-import dream_postgres/internal/cell.{
-  type Cell, type StatementDescription, type TypeDescription,
-}
-import dream_postgres/internal/copy_request.{
-  type RowWatcher, CopyRows, RecordedRows, RowWatcher,
-}
-import dream_postgres/internal/recorder/recorder_process.{handle_message}
-import dream_postgres/internal/recorder/recorder_state.{
+import dream_postgres/recorder/match
+import dream_postgres/recorder/recorder_process.{handle_message}
+import dream_postgres/recorder/recorder_state.{
   type Message, type Session, type State, AbortedBy, OwnerDown, PassingThrough,
   PlayingBack, Save, Saving, State, Stop, Take, claim, recorder_down,
   start_failure,
 }
-import dream_postgres/internal/recorder/recording_file.{
+import dream_postgres/recorder/recording_file.{
   is_file, read_recording, write_recording,
 }
-import dream_postgres/internal/recorder/written_entry.{
+import dream_postgres/recorder/replay.{type Replay, Replay}
+import dream_postgres/recorder/written_entry.{
   every_type, receive_all, watched_request, written_request,
 }
-import dream_postgres/internal/replay.{type Replay, Replay}
-import dream_postgres/recorder/match
 import dream_postgres/recording.{type RecordedEntry}
 import dream_postgres/secrets.{type Secrets}
 import gleam/erlang/process.{type Down, type Pid, type Subject}
@@ -453,7 +453,7 @@ fn record(
       Ok(CopyToAnswer(
         description:,
         types:,
-        rows: copy_request.watch(
+        rows: request.watch(
           rows,
           stream_watcher(recorder, secrets, copy, description, types, []),
         ),

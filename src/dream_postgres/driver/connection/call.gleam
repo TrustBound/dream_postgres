@@ -1,6 +1,7 @@
 //// A caller's side of a request: the connection handle, and the call that sends
 //// a request and waits for its answer.
 
+import dream_postgres/driver/cell.{type Cell, type Format}
 import dream_postgres/driver/connection/outcome.{type Outcome}
 import dream_postgres/driver/connection/process_message.{
   type DescriptionSource, type Message, type Prepared, type Request,
@@ -17,7 +18,6 @@ import dream_postgres/driver/connection/request_failure.{
   ProcessGone,
 }
 import dream_postgres/driver/trace.{type SpanTarget}
-import dream_postgres/internal/cell.{type Cell, type Format}
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/option.{None}
 import gleam/result.{map_error}

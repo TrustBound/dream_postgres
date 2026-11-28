@@ -1,6 +1,10 @@
 //// Tests for `dream_postgres/driver/transaction`: the transaction status
 //// and the error that aborted a failed transaction, after each outcome.
 
+import dream_postgres/driver/cell.{
+  type ServerReport, type TransactionStatus, Idle, InFailedTransaction,
+  InTransaction,
+}
 import dream_postgres/driver/query/step.{
   type Failure, type Outcome, type SimpleQueryFailure, CopyNotSupported, Outcome,
   ServerError, SimpleQueryFailure,
@@ -8,10 +12,6 @@ import dream_postgres/driver/query/step.{
 import dream_postgres/driver/transaction.{
   aborting_error, new_tracker, track, track_simple_query, track_step,
   transaction_status,
-}
-import dream_postgres/internal/cell.{
-  type ServerReport, type TransactionStatus, Idle, InFailedTransaction,
-  InTransaction,
 }
 import dream_test/matchers.{be_equal, be_none, be_some, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

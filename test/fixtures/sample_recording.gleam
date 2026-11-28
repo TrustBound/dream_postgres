@@ -2,15 +2,15 @@
 //// request, each outcome, each cell, a secret parameter, each type kind
 //// and each severity.
 
+import dream_postgres/driver/cell.{
+  Array, Base, Binary, ColumnDescription, CommandResult, Composite, Domain, Enum,
+  Multirange, Null, ParameterDescription, Pseudo, Range, StatementDescription,
+  Text, TypeDescription,
+}
 import dream_postgres/error.{
   type ServerError, DebugSeverity, ErrorSeverity, FatalSeverity, InfoSeverity,
   LogSeverity, NoticeSeverity, PanicSeverity, ServerError, UnlistedSeverity,
   WarningSeverity,
-}
-import dream_postgres/internal/cell.{
-  Array, Base, Binary, ColumnDescription, CommandResult, Composite, Domain, Enum,
-  Multirange, Null, ParameterDescription, Pseudo, Range, StatementDescription,
-  Text, TypeDescription,
 }
 import dream_postgres/recording.{
   type Recording, RecordedCopyFrom, RecordedCopyTo, RecordedEntry,

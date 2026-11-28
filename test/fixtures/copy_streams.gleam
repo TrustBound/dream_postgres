@@ -1,6 +1,6 @@
 //// Binary COPY data for the tests of the stream reader and writer.
 
-import dream_postgres/internal/cell.{type Cell, Binary, Null}
+import dream_postgres/driver/cell.{type Cell, Binary, Null}
 import gleam/bit_array
 import gleam/int
 import gleam/result

@@ -27,12 +27,12 @@
 //// ```
 
 import dream_postgres/codec.{type Codec}
-import dream_postgres/error.{type Reason, SecretColumnNotReplaced}
-import dream_postgres/internal/cell.{
+import dream_postgres/codecs/codec_type.{type TypeLookup}
+import dream_postgres/driver/cell.{
   type Cell, type ColumnDescription, type StatementDescription,
   type TypeDescription, Binary, Null, Text,
 }
-import dream_postgres/internal/codec_type.{type TypeLookup}
+import dream_postgres/error.{type Reason, SecretColumnNotReplaced}
 import gleam/dict
 import gleam/list
 import gleam/result

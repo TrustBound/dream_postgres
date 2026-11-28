@@ -3,6 +3,7 @@
 //// statement cache keys by the real SQL. Each span text here is not SQL
 //// that the server could run, so a call that works ran the real SQL.
 
+import dream_postgres/driver/cell.{Text}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/copy_caller.{copy_from, copy_to}
 import dream_postgres/driver/connection/extended_query.{
@@ -10,7 +11,6 @@ import dream_postgres/driver/connection/extended_query.{
 }
 import dream_postgres/driver/connection/simple_query.{run_simple_query}
 import dream_postgres/driver/connection/statement.{span_text, statement}
-import dream_postgres/internal/cell.{Text}
 import dream_test/matchers.{be_equal, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit_context.{describe, it}

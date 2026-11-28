@@ -4,7 +4,7 @@ import dream_postgres/driver/connection/request_failure.{
   type ConnectionStateError,
 }
 import dream_postgres/error.{type Reason}
-import dream_postgres/internal/driver_executor
+import dream_postgres/query/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the client reason of a state question that the connection process did not answer, as the client sees it.

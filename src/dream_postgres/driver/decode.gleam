@@ -18,6 +18,11 @@
 ////
 //// This module is internal to dream_postgres.
 
+import dream_postgres/driver/cell.{
+  type Format, type ParameterDescription, type ServerReport,
+  type TransactionStatus, BinaryFormat, ColumnDescription, Idle,
+  InFailedTransaction, InTransaction, ServerReport, TextFormat,
+}
 import dream_postgres/driver/message.{
   type BackendMessage, type DecodeStep, type EncryptionAnswer,
   type ProtocolError, type ResultColumn, AuthenticationCleartextPassword,
@@ -35,11 +40,6 @@ import dream_postgres/driver/message.{
   PortalSuspended, ReadyForQuery, ResultColumn, RowDescription, UnknownAnswer,
   UnknownAuthenticationRequest, UnknownFormatCode, UnknownMessageType,
   UnknownTransactionStatus,
-}
-import dream_postgres/internal/cell.{
-  type Format, type ParameterDescription, type ServerReport,
-  type TransactionStatus, BinaryFormat, ColumnDescription, Idle,
-  InFailedTransaction, InTransaction, ServerReport, TextFormat,
 }
 import gleam/bit_array.{to_string}
 import gleam/bool.{guard}

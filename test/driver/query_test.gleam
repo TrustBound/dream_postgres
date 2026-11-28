@@ -4,6 +4,11 @@
 //// one message at a time, with no server. Some flows come as bytes through
 //// `decode_backend`.
 
+import dream_postgres/driver/cell.{
+  type ColumnDescription, type Format, type ServerReport, Binary, BinaryFormat,
+  ColumnDescription, CommandResult, Idle, InFailedTransaction, InTransaction,
+  Null, ParameterDescription, StatementDescription, Text, TextFormat,
+}
 import dream_postgres/driver/message.{
   type BackendMessage, type ResultColumn, Bind, BindComplete, Close,
   CloseComplete, CommandComplete, CopyBothResponse, CopyDataFromServer,
@@ -28,11 +33,6 @@ import dream_postgres/driver/query/step.{
   CopyNotSupported, Finished, Notice, Notification, Outcome, ParameterChanged,
   ReadingCopyOut, ReadingExecuteRows, ReadingSimpleQueryRows, ServerError,
   SimpleQueryFailure, StatementResult, UnexpectedMessage, failure_report,
-}
-import dream_postgres/internal/cell.{
-  type ColumnDescription, type Format, type ServerReport, Binary, BinaryFormat,
-  ColumnDescription, CommandResult, Idle, InFailedTransaction, InTransaction,
-  Null, ParameterDescription, StatementDescription, Text, TextFormat,
 }
 import dream_test/matchers.{
   be_equal, be_error, be_none, be_ok, be_some, or_fail_with, should,

@@ -1,8 +1,8 @@
 //// A matcher that reads chunks of binary COPY data to their end.
 
+import dream_postgres/copy/binary_format.{type StreamReader}
+import dream_postgres/driver/cell.{type Cell}
 import dream_postgres/error.{type CopyStreamFault}
-import dream_postgres/internal/cell.{type Cell}
-import dream_postgres/internal/copy_stream.{type StreamReader}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list
 import gleam/result
@@ -34,10 +34,10 @@ fn read_all(
 ) -> Result(List(List(Cell)), CopyStreamFault) {
   use #(reader, tuples) <- result.try(list.try_fold(
     chunks,
-    #(copy_stream.new_reader(), []),
+    #(binary_format.new_reader(), []),
     read_one,
   ))
-  copy_stream.finish(reader) |> result.replace(tuples)
+  binary_format.finish(reader) |> result.replace(tuples)
 }
 
 fn read_one(
@@ -45,6 +45,6 @@ fn read_one(
   chunk: BitArray,
 ) -> Result(#(StreamReader, List(List(Cell))), CopyStreamFault) {
   let #(reader, tuples) = read_so_far
-  copy_stream.read_chunk(reader, chunk)
+  binary_format.read_chunk(reader, chunk)
   |> result.map(fn(read) { #(read.0, list.append(tuples, read.1)) })
 }

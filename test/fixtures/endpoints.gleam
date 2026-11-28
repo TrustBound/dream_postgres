@@ -1,6 +1,6 @@
 //// The server endpoints that the error mapping tests use.
 
-import dream_postgres/internal/driver_executor.{type Endpoint, Endpoint}
+import dream_postgres/query/driver_executor.{type Endpoint, Endpoint}
 
 /// The endpoint of the mapping tests: `db.example` on port 5432.
 pub fn example_endpoint() -> Endpoint {

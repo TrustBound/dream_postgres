@@ -30,12 +30,12 @@
 //// }
 //// ```
 
+import dream_postgres/copy/request.{type RowFeed}
+import dream_postgres/driver/cell.{type Cell, Binary, Null, Text}
 import dream_postgres/interceptor.{
   type Parameter, type Request, CopyFrom, CopyTo, Sql, Statement,
 }
-import dream_postgres/internal/cell.{type Cell, Binary, Null, Text}
-import dream_postgres/internal/copy_request.{type RowFeed}
-import dream_postgres/internal/query.{WrittenCell, WrittenSecret}
+import dream_postgres/query/definition.{WrittenCell, WrittenSecret}
 import gleam/bit_array
 import gleam/int
 import gleam/list
@@ -130,11 +130,11 @@ fn kind_name(request: Request) -> String {
 }
 
 fn parameter_text(parameter: Parameter) -> String {
-  case query.written(parameter) {
+  case definition.written(parameter) {
     Some(WrittenCell(type_description:, cell:)) ->
       type_description.name <> " " <> cell_text(cell)
-    Some(WrittenSecret(..)) -> "secret " <> query.codec_name(parameter)
-    None -> "not written " <> query.codec_name(parameter)
+    Some(WrittenSecret(..)) -> "secret " <> definition.codec_name(parameter)
+    None -> "not written " <> definition.codec_name(parameter)
   }
 }
 
@@ -150,7 +150,7 @@ fn feed_rows(
   rows: RowFeed,
   read: List(List(Parameter)),
 ) -> List(List(Parameter)) {
-  case copy_request.next_row(rows) {
+  case request.next_row(rows) {
     Some(#(values, rest)) -> feed_rows(rest, [values, ..read])
     None -> list.reverse(read)
   }

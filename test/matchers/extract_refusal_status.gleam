@@ -1,9 +1,9 @@
 //// Extracts the transaction status that a refused statement left.
 
+import dream_postgres/driver/cell.{type TransactionStatus}
 import dream_postgres/driver/connection/request_failure.{
   type RunError, RunRefused,
 }
-import dream_postgres/internal/cell.{type TransactionStatus}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

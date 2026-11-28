@@ -3,12 +3,12 @@
 //// its row reader and the cells of its rows.
 
 import dream_postgres/codec
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type Cell, type StatementDescription, Binary, ParameterDescription,
   StatementDescription,
 }
-import dream_postgres/internal/query.{type Query}
-import dream_postgres/internal/row_reader.{type Row, column, row}
+import dream_postgres/query/definition.{type Query}
+import dream_postgres/row/reader.{type Row, column, row}
 import fixtures/column_description
 
 /// The SQL of the posts query.
@@ -30,8 +30,8 @@ pub fn sql() -> String {
 /// posts.query() |> query.named("post.find")
 /// ```
 pub fn query() -> Query {
-  query.query(sql())
-  |> query.parameter(codec.int, 7)
+  definition.query(sql())
+  |> definition.parameter(codec.int, 7)
 }
 
 /// The description of the prepared posts query: one `int4` parameter, and

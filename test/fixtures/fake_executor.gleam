@@ -4,12 +4,12 @@
 //// `positive_int` and `pair`. A type it does not know fails with
 //// `QueryTimeout(stopped_on_server: True)`.
 
-import dream_postgres/error.{type Reason, QueryTimeout}
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type Cell, type CommandResult, type Format, type StatementDescription,
   type TypeDescription, CommandResult,
 }
-import dream_postgres/internal/runner.{type Executor, type RunFailure, Executor}
+import dream_postgres/error.{type Reason, QueryTimeout}
+import dream_postgres/query/runner.{type Executor, type RunFailure, Executor}
 import fixtures/type_catalog
 import gleam/list
 import gleam/option.{type Option}

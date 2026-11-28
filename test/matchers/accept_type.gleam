@@ -1,8 +1,8 @@
 //// A matcher that tells if the codec of the chain takes a type of the test
 //// catalog (`fixtures/type_catalog`).
 
-import dream_postgres/internal/cell.{type TypeDescription}
-import dream_postgres/internal/codec_type.{type Codec}
+import dream_postgres/codecs/codec_type.{type Codec}
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import fixtures/type_catalog
 

@@ -2,8 +2,8 @@
 //// with its readers and the cells of one row.
 
 import dream_postgres/codec
-import dream_postgres/internal/cell.{type Cell, Binary}
-import dream_postgres/internal/row_reader.{
+import dream_postgres/driver/cell.{type Cell, Binary}
+import dream_postgres/row/reader.{
   type DescribedColumn, type Row, column, column_at, column_named, row,
 }
 import fixtures/described_column

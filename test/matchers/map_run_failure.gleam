@@ -2,8 +2,8 @@
 //// statement to check again, or the client reason of the failure.
 
 import dream_postgres/driver/connection/request_failure.{type RunError}
-import dream_postgres/internal/driver_executor
-import dream_postgres/internal/runner.{type RunFailure}
+import dream_postgres/query/driver_executor
+import dream_postgres/query/runner.{type RunFailure}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import fixtures/endpoints
 

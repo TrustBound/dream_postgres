@@ -1,6 +1,6 @@
 //// Extracts the result columns of a statement description.
 
-import dream_postgres/internal/cell.{
+import dream_postgres/driver/cell.{
   type ColumnDescription, type StatementDescription,
 }
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}

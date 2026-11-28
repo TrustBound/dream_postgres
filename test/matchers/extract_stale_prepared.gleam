@@ -1,7 +1,7 @@
 //// Extracts the description that a prepare from the cache gave after a
 //// schema change.
 
-import dream_postgres/internal/cell.{type StatementDescription}
+import dream_postgres/driver/cell.{type StatementDescription}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import driver/server_prepare.{type StaleOutcome}
 

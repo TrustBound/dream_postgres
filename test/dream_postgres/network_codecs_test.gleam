@@ -2,8 +2,8 @@
 //// of PostgreSQL's binary formats, and the network value functions.
 
 import dream_postgres/codec
-import dream_postgres/internal/cell.{Binary, Null}
-import dream_postgres/internal/codec_type.{Malformed}
+import dream_postgres/codecs/codec_type.{Malformed}
+import dream_postgres/driver/cell.{Binary, Null}
 import dream_postgres/network.{
   IpNetwork, Ipv4, Ipv6, NotAMacAddress, NotAnIpNetwork,
 }

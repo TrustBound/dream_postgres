@@ -7,16 +7,16 @@
 //// The codec reads a value with a row reader, the same as a row of a
 //// query, and writes it as a list of fields in the type's order.
 
-import dream_postgres/error
-import dream_postgres/internal/cell.{
+import dream_postgres/codecs/codec_type.{
+  type Codec, type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes,
+}
+import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, Array, Base, Binary, ColumnDescription,
   Composite, Domain, Enum, Multirange, Null, Pseudo, Range, Text,
 }
-import dream_postgres/internal/codec_type.{
-  type Codec, type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes,
-}
-import dream_postgres/internal/query.{type Value}
-import dream_postgres/internal/row_reader.{
+import dream_postgres/error
+import dream_postgres/query/definition.{type Value}
+import dream_postgres/row/reader.{
   type DescribedColumn, type Row, DescribedColumn,
 }
 import gleam/bit_array
@@ -116,9 +116,9 @@ fn accepts(
     described_fields(description, lookup)
     |> result.replace_error(Nil)
     |> result.try(fn(fields) {
-      row_reader.check(reader, fields, lookup) |> result.replace_error(Nil)
+      reader.check(reader, fields, lookup) |> result.replace_error(Nil)
     })
-    |> result.map(row_reader.reads_only_binary)
+    |> result.map(reader.reads_only_binary)
     |> result.unwrap(False)
   }
 }
@@ -131,7 +131,7 @@ fn encode(
   use described <- result.try(described_fields(description, lookup))
   let types = list.map(described, fn(field) { field.type_description })
   use written <- result.try(
-    query.write_values(fields, types, lookup)
+    definition.write_values(fields, types, lookup)
     |> result.map_error(error.reason_message),
   )
   use body <- result.try(
@@ -179,8 +179,8 @@ fn decode(
     <<count:size(32), rest:bits>> -> decode_fields(rest, count, [])
     _ -> Error(Malformed("the composite value is cut short"))
   })
-  row_reader.check(reader, described, lookup)
-  |> result.try(row_reader.read(_, cells, lookup))
+  reader.check(reader, described, lookup)
+  |> result.try(reader.read(_, cells, lookup))
   |> result.map_error(fn(reason) { Malformed(error.reason_message(reason)) })
 }
 

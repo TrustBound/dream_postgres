@@ -3,6 +3,7 @@
 //// documentation ("Message Formats"), and each value that a layout cannot
 //// hold.
 
+import dream_postgres/driver/cell.{Binary, BinaryFormat, Null, Text, TextFormat}
 import dream_postgres/driver/encode.{encode, length_field}
 import dream_postgres/driver/message.{
   type EncodeError, type FrontendMessage, Bind, CancelRequest, Close, CopyData,
@@ -10,9 +11,6 @@ import dream_postgres/driver/message.{
   GssEncryptionRequest, GssResponse, NumberOutOfRange, Parse, Portal, Query,
   SecretKeyLengthOutOfRange, SslRequest, Statement, Sync, Terminate,
   TooManyItems, ZeroByteInString,
-}
-import dream_postgres/internal/cell.{
-  Binary, BinaryFormat, Null, Text, TextFormat,
 }
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}

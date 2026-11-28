@@ -1,20 +1,20 @@
 //// The answer that the recorder gives from a recording: the entry that fits a
 //// request, and the result that it records.
 
+import dream_postgres/copy/executor
+import dream_postgres/copy/request.{type RowFeed}
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_postgres/error.{type Reason, RequestNotMatched, RequestNotRecorded}
 import dream_postgres/interceptor.{
   type Interceptor, type Outcome, type Request, CopyFrom, CopyTo, Request, Sql,
   Statement,
 }
-import dream_postgres/internal/cell.{type TypeDescription}
-import dream_postgres/internal/copy
-import dream_postgres/internal/copy_request.{type RowFeed}
-import dream_postgres/internal/query.{type Value}
-import dream_postgres/internal/recorder/recorder_state.{type State, State}
-import dream_postgres/internal/recorder/written_entry.{
+import dream_postgres/query/definition.{type Value}
+import dream_postgres/query/runner
+import dream_postgres/recorder/recorder_state.{type State, State}
+import dream_postgres/recorder/written_entry.{
   feed_rows, recorded_outcome, recorded_sql,
 }
-import dream_postgres/internal/runner
 import dream_postgres/recording.{
   type RecordedEntry, type RecordedFailure, type RecordedRequest,
   RecordedCopyFrom, RecordedCopyTo, RecordedSql, RecordedStatement,
@@ -163,11 +163,11 @@ fn parameters_written_like(
       types:,
       ..,
     ) ->
-      query.write_values(values, parameter_types, lookup_of(types))
+      definition.write_values(values, parameter_types, lookup_of(types))
       |> result.map(fn(written) {
         list.zip(values, parameter_types)
         |> list.map2(written.values, fn(pair, cell) {
-          query.written_as(pair.0, pair.1, cell)
+          definition.written_as(pair.0, pair.1, cell)
         })
       })
     RecordedStatement(parameters: None, ..)
@@ -190,15 +190,15 @@ fn rows_written_like(
     ) ->
       feed_rows(rows, [])
       |> list.try_map(fn(values) {
-        copy.write_row(values, column_types, lookup_of(types), columns)
+        executor.write_row(values, column_types, lookup_of(types), columns)
         |> result.map(fn(fields) {
           list.zip(values, column_types)
           |> list.map2(fields, fn(pair, field) {
-            query.written_as(pair.0, pair.1, copy.field_cell(field))
+            definition.written_as(pair.0, pair.1, executor.field_cell(field))
           })
         })
       })
-      |> result.map(copy_request.feed(_, fn(values) { values }))
+      |> result.map(request.feed(_, fn(values) { values }))
     RecordedCopyFrom(rows: None, ..)
     | RecordedStatement(..)
     | RecordedSql(..)

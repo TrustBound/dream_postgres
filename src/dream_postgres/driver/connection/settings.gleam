@@ -1,12 +1,12 @@
 //// The settings of a connection process.
 
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/backoff.{type Backoff}
 import dream_postgres/driver/connection/event.{type ConnectionEvent}
 import dream_postgres/driver/connection/outcome.{type Notification}
 import dream_postgres/driver/login.{type LoginConfig}
 import dream_postgres/driver/sink.{type Sink}
 import dream_postgres/driver/transport.{type TransportConfig}
-import dream_postgres/internal/cell.{type ServerReport}
 import gleam/option.{type Option}
 
 /// Everything a connection process needs.

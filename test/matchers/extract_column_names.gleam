@@ -1,6 +1,6 @@
 //// Extracts the name of each column description.
 
-import dream_postgres/internal/cell.{type ColumnDescription}
+import dream_postgres/driver/cell.{type ColumnDescription}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{map}
 

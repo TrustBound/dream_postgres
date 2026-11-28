@@ -1,11 +1,11 @@
 //// Queries: the builder, and the check and write of the parameters.
 
 import dream_postgres/codec
+import dream_postgres/driver/cell.{Binary, BinaryFormat, Null}
 import dream_postgres/error.{
   EncodeFailed, ParameterCountMismatch, ParameterTypeMismatch,
 }
-import dream_postgres/internal/cell.{Binary, BinaryFormat, Null}
-import dream_postgres/internal/query.{WrittenParameters}
+import dream_postgres/query/definition.{WrittenParameters}
 import dream_test/matchers.{
   be_equal, be_error, be_none, be_ok, be_some, or_fail_with, should,
 }
@@ -20,10 +20,10 @@ pub fn tests() -> TestSuite {
     group("the builder", [
       it("keeps the SQL", fn() {
         // Arrange
-        let subject = query.query("SELECT 1")
+        let subject = definition.query("SELECT 1")
 
         // Act
-        let sql = query.sql(subject)
+        let sql = definition.sql(subject)
 
         // Assert
         sql
@@ -33,10 +33,10 @@ pub fn tests() -> TestSuite {
       }),
       it("has no name until one is given", fn() {
         // Arrange
-        let subject = query.query("SELECT 1")
+        let subject = definition.query("SELECT 1")
 
         // Act
-        let name = query.name(subject)
+        let name = definition.name(subject)
 
         // Assert
         name
@@ -46,10 +46,11 @@ pub fn tests() -> TestSuite {
       }),
       it("keeps the name", fn() {
         // Arrange
-        let subject = query.query("SELECT 1") |> query.named("post.create")
+        let subject =
+          definition.query("SELECT 1") |> definition.named("post.create")
 
         // Act
-        let name = query.name(subject)
+        let name = definition.name(subject)
 
         // Assert
         name
@@ -61,15 +62,15 @@ pub fn tests() -> TestSuite {
       it("counts the parameters", fn() {
         // Arrange
         let subject =
-          query.query(
+          definition.query(
             "INSERT INTO posts (user_id, body, score) VALUES ($1, $2, $3)",
           )
-          |> query.parameter(codec.int, 7)
-          |> query.parameter(codec.nullable(codec.text), None)
-          |> query.parameter(codec.numeric, "9.5")
+          |> definition.parameter(codec.int, 7)
+          |> definition.parameter(codec.nullable(codec.text), None)
+          |> definition.parameter(codec.numeric, "9.5")
 
         // Act
-        let count = query.parameter_count(subject)
+        let count = definition.parameter_count(subject)
 
         // Assert
         count
@@ -84,12 +85,12 @@ pub fn tests() -> TestSuite {
         fn() {
           // Arrange
           let subject =
-            query.query(
+            definition.query(
               "INSERT INTO posts (user_id, body, score) VALUES ($1, $2, $3)",
             )
-            |> query.parameter(codec.int, 7)
-            |> query.parameter(codec.nullable(codec.text), None)
-            |> query.parameter(codec.numeric, "9.5")
+            |> definition.parameter(codec.int, 7)
+            |> definition.parameter(codec.nullable(codec.text), None)
+            |> definition.parameter(codec.numeric, "9.5")
 
           // Act and assert
           subject
@@ -115,7 +116,7 @@ pub fn tests() -> TestSuite {
       ),
       it("refuses fewer parameters than the query has", fn() {
         // Arrange
-        let subject = query.query("SELECT $1, $2")
+        let subject = definition.query("SELECT $1, $2")
 
         // Act and assert
         subject
@@ -128,12 +129,12 @@ pub fn tests() -> TestSuite {
       it("refuses more parameters than the query has", fn() {
         // Arrange
         let subject =
-          query.query(
+          definition.query(
             "INSERT INTO posts (user_id, body, score) VALUES ($1, $2, $3)",
           )
-          |> query.parameter(codec.int, 7)
-          |> query.parameter(codec.nullable(codec.text), None)
-          |> query.parameter(codec.numeric, "9.5")
+          |> definition.parameter(codec.int, 7)
+          |> definition.parameter(codec.nullable(codec.text), None)
+          |> definition.parameter(codec.numeric, "9.5")
 
         // Act and assert
         subject
@@ -146,12 +147,12 @@ pub fn tests() -> TestSuite {
       it("refuses a codec that does not take the parameter's type", fn() {
         // Arrange
         let subject =
-          query.query(
+          definition.query(
             "INSERT INTO posts (user_id, body, score) VALUES ($1, $2, $3)",
           )
-          |> query.parameter(codec.int, 7)
-          |> query.parameter(codec.nullable(codec.text), None)
-          |> query.parameter(codec.numeric, "9.5")
+          |> definition.parameter(codec.int, 7)
+          |> definition.parameter(codec.nullable(codec.text), None)
+          |> definition.parameter(codec.numeric, "9.5")
 
         // Act and assert
         subject
@@ -172,7 +173,8 @@ pub fn tests() -> TestSuite {
       it("refuses a value the codec cannot write", fn() {
         // Arrange
         let subject =
-          query.query("SELECT $1") |> query.parameter(codec.int, 40_000)
+          definition.query("SELECT $1")
+          |> definition.parameter(codec.int, 40_000)
 
         // Act and assert
         subject

@@ -3,16 +3,16 @@
 
 import dream_errors.{type Error}
 import dream_postgres/codec
+import dream_postgres/copy/executor
+import dream_postgres/copy/request
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/internal/connection_state.{
+import dream_postgres/error/failure.{failure}
+import dream_postgres/pool.{type Connection}
+import dream_postgres/pool/connection_state.{
   chain_of, copy_from_end, copy_to_end, hold, secret_free_error,
 }
-import dream_postgres/internal/copy as internal_copy
-import dream_postgres/internal/copy_request
-import dream_postgres/internal/failure.{failure}
-import dream_postgres/internal/query as internal_query
-import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{type Query}
+import dream_postgres/query/definition
 import dream_postgres/row.{type Row}
 import gleam/option.{None, Some}
 import gleam/result
@@ -82,7 +82,7 @@ pub fn copy_from(
   write write: fn(a) -> List(codec.Field),
 ) -> Result(Int, Error(PostgresError)) {
   hold(connection, fn(held) {
-    internal_copy.copy_from(
+    executor.copy_from(
       chain_of(held),
       copy_from_end(held),
       table,
@@ -94,7 +94,7 @@ pub fn copy_from(
   |> result.flatten
   |> result.map_error(failure(
     None,
-    Some(internal_copy.copy_from_sql(table, columns)),
+    Some(executor.copy_from_sql(table, columns)),
     _,
   ))
   |> result.map_error(secret_free_error(connection, _))
@@ -102,18 +102,18 @@ pub fn copy_from(
 
 /// The table that `copy_from` stores its rows in.
 pub type Table =
-  copy_request.Table
+  request.Table
 
 /// A table found through the search path, such as `table("users")`. The
 /// name is one identifier: a dot in it is part of the name, not a schema.
 pub fn table(name: String) -> Table {
-  copy_request.table(name)
+  request.table(name)
 }
 
 /// A table in a schema, such as `table_in_schema("billing", "invoices")`.
 /// The schema and the name are each quoted on their own.
 pub fn table_in_schema(schema: String, name: String) -> Table {
-  copy_request.table_in_schema(schema, name)
+  request.table_in_schema(schema, name)
 }
 
 /// Reads the rows of a query with one binary `COPY (...) TO STDOUT`, and
@@ -161,7 +161,7 @@ pub fn copy_to(
   with fold: fn(accumulator, a) -> accumulator,
 ) -> Result(accumulator, Error(PostgresError)) {
   hold(connection, fn(held) {
-    internal_copy.copy_to(
+    executor.copy_to(
       chain_of(held),
       copy_to_end(held),
       query,
@@ -172,8 +172,8 @@ pub fn copy_to(
   })
   |> result.flatten
   |> result.map_error(failure(
-    internal_query.name(query),
-    Some(internal_query.sql(query)),
+    definition.name(query),
+    Some(definition.sql(query)),
     _,
   ))
   |> result.map_error(secret_free_error(connection, _))

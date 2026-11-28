@@ -1,7 +1,7 @@
 //// A matcher that maps a notice report of the driver to the notice of the client.
 
 import dream_postgres/config.{type ServerNotice}
-import dream_postgres/internal/cell.{type ServerReport}
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Map a notice report of the driver to the notice of the client. The chain goes on with the result.

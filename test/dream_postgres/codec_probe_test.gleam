@@ -3,10 +3,10 @@
 //// then reads that text back and compares the value.
 
 import dream_postgres/codec
+import dream_postgres/codecs/codec_type.{OutOfRange}
 import dream_postgres/geometry.{
   Box, Circle, Line, LineSegment, Path, Point, Polygon,
 }
-import dream_postgres/internal/codec_type.{OutOfRange}
 import dream_postgres/json
 import dream_postgres/network.{IpNetwork, Ipv4, Ipv6}
 import dream_postgres/range.{EmptyRange, Exclusive, Inclusive, Unbounded}

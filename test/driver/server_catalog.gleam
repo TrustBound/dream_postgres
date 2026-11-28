@@ -12,13 +12,13 @@
 import dream_postgres/driver/catalog.{
   type Catalog, type CatalogError, type CatalogEvent, UnknownType,
 }
+import dream_postgres/driver/cell.{type TypeDescription}
 import dream_postgres/driver/connection.{stop}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/outcome.{type Outcome}
 import dream_postgres/driver/connection/request_failure.{type SimpleQueryError}
 import dream_postgres/driver/connection/simple_query.{run_simple_query}
 import dream_postgres/driver/connection/statement as connection_statement
-import dream_postgres/internal/cell.{type TypeDescription}
 import dream_test/context.{type Context}
 import driver/server_connection.{
   type Caller, advisory_lock_sql, caller_answer, query_text,

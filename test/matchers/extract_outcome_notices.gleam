@@ -1,7 +1,7 @@
 //// Extracts the notice texts of each outcome of the connection process.
 
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/outcome.{type Outcome}
-import dream_postgres/internal/cell.{type ServerReport}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list.{map}
 

@@ -1,10 +1,10 @@
 //// Extracts the transaction status and the aborting error code of a
 //// transaction tracker.
 
+import dream_postgres/driver/cell.{type ServerReport, type TransactionStatus}
 import dream_postgres/driver/transaction.{
   type TransactionTracker, aborting_error, transaction_status,
 }
-import dream_postgres/internal/cell.{type ServerReport, type TransactionStatus}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/option.{type Option, map}
 

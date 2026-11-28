@@ -1,5 +1,6 @@
 //// The answer of the process to a caller when a Simple Query ends.
 
+import dream_postgres/driver/cell.{type TransactionStatus}
 import dream_postgres/driver/connection/notices.{after_step, outcomes_of}
 import dream_postgres/driver/connection/outcome.{type Outcome}
 import dream_postgres/driver/connection/reply.{type ReplyTo, reply}
@@ -14,7 +15,6 @@ import dream_postgres/driver/query/step.{
   ServerError, SimpleQueryFailure,
 } as query_step
 import dream_postgres/driver/transaction.{track_simple_query}
-import dream_postgres/internal/cell.{type TransactionStatus}
 
 pub fn simple_query_finisher(
   reply_to: ReplyTo(Result(List(Outcome), SimpleQueryError)),

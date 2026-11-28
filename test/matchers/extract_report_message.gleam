@@ -1,6 +1,6 @@
 //// Extracts the message of a server report.
 
-import dream_postgres/internal/cell.{type ServerReport}
+import dream_postgres/driver/cell.{type ServerReport}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Gives the primary message of the report.

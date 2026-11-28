@@ -1,12 +1,10 @@
 //// A matcher that gives the cells of the rows of an outcome of an
 //// interceptor.
 
+import dream_postgres/copy/request.{CopyRows, DatabaseRows, RecordedRows}
+import dream_postgres/driver/cell.{type Cell}
 import dream_postgres/interceptor.{
   type Outcome, CopyFromAnswer, CopyToAnswer, SqlAnswer, StatementAnswer,
-}
-import dream_postgres/internal/cell.{type Cell}
-import dream_postgres/internal/copy_request.{
-  CopyRows, DatabaseRows, RecordedRows,
 }
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,

@@ -1,13 +1,13 @@
 //// Logs in to the driver servers of PostgreSQL 16 to 19 with each login
 //// method of `test/docker/driver_pg_hba.conf`, over the transport.
 
+import dream_postgres/driver/cell.{Idle}
 import dream_postgres/driver/login.{
   type ChannelBindingSetting, DisableChannelBinding, PreferChannelBinding,
   RequireChannelBinding,
 }
 import dream_postgres/driver/message.{Protocol30, Protocol32}
 import dream_postgres/driver/transport.{NoTls}
-import dream_postgres/internal/cell.{Idle}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}

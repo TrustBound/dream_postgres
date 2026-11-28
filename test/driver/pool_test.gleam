@@ -11,6 +11,7 @@
 //// and proxy.
 
 import dream_postgres/driver/catalog.{CatalogProcessDown}
+import dream_postgres/driver/cell.{type TransactionStatus, Idle, InTransaction}
 import dream_postgres/driver/connection/event.{
   type ConnectionEvent, Connected, ConnectionLost, Disconnected, SocketFailed,
   TransportRefused,
@@ -33,7 +34,6 @@ import dream_postgres/driver/pool/pool_message.{type Pool}
 import dream_postgres/driver/pool/pool_settings.{type PoolConfig}
 import dream_postgres/driver/pool/pool_status.{type PoolStatus, PoolStatus}
 import dream_postgres/driver/transport.{ConnectRefused, SocketClosed}
-import dream_postgres/internal/cell.{type TransactionStatus, Idle, InTransaction}
 import dream_test/context
 import dream_test/matchers.{
   be_equal, be_error, be_ok, be_some, have_length, or_fail_with, should,

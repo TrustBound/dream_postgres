@@ -1,7 +1,7 @@
 //// ServerReport values for the driver tests: the fields that every
 //// ErrorResponse and NoticeResponse has, and no other field.
 
-import dream_postgres/internal/cell.{type ServerReport, ServerReport}
+import dream_postgres/driver/cell.{type ServerReport, ServerReport}
 import gleam/option.{None}
 
 /// A report with a severity, a SQLSTATE code and a message, and no other

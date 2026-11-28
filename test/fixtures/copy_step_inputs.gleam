@@ -3,6 +3,9 @@
 //// PostgreSQL documentation ("Message Flow", "COPY Operations"), and what
 //// the step gives back for each.
 
+import dream_postgres/driver/cell.{
+  type ServerReport, type TransactionStatus, ServerReport, TextFormat,
+}
 import dream_postgres/driver/message.{
   type BackendMessage, BindComplete, CopyInResponse, CopyOutResponse,
   ParseComplete,
@@ -11,9 +14,6 @@ import dream_postgres/driver/query/copy_step.{type CopyState} as query_copy_step
 import dream_postgres/driver/query/step.{
   type CopyResult, type Failure, type Outcome, type Phase, CopyFrom, Outcome,
 } as query_step
-import dream_postgres/internal/cell.{
-  type ServerReport, type TransactionStatus, ServerReport, TextFormat,
-}
 import gleam/bit_array
 import gleam/list
 import gleam/option.{None}
