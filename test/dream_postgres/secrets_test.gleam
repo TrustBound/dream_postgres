@@ -7,7 +7,7 @@ import dream_postgres/error.{SecretColumnNotReplaced}
 import dream_postgres/pool.{named_connection}
 import dream_postgres/query.{one, query}
 import dream_postgres/row.{single}
-import dream_postgres/secrets
+import dream_postgres/secrets.{secrets}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, contain, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -43,7 +43,7 @@ pub fn unit_tests() -> TestSuite {
     }),
     unit.it("replace_text replaces each secret text in order", fn() {
       // Act and assert
-      secrets.new()
+      secrets()
       |> secrets.text("sk_live_", with: "sk_test_")
       |> secrets.text("sk_test_1", with: "one")
       |> secrets.replace_text("SELECT 'sk_live_1', 'sk_live_2'")
@@ -53,7 +53,7 @@ pub fn unit_tests() -> TestSuite {
     }),
     unit.it("replace_columns replaces the value of a secret column", fn() {
       // Act and assert
-      secrets.new()
+      secrets()
       |> secrets.column("token", codec.text, with: "token-redacted")
       |> secrets.replace_columns(
         StatementDescription(parameters: [], columns: [
@@ -71,7 +71,7 @@ pub fn unit_tests() -> TestSuite {
     }),
     unit.it("replace_columns leaves a NULL of a secret column", fn() {
       // Act and assert
-      secrets.new()
+      secrets()
       |> secrets.column("token", codec.text, with: "token-redacted")
       |> secrets.replace_columns(
         StatementDescription(parameters: [], columns: [
@@ -86,7 +86,7 @@ pub fn unit_tests() -> TestSuite {
     }),
     unit.it("replace_columns refuses a codec that does not take the type", fn() {
       // Act and assert
-      secrets.new()
+      secrets()
       |> secrets.column("token", codec.int, with: 1)
       |> secrets.replace_columns(
         StatementDescription(parameters: [], columns: [
@@ -106,7 +106,7 @@ pub fn unit_tests() -> TestSuite {
     }),
     unit.it("replace_columns gives the reason a value cannot be written", fn() {
       // Act and assert
-      secrets.new()
+      secrets()
       |> secrets.column("small", codec.int, with: 100_000)
       |> secrets.replace_columns(
         StatementDescription(parameters: [], columns: [
@@ -128,7 +128,7 @@ pub fn unit_tests() -> TestSuite {
       "replace_columns refuses a column whose type is not in the answer",
       fn() {
         // Act and assert
-        secrets.new()
+        secrets()
         |> secrets.column("token", codec.text, with: "token-redacted")
         |> secrets.replace_columns(
           StatementDescription(parameters: [], columns: [

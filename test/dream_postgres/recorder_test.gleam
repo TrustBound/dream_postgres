@@ -16,7 +16,7 @@ import dream_postgres/posix
 import dream_postgres/query.{affected, query}
 import dream_postgres/recorder
 import dream_postgres/row.{single}
-import dream_postgres/secrets
+import dream_postgres/secrets.{secrets}
 import dream_test/context
 import dream_test/matchers.{
   be_equal, be_error, be_ok, contain_string, or_fail_with, should,
@@ -902,8 +902,8 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_with_recorder(
             server_pools.config(recorded_scenarios.server_port)
-              |> config.secrets(
-                secrets.new() |> secrets.column("token", codec.int, with: 1),
+              |> config.set_secrets(
+                secrets() |> secrets.column("token", codec.int, with: 1),
               ),
             recorded_scenarios.read_token,
           )

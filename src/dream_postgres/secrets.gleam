@@ -1,6 +1,6 @@
 //// The secrets of a config: text to replace in SQL, and columns whose
 //// values to replace. Declare them once on the config with
-//// `config.secrets`. They apply to each copy of a request that
+//// `config.set_secrets`. They apply to each copy of a request that
 //// leaves the process: the recording of a recorder, the SQL of a
 //// `PostgresError`, and the text of the trace span of each statement. The
 //// database and the app always get the real values.
@@ -9,8 +9,8 @@
 ////
 //// ```gleam
 //// import dream_postgres/codec.{text}
-//// import dream_postgres/config.{type Config, intercept, secrets}
-//// import dream_postgres/secrets
+//// import dream_postgres/config.{type Config, intercept, set_secrets}
+//// import dream_postgres/secrets.{secrets}
 //// import snippets/request_tagging.{tag_with_app_name}
 ////
 //// /// The config of the app, shared by the app and its tests. `server` holds
@@ -18,8 +18,8 @@
 //// pub fn app_config(server: Config) -> Config {
 ////   server
 ////   |> intercept(tag_with_app_name)
-////   |> secrets(
-////     secrets.new()
+////   |> set_secrets(
+////     secrets()
 ////     |> secrets.text("sk_live_", with: "sk_test_")
 ////     |> secrets.column("token", text, with: "token-redacted"),
 ////   )
@@ -62,8 +62,8 @@ type SecretColumn {
 ///
 /// ```gleam
 /// import dream_postgres/codec.{text}
-/// import dream_postgres/config.{type Config, intercept, secrets}
-/// import dream_postgres/secrets
+/// import dream_postgres/config.{type Config, intercept, set_secrets}
+/// import dream_postgres/secrets.{secrets}
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
 /// /// The config of the app, shared by the app and its tests. `server` holds
@@ -71,14 +71,14 @@ type SecretColumn {
 /// pub fn app_config(server: Config) -> Config {
 ///   server
 ///   |> intercept(tag_with_app_name)
-///   |> secrets(
-///     secrets.new()
+///   |> set_secrets(
+///     secrets()
 ///     |> secrets.text("sk_live_", with: "sk_test_")
 ///     |> secrets.column("token", text, with: "token-redacted"),
 ///   )
 /// }
 /// ```
-pub fn new() -> Secrets {
+pub fn secrets() -> Secrets {
   Secrets(texts: [], columns: [])
 }
 
@@ -89,8 +89,8 @@ pub fn new() -> Secrets {
 ///
 /// ```gleam
 /// import dream_postgres/codec.{text}
-/// import dream_postgres/config.{type Config, intercept, secrets}
-/// import dream_postgres/secrets
+/// import dream_postgres/config.{type Config, intercept, set_secrets}
+/// import dream_postgres/secrets.{secrets}
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
 /// /// The config of the app, shared by the app and its tests. `server` holds
@@ -98,21 +98,21 @@ pub fn new() -> Secrets {
 /// pub fn app_config(server: Config) -> Config {
 ///   server
 ///   |> intercept(tag_with_app_name)
-///   |> secrets(
-///     secrets.new()
+///   |> set_secrets(
+///     secrets()
 ///     |> secrets.text("sk_live_", with: "sk_test_")
 ///     |> secrets.column("token", text, with: "token-redacted"),
 ///   )
 /// }
 /// ```
 pub fn text(
-  secrets: Secrets,
+  declared: Secrets,
   secret: String,
   with replacement: String,
 ) -> Secrets {
   Secrets(
-    ..secrets,
-    texts: list.append(secrets.texts, [SecretText(secret:, replacement:)]),
+    ..declared,
+    texts: list.append(declared.texts, [SecretText(secret:, replacement:)]),
   )
 }
 
@@ -124,8 +124,8 @@ pub fn text(
 ///
 /// ```gleam
 /// import dream_postgres/codec.{text}
-/// import dream_postgres/config.{type Config, intercept, secrets}
-/// import dream_postgres/secrets
+/// import dream_postgres/config.{type Config, intercept, set_secrets}
+/// import dream_postgres/secrets.{secrets}
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
 /// /// The config of the app, shared by the app and its tests. `server` holds
@@ -133,15 +133,15 @@ pub fn text(
 /// pub fn app_config(server: Config) -> Config {
 ///   server
 ///   |> intercept(tag_with_app_name)
-///   |> secrets(
-///     secrets.new()
+///   |> set_secrets(
+///     secrets()
 ///     |> secrets.text("sk_live_", with: "sk_test_")
 ///     |> secrets.column("token", text, with: "token-redacted"),
 ///   )
 /// }
 /// ```
 pub fn column(
-  secrets: Secrets,
+  declared: Secrets,
   name: String,
   codec: Codec(a),
   with replacement: a,
@@ -157,13 +157,13 @@ pub fn column(
         codec_type.encode(codec, replacement, description, lookup)
       },
     )
-  Secrets(..secrets, columns: list.append(secrets.columns, [secret_column]))
+  Secrets(..declared, columns: list.append(declared.columns, [secret_column]))
 }
 
 /// The text with each secret text replaced.
 @internal
-pub fn replace_text(secrets: Secrets, text: String) -> String {
-  list.fold(secrets.texts, text, fn(replaced, secret_text) {
+pub fn replace_text(declared: Secrets, text: String) -> String {
+  list.fold(declared.texts, text, fn(replaced, secret_text) {
     string.replace(
       replaced,
       each: secret_text.secret,
@@ -176,7 +176,7 @@ pub fn replace_text(secrets: Secrets, text: String) -> String {
 /// `types` holds the type of each column of the description.
 @internal
 pub fn replace_columns(
-  secrets: Secrets,
+  declared: Secrets,
   description: StatementDescription,
   types: List(TypeDescription),
   rows: List(List(Cell)),
@@ -191,7 +191,7 @@ pub fn replace_columns(
   use replacements <- result.map(
     description.columns
     |> list.index_map(fn(answer_column, position) {
-      column_replacements(secrets, answer_column, position, lookup)
+      column_replacements(declared, answer_column, position, lookup)
     })
     |> result.all,
   )
@@ -206,12 +206,12 @@ pub fn replace_columns(
 // The replacement cell of each secret column that has the name of the
 // column of the answer at `position`.
 fn column_replacements(
-  secrets: Secrets,
+  declared: Secrets,
   answer_column: ColumnDescription,
   position: Int,
   lookup: TypeLookup,
 ) -> Result(List(#(Int, Cell)), Reason) {
-  secrets.columns
+  declared.columns
   |> list.filter(fn(secret_column) { secret_column.name == answer_column.name })
   |> list.try_map(fn(secret_column) {
     lookup(answer_column.type_id)

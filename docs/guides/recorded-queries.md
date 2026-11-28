@@ -38,8 +38,8 @@ The app and its tests share one config. It holds the interceptors of the app and
 
 ```gleam
 import dream_postgres/codec.{text}
-import dream_postgres/config.{type Config, intercept, secrets}
-import dream_postgres/secrets
+import dream_postgres/config.{type Config, intercept, set_secrets}
+import dream_postgres/secrets.{secrets}
 import snippets/request_tagging.{tag_with_app_name}
 
 /// The config of the app, shared by the app and its tests. `server` holds
@@ -47,8 +47,8 @@ import snippets/request_tagging.{tag_with_app_name}
 pub fn app_config(server: Config) -> Config {
   server
   |> intercept(tag_with_app_name)
-  |> secrets(
-    secrets.new()
+  |> set_secrets(
+    secrets()
     |> secrets.text("sk_live_", with: "sk_test_")
     |> secrets.column("token", text, with: "token-redacted"),
   )
@@ -302,7 +302,7 @@ Each recording starts with no UUID known. A placeholder does not change, so the 
 
 ## Secrets
 
-`config.secrets` declares the secrets of the config one time. They apply to each copy of a request that leaves the process:
+`config.set_secrets` declares the secrets of the config one time. They apply to each copy of a request that leaves the process:
 
 | Secret | The recording | `PostgresError.sql` | The text of the trace span |
 |---|---|---|---|

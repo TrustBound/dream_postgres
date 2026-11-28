@@ -22,7 +22,7 @@ import dream_postgres/query/driver_executor
 import dream_postgres/reconnect.{type ReconnectStep, ReconnectStep, full_jitter}
 import dream_postgres/recorder.{type Recorder}
 import dream_postgres/recorder/replay.{type Replay}
-import dream_postgres/secrets.{type Secrets}
+import dream_postgres/secrets.{type Secrets, secrets}
 import dream_postgres/sql_state.{type SqlState}
 import gleam/erlang/process.{type Subject}
 import gleam/list
@@ -120,7 +120,7 @@ pub fn default_config() -> Config {
     query_timeout_milliseconds: 5000,
     checkout_timeout_milliseconds: 5000,
     interceptors: [],
-    secrets: secrets.new(),
+    secrets: secrets(),
     recorder: None,
     reconnect_first_delay_milliseconds: 100,
     reconnect_longest_delay_milliseconds: 10_000,
@@ -285,8 +285,8 @@ pub fn intercept(config: Config, added_interceptor: Interceptor) -> Config {
 ///
 /// ```gleam
 /// import dream_postgres/codec.{text}
-/// import dream_postgres/config.{type Config, intercept, secrets}
-/// import dream_postgres/secrets
+/// import dream_postgres/config.{type Config, intercept, set_secrets}
+/// import dream_postgres/secrets.{secrets}
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
 /// /// The config of the app, shared by the app and its tests. `server` holds
@@ -294,14 +294,14 @@ pub fn intercept(config: Config, added_interceptor: Interceptor) -> Config {
 /// pub fn app_config(server: Config) -> Config {
 ///   server
 ///   |> intercept(tag_with_app_name)
-///   |> secrets(
-///     secrets.new()
+///   |> set_secrets(
+///     secrets()
 ///     |> secrets.text("sk_live_", with: "sk_test_")
 ///     |> secrets.column("token", text, with: "token-redacted"),
 ///   )
 /// }
 /// ```
-pub fn secrets(config: Config, declared: Secrets) -> Config {
+pub fn set_secrets(config: Config, declared: Secrets) -> Config {
   Config(..config, secrets: declared)
 }
 

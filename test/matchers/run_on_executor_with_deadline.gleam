@@ -3,7 +3,7 @@
 
 import dream_postgres/query/driver_executor
 import dream_postgres/query/runner.{type Executor}
-import dream_postgres/secrets
+import dream_postgres/secrets.{secrets}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -51,7 +51,7 @@ fn run_on_chosen(
         session.connection,
         session.catalog,
         endpoints.example_endpoint(),
-        secrets.new(),
+        secrets(),
         deadline_milliseconds,
       )
       |> work
