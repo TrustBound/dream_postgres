@@ -27,8 +27,9 @@ import dream_postgres/driver/channel_binding.{
 import dream_postgres/driver/crypto.{Md5, hash, random_bytes}
 import dream_postgres/driver/login/login_config.{
   type ChannelBindingSetting, type LoginConfig, type Password,
-  DisableChannelBinding, NoPassword, Password, PreferChannelBinding,
-  RequireChannelBinding, check_password_text, longest_password,
+  DisableChannelBinding, PreferChannelBinding, RequireChannelBinding,
+  channel_binding, check_password_text, login_password, longest_password,
+  parameters, password_text, protocol_version, user,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type ProtocolVersion, AuthenticationCleartextPassword,
@@ -355,7 +356,7 @@ pub fn start(
   client_nonce: ClientNonce,
   server_certificate: Option(BitArray),
 ) -> Result(#(LoginState, LoginMessage), LoginStartError) {
-  let requires_tls = config.channel_binding == RequireChannelBinding
+  let requires_tls = channel_binding(config) == RequireChannelBinding
   use <- guard(requires_tls && server_certificate == None, {
     Error(ChannelBindingRequiresTls)
   })
@@ -369,7 +370,7 @@ fn initial_state(
   server_certificate: Option(BitArray),
 ) -> LoginState {
   let progress =
-    Progress(False, config.protocol_version, [], dict.new(), None, [])
+    Progress(False, protocol_version(config), [], dict.new(), None, [])
   LoginState(
     AwaitingLoginRequest,
     config,
@@ -480,7 +481,7 @@ fn negotiated_version(
 }
 
 fn trust_login(state: LoginState) -> Result(LoginStep, LoginError) {
-  let required = state.config.channel_binding == RequireChannelBinding
+  let required = channel_binding(state.config) == RequireChannelBinding
   use <- guard(required, Error(ChannelBindingNotOffered(TrustLogin)))
   continue(state, AwaitingReadyForQuery, None)
 }
@@ -506,7 +507,7 @@ fn md5_login(
   salt: BitArray,
 ) -> Result(LoginStep, LoginError) {
   use password <- try(unbound_password(state, Md5Login))
-  let inner = md5_hex(<<password:utf8, state.config.user:utf8>>)
+  let inner = md5_hex(<<password:utf8, user(state.config):utf8>>)
   let hashed = "md5" <> md5_hex(<<inner:utf8, salt:bits>>)
   continue(state, AwaitingAuthenticationOk, Some(PasswordMessage(hashed)))
 }
@@ -522,9 +523,9 @@ fn unbound_password(
   state: LoginState,
   method: LoginMethod,
 ) -> Result(String, LoginError) {
-  let required = state.config.channel_binding == RequireChannelBinding
+  let required = channel_binding(state.config) == RequireChannelBinding
   use <- guard(required, Error(ChannelBindingNotOffered(method)))
-  read_password(state.config.password, method)
+  read_password(login_password(state.config), method)
 }
 
 /// Reads the password when the server asks for it. libpq refuses an empty
@@ -533,9 +534,9 @@ fn read_password(
   password: Password,
   method: LoginMethod,
 ) -> Result(String, LoginError) {
-  case password {
-    Password(read:) -> checked_password(read(), method)
-    NoPassword -> Error(PasswordRequired(method))
+  case password_text(password) {
+    Some(text) -> checked_password(text, method)
+    None -> Error(PasswordRequired(method))
   }
 }
 
@@ -575,7 +576,7 @@ fn choose_channel_binding(
   case state.server_certificate {
     None -> binding_without_tls(mechanisms)
     Some(certificate) ->
-      binding_with_tls(state.config.channel_binding, certificate, mechanisms)
+      binding_with_tls(channel_binding(state.config), certificate, mechanisms)
   }
 }
 
@@ -648,7 +649,7 @@ fn scram_proof(
   data: BitArray,
 ) -> Result(LoginStep, LoginError) {
   let method = ScramLogin(mechanism)
-  use password <- try(read_password(state.config.password, method))
+  use password <- try(read_password(login_password(state.config), method))
   use final <- try(
     client_final(first, password, data) |> map_error(ScramServerFirstFailed),
   )
@@ -691,8 +692,8 @@ fn ready_for_query(
   let progress = state.progress
   case message {
     ParameterStatus(name:, value:) -> {
-      let parameters = dict.insert(progress.parameters, name, value)
-      keep_progress(state, Progress(..progress, parameters:))
+      let server_parameters = dict.insert(progress.parameters, name, value)
+      keep_progress(state, Progress(..progress, parameters: server_parameters))
     }
     BackendKeyData(process_id:, secret_key:) -> {
       let cancel_key = Some(CancelKey(process_id:, secret_key:))
@@ -777,10 +778,10 @@ pub fn encode_login_message(message: LoginMessage) -> BitArray {
 /// The StartupMessage has no type byte: the length, the protocol version,
 /// each name and value with its zero byte, then a zero byte.
 fn startup_message_bytes(config: LoginConfig) -> BitArray {
-  let parameters = [#("user", config.user), ..config.parameters]
+  let fields = [#("user", user(config)), ..parameters(config)]
   let body = <<
-    version_code(config.protocol_version):32,
-    bit_array.concat(map_list(parameters, parameter_bytes)):bits,
+    version_code(protocol_version(config)):32,
+    bit_array.concat(map_list(fields, parameter_bytes)):bits,
     0,
   >>
   let length = byte_size(body) + 4

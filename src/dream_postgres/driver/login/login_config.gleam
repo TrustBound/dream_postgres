@@ -13,6 +13,7 @@ import dream_postgres/driver/encode.{length_field}
 import dream_postgres/driver/message.{type ProtocolVersion}
 import gleam/bool.{guard}
 import gleam/list.{append, filter, fold, try_each, try_fold}
+import gleam/option.{type Option, None, Some}
 import gleam/result.{replace, replace_error, try, unwrap}
 import gleam/set.{type Set}
 import gleam/string.{lowercase, to_graphemes}
@@ -36,7 +37,7 @@ pub const default_application_name = "dream_postgres"
 pub const longest_password = 65_530
 
 /// A password, or none, kept in a function so that no value prints it.
-pub type Password {
+pub opaque type Password {
   Password(read: fn() -> String)
   NoPassword
 }
@@ -56,7 +57,7 @@ pub type ChannelBindingSetting {
 }
 
 /// The checked settings of a login. Only `new` makes one.
-pub type LoginConfig {
+pub opaque type LoginConfig {
   LoginConfig(
     user: String,
     database: String,
@@ -140,7 +141,47 @@ pub fn no_password() -> Password {
 pub fn database(config: LoginConfig) -> String {
   case config.database {
     "" -> config.user
-    database -> database
+    database_name -> database_name
+  }
+}
+
+/// The user that logs in.
+pub fn user(config: LoginConfig) -> String {
+  config.user
+}
+
+/// The password of the settings.
+pub fn login_password(config: LoginConfig) -> Password {
+  config.password
+}
+
+/// The startup parameters in the order of the StartupMessage: `database`,
+/// each parameter of the caller, `application_name`, then
+/// `client_encoding`. `user` is not one of them.
+pub fn parameters(config: LoginConfig) -> List(#(String, String)) {
+  config.parameters
+}
+
+/// When the login binds SCRAM to the TLS connection.
+pub fn channel_binding(config: LoginConfig) -> ChannelBindingSetting {
+  config.channel_binding
+}
+
+/// The protocol version that the login asks for.
+pub fn protocol_version(config: LoginConfig) -> ProtocolVersion {
+  config.protocol_version
+}
+
+/// Reads the password now, from its function.
+///
+/// ## Returns
+///
+/// - `Some(text)`: the text that the password's function gives
+/// - `None`: the settings have no password
+pub fn password_text(given_password: Password) -> Option(String) {
+  case given_password {
+    Password(read:) -> Some(read())
+    NoPassword -> None
   }
 }
 
@@ -168,33 +209,37 @@ pub fn database(config: LoginConfig) -> String {
 ///   parameter given two times, an encoding other than UTF-8, or a
 ///   StartupMessage longer than its length field can hold
 pub fn new(
-  user user: String,
-  database database: String,
-  password password: Password,
-  parameters parameters: List(#(String, String)),
-  channel_binding channel_binding: ChannelBindingSetting,
-  protocol_version protocol_version: ProtocolVersion,
+  user user_name: String,
+  database database_name: String,
+  password given_password: Password,
+  parameters caller_parameters: List(#(String, String)),
+  channel_binding binding_setting: ChannelBindingSetting,
+  protocol_version requested_version: ProtocolVersion,
 ) -> Result(LoginConfig, ConfigError) {
-  use <- guard(user == "", Error(EmptyUser))
-  use _ <- try(check_password(password))
-  let given = [#("user", user), #("database", database), ..parameters]
+  use <- guard(user_name == "", Error(EmptyUser))
+  use _ <- try(check_password(given_password))
+  let given = [
+    #("user", user_name),
+    #("database", database_name),
+    ..caller_parameters
+  ]
   use _ <- try(try_each(given, check_parameter))
   use _ <- try(try_fold(given, set.new(), check_unique_name))
-  use _ <- try(try_each(parameters, check_client_encoding))
-  let startup = startup_parameters(database, parameters)
-  use _ <- try(check_startup_length(user, startup))
+  use _ <- try(try_each(caller_parameters, check_client_encoding))
+  let startup = startup_parameters(database_name, caller_parameters)
+  use _ <- try(check_startup_length(user_name, startup))
   Ok(LoginConfig(
-    user:,
-    database:,
-    password:,
+    user: user_name,
+    database: database_name,
+    password: given_password,
     parameters: startup,
-    channel_binding:,
-    protocol_version:,
+    channel_binding: binding_setting,
+    protocol_version: requested_version,
   ))
 }
 
-fn check_password(password: Password) -> Result(Nil, ConfigError) {
-  case password {
+fn check_password(given_password: Password) -> Result(Nil, ConfigError) {
+  case given_password {
     Password(read:) -> check_password_text(read())
     NoPassword -> Ok(Nil)
   }
@@ -241,28 +286,28 @@ fn check_client_encoding(
 /// The length is worked out from the lengths of the texts, so that no
 /// bytes of the message are built for the check.
 fn check_startup_length(
-  user: String,
-  parameters: List(#(String, String)),
+  user_name: String,
+  startup: List(#(String, String)),
 ) -> Result(Nil, ConfigError) {
-  let length = startup_message_length(user, parameters)
+  let length = startup_message_length(user_name, startup)
   length_field(length)
   |> replace_error(StartupMessageTooLong(length))
   |> replace(Nil)
 }
 
-/// The length field of the StartupMessage of `user` and `parameters`,
+/// The length field of the StartupMessage of `user_name` and `startup`,
 /// worked out from the lengths of the texts alone, with no bytes built:
 /// the length field itself, the protocol version, each name and value with
 /// its zero byte, and the zero byte that ends the list.
 fn startup_message_length(
-  user: String,
-  parameters: List(#(String, String)),
+  user_name: String,
+  startup: List(#(String, String)),
 ) -> Int {
   let length_and_version = 8
   let end_of_list = 1
   fold(
-    parameters,
-    length_and_version + end_of_list + parameter_length(#("user", user)),
+    startup,
+    length_and_version + end_of_list + parameter_length(#("user", user_name)),
     add_parameter_length,
   )
 }
@@ -285,13 +330,16 @@ fn is_letter_or_digit(grapheme: String) -> Bool {
 }
 
 fn startup_parameters(
-  database: String,
-  parameters: List(#(String, String)),
+  database_name: String,
+  caller_parameters: List(#(String, String)),
 ) -> List(#(String, String)) {
   let application_name =
-    find_parameter(parameters, "application_name")
+    find_parameter(caller_parameters, "application_name")
     |> unwrap(#("application_name", default_application_name))
-  [#("database", database), ..filter(parameters, is_caller_parameter)]
+  [
+    #("database", database_name),
+    ..filter(caller_parameters, is_caller_parameter)
+  ]
   |> append([application_name, #("client_encoding", "UTF8")])
 }
 
@@ -301,10 +349,10 @@ fn is_caller_parameter(parameter: #(String, String)) -> Bool {
 }
 
 fn find_parameter(
-  parameters: List(#(String, String)),
+  caller_parameters: List(#(String, String)),
   name: String,
 ) -> Result(#(String, String), Nil) {
-  case parameters {
+  case caller_parameters {
     [] -> Error(Nil)
     [parameter, ..rest] -> {
       use <- guard(lowercase(parameter.0) == name, Ok(parameter))
