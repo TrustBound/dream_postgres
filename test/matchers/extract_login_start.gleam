@@ -1,9 +1,10 @@
 //// Starts a login with the login steps.
 
 import dream_postgres/driver/login.{
-  type ClientNonce, type LoginConfig, type LoginMessage, type LoginStartError,
-  type LoginState, client_nonce, start,
+  type ClientNonce, type LoginMessage, type LoginStartError, type LoginState,
+  client_nonce, start,
 }
+import dream_postgres/driver/login/login_config.{type LoginConfig}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }

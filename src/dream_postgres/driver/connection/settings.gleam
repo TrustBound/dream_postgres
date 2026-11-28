@@ -4,7 +4,7 @@ import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/backoff.{type Backoff}
 import dream_postgres/driver/connection/event.{type ConnectionEvent}
 import dream_postgres/driver/connection/outcome.{type Notification}
-import dream_postgres/driver/login.{type LoginConfig}
+import dream_postgres/driver/login/login_config.{type LoginConfig}
 import dream_postgres/driver/sink.{type Sink}
 import dream_postgres/driver/transport.{type TransportConfig}
 import gleam/option.{type Option}

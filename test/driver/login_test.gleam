@@ -11,19 +11,21 @@
 import dream_postgres/driver/cell.{Idle, ServerReport}
 import dream_postgres/driver/channel_binding.{UnsupportedSignatureAlgorithm}
 import dream_postgres/driver/login.{
-  type ChannelBindingSetting, type ConfigError, type LoginConfig,
   type LoginError, type LoginOutcome, type LoginStartError, CancelKey,
   CertificateHashFailed, ChannelBindingNotOffered,
   ChannelBindingOfferedWithoutTls, ChannelBindingRequiresTls, CleartextLogin,
-  ClientNonceTooLong, ClientNonceTooShort, DisableChannelBinding,
-  DuplicateParameter, EmptyParameterName, EmptyUser, GssLogin, KerberosV5Login,
+  ClientNonceTooLong, ClientNonceTooShort, GssLogin, KerberosV5Login,
   LoginOutcome, Md5Login, PasswordHasZeroByte, PasswordRequired, PasswordTooLong,
-  PreferChannelBinding, RequireChannelBinding, SaslLogin, ScramLogin,
-  ScramServerFinalFailed, ScramServerFirstFailed, ServerRejectedLogin, SspiLogin,
-  StartupMessageTooLong, TrustLogin, UnexpectedMessage,
-  UnsupportedClientEncoding, UnsupportedLoginMethod, UnsupportedProtocolVersion,
-  ZeroByteInParameter, ZeroByteInPassword, client_nonce, new, no_password,
-  password, password_function,
+  SaslLogin, ScramLogin, ScramServerFinalFailed, ScramServerFirstFailed,
+  ServerRejectedLogin, SspiLogin, TrustLogin, UnexpectedMessage,
+  UnsupportedLoginMethod, UnsupportedProtocolVersion, client_nonce,
+}
+import dream_postgres/driver/login/login_config.{
+  type ChannelBindingSetting, type ConfigError, type LoginConfig,
+  DisableChannelBinding, DuplicateParameter, EmptyParameterName, EmptyUser,
+  PreferChannelBinding, RequireChannelBinding, StartupMessageTooLong,
+  UnsupportedClientEncoding, ZeroByteInParameter, ZeroByteInPassword, new,
+  no_password, password, password_function,
 }
 import dream_postgres/driver/message.{
   type BackendMessage, type ProtocolVersion, AuthenticationCleartextPassword,

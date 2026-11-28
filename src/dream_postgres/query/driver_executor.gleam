@@ -21,9 +21,8 @@ import dream_postgres/driver/listener.{type UnsubscribeError}
 import dream_postgres/driver/listener/process_message.{
   type ListenFailure, type ListenerError,
 }
-import dream_postgres/driver/login.{
-  type ConfigError, type LoginError, type LoginMethod,
-}
+import dream_postgres/driver/login.{type LoginError, type LoginMethod}
+import dream_postgres/driver/login/login_config.{type ConfigError}
 import dream_postgres/driver/message.{
   type BackendMessage, type EncodeError, type ProtocolError,
 }
@@ -642,14 +641,15 @@ pub fn address_fault(address_error: AddressError) -> error.ConfigFault {
 @internal
 pub fn login_config_fault(config_error: ConfigError) -> error.ConfigFault {
   case config_error {
-    login.EmptyUser -> error.EmptyUser
-    login.ZeroByteInPassword -> error.ZeroByteInPassword
-    login.ZeroByteInParameter(name:) -> error.ZeroByteInParameter(name:)
-    login.EmptyParameterName -> error.EmptyParameterName
-    login.DuplicateParameter(name:) -> error.DuplicateParameter(name:)
-    login.UnsupportedClientEncoding(value:) ->
+    login_config.EmptyUser -> error.EmptyUser
+    login_config.ZeroByteInPassword -> error.ZeroByteInPassword
+    login_config.ZeroByteInParameter(name:) -> error.ZeroByteInParameter(name:)
+    login_config.EmptyParameterName -> error.EmptyParameterName
+    login_config.DuplicateParameter(name:) -> error.DuplicateParameter(name:)
+    login_config.UnsupportedClientEncoding(value:) ->
       error.UnsupportedClientEncoding(value:)
-    login.StartupMessageTooLong(length:) -> error.StartupMessageTooLong(length:)
+    login_config.StartupMessageTooLong(length:) ->
+      error.StartupMessageTooLong(length:)
   }
 }
 

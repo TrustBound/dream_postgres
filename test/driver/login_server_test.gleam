@@ -2,7 +2,7 @@
 //// method of `test/docker/driver_pg_hba.conf`, over the transport.
 
 import dream_postgres/driver/cell.{Idle}
-import dream_postgres/driver/login.{
+import dream_postgres/driver/login/login_config.{
   type ChannelBindingSetting, DisableChannelBinding, PreferChannelBinding,
   RequireChannelBinding,
 }

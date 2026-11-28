@@ -6,7 +6,7 @@
 import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/encode.{encode}
-import dream_postgres/driver/login.{PreferChannelBinding}
+import dream_postgres/driver/login/login_config.{PreferChannelBinding}
 import dream_postgres/driver/message.{
   type BackendMessage, type EncodeError, type FrontendMessage,
   type ProtocolError, Decoded, NeedMoreBytes, Protocol30,

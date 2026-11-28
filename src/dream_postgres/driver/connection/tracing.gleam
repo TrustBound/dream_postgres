@@ -20,7 +20,7 @@ import dream_postgres/driver/connection/request_failure.{
 }
 import dream_postgres/driver/connection/settings.{type ConnectionConfig}
 import dream_postgres/driver/connection/statement.{type Statement}
-import dream_postgres/driver/login
+import dream_postgres/driver/login/login_config
 import dream_postgres/driver/trace.{
   type SpanEnd, type SpanTarget, Failed, SpanQuery, SpanTarget, Worked,
 }
@@ -31,7 +31,7 @@ import gleam/option.{type Option, None, Some}
 pub fn span_target(config: ConnectionConfig) -> SpanTarget {
   let address = config.transport.address
   SpanTarget(
-    database: login.database(config.login),
+    database: login_config.database(config.login),
     host: transport.host(address),
     port: transport.port(address),
   )

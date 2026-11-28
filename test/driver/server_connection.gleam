@@ -33,9 +33,10 @@ import dream_postgres/driver/connection/statement as connection_statement
 import dream_postgres/driver/connection/status.{
   server_parameter, transaction_status,
 }
-import dream_postgres/driver/login.{
+import dream_postgres/driver/login.{ServerRejectedLogin}
+import dream_postgres/driver/login/login_config.{
   type ChannelBindingSetting, type LoginConfig, type Password,
-  PreferChannelBinding, RequireChannelBinding, ServerRejectedLogin,
+  PreferChannelBinding, RequireChannelBinding,
 }
 import dream_postgres/driver/message.{type ProtocolVersion, Protocol30}
 import dream_postgres/driver/statement_cache.{default_limit}
@@ -113,7 +114,7 @@ pub fn parameters_config(
   login_settings_config(
     port,
     servers.database,
-    login.password(servers.password),
+    login_config.password(servers.password),
     parameters,
   )
 }
@@ -123,7 +124,12 @@ pub fn database_config(
   port: Int,
   database: String,
 ) -> Result(ConnectionConfig, String) {
-  login_settings_config(port, database, login.password(servers.password), [])
+  login_settings_config(
+    port,
+    database,
+    login_config.password(servers.password),
+    [],
+  )
 }
 
 /// The config of a connection as `dream` whose password comes from a
@@ -132,7 +138,7 @@ pub fn password_function_config(port: Int) -> Result(ConnectionConfig, String) {
   login_settings_config(
     port,
     servers.database,
-    login.password_function(fn() { servers.password }),
+    login_config.password_function(fn() { servers.password }),
     [],
   )
 }
@@ -255,7 +261,7 @@ pub fn required_binding_config(port: Int) -> Result(ConnectionConfig, String) {
   use login <- try(login_settings_with(
     "dream",
     servers.database,
-    login.password(servers.password),
+    login_config.password(servers.password),
     [],
     Protocol30,
     RequireChannelBinding,
@@ -272,7 +278,7 @@ fn login_config(
   login_settings(
     user,
     servers.database,
-    login.password(password),
+    login_config.password(password),
     parameters,
     protocol_version,
   )
@@ -303,7 +309,7 @@ fn login_settings_with(
   protocol_version: ProtocolVersion,
   channel_binding: ChannelBindingSetting,
 ) -> Result(LoginConfig, String) {
-  login.new(
+  login_config.new(
     user:,
     database:,
     password:,

@@ -17,7 +17,7 @@ import dream_postgres/driver/connection/outcome.{type Outcome}
 import dream_postgres/driver/connection/settings.{ConnectionConfig} as connection_settings
 import dream_postgres/driver/connection/simple_query as connection_simple_query
 import dream_postgres/driver/connection/statement as connection_statement
-import dream_postgres/driver/login.{PreferChannelBinding}
+import dream_postgres/driver/login/login_config.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
 import dream_postgres/driver/transport.{NoTls, TransportConfig}
 import driver/servers.{type Server, driver_servers}
@@ -225,10 +225,10 @@ fn start_session(server: Server) -> Result(ProbeSession, String) {
     |> result.map_error(string.inspect),
   )
   use login_config <- result.try(
-    login.new(
+    login_config.new(
       user: "dream",
       database: servers.database,
-      password: login.password(servers.password),
+      password: login_config.password(servers.password),
       parameters: [],
       channel_binding: PreferChannelBinding,
       protocol_version: Protocol30,

@@ -5,10 +5,12 @@
 
 import dream_postgres/driver/decode.{decode_backend}
 import dream_postgres/driver/login.{
-  type ChannelBindingSetting, type ClientNonce, type ClientNonceError,
-  type ConfigError, type LoginError, type LoginMessage, type LoginOutcome,
-  type LoginStartError, type LoginState, Continue, LoggedIn,
+  type ClientNonce, type ClientNonceError, type LoginError, type LoginMessage,
+  type LoginOutcome, type LoginStartError, type LoginState, Continue, LoggedIn,
   encode_login_message,
+}
+import dream_postgres/driver/login/login_config.{
+  type ChannelBindingSetting, type ConfigError,
 }
 import dream_postgres/driver/message.{
   type ProtocolError, type ProtocolVersion, Decoded, NeedMoreBytes,
@@ -106,11 +108,11 @@ fn close_with(
 
 fn login_config(
   test_login: TestLogin,
-) -> Result(login.LoginConfig, LoginFailure) {
-  login.new(
+) -> Result(login_config.LoginConfig, LoginFailure) {
+  login_config.new(
     user: test_login.user,
     database: servers.database,
-    password: login.password(test_login.password),
+    password: login_config.password(test_login.password),
     parameters: [],
     channel_binding: test_login.channel_binding,
     protocol_version: test_login.protocol_version,
@@ -137,7 +139,7 @@ fn open(
 
 fn run_login(
   connection: Connection,
-  config: login.LoginConfig,
+  config: login_config.LoginConfig,
   nonce: ClientNonce,
 ) -> Result(#(LoginOutcome, BitArray), LoginFailure) {
   use #(state, first) <- try(

@@ -9,7 +9,7 @@ import dream_postgres/driver/connection
 import dream_postgres/driver/connection/backoff.{Backoff} as connection_backoff
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/settings.{ConnectionConfig} as connection_settings
-import dream_postgres/driver/login.{PreferChannelBinding}
+import dream_postgres/driver/login/login_config.{PreferChannelBinding}
 import dream_postgres/driver/message
 import dream_postgres/driver/transport.{NoTls, TransportConfig}
 import driver/servers.{type Server, driver_servers}
@@ -109,10 +109,10 @@ fn start_session(server: Server) -> Result(ExecutorSession, String) {
     |> result.map_error(string.inspect),
   )
   use login_config <- result.try(
-    login.new(
+    login_config.new(
       user: "dream",
       database: servers.database,
-      password: login.password(servers.password),
+      password: login_config.password(servers.password),
       parameters: [],
       channel_binding: PreferChannelBinding,
       protocol_version: message.Protocol30,

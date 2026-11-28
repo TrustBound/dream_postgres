@@ -12,7 +12,7 @@ import dream_postgres/driver/connection/extended_query.{prepare, run}
 import dream_postgres/driver/connection/simple_query.{run_simple_query}
 import dream_postgres/driver/connection/statement.{named, statement}
 import dream_postgres/driver/listener.{type Listener}
-import dream_postgres/driver/login.{PreferChannelBinding}
+import dream_postgres/driver/login/login_config.{PreferChannelBinding}
 import dream_postgres/driver/message.{Protocol30}
 import dream_postgres/driver/pool/holds as pool_holds
 import dream_postgres/driver/trace.{SpanQuery, SpanTarget, Worked}
@@ -799,15 +799,15 @@ fn span_tests() -> TestSuite {
       |> or_fail_with("Expected the target as the name")
     }),
     unit.it("names the user's database for an empty database", fn() {
-      login.new(
+      login_config.new(
         user: "app_user",
         database: "",
-        password: login.no_password(),
+        password: login_config.no_password(),
         parameters: [],
         channel_binding: PreferChannelBinding,
         protocol_version: Protocol30,
       )
-      |> result.map(login.database)
+      |> result.map(login_config.database)
       |> should
       |> be_equal(Ok("app_user"))
       |> or_fail_with("Expected the user's name as the database")

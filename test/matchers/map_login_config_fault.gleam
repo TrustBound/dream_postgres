@@ -1,6 +1,6 @@
 //// A matcher that gives the config fault of an error of a login config.
 
-import dream_postgres/driver/login.{type ConfigError}
+import dream_postgres/driver/login/login_config.{type ConfigError}
 import dream_postgres/error.{type ConfigFault}
 import dream_postgres/query/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}

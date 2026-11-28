@@ -8,7 +8,7 @@ import dream_errors.{type Error}
 import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/backoff as connection_backoff
 import dream_postgres/driver/connection/settings as connection_settings
-import dream_postgres/driver/login
+import dream_postgres/driver/login/login_config
 import dream_postgres/driver/message
 import dream_postgres/driver/pool/pool_event
 import dream_postgres/driver/pool/pool_settings.{type PoolConfig}
@@ -691,13 +691,13 @@ fn address_of(
 
 fn login_config_of(
   config: Config,
-) -> Result(login.LoginConfig, Error(PostgresError)) {
-  login.new(
+) -> Result(login_config.LoginConfig, Error(PostgresError)) {
+  login_config.new(
     user: config.user,
     database: config.database,
     password: login_password(config.password),
     parameters: [],
-    channel_binding: login.PreferChannelBinding,
+    channel_binding: login_config.PreferChannelBinding,
     protocol_version: message.Protocol30,
   )
   |> result.map_error(fn(config_error) {
@@ -710,7 +710,7 @@ fn login_config_of(
 fn connection_config_of(
   config: Config,
   address: transport.Address,
-  login_config: login.LoginConfig,
+  login_config: login_config.LoginConfig,
 ) -> connection_settings.ConnectionConfig {
   connection_settings.ConnectionConfig(
     transport: transport.TransportConfig(
@@ -886,10 +886,10 @@ fn reconnect_strategy_of(
   }
 }
 
-fn login_password(password: Option(String)) -> login.Password {
+fn login_password(password: Option(String)) -> login_config.Password {
   case password {
-    Some(text) -> login.password(text)
-    None -> login.no_password()
+    Some(text) -> login_config.password(text)
+    None -> login_config.no_password()
   }
 }
 

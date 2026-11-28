@@ -14,6 +14,7 @@ import dream_postgres/driver/connection/event as connection_event
 import dream_postgres/driver/connection/outcome as connection_outcome
 import dream_postgres/driver/connection/request_failure as connection_request_failure
 import dream_postgres/driver/login
+import dream_postgres/driver/login/login_config
 import dream_postgres/driver/message
 import dream_postgres/driver/pool/pool_failure
 import dream_postgres/driver/query/step as query_step
@@ -2222,7 +2223,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an empty user", fn() {
         // Act and assert
-        login.EmptyUser
+        login_config.EmptyUser
         |> should
         |> map_login_config_fault()
         |> be_equal(error.EmptyUser)
@@ -2230,7 +2231,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a zero byte in the password", fn() {
         // Act and assert
-        login.ZeroByteInPassword
+        login_config.ZeroByteInPassword
         |> should
         |> map_login_config_fault()
         |> be_equal(error.ZeroByteInPassword)
@@ -2238,7 +2239,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a zero byte in a parameter", fn() {
         // Act and assert
-        login.ZeroByteInParameter("a")
+        login_config.ZeroByteInParameter("a")
         |> should
         |> map_login_config_fault()
         |> be_equal(error.ZeroByteInParameter("a"))
@@ -2246,7 +2247,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an empty parameter name", fn() {
         // Act and assert
-        login.EmptyParameterName
+        login_config.EmptyParameterName
         |> should
         |> map_login_config_fault()
         |> be_equal(error.EmptyParameterName)
@@ -2254,7 +2255,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a duplicate parameter", fn() {
         // Act and assert
-        login.DuplicateParameter("a")
+        login_config.DuplicateParameter("a")
         |> should
         |> map_login_config_fault()
         |> be_equal(error.DuplicateParameter("a"))
@@ -2262,7 +2263,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("a startup message that is too long", fn() {
         // Act and assert
-        login.StartupMessageTooLong(2_147_483_648)
+        login_config.StartupMessageTooLong(2_147_483_648)
         |> should
         |> map_login_config_fault()
         |> be_equal(error.StartupMessageTooLong(2_147_483_648))
@@ -2270,7 +2271,7 @@ pub fn mapping_tests() -> TestSuite {
       }),
       unit.it("an encoding other than UTF-8", fn() {
         // Act and assert
-        login.UnsupportedClientEncoding("LATIN1")
+        login_config.UnsupportedClientEncoding("LATIN1")
         |> should
         |> map_login_config_fault()
         |> be_equal(error.UnsupportedClientEncoding("LATIN1"))
