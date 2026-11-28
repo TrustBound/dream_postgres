@@ -1,534 +1,909 @@
-//// The recorded queries of `dream_postgres/recorder`, and their file format.
+//// A recording: the requests of a test and the answers that PostgreSQL
+//// gave them, as a recorder in record mode saves them, and a recorder in
+//// playback mode gives them back.
 ////
-//// A recording file holds the queries of one test, in the order they ran.
-//// Each query has its SQL, its parameters and its result: the count and the
-//// rows, or the error. The file is JSON, with one key order, so a diff of
-//// two recordings shows only what changed:
+//// A recording is a JSON file. Its text is the same for the same requests
+//// and answers: the keys of each object are in alphabetical order, there
+//// is no time in it, and each request is on its own line, in the order
+//// the answers came. Each request has its key, which playback compares.
+//// Each cell is hex, so a value is exactly the bytes that went over the
+//// wire. A parameter of `secret_parameter` is
+//// `{"secret":{"codec":"<codec>"}}`, with no bytes. With each request are
+//// the types that its codecs need, so playback checks the codecs as a
+//// live run does.
 ////
-//// ```json illustration
+//// ### A recording of one BEGIN <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/begin_recording.json"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+////
+//// ```json
 //// {
-////   "format": "dream_postgres query recording",
-////   "version": 1,
-////   "queries": [
-////     {
-////       "sql": "SELECT id, name FROM users WHERE id = $1",
-////       "parameters": [1],
-////       "result": {
-////         "count": 1,
-////         "rows": [
-////           {"tuple":[1,"Ada"]}
-////         ]
-////       }
-////     },
-////     {
-////       "sql": "SELECT name FROM missing_table",
-////       "parameters": [],
-////       "result": {"error":"postgresql_error","code":"42P01","name":"undefined_table","message":"relation \"missing_table\" does not exist"}
-////     }
+////   "dream_postgres_recording": 1,
+////   "entries": [
+////     {"key":"sql\nBEGIN","sql":{"outcome":{"answer":{"results":[{"count":0,"rows":[],"tag":"BEGIN"}]}},"sql":"BEGIN"}}
 ////   ]
 //// }
 //// ```
-////
-//// Each parameter and each row is a value on one line. A value is written
-//// as follows:
-////
-//// | Value from the driver | JSON | `RecordedValue` |
-//// |---|---|---|
-//// | `null` (SQL `NULL`) | `null` | `Null` |
-//// | `true`, `false` | `true`, `false` | `Boolean` |
-//// | an integer | a number with no `.` | `Integer` |
-//// | a float | a number with a `.` or an `e`, such as `1.5` or `1.0e30` | `Real` |
-//// | text (valid UTF-8) | a string | `Text` |
-//// | bytes that are not valid UTF-8 | `{"bytes":"00FF"}` (base 16) | `Bytes` |
-//// | bits, such as the SQL `bit(3)` value `101` | `{"bits":{"size":3,"hex":"A0"}}` | `Bytes` |
-//// | a list (an SQL array) | an array | `Array` |
-//// | a tuple (a row, a date, a time) | `{"tuple":[...]}` | `Tuple` |
-//// | a map (a row with `rows_as_map`) | `{"map":[[key,value],...]}` | `Map` |
-//// | another atom, such as `infinity` | `{"atom":"infinity"}` | `Atom` |
-////
-//// The `result` is `{"count":...,"rows":[...]}` for a query that worked, or
-//// `{"error":...}` for one that failed, with the fields of the
-//// `dream_postgres_client.QueryError`. The `reason` of a
-//// `dream_postgres_client.InterceptorFailed` error is a value as above. A
-//// reason that no value can hold, such as a process, is written as its text.
-//// `version` is 1. A later version of this package that changes the format
-//// gives the files a new version, and reads version 1.
 
-import dream_postgres_client
+import dream_postgres/driver/cell.{
+  type Cell, type ColumnDescription, type CommandResult,
+  type StatementDescription, type TypeDescription, type TypeKind, Array, Base,
+  Binary, ColumnDescription, CommandResult, Composite, Domain, Enum, Multirange,
+  Null, ParameterDescription, Pseudo, Range, StatementDescription, Text,
+  TypeDescription,
+}
+import dream_postgres/error.{
+  type Reason, type ServerError, type Severity, AmbiguousColumnName,
+  CatalogProcessDown, ChannelTooLong, ColumnCountMismatch, ColumnReadTwice,
+  ColumnTypeMismatch, CommitRolledBack, ConnectFailed, ConnectionLost,
+  ConnectionProcessDown, CopyNeedsBinaryCodec, CopyNotRunning, CopyNotStarted,
+  CopyQueryHasParameters, CopyStatementRefused, DebugSeverity, DecodeFailed,
+  EncodeFailed, ErrorSeverity, FatalSeverity, InfoSeverity, InterceptorFailed,
+  InvalidConfig, ListenerStartFailed, ListenerStopped, LogSeverity,
+  MalformedCopyStream, MixedColumnReaders, NoColumnAtPosition, NoColumnNamed,
+  NoConnection, NoDatabaseToVerify, NoticeSeverity, OptionsInNestedTransaction,
+  PanicSeverity, ParameterCountMismatch, ParameterTypeMismatch,
+  PoolHasNoDatabase, PoolStartFailed, PoolStopped, ProtocolViolation,
+  QueryTimeout, ReaderDependsOnValue, RecorderNotStarted, RecorderStopped,
+  RecordingInUse, RecordingNotDecoded, RecordingNotFound, RecordingNotRead,
+  RecordingNotWritten, RequestNotMatched, RequestNotRecorded, RequestNotWritable,
+  RollbackAlsoFailed, SecretColumnNotReplaced, Server, SqlStatementFailed,
+  StatementChangedDuringRun, SubscriberHasNoProcess, TooManyRows,
+  UndecodableServerMessage, UnexpectedCommitAnswer, UnexpectedIdleMessage,
+  UnexpectedListenAnswer, UnexpectedNull, UnexpectedServerMessage, UnknownType,
+  UnlistedSeverity, UnreadableCatalog, ValueOutOfRange, WarningSeverity,
+}
+import dream_postgres/sql_state
 import gleam/bit_array
-import gleam/dynamic.{type Dynamic}
-import gleam/dynamic/decode
-import gleam/json
+import gleam/dynamic/decode.{type Decoder}
+import gleam/json.{type Json}
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/string
 
-/// The version of the file format that `to_json` writes and `from_json`
-/// reads.
-pub const format_version = 1
+/// The number of the file format. A file of another format is not read.
+const format = 1
 
-/// The value of the `format` key of a recording file.
-pub const format_name = "dream_postgres query recording"
-
-/// A parameter of a query, or a value that a query returned, as the
-/// recorder keeps it.
-///
-/// Each constructor is one kind of term that the driver gives. A query
-/// played back from a recording gives the same term that it gave live.
-pub type RecordedValue {
-  /// SQL `NULL`.
-  Null
-  /// A `boolean`.
-  Boolean(Bool)
-  /// An integer, also a `numeric` with no fraction and a `timestamp`, which
-  /// the driver gives as microseconds.
-  Integer(Int)
-  /// A float, also a `numeric` with a fraction.
-  Real(Float)
-  /// Text: `text`, `varchar`, `json`, `jsonb`, a UUID cast to text, and
-  /// every other value whose bytes are valid UTF-8, a `bytea` too.
-  Text(String)
-  /// Bytes that are not valid UTF-8, such as a `bytea` or a `uuid`, or bits
-  /// such as a `bit(3)`.
-  Bytes(BitArray)
-  /// An SQL array.
-  Array(List(RecordedValue))
-  /// A row, a `date` (year, month, day), a `time` (hours, minutes,
-  /// seconds), a `timestamptz` or an `interval`.
-  Tuple(List(RecordedValue))
-  /// A row of a pool with `dream_postgres_client.rows_as_map`, or a `point`.
-  /// The pairs are in the order of their keys.
-  Map(List(#(RecordedValue, RecordedValue)))
-  /// Another atom, such as `infinity` or `NaN` for a float.
-  Atom(String)
-}
-
-/// A query that the recorder saw: its SQL and its parameters, in order.
-pub type RecordedQuery {
-  RecordedQuery(sql: String, parameters: List(RecordedValue))
-}
-
-/// The result of a recorded query.
-pub type RecordedResult {
-  /// The query worked. `count` is the row count of the driver, which is 0
-  /// for a command with no row count, such as `CREATE TABLE`. `rows` holds
-  /// the rows before they are decoded, so each decoder works on them as on
-  /// a live result.
-  Returned(count: Int, rows: List(RecordedValue))
-  /// The query failed with this error.
-  Failed(error: dream_postgres_client.QueryError)
-}
-
-/// One recorded query and its result.
+/// The entries of a recording, in the order their answers came.
 pub type Recording {
-  Recording(query: RecordedQuery, result: RecordedResult)
+  Recording(entries: List(RecordedEntry))
 }
 
-/// Writes recordings as the text of a recording file.
-///
-/// The recorder calls this function for each recorded query. Use it to
-/// write a recording file by hand, for a result that is hard to get from a
-/// real database.
-///
-/// ## Example
-///
-/// ### Write a recording by hand <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recording_by_hand.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/recording.{Failed, Integer, RecordedQuery, Recording}
-/// import dream_postgres_client
-///
-/// pub fn timeout_recording() -> String {
-///   recording.to_json([
-///     Recording(
-///       query: RecordedQuery(
-///         sql: "SELECT id, name, email FROM users WHERE id = $1",
-///         parameters: [Integer(1)],
-///       ),
-///       result: Failed(dream_postgres_client.QueryTimeout),
-///     ),
-///   ])
-/// }
-/// ```
-pub fn to_json(recordings: List(Recording)) -> String {
-  Object([
-    #("format", Inline(json.string(format_name))),
-    #("version", Inline(json.int(format_version))),
-    #("queries", Lines(list.map(recordings, recording_layout))),
-  ])
-  |> render("")
-  <> "\n"
+/// One request of a recording with its key: what `recorder.match_on` made
+/// of the request. In playback, the key of each request must be the key
+/// of the next entry.
+pub type RecordedEntry {
+  RecordedEntry(key: String, request: RecordedRequest)
 }
 
-/// Reads the text of a recording file.
+/// One request and the answer that PostgreSQL gave it.
+pub type RecordedRequest {
+  /// A statement of `all`, `one`, `maybe_one` or `affected`. `parameters`
+  /// is `None` when the request failed before its parameters were
+  /// written: then only the SQL picks it.
+  RecordedStatement(
+    sql: String,
+    parameters: Option(WrittenParameters),
+    types: List(TypeDescription),
+    outcome: Result(StatementReply, RecordedFailure),
+  )
+  /// A `run_sql` call, or a command of a transaction.
+  RecordedSql(
+    sql: String,
+    outcome: Result(List(CommandResult), RecordedFailure),
+  )
+  /// A `copy_from`. `rows` is `None` when the request failed before each
+  /// row was written: then only the SQL picks it.
+  RecordedCopyFrom(
+    sql: String,
+    rows: Option(WrittenRows),
+    types: List(TypeDescription),
+    outcome: Result(Int, RecordedFailure),
+  )
+  /// A `copy_to`: the SQL is the query inside the COPY.
+  RecordedCopyTo(
+    sql: String,
+    types: List(TypeDescription),
+    outcome: Result(RecordedStream, RecordedFailure),
+  )
+}
+
+/// The parameters of a statement as they were written: the type of each
+/// parameter, and its cell or its secret mark.
+pub type WrittenParameters {
+  WrittenParameters(
+    types: List(TypeDescription),
+    parameters: List(WrittenParameter),
+  )
+}
+
+/// One parameter of a statement as it was written.
+pub type WrittenParameter {
+  /// The cell of the parameter: exactly the bytes that went over the
+  /// wire.
+  WrittenCell(cell: Cell)
+  /// A parameter of `query.secret_parameter`. The file keeps the
+  /// name of its codec and no bytes, and playback takes any value with
+  /// that codec at that position.
+  SecretCell(codec: String)
+}
+
+/// The rows of a `copy_from` as they were written: the type of each
+/// column, and the cells of each row.
+pub type WrittenRows {
+  WrittenRows(types: List(TypeDescription), rows: List(List(Cell)))
+}
+
+/// The answer to a statement: its description and its result.
+pub type StatementReply {
+  StatementReply(description: StatementDescription, result: CommandResult)
+}
+
+/// The answer to a `copy_to`: the description of the query, its rows, and
+/// how the stream of them ended.
+pub type RecordedStream {
+  RecordedStream(
+    description: StatementDescription,
+    rows: List(List(Cell)),
+    ending: Result(Nil, RecordedFailure),
+  )
+}
+
+/// A failure that PostgreSQL gave: the only failures a recording holds. A
+/// failure of the client, such as a codec that does not take the type of
+/// its column, comes again from the recorded types.
+pub type RecordedFailure {
+  /// `error.Server`.
+  RecordedServerError(server_error: ServerError)
+  /// `error.SqlStatementFailed`.
+  RecordedSqlFailure(server_error: ServerError, statements_run: Int)
+}
+
+/// The recorded failure of a reason, or `None` when PostgreSQL did not
+/// give the reason.
 ///
-/// ## Returns
-///
-/// - `Ok(recordings)`: the recordings of the file, in order
-/// - `Error(message)`: the text is not a recording file of version 1. The
-///   message says what is wrong.
-///
-/// ## Example
-///
-/// ### Read the SQL of a recording file <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recording_read.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Record a server error and replay it <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/replay_server_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/recording
-/// import gleam/list
-/// import gleam/result
+/// import dream_postgres/error.{type Reason, type ServerError, Server}
+/// import dream_postgres/recording.{failure_reason, recorded_failure}
+/// import gleam/option.{type Option}
 ///
-/// pub fn recorded_sql(file_text: String) -> Result(List(String), String) {
-///   use recordings <- result.map(recording.from_json(file_text))
-///   list.map(recordings, fn(entry) { entry.query.sql })
+/// /// A server error goes into a recording as a `RecordedServerError`, and
+/// /// comes back as the same reason: `Some(Server(server_error))`.
+/// pub fn replay_server_error(server_error: ServerError) -> Option(Reason) {
+///   Server(server_error)
+///   |> recorded_failure
+///   |> option.map(failure_reason)
 /// }
 /// ```
-pub fn from_json(text: String) -> Result(List(Recording), String) {
-  case json.parse(text, file_decoder()) {
-    Ok(recordings) -> Ok(recordings)
-    Error(error) ->
-      Error("This is not a recording file: " <> string.inspect(error))
+pub fn recorded_failure(reason: Reason) -> Option(RecordedFailure) {
+  case reason {
+    Server(server_error) -> Some(RecordedServerError(server_error:))
+    SqlStatementFailed(statements_run:, server_error:) ->
+      Some(RecordedSqlFailure(statements_run:, server_error:))
+    ConnectFailed(..)
+    | ConnectionLost(..)
+    | NoConnection
+    | QueryTimeout(..)
+    | ProtocolViolation(..)
+    | ParameterCountMismatch(..)
+    | ParameterTypeMismatch(..)
+    | ColumnCountMismatch(..)
+    | ColumnTypeMismatch(..)
+    | NoColumnAtPosition(..)
+    | NoColumnNamed(..)
+    | AmbiguousColumnName(..)
+    | ColumnReadTwice(..)
+    | MixedColumnReaders
+    | ReaderDependsOnValue(..)
+    | StatementChangedDuringRun
+    | EncodeFailed(..)
+    | UnexpectedNull(..)
+    | ValueOutOfRange(..)
+    | DecodeFailed(..)
+    | TooManyRows(..)
+    | CommitRolledBack(..)
+    | InterceptorFailed(..)
+    | RequestNotRecorded(..)
+    | RequestNotMatched(..)
+    | RecordingNotWritten(..)
+    | RecordingNotFound(..)
+    | RecordingNotRead(..)
+    | RecordingNotDecoded(..)
+    | RecordingInUse(..)
+    | RecorderNotStarted(..)
+    | RecorderStopped
+    | PoolHasNoDatabase
+    | SecretColumnNotReplaced(..)
+    | CopyStatementRefused(..)
+    | CopyNotStarted(..)
+    | CopyNotRunning
+    | RequestNotWritable(..)
+    | ConnectionProcessDown
+    | UnknownType(..)
+    | UnreadableCatalog(..)
+    | CatalogProcessDown
+    | UndecodableServerMessage(..)
+    | UnexpectedServerMessage(..)
+    | UnexpectedIdleMessage(..)
+    | InvalidConfig(..)
+    | PoolStartFailed(..)
+    | PoolStopped
+    | NoDatabaseToVerify
+    | OptionsInNestedTransaction
+    | UnexpectedCommitAnswer(..)
+    | RollbackAlsoFailed(..)
+    | CopyNeedsBinaryCodec(..)
+    | CopyQueryHasParameters(..)
+    | MalformedCopyStream(..)
+    | ChannelTooLong(..)
+    | SubscriberHasNoProcess
+    | UnexpectedListenAnswer
+    | ListenerStopped
+    | ListenerStartFailed(..) -> None
   }
 }
 
-/// Writes values as a JSON array on one line, as a recording file writes
-/// the parameters of a query.
+/// The reason of a recorded failure, as PostgreSQL gave it.
 ///
-/// The keys `sql_and_parameters` and `normalized_sql_and_parameters` of
-/// `dream_postgres/recorder` use it, and so does the error of a query with
-/// no recording.
-///
-/// ## Example
-///
-/// ### Write values as JSON <a href="https://github.com/TrustBound/dream_postgres/blob/2.0.0/test/snippets/recording_values.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+/// ### Record a server error and replay it <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/replay_server_error.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/recording.{Integer, Null, Text}
+/// import dream_postgres/error.{type Reason, type ServerError, Server}
+/// import dream_postgres/recording.{failure_reason, recorded_failure}
+/// import gleam/option.{type Option}
 ///
-/// pub fn parameters_text() -> String {
-///   recording.values_to_json([Integer(1), Text("Ada"), Null])
+/// /// A server error goes into a recording as a `RecordedServerError`, and
+/// /// comes back as the same reason: `Some(Server(server_error))`.
+/// pub fn replay_server_error(server_error: ServerError) -> Option(Reason) {
+///   Server(server_error)
+///   |> recorded_failure
+///   |> option.map(failure_reason)
 /// }
 /// ```
-pub fn values_to_json(values: List(RecordedValue)) -> String {
-  json.to_string(json.array(values, value_to_json))
-}
-
-// The layout of a recording file: objects and lists of recordings span
-// lines, and each value is on one line.
-type Layout {
-  Object(entries: List(#(String, Layout)))
-  Lines(items: List(Layout))
-  Inline(value: json.Json)
-}
-
-fn render(layout: Layout, indent: String) -> String {
-  case layout {
-    Inline(value) -> json.to_string(value)
-    Lines([]) -> "[]"
-    Lines(items) ->
-      "[\n"
-      <> list.map(items, fn(item) {
-        indent <> "  " <> render(item, indent <> "  ")
-      })
-      |> string.join(",\n")
-      <> "\n"
-      <> indent
-      <> "]"
-    Object(entries) ->
-      "{\n"
-      <> list.map(entries, fn(entry) { render_entry(entry, indent <> "  ") })
-      |> string.join(",\n")
-      <> "\n"
-      <> indent
-      <> "}"
+pub fn failure_reason(failure: RecordedFailure) -> Reason {
+  case failure {
+    RecordedServerError(server_error:) -> Server(server_error)
+    RecordedSqlFailure(statements_run:, server_error:) ->
+      SqlStatementFailed(statements_run:, server_error:)
   }
 }
 
-fn render_entry(entry: #(String, Layout), indent: String) -> String {
-  indent
-  <> json.to_string(json.string(entry.0))
-  <> ": "
-  <> render(entry.1, indent)
+// --- Writing ------------------------------------------------------------------------
+
+/// The text of the recording file.
+///
+/// ### The text of an empty recording <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/empty_recording_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/recording.{Recording, format_recording}
+///
+/// /// The text of a recording with no request:
+/// /// "{\n  \"dream_postgres_recording\": 1,\n  \"entries\": []\n}\n"
+/// pub fn empty_recording_text() -> String {
+///   format_recording(Recording(entries: []))
+/// }
+/// ```
+pub fn format_recording(recording: Recording) -> String {
+  let entries = case recording.entries {
+    [] -> "[]"
+    entries ->
+      "[\n    "
+      <> entries
+      |> list.map(fn(entry) { json.to_string(entry_json(entry)) })
+      |> string.join(",\n    ")
+      <> "\n  ]"
+  }
+  "{\n  \"dream_postgres_recording\": "
+  <> json.to_string(json.int(format))
+  <> ",\n  \"entries\": "
+  <> entries
+  <> "\n}\n"
 }
 
-fn recording_layout(recording: Recording) -> Layout {
-  Object([
-    #("sql", Inline(json.string(recording.query.sql))),
-    #(
-      "parameters",
-      Inline(json.array(recording.query.parameters, value_to_json)),
-    ),
-    #("result", result_layout(recording.result)),
+// An object with its keys in alphabetical order, so the same value always
+// gives the same text.
+fn sorted_object(entries: List(#(String, Json))) -> Json {
+  entries
+  |> list.sort(fn(left, right) { string.compare(left.0, right.0) })
+  |> json.object
+}
+
+fn entry_json(entry: RecordedEntry) -> Json {
+  sorted_object([
+    #("key", json.string(entry.key)),
+    request_member(entry.request),
   ])
 }
 
-fn result_layout(result: RecordedResult) -> Layout {
-  case result {
-    Returned(count:, rows:) ->
-      Object([
-        #("count", Inline(json.int(count))),
-        #("rows", Lines(list.map(rows, fn(row) { Inline(value_to_json(row)) }))),
+fn request_member(request: RecordedRequest) -> #(String, Json) {
+  case request {
+    RecordedStatement(sql:, parameters:, types:, outcome:) -> #(
+      "statement",
+      sorted_object([
+        #("sql", json.string(sql)),
+        #("parameters", json.nullable(parameters, written_parameters_json)),
+        #("types", json.array(types, type_json)),
+        #("outcome", outcome_json(outcome, statement_reply_json)),
+      ]),
+    )
+    RecordedSql(sql:, outcome:) -> #(
+      "sql",
+      sorted_object([
+        #("sql", json.string(sql)),
+        #(
+          "outcome",
+          outcome_json(outcome, fn(results) {
+            sorted_object([#("results", json.array(results, result_json))])
+          }),
+        ),
+      ]),
+    )
+    RecordedCopyFrom(sql:, rows:, types:, outcome:) -> #(
+      "copy_from",
+      sorted_object([
+        #("sql", json.string(sql)),
+        #("rows", json.nullable(rows, written_rows_json)),
+        #("types", json.array(types, type_json)),
+        #(
+          "outcome",
+          outcome_json(outcome, fn(count) {
+            sorted_object([#("count", json.int(count))])
+          }),
+        ),
+      ]),
+    )
+    RecordedCopyTo(sql:, types:, outcome:) -> #(
+      "copy_to",
+      sorted_object([
+        #("sql", json.string(sql)),
+        #("types", json.array(types, type_json)),
+        #("outcome", outcome_json(outcome, stream_json)),
+      ]),
+    )
+  }
+}
+
+fn outcome_json(
+  outcome: Result(answer, RecordedFailure),
+  answer_json: fn(answer) -> Json,
+) -> Json {
+  case outcome {
+    Ok(answer) -> sorted_object([#("answer", answer_json(answer))])
+    Error(failure) -> sorted_object([#("failure", failure_json(failure))])
+  }
+}
+
+fn written_parameters_json(written: WrittenParameters) -> Json {
+  sorted_object([
+    #("types", json.array(written.types, type_json)),
+    #("cells", json.array(written.parameters, written_parameter_json)),
+  ])
+}
+
+fn written_parameter_json(parameter: WrittenParameter) -> Json {
+  case parameter {
+    WrittenCell(cell:) -> cell_json(cell)
+    SecretCell(codec:) ->
+      sorted_object([
+        #("secret", sorted_object([#("codec", json.string(codec))])),
       ])
-    Failed(error) -> Inline(error_to_json(error))
   }
 }
 
-fn value_to_json(value: RecordedValue) -> json.Json {
+fn written_rows_json(written: WrittenRows) -> Json {
+  sorted_object([
+    #("types", json.array(written.types, type_json)),
+    #("rows", json.array(written.rows, row_json)),
+  ])
+}
+
+fn statement_reply_json(reply: StatementReply) -> Json {
+  sorted_object([
+    #("description", description_json(reply.description)),
+    #("result", result_json(reply.result)),
+  ])
+}
+
+fn stream_json(stream: RecordedStream) -> Json {
+  sorted_object([
+    #("description", description_json(stream.description)),
+    #("rows", json.array(stream.rows, row_json)),
+    #("failure", case stream.ending {
+      Ok(Nil) -> json.null()
+      Error(failure) -> failure_json(failure)
+    }),
+  ])
+}
+
+fn failure_json(failure: RecordedFailure) -> Json {
+  case failure {
+    RecordedServerError(server_error:) ->
+      sorted_object([#("server_error", server_error_json(server_error))])
+    RecordedSqlFailure(statements_run:, server_error:) ->
+      sorted_object([
+        #(
+          "sql_statement_failed",
+          sorted_object([
+            #("statements_run", json.int(statements_run)),
+            #("server_error", server_error_json(server_error)),
+          ]),
+        ),
+      ])
+  }
+}
+
+fn server_error_json(server_error: ServerError) -> Json {
+  let text = fn(value) { json.nullable(value, json.string) }
+  let number = fn(value) { json.nullable(value, json.int) }
+  sorted_object([
+    #("severity", json.string(severity_name(server_error.severity))),
+    #(
+      "code",
+      json.string(sql_state.sql_state_to_string(server_error.sql_state)),
+    ),
+    #("message", json.string(server_error.message)),
+    #("detail", text(server_error.detail)),
+    #("hint", text(server_error.hint)),
+    #("position", number(server_error.position)),
+    #("internal_position", number(server_error.internal_position)),
+    #("internal_query", text(server_error.internal_query)),
+    #("context", text(server_error.context)),
+    #("schema", text(server_error.schema)),
+    #("table", text(server_error.table)),
+    #("column", text(server_error.column)),
+    #("data_type", text(server_error.data_type)),
+    #("constraint", text(server_error.constraint)),
+    #("file", text(server_error.file)),
+    #("line", number(server_error.line)),
+    #("routine", text(server_error.routine)),
+    #("localized_severity", json.string(server_error.localized_severity)),
+    #(
+      "other_fields",
+      json.array(server_error.other_fields, fn(field) {
+        sorted_object([
+          #("code", json.int(field.0)),
+          #("value", json.string(field.1)),
+        ])
+      }),
+    ),
+  ])
+}
+
+// The severity as PostgreSQL sends it, which `error` reads back.
+fn severity_name(severity: Severity) -> String {
+  case severity {
+    ErrorSeverity -> "ERROR"
+    FatalSeverity -> "FATAL"
+    PanicSeverity -> "PANIC"
+    WarningSeverity -> "WARNING"
+    NoticeSeverity -> "NOTICE"
+    DebugSeverity -> "DEBUG"
+    InfoSeverity -> "INFO"
+    LogSeverity -> "LOG"
+    UnlistedSeverity(name:) -> name
+  }
+}
+
+fn description_json(description: StatementDescription) -> Json {
+  sorted_object([
+    #(
+      "parameter_type_ids",
+      json.array(description.parameters, fn(parameter) {
+        json.int(parameter.type_id)
+      }),
+    ),
+    #("columns", json.array(description.columns, column_json)),
+  ])
+}
+
+fn column_json(column: ColumnDescription) -> Json {
+  sorted_object([
+    #("name", json.string(column.name)),
+    #("type_id", json.int(column.type_id)),
+    #("type_modifier", json.int(column.type_modifier)),
+    #("table_id", json.int(column.table_id)),
+    #("column_number", json.int(column.column_number)),
+  ])
+}
+
+fn result_json(command_result: CommandResult) -> Json {
+  sorted_object([
+    #("rows", json.array(command_result.rows, row_json)),
+    #("tag", json.string(command_result.tag)),
+    #("count", json.int(command_result.count)),
+  ])
+}
+
+fn row_json(cells: List(Cell)) -> Json {
+  json.array(cells, cell_json)
+}
+
+fn cell_json(value: Cell) -> Json {
   case value {
+    Binary(bytes:) -> sorted_object([#("binary", hex_json(bytes))])
+    Text(bytes:) -> sorted_object([#("text", hex_json(bytes))])
     Null -> json.null()
-    Boolean(boolean) -> json.bool(boolean)
-    Integer(integer) -> json.int(integer)
-    Real(float) -> json.float(float)
-    Text(text) -> json.string(text)
-    Bytes(bytes) -> bytes_to_json(bytes)
-    Array(values) -> json.array(values, value_to_json)
-    Tuple(values) ->
-      json.object([#("tuple", json.array(values, value_to_json))])
-    Map(pairs) -> json.object([#("map", json.array(pairs, pair_to_json))])
-    Atom(name) -> json.object([#("atom", json.string(name))])
   }
 }
 
-fn pair_to_json(pair: #(RecordedValue, RecordedValue)) -> json.Json {
-  json.preprocessed_array([value_to_json(pair.0), value_to_json(pair.1)])
+fn hex_json(bytes: BitArray) -> Json {
+  json.string(string.lowercase(bit_array.base16_encode(bytes)))
 }
 
-fn bytes_to_json(bytes: BitArray) -> json.Json {
-  case bit_array.bit_size(bytes) % 8 {
-    0 -> json.object([#("bytes", json.string(bit_array.base16_encode(bytes)))])
-    _ -> bits_to_json(bits_to_hex(bytes))
-  }
-}
-
-fn bits_to_json(bits: #(Int, String)) -> json.Json {
-  json.object([
-    #(
-      "bits",
-      json.object([#("size", json.int(bits.0)), #("hex", json.string(bits.1))]),
-    ),
+fn type_json(type_description: TypeDescription) -> Json {
+  sorted_object([
+    #("id", json.int(type_description.id)),
+    #("schema", json.string(type_description.schema)),
+    #("name", json.string(type_description.name)),
+    #("kind", kind_json(type_description.kind)),
   ])
 }
 
-@external(erlang, "dream_postgres_recorder_ffi", "bits_to_hex")
-fn bits_to_hex(bits: BitArray) -> #(Int, String)
-
-@external(erlang, "dream_postgres_recorder_ffi", "hex_to_bits")
-fn hex_to_bits(size: Int, hex: String) -> Result(BitArray, Nil)
-
-fn error_to_json(error: dream_postgres_client.QueryError) -> json.Json {
-  case error {
-    dream_postgres_client.ConstraintViolated(message:, constraint:, detail:) ->
-      json.object([
-        #("error", json.string("constraint_violated")),
-        #("message", json.string(message)),
-        #("constraint", json.string(constraint)),
-        #("detail", json.string(detail)),
-      ])
-    dream_postgres_client.PostgresqlError(code:, name:, message:) ->
-      json.object([
-        #("error", json.string("postgresql_error")),
-        #("code", json.string(code)),
-        #("name", json.string(name)),
-        #("message", json.string(message)),
-      ])
-    dream_postgres_client.UnexpectedArgumentCount(expected:, got:) ->
-      json.object([
-        #("error", json.string("unexpected_argument_count")),
-        #("expected", json.int(expected)),
-        #("got", json.int(got)),
-      ])
-    dream_postgres_client.UnexpectedArgumentType(expected:, got:) ->
-      json.object([
-        #("error", json.string("unexpected_argument_type")),
-        #("expected", json.string(expected)),
-        #("got", json.string(got)),
-      ])
-    dream_postgres_client.UnexpectedResultType(errors) ->
-      json.object([
-        #("error", json.string("unexpected_result_type")),
-        #("errors", json.array(errors, decode_error_to_json)),
-      ])
-    dream_postgres_client.QueryTimeout ->
-      json.object([#("error", json.string("query_timeout"))])
-    dream_postgres_client.ConnectionUnavailable ->
-      json.object([#("error", json.string("connection_unavailable"))])
-    dream_postgres_client.InterceptorFailed(reason:) ->
-      json.object([
-        #("error", json.string("interceptor_failed")),
-        #("reason", value_to_json(reason_to_recorded(reason))),
-      ])
-  }
-}
-
-// The reason of `dream_postgres_client.InterceptorFailed` can be any term. A
-// term that no `RecordedValue` holds, such as a process, is kept as its text.
-fn reason_to_recorded(reason: Dynamic) -> RecordedValue {
-  case to_recorded(reason) {
-    Ok(value) -> value
-    Error(text) -> Text(text)
-  }
-}
-
-@external(erlang, "dream_postgres_recorder_ffi", "to_recorded")
-fn to_recorded(term: Dynamic) -> Result(RecordedValue, String)
-
-@external(erlang, "dream_postgres_recorder_ffi", "from_recorded")
-fn from_recorded(value: RecordedValue) -> Dynamic
-
-fn decode_error_to_json(error: decode.DecodeError) -> json.Json {
-  json.object([
-    #("expected", json.string(error.expected)),
-    #("found", json.string(error.found)),
-    #("path", json.array(error.path, json.string)),
-  ])
-}
-
-fn file_decoder() -> decode.Decoder(List(Recording)) {
-  use format <- decode.field("format", decode.string)
-  use version <- decode.field("version", decode.int)
-  use recordings <- decode.field("queries", decode.list(recording_decoder()))
-  case format == format_name, version == format_version {
-    True, True -> decode.success(recordings)
-    False, _ -> decode.failure([], "the format " <> format_name)
-    True, False -> decode.failure([], "version 1 of the format")
-  }
-}
-
-fn recording_decoder() -> decode.Decoder(Recording) {
-  use sql <- decode.field("sql", decode.string)
-  use parameters <- decode.field("parameters", decode.list(value_decoder()))
-  use result <- decode.field("result", result_decoder())
-  decode.success(Recording(RecordedQuery(sql:, parameters:), result))
-}
-
-fn result_decoder() -> decode.Decoder(RecordedResult) {
-  decode.one_of(returned_decoder(), [failed_decoder()])
-}
-
-fn returned_decoder() -> decode.Decoder(RecordedResult) {
-  use count <- decode.field("count", decode.int)
-  use rows <- decode.field("rows", decode.list(value_decoder()))
-  decode.success(Returned(count:, rows:))
-}
-
-fn failed_decoder() -> decode.Decoder(RecordedResult) {
-  use kind <- decode.field("error", decode.string)
-  decode.map(error_decoder(kind), Failed)
-}
-
-fn error_decoder(
-  kind: String,
-) -> decode.Decoder(dream_postgres_client.QueryError) {
+fn kind_json(kind: TypeKind) -> Json {
+  let id_of = fn(name, type_id) { sorted_object([#(name, json.int(type_id))]) }
   case kind {
-    "constraint_violated" -> {
-      use message <- decode.field("message", decode.string)
-      use constraint <- decode.field("constraint", decode.string)
-      use detail <- decode.field("detail", decode.string)
-      decode.success(dream_postgres_client.ConstraintViolated(
-        message:,
-        constraint:,
-        detail:,
-      ))
-    }
-    "postgresql_error" -> {
-      use code <- decode.field("code", decode.string)
-      use name <- decode.field("name", decode.string)
-      use message <- decode.field("message", decode.string)
-      decode.success(dream_postgres_client.PostgresqlError(
-        code:,
-        name:,
-        message:,
-      ))
-    }
-    "unexpected_argument_count" -> {
-      use expected <- decode.field("expected", decode.int)
-      use got <- decode.field("got", decode.int)
-      decode.success(dream_postgres_client.UnexpectedArgumentCount(
-        expected:,
-        got:,
-      ))
-    }
-    "unexpected_argument_type" -> {
-      use expected <- decode.field("expected", decode.string)
-      use got <- decode.field("got", decode.string)
-      decode.success(dream_postgres_client.UnexpectedArgumentType(
-        expected:,
-        got:,
-      ))
-    }
-    "unexpected_result_type" -> {
-      use errors <- decode.field("errors", decode.list(decode_error_decoder()))
-      decode.success(dream_postgres_client.UnexpectedResultType(errors))
-    }
-    "query_timeout" -> decode.success(dream_postgres_client.QueryTimeout)
-    "connection_unavailable" ->
-      decode.success(dream_postgres_client.ConnectionUnavailable)
-    "interceptor_failed" -> {
-      use reason <- decode.field("reason", value_decoder())
-      decode.success(
-        dream_postgres_client.InterceptorFailed(from_recorded(reason)),
-      )
-    }
-    _ ->
-      decode.failure(
-        dream_postgres_client.ConnectionUnavailable,
-        "a dream_postgres_client.QueryError",
-      )
+    Base -> sorted_object([#("base", sorted_object([]))])
+    Pseudo -> sorted_object([#("pseudo", sorted_object([]))])
+    Enum(labels:) ->
+      sorted_object([
+        #("enum", sorted_object([#("labels", json.array(labels, json.string))])),
+      ])
+    Composite(fields:) ->
+      sorted_object([
+        #(
+          "composite",
+          sorted_object([
+            #(
+              "fields",
+              json.array(fields, fn(field) {
+                sorted_object([
+                  #("name", json.string(field.0)),
+                  #("type_id", json.int(field.1)),
+                ])
+              }),
+            ),
+          ]),
+        ),
+      ])
+    Domain(base_type_id:) ->
+      sorted_object([#("domain", id_of("base_type_id", base_type_id))])
+    Range(element_type_id:) ->
+      sorted_object([#("range", id_of("element_type_id", element_type_id))])
+    Multirange(range_type_id:) ->
+      sorted_object([#("multirange", id_of("range_type_id", range_type_id))])
+    Array(element_type_id:) ->
+      sorted_object([#("array", id_of("element_type_id", element_type_id))])
   }
 }
 
-fn decode_error_decoder() -> decode.Decoder(decode.DecodeError) {
-  use expected <- decode.field("expected", decode.string)
-  use found <- decode.field("found", decode.string)
-  use path <- decode.field("path", decode.list(decode.string))
-  decode.success(decode.DecodeError(expected:, found:, path:))
+// --- Reading ------------------------------------------------------------------------
+
+/// The recording of the bytes of a recording file.
+///
+/// ### Read a recording file <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/read_recording.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/recording.{type Recording, parse_recording}
+/// import gleam/json
+///
+/// /// Reads the bytes of a recording file.
+/// pub fn read_recording(bytes: BitArray) -> Result(Recording, json.DecodeError) {
+///   parse_recording(bytes)
+/// }
+/// ```
+pub fn parse_recording(bytes: BitArray) -> Result(Recording, json.DecodeError) {
+  json.parse_bits(bytes, recording_decoder())
 }
 
-fn value_decoder() -> decode.Decoder(RecordedValue) {
-  use <- decode.recursive
-  decode.one_of(null_decoder(), [
-    decode.map(decode.bool, Boolean),
-    decode.map(decode.int, Integer),
-    decode.map(decode.float, Real),
-    decode.map(decode.string, Text),
-    decode.map(decode.list(value_decoder()), Array),
-    decode.map(decode.at(["tuple"], decode.list(value_decoder())), Tuple),
-    decode.map(decode.at(["map"], decode.list(pair_decoder())), Map),
-    decode.map(decode.at(["atom"], decode.string), Atom),
-    decode.map(decode.at(["bytes"], hex_decoder()), Bytes),
-    decode.map(decode.at(["bits"], bits_decoder()), Bytes),
+fn recording_decoder() -> Decoder(Recording) {
+  use version <- decode.field("dream_postgres_recording", decode.int)
+  case version == format {
+    True -> {
+      use entries <- decode.field("entries", decode.list(entry_decoder()))
+      decode.success(Recording(entries:))
+    }
+    False -> decode.failure(Recording(entries: []), "recording format 1")
+  }
+}
+
+fn entry_decoder() -> Decoder(RecordedEntry) {
+  use key <- decode.field("key", decode.string)
+  use request <- decode.then(request_decoder())
+  decode.success(RecordedEntry(key:, request:))
+}
+
+fn request_decoder() -> Decoder(RecordedRequest) {
+  decode.one_of(decode.at(["statement"], statement_decoder()), [
+    decode.at(["sql"], sql_decoder()),
+    decode.at(["copy_from"], copy_from_decoder()),
+    decode.at(["copy_to"], copy_to_decoder()),
   ])
 }
 
-fn null_decoder() -> decode.Decoder(RecordedValue) {
-  decode.new_primitive_decoder("null", fn(value) {
-    case is_json_null(value) {
-      True -> Ok(Null)
-      False -> Error(Null)
-    }
-  })
+fn statement_decoder() -> Decoder(RecordedRequest) {
+  use sql <- decode.field("sql", decode.string)
+  use parameters <- decode.field(
+    "parameters",
+    decode.optional({
+      use types <- decode.field("types", decode.list(type_decoder()))
+      use parameters <- decode.field(
+        "cells",
+        decode.list(written_parameter_decoder()),
+      )
+      decode.success(WrittenParameters(types:, parameters:))
+    }),
+  )
+  use types <- decode.field("types", decode.list(type_decoder()))
+  use outcome <- decode.field(
+    "outcome",
+    outcome_decoder({
+      use description <- decode.field("description", description_decoder())
+      use result <- decode.field("result", result_decoder())
+      decode.success(StatementReply(description:, result:))
+    }),
+  )
+  decode.success(RecordedStatement(sql:, parameters:, types:, outcome:))
 }
 
-@external(erlang, "dream_postgres_recorder_ffi", "is_json_null")
-fn is_json_null(value: Dynamic) -> Bool
-
-fn pair_decoder() -> decode.Decoder(#(RecordedValue, RecordedValue)) {
-  use key <- decode.field(0, value_decoder())
-  use value <- decode.field(1, value_decoder())
-  decode.success(#(key, value))
+fn sql_decoder() -> Decoder(RecordedRequest) {
+  use sql <- decode.field("sql", decode.string)
+  use outcome <- decode.field(
+    "outcome",
+    outcome_decoder(decode.field(
+      "results",
+      decode.list(result_decoder()),
+      decode.success,
+    )),
+  )
+  decode.success(RecordedSql(sql:, outcome:))
 }
 
-fn hex_decoder() -> decode.Decoder(BitArray) {
-  use hex <- decode.then(decode.string)
-  case bit_array.base16_decode(hex) {
+fn copy_from_decoder() -> Decoder(RecordedRequest) {
+  use sql <- decode.field("sql", decode.string)
+  use rows <- decode.field(
+    "rows",
+    decode.optional({
+      use types <- decode.field("types", decode.list(type_decoder()))
+      use rows <- decode.field("rows", decode.list(row_decoder()))
+      decode.success(WrittenRows(types:, rows:))
+    }),
+  )
+  use types <- decode.field("types", decode.list(type_decoder()))
+  use outcome <- decode.field(
+    "outcome",
+    outcome_decoder(decode.field("count", decode.int, decode.success)),
+  )
+  decode.success(RecordedCopyFrom(sql:, rows:, types:, outcome:))
+}
+
+fn copy_to_decoder() -> Decoder(RecordedRequest) {
+  use sql <- decode.field("sql", decode.string)
+  use types <- decode.field("types", decode.list(type_decoder()))
+  use outcome <- decode.field(
+    "outcome",
+    outcome_decoder({
+      use description <- decode.field("description", description_decoder())
+      use rows <- decode.field("rows", decode.list(row_decoder()))
+      use failure <- decode.field("failure", decode.optional(failure_decoder()))
+      decode.success(
+        RecordedStream(description:, rows:, ending: case failure {
+          Some(recorded) -> Error(recorded)
+          None -> Ok(Nil)
+        }),
+      )
+    }),
+  )
+  decode.success(RecordedCopyTo(sql:, types:, outcome:))
+}
+
+fn outcome_decoder(
+  answer_decoder: Decoder(answer),
+) -> Decoder(Result(answer, RecordedFailure)) {
+  decode.one_of(
+    decode.field("answer", answer_decoder, fn(answer) {
+      decode.success(Ok(answer))
+    }),
+    [
+      decode.field("failure", failure_decoder(), fn(failure) {
+        decode.success(Error(failure))
+      }),
+    ],
+  )
+}
+
+fn failure_decoder() -> Decoder(RecordedFailure) {
+  decode.one_of(
+    decode.field("server_error", server_error_decoder(), fn(server_error) {
+      decode.success(RecordedServerError(server_error:))
+    }),
+    [
+      decode.field(
+        "sql_statement_failed",
+        {
+          use statements_run <- decode.field("statements_run", decode.int)
+          use server_error <- decode.field(
+            "server_error",
+            server_error_decoder(),
+          )
+          decode.success(RecordedSqlFailure(statements_run:, server_error:))
+        },
+        decode.success,
+      ),
+    ],
+  )
+}
+
+fn server_error_decoder() -> Decoder(ServerError) {
+  let text = decode.optional(decode.string)
+  let number = decode.optional(decode.int)
+  use severity <- decode.field("severity", decode.string)
+  use code <- decode.field("code", decode.string)
+  use message <- decode.field("message", decode.string)
+  use detail <- decode.field("detail", text)
+  use hint <- decode.field("hint", text)
+  use position <- decode.field("position", number)
+  use internal_position <- decode.field("internal_position", number)
+  use internal_query <- decode.field("internal_query", text)
+  use context <- decode.field("context", text)
+  use schema <- decode.field("schema", text)
+  use table <- decode.field("table", text)
+  use column <- decode.field("column", text)
+  use data_type <- decode.field("data_type", text)
+  use constraint <- decode.field("constraint", text)
+  use file <- decode.field("file", text)
+  use line <- decode.field("line", number)
+  use routine <- decode.field("routine", text)
+  use localized_severity <- decode.field("localized_severity", decode.string)
+  use other_fields <- decode.field(
+    "other_fields",
+    decode.list({
+      use code <- decode.field("code", decode.int)
+      use value <- decode.field("value", decode.string)
+      decode.success(#(code, value))
+    }),
+  )
+  decode.success(
+    error.report_to_server_error(cell.ServerReport(
+      severity:,
+      localized_severity:,
+      code:,
+      message:,
+      detail:,
+      hint:,
+      position:,
+      internal_position:,
+      internal_query:,
+      context:,
+      schema:,
+      table:,
+      column:,
+      data_type:,
+      constraint:,
+      file:,
+      line:,
+      routine:,
+      other_fields:,
+    )),
+  )
+}
+
+fn description_decoder() -> Decoder(StatementDescription) {
+  use parameter_type_ids <- decode.field(
+    "parameter_type_ids",
+    decode.list(decode.int),
+  )
+  use columns <- decode.field("columns", decode.list(column_decoder()))
+  decode.success(StatementDescription(
+    parameters: list.map(parameter_type_ids, ParameterDescription),
+    columns:,
+  ))
+}
+
+fn column_decoder() -> Decoder(ColumnDescription) {
+  use name <- decode.field("name", decode.string)
+  use type_id <- decode.field("type_id", decode.int)
+  use type_modifier <- decode.field("type_modifier", decode.int)
+  use table_id <- decode.field("table_id", decode.int)
+  use column_number <- decode.field("column_number", decode.int)
+  decode.success(ColumnDescription(
+    name:,
+    type_id:,
+    type_modifier:,
+    table_id:,
+    column_number:,
+  ))
+}
+
+fn result_decoder() -> Decoder(CommandResult) {
+  use rows <- decode.field("rows", decode.list(row_decoder()))
+  use tag <- decode.field("tag", decode.string)
+  use count <- decode.field("count", decode.int)
+  decode.success(CommandResult(rows:, tag:, count:))
+}
+
+fn row_decoder() -> Decoder(List(Cell)) {
+  decode.list(cell_decoder())
+}
+
+fn written_parameter_decoder() -> Decoder(WrittenParameter) {
+  decode.one_of(
+    decode.at(["secret", "codec"], decode.string)
+      |> decode.map(fn(codec) { SecretCell(codec:) }),
+    [cell_decoder() |> decode.map(fn(cell) { WrittenCell(cell:) })],
+  )
+}
+
+fn cell_decoder() -> Decoder(Cell) {
+  decode.optional(
+    decode.one_of(
+      decode.field("binary", hex_decoder(), fn(bytes) {
+        decode.success(Binary(bytes:))
+      }),
+      [
+        decode.field("text", hex_decoder(), fn(bytes) {
+          decode.success(Text(bytes:))
+        }),
+      ],
+    ),
+  )
+  |> decode.map(option.unwrap(_, Null))
+}
+
+fn hex_decoder() -> Decoder(BitArray) {
+  use text <- decode.then(decode.string)
+  case bit_array.base16_decode(text) {
     Ok(bytes) -> decode.success(bytes)
-    Error(Nil) -> decode.failure(<<>>, "base 16 text")
+    Error(Nil) -> decode.failure(<<>>, "hex bytes")
   }
 }
 
-fn bits_decoder() -> decode.Decoder(BitArray) {
-  use size <- decode.field("size", decode.int)
-  use hex <- decode.field("hex", decode.string)
-  case hex_to_bits(size, hex) {
-    Ok(bits) -> decode.success(bits)
-    Error(Nil) -> decode.failure(<<>>, "base 16 text of the size")
+fn type_decoder() -> Decoder(TypeDescription) {
+  use id <- decode.field("id", decode.int)
+  use schema <- decode.field("schema", decode.string)
+  use name <- decode.field("name", decode.string)
+  use kind <- decode.field("kind", kind_decoder())
+  decode.success(TypeDescription(id:, schema:, name:, kind:))
+}
+
+fn kind_decoder() -> Decoder(TypeKind) {
+  let type_id_kind = fn(name, field, make: fn(Int) -> TypeKind) {
+    decode.field(
+      name,
+      decode.field(field, decode.int, decode.success),
+      fn(type_id) { decode.success(make(type_id)) },
+    )
   }
+  decode.one_of(decode.field("base", decode.success(Base), decode.success), [
+    decode.field("pseudo", decode.success(Pseudo), decode.success),
+    decode.field(
+      "enum",
+      decode.field("labels", decode.list(decode.string), decode.success),
+      fn(labels) { decode.success(Enum(labels:)) },
+    ),
+    decode.field(
+      "composite",
+      decode.field(
+        "fields",
+        decode.list({
+          use name <- decode.field("name", decode.string)
+          use type_id <- decode.field("type_id", decode.int)
+          decode.success(#(name, type_id))
+        }),
+        decode.success,
+      ),
+      fn(fields) { decode.success(Composite(fields:)) },
+    ),
+    type_id_kind("domain", "base_type_id", fn(type_id) {
+      Domain(base_type_id: type_id)
+    }),
+    type_id_kind("range", "element_type_id", fn(type_id) {
+      Range(element_type_id: type_id)
+    }),
+    type_id_kind("multirange", "range_type_id", fn(type_id) {
+      Multirange(range_type_id: type_id)
+    }),
+    type_id_kind("array", "element_type_id", fn(type_id) {
+      Array(element_type_id: type_id)
+    }),
+  ])
 }

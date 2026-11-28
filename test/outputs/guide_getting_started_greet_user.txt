@@ -1,8 +1,0 @@
-greet_user(Context(db:), 1)
-  -> "Hello, Ada"
-
-greet_user(Context(db:), 3)
-  -> "No user with that id"
-
-find_user(db, 2)
-  -> Ok(Returned(1, [User(2, "Grace")]))

@@ -1,2 +1,0 @@
-TLS client: ... generated CLIENT ALERT: Fatal - Unknown CA
-TLS client: ... generated CLIENT ALERT: Fatal - Bad Certificate, - {bad_cert,{hostname_check_failed,{requested,"127.0.0.1"},{received,[{dNSName,"localhost"}]}}}

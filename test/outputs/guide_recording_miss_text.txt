@@ -1,5 +1,0 @@
-No recording matches SELECT id, name, email FROM users WHERE id = $1 with [2]
-Nearest recording in test/fixtures/recordings/create_and_find.json:
-  parameters:
-  - [1]
-  + [2]

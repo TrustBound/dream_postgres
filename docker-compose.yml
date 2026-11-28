@@ -7,11 +7,32 @@
 # GitHub Actions can't do it: it starts before the checkout, so it can't
 # mount the certificates of test/fixtures/ssl, and it can't change the
 # command that starts PostgreSQL.
+#
+# The image dream-test-postgres:<version> is postgres:<version>-alpine with
+# the pgvector extension, built from test/docker/Dockerfile. The alpine image
+# already has hstore, ltree and citext. `docker compose up` builds the image
+# when it is not there yet. At the first start of a server,
+# test/docker/extensions.sql makes the four extensions in dream_test.
+#
+# The servers postgres-17, postgres-18 and postgres-19 are for the type proof
+# (test/type_proof_test.gleam), with postgres for 16. CI gives the four URLs
+# to the proof in DREAM_POSTGRES_PROOF_URLS.
+#
+# The test databases are thrown away, so each server keeps its data in
+# memory (tmpfs, 2 GB at most) and never on Docker's disk, and turns off the
+# settings that make data survive a crash (fsync, synchronous_commit,
+# full_page_writes). Never use these settings for data you want to keep.
+# The tmpfs is mounted on the data volume of the image:
+# /var/lib/postgresql/data up to PostgreSQL 17, /var/lib/postgresql from 18.
 
 services:
   # The server for most tests. SSL is off.
   postgres:
-    image: postgres:16-alpine
+    image: dream-test-postgres:16
+    build:
+      context: test/docker
+      args:
+        PG_MAJOR: 16
     environment:
       POSTGRES_USER: dream
       POSTGRES_PASSWORD: dream
@@ -20,6 +41,18 @@ services:
       # Port 5436 on this machine, so the tests do not use a PostgreSQL
       # server that already listens on 5432.
       - "5436:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
+    volumes:
+      - ./test/docker/extensions.sql:/docker-entrypoint-initdb.d/extensions.sql:ro
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
       interval: 1s
@@ -31,15 +64,18 @@ services:
   # `localhost`. So `localhost` matches the certificate and `127.0.0.1`
   # does not. The server also accepts connections without SSL.
   postgres-ssl:
-    image: postgres:16-alpine
+    image: dream-test-postgres:16
     environment:
       POSTGRES_USER: dream
       POSTGRES_PASSWORD: dream
       POSTGRES_DB: dream_test
     ports:
       - "5437:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
     volumes:
       - ./test/fixtures/ssl:/certs:ro
+      - ./test/docker/extensions.sql:/docker-entrypoint-initdb.d/extensions.sql:ro
     # PostgreSQL refuses a key file that the user `postgres` does not own,
     # or that others can read. A mounted file has the owner and the mode of
     # the checkout, so the entrypoint copies the files first.
@@ -53,8 +89,190 @@ services:
         -c ssl=on
         -c ssl_cert_file=/var/lib/postgresql/server.crt
         -c ssl_key_file=/var/lib/postgresql/server.key
+        -c fsync=off
+        -c synchronous_commit=off
+        -c full_page_writes=off
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
       interval: 1s
       timeout: 5s
       retries: 30
+
+  # PostgreSQL 17, for the type proof.
+  postgres-17:
+    image: dream-test-postgres:17
+    build:
+      context: test/docker
+      args:
+        PG_MAJOR: 17
+    environment:
+      POSTGRES_USER: dream
+      POSTGRES_PASSWORD: dream
+      POSTGRES_DB: dream_test
+    ports:
+      - "5438:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
+    volumes:
+      - ./test/docker/extensions.sql:/docker-entrypoint-initdb.d/extensions.sql:ro
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  # PostgreSQL 18, for the type proof.
+  postgres-18:
+    image: dream-test-postgres:18
+    build:
+      context: test/docker
+      args:
+        PG_MAJOR: 18
+    environment:
+      POSTGRES_USER: dream
+      POSTGRES_PASSWORD: dream
+      POSTGRES_DB: dream_test
+    ports:
+      - "5439:5432"
+    tmpfs:
+      - /var/lib/postgresql:rw,size=2g
+    volumes:
+      - ./test/docker/extensions.sql:/docker-entrypoint-initdb.d/extensions.sql:ro
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  # PostgreSQL 19, for the type proof.
+  postgres-19:
+    image: dream-test-postgres:19
+    build:
+      context: test/docker
+      args:
+        PG_MAJOR: 19
+    environment:
+      POSTGRES_USER: dream
+      POSTGRES_PASSWORD: dream
+      POSTGRES_DB: dream_test
+    ports:
+      - "5440:5432"
+    tmpfs:
+      - /var/lib/postgresql:rw,size=2g
+    volumes:
+      - ./test/docker/extensions.sql:/docker-entrypoint-initdb.d/extensions.sql:ro
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  # The driver servers: one for each supported version, PostgreSQL 16 to 19.
+  # The driver tests (test/driver) run on all four. Each has SSL on, with
+  # the server certificate of test/fixtures/ssl, and the login method of
+  # each database user comes from test/docker/driver_pg_hba.conf:
+  #
+  #   dream            SCRAM-SHA-256, with or without TLS
+  #   dream_trust      trust: no password
+  #   dream_cleartext  cleartext password
+  #   dream_md5        MD5, with a password that the server keeps as MD5
+  #   dream_tls        SCRAM-SHA-256, and only over TLS
+  #
+  # All passwords are `dream`. test/docker/driver_users.sql makes the users
+  # at the first start of a server. The ports are 5441 to 5444.
+  #
+  # driver-17, driver-18 and driver-19 copy the settings of driver-16 (the
+  # YAML anchor driver-server) and change only the image, the port and the
+  # tmpfs path.
+  driver-16: &driver-server
+    image: dream-test-postgres:16
+    ports:
+      - "5441:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
+    environment:
+      POSTGRES_USER: dream
+      POSTGRES_PASSWORD: dream
+      POSTGRES_DB: dream_test
+    volumes:
+      - ./test/fixtures/ssl:/certs:ro
+      - ./test/docker/extensions.sql:/docker-entrypoint-initdb.d/extensions.sql:ro
+      - ./test/docker/driver_users.sql:/docker-entrypoint-initdb.d/driver_users.sql:ro
+      - ./test/docker/driver_pg_hba.conf:/etc/dream/pg_hba.conf:ro
+    # PostgreSQL refuses a key file that the user `postgres` does not own, or
+    # that others can read, so the entrypoint copies the files first. The
+    # copies go to /etc/dream-ssl, outside the data directory, which differs
+    # between PostgreSQL 17 and 18.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        install -d -o postgres -g postgres -m 0700 /etc/dream-ssl &&
+        install -o postgres -g postgres -m 0600 /certs/server.key /etc/dream-ssl/server.key &&
+        install -o postgres -g postgres -m 0644 /certs/server.crt /etc/dream-ssl/server.crt &&
+        exec docker-entrypoint.sh postgres
+        -c hba_file=/etc/dream/pg_hba.conf
+        -c ssl=on
+        -c ssl_cert_file=/etc/dream-ssl/server.crt
+        -c ssl_key_file=/etc/dream-ssl/server.key
+        -c fsync=off
+        -c synchronous_commit=off
+        -c full_page_writes=off
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dream -d dream_test"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  driver-17:
+    <<: *driver-server
+    image: dream-test-postgres:17
+    ports:
+      - "5442:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
+
+  driver-18:
+    <<: *driver-server
+    image: dream-test-postgres:18
+    ports:
+      - "5443:5432"
+    tmpfs:
+      - /var/lib/postgresql:rw,size=2g
+
+  driver-19:
+    <<: *driver-server
+    image: dream-test-postgres:19
+    ports:
+      - "5444:5432"
+    tmpfs:
+      - /var/lib/postgresql:rw,size=2g
+
+# The project name of these containers, so that `docker compose` in another
+# checkout of this repository, under another folder name, uses the same
+# containers and does not start a second set on the same ports.
+name: dream_postgres_test

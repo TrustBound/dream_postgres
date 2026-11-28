@@ -1,0 +1,104 @@
+//// Runs the driver tests alone, with the coverage gate on the driver
+//// modules only: `make test-driver`. `gleam test` runs the same tests with
+//// all the others.
+
+import dream_test/coverage.{minimum_percent, show_missing, source_directory}
+import dream_test/reporters/bdd
+import dream_test/reporters/progress
+import dream_test/runner
+import dream_test/suite.{type TestSuite}
+import driver/backoff_test
+import driver/bit_array_test
+import driver/catalog_table_test
+import driver/catalog_test
+import driver/channel_binding_test
+import driver/connection_copy_test
+import driver/connection_events_test
+import driver/connection_housekeeping_test
+import driver/connection_test
+import driver/decode_test
+import driver/encode_test
+import driver/housekeeping_sql_test
+import driver/listener_name_test
+import driver/listener_test
+import driver/login_server_test
+import driver/login_test
+import driver/notices_test
+import driver/parity_test
+import driver/pool_test
+import driver/pool_without_database_test
+import driver/prepare_refresh_test
+import driver/query_copy_test
+import driver/query_server_test
+import driver/query_test
+import driver/recorded_test
+import driver/saslprep_test
+import driver/scram_test
+import driver/server_test
+import driver/setup_deadline_test
+import driver/sink_test
+import driver/span_text_test
+import driver/statement_cache_test
+import driver/supervised_connection_test
+import driver/trace_test
+import driver/transaction_test
+import driver/transport_test
+
+/// Every suite of the driver tests, in the order they run.
+pub fn suites() -> List(TestSuite) {
+  [
+    bit_array_test.tests(),
+    encode_test.tests(),
+    housekeeping_sql_test.tests(),
+    decode_test.tests(),
+    query_test.tests(),
+    query_copy_test.tests(),
+    transaction_test.tests(),
+    recorded_test.tests(),
+    saslprep_test.tests(),
+    scram_test.tests(),
+    channel_binding_test.tests(),
+    login_test.tests(),
+    login_server_test.tests(),
+    query_server_test.tests(),
+    server_test.tests(),
+    transport_test.tests(),
+    statement_cache_test.tests(),
+    connection_test.tests(),
+    prepare_refresh_test.tests(),
+    connection_copy_test.tests(),
+    connection_housekeeping_test.tests(),
+    pool_test.tests(),
+    pool_without_database_test.tests(),
+    catalog_table_test.tests(),
+    catalog_test.tests(),
+    listener_test.tests(),
+    listener_name_test.tests(),
+    parity_test.tests(),
+    setup_deadline_test.tests(),
+    connection_events_test.tests(),
+    supervised_connection_test.tests(),
+    trace_test.tests(),
+    span_text_test.tests(),
+    backoff_test.tests(),
+    notices_test.tests(),
+    sink_test.tests(),
+  ]
+}
+
+/// Runs the driver tests, and fails below 100% line coverage of
+/// `src/dream_postgres/driver`.
+pub fn main() -> Nil {
+  runner.new(suites())
+  |> runner.progress_reporter(progress.new())
+  |> runner.results_reporters([bdd.new()])
+  |> runner.coverage(
+    coverage.new()
+    |> source_directory("src/dream_postgres/driver")
+    |> show_missing()
+    |> minimum_percent(100.0),
+  )
+  |> runner.exit_on_failure()
+  |> runner.run()
+  Nil
+}

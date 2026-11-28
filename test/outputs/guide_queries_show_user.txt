@@ -1,5 +1,0 @@
-show_user(db, 1)
-  -> Response(200, "1: Ada <ada@example.com>")
-
-show_user(db, 2)
-  -> Response(404, "No user with that id")
