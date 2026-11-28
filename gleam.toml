@@ -6,18 +6,13 @@ repository = { type = "github", user = "TrustBound", repo = "dream_postgres" }
 # The modules that are not part of the public API. Each sits in the folder
 # of the public module that it serves.
 internal_modules = [
-    "dream_postgres/codecs/codec_type",
+    "dream_postgres/codec/*",
     "dream_postgres/copy/*",
     "dream_postgres/driver/*",
     "dream_postgres/error/*",
     "dream_postgres/pool/*",
     "dream_postgres/query/*",
-    "dream_postgres/recorder/recorded_answer",
-    "dream_postgres/recorder/recorder_process",
-    "dream_postgres/recorder/recorder_state",
-    "dream_postgres/recorder/recording_file",
-    "dream_postgres/recorder/replay",
-    "dream_postgres/recorder/written_entry",
+    "dream_postgres/recorder/*",
     "dream_postgres/row/*",
     "dream_postgres/url/*",
 ]

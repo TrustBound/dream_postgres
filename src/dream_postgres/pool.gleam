@@ -29,18 +29,19 @@ pub type Connection =
 /// The connections connect in the background: a server that does not
 /// answer shows as an error of the first query. For a pool under a
 /// supervisor, use `supervised`.
-pub fn start(config: Config) -> Result(Connection, Error(PostgresError)) {
+pub fn start_pool(config: Config) -> Result(Connection, Error(PostgresError)) {
   use _checked <- result.try(check_times(config))
   let settings = pool_settings(config, [], None)
   case recorder_attachment(config) {
-    recorder.RecordingPool(interceptor:) -> start_pool(config, [interceptor])
-    recorder.PlainPool -> start_pool(config, [])
+    recorder.RecordingPool(interceptor:) ->
+      start_driver_pool(config, [interceptor])
+    recorder.PlainPool -> start_driver_pool(config, [])
     recorder.NoPool(replay:, recorder: test_recorder) ->
       Ok(connection_state.replayed(settings, replay, test_recorder))
   }
 }
 
-fn start_pool(
+fn start_driver_pool(
   config: Config,
   lowest_interceptors: List(Interceptor),
 ) -> Result(Connection, Error(PostgresError)) {
@@ -67,9 +68,9 @@ pub type PoolName =
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres/codecs.{text}
+/// import dream_postgres/codec.{text}
 /// import dream_postgres/config.{type Config}
-/// import dream_postgres/error.{type PostgresError, describe}
+/// import dream_postgres/error.{type PostgresError, describe_error}
 /// import dream_postgres/pool.{type PoolName, named_connection, supervised}
 /// import dream_postgres/query.{one, query}
 /// import dream_postgres/row.{single}
@@ -85,7 +86,7 @@ pub type PoolName =
 /// ) -> Result(actor.Started(Supervisor), String) {
 ///   use pool_child <- result.try(
 ///     supervised(config, name: pool_name)
-///     |> result.map_error(describe),
+///     |> result.map_error(describe_error),
 ///   )
 ///   static_supervisor.new(static_supervisor.OneForOne)
 ///   |> static_supervisor.add(pool_child)
@@ -130,9 +131,9 @@ pub fn named_connection(name: PoolName) -> Connection {
 
 /// Stops the pool and closes its connections, then stops the recorder of
 /// the config, if any. The holds that run get at most 5 seconds to
-/// finish. A held connection belongs to its pool, so `stop` of one does
+/// finish. A held connection belongs to its pool, so `stop_pool` of one does
 /// nothing.
-pub fn stop(connection: Connection) -> Nil {
+pub fn stop_pool(connection: Connection) -> Nil {
   connection_state.stop(connection)
 }
 
@@ -146,7 +147,7 @@ pub fn stop(connection: Connection) -> Nil {
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres/codecs.{text}
+/// import dream_postgres/codec.{text}
 /// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/pool.{type Connection, with_interceptor}
 /// import dream_postgres/query.{one, query}

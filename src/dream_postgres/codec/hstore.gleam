@@ -1,8 +1,10 @@
 //// The codec of the extension type `hstore`, in its binary format: the
 //// number of pairs (32 bits), then each key and value as a length
 //// (32 bits, -1 for a NULL value) and its bytes.
+////
+//// This module is internal to dream_postgres.
 
-import dream_postgres/codecs/codec_type.{
+import dream_postgres/codec/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
   utf8_bytes, wrong_size,
 }
@@ -14,8 +16,6 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 
 // A function, not a constant: a constant cannot hold a Dict.
-/// The extension type `hstore`, as a `Dict` of keys to values that can be
-/// NULL. A function, because a constant cannot hold a `Dict`.
 pub fn hstore() -> codec_type.Codec(Dict(String, Option(String))) {
   Codec(
     name: "hstore",

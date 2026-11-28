@@ -132,7 +132,7 @@ pub fn tests() -> TestSuite {
         let code = "23505"
 
         // Act
-        let found = sql_state.from_string(code)
+        let found = sql_state.parse_sql_state(code)
 
         // Assert
         found
@@ -145,7 +145,7 @@ pub fn tests() -> TestSuite {
         let code = "99X99"
 
         // Act
-        let found = sql_state.from_string(code)
+        let found = sql_state.parse_sql_state(code)
 
         // Assert
         found
@@ -158,7 +158,7 @@ pub fn tests() -> TestSuite {
         let code = Unlisted("99X99")
 
         // Act
-        let found = sql_state.to_string(code)
+        let found = sql_state.sql_state_to_string(code)
 
         // Assert
         found
@@ -173,7 +173,7 @@ pub fn tests() -> TestSuite {
         let code = WarningStringDataRightTruncation
 
         // Act
-        let found = sql_state.name(code)
+        let found = sql_state.sql_state_name(code)
 
         // Assert
         found
@@ -189,7 +189,7 @@ pub fn tests() -> TestSuite {
         let code = Unlisted("99X99")
 
         // Act
-        let found = sql_state.name(code)
+        let found = sql_state.sql_state_name(code)
 
         // Assert
         found
@@ -207,7 +207,7 @@ pub fn tests() -> TestSuite {
         let code = DeadlockDetected
 
         // Act
-        let found = sql_state.class(code)
+        let found = sql_state.sql_state_class(code)
 
         // Assert
         found
@@ -222,7 +222,7 @@ pub fn tests() -> TestSuite {
         let code = Unlisted("23999")
 
         // Act
-        let found = sql_state.class(code)
+        let found = sql_state.sql_state_class(code)
 
         // Assert
         found
@@ -235,7 +235,7 @@ pub fn tests() -> TestSuite {
         let code = Unlisted("99X99")
 
         // Act
-        let found = sql_state.class(code)
+        let found = sql_state.sql_state_class(code)
 
         // Assert
         found

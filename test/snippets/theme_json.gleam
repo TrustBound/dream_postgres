@@ -1,4 +1,4 @@
-import dream_postgres/codecs/json.{type Json, from_json, parse}
+import dream_postgres/json.{type Json, decode_json, gleam_json_to_json}
 import gleam/dynamic/decode
 import gleam/json as gleam_json
 
@@ -12,14 +12,14 @@ pub fn theme_document(theme: Theme) -> Json {
     #("dark", gleam_json.bool(theme.dark)),
     #("font_size", gleam_json.int(theme.font_size)),
   ])
-  |> from_json
+  |> gleam_json_to_json
 }
 
 /// The theme of a JSON document that a `json` or a `jsonb` column gave.
 pub fn theme_from_document(
   document: Json,
 ) -> Result(Theme, gleam_json.DecodeError) {
-  parse(document, theme_decoder())
+  decode_json(document, theme_decoder())
 }
 
 fn theme_decoder() -> decode.Decoder(Theme) {

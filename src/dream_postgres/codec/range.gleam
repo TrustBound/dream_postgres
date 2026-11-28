@@ -1,7 +1,3 @@
-//// The Gleam value of PostgreSQL's range and multirange types, for any
-//// element type: `int4range`, `daterange`, `tstzrange` and a range type
-//// that an app makes.
-////
 //// The codecs of ranges and multiranges of any element type.
 ////
 //// A range of an element with a binary codec uses PostgreSQL's binary
@@ -15,38 +11,22 @@
 //// the text format: `empty`, or `[lower,upper)` with each bound quoted, and
 //// a multirange is `{[1,3),[5,7)}`.
 
-import dream_postgres/codecs.{type Codec}
-import dream_postgres/codecs/codec_type.{
-  type DecodeIssue, type TypeLookup, Codec, Malformed, NullValue, accepts,
-  decode, encode, utf8_bytes,
+import dream_postgres/codec/codec_type.{
+  type Codec, type DecodeIssue, type TypeLookup, Codec, Malformed, NullValue,
+  accepts, decode, encode, utf8_bytes,
 }
 import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, Array, Base, Binary, BinaryFormat, Composite,
   Domain, Enum, Multirange, Null, Pseudo, Range as RangeKind, Text, TextFormat,
+}
+import dream_postgres/range.{
+  type Bound, type Range, EmptyRange, Exclusive, Inclusive, Range, Unbounded,
 }
 import gleam/bit_array
 import gleam/int
 import gleam/list
 import gleam/result
 import gleam/string
-
-/// One end of a range.
-pub type Bound(a) {
-  /// No limit on this side.
-  Unbounded
-  /// The range holds this value.
-  Inclusive(a)
-  /// The range stops just before this value.
-  Exclusive(a)
-}
-
-/// A range: empty, or the values between two bounds.
-pub type Range(a) {
-  EmptyRange
-  Range(lower: Bound(a), upper: Bound(a))
-}
-
-// --- Codecs ---------------------------------------------------------------------
 
 const empty_flag = 1
 
@@ -58,22 +38,7 @@ const no_lower_flag = 8
 
 const no_upper_flag = 16
 
-/// A codec of a range of the element codec's type, for any range type
-/// whose element the element codec takes:
-///
-/// ### A codec of a date range <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/booking_period_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/codecs.{type Codec}
-/// import dream_postgres/codecs/range.{type Range, range}
-/// import dream_postgres/codecs/time.{date}
-/// import gleam/time/calendar.{type Date}
-///
-/// /// A codec of `daterange`.
-/// pub fn booking_period_codec() -> Codec(Range(Date)) {
-///   range(date)
-/// }
-/// ```
+/// A codec of a range of the element codec's type.
 pub fn range(element: Codec(a)) -> Codec(Range(a)) {
   Codec(
     name: "range of " <> element.name,
@@ -160,7 +125,8 @@ fn encode_text_multirange(
   )
 }
 
-/// A codec of a multirange, as a list of ranges.
+/// A codec of a multirange of the element codec's type, as a list of
+/// ranges.
 pub fn multirange(element: Codec(a)) -> Codec(List(Range(a))) {
   Codec(
     name: "multirange of " <> element.name,

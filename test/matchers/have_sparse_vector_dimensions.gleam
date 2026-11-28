@@ -1,7 +1,7 @@
 //// A matcher that gives the number of dimensions of the pgvector `sparsevec`
 //// of the chain.
 
-import dream_postgres/codecs/vector.{type SparseVector}
+import dream_postgres/vector.{type SparseVector}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the number of dimensions of the sparse vector. The chain goes on with

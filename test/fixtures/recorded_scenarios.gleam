@@ -4,21 +4,21 @@
 //// tests play them back with no database. `remove` deletes the directory.
 
 import dream_errors.{type Error}
-import dream_postgres/codecs
-import dream_postgres/codecs/array
+import dream_postgres/codec
 import dream_postgres/config.{type Config}
 import dream_postgres/copy.{copy_from, copy_to, table}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/interceptor.{type Request, SqlAnswer}
+import dream_postgres/normalize
 import dream_postgres/pool.{type Connection, type PoolName, with_connection}
 import dream_postgres/query.{
   affected, all, maybe_one, named, one, parameter, query, run_sql,
 }
-import dream_postgres/recorder.{type Recorder, type RecorderBuilder}
-import dream_postgres/recorder/match
-import dream_postgres/recorder/normalize
+import dream_postgres/recorder.{type Recorder, type RecorderBuilder, sql_only}
 import dream_postgres/row.{single}
-import dream_postgres/transaction.{commit, keep_both, run, step, transaction}
+import dream_postgres/transaction.{
+  commit, keep_both_errors, run_transaction, step, transaction,
+}
 import dream_uuid
 import fixtures/copy_users
 import fixtures/interceptors
@@ -101,11 +101,11 @@ pub fn record_all() -> Result(RecordedRuns, String) {
 fn on_server(sql: String) -> Result(Nil, String) {
   use connection <- result.try(
     server_pools.config(server_port)
-    |> pool.start
+    |> pool.start_pool
     |> result.map_error(string.inspect),
   )
   let ran = run_sql(sql, connection) |> result.map_error(string.inspect)
-  pool.stop(connection)
+  pool.stop_pool(connection)
   ran
 }
 
@@ -187,9 +187,9 @@ pub fn start_supervised_playback(
   let settings = scenario_of(recording)
   use path <- result.try(copy_of(runs, recording))
   use test_recorder <- result.try(
-    recorder.new(file: path)
+    recorder.recorder(file: path)
     |> settings.recorder_settings
-    |> recorder.start
+    |> recorder.start_recorder
     |> result.map_error(string.inspect),
   )
   use pool_child <- result.try(
@@ -217,9 +217,9 @@ pub fn start_in_ended_process(path: String) -> Nil {
   let owner =
     process.spawn_unlinked(fn() {
       let _started =
-        recorder.new(file: path)
+        recorder.recorder(file: path)
         |> recorder.mode(recorder.Passthrough)
-        |> recorder.start
+        |> recorder.start_recorder
       Nil
     })
   let owner_monitor = process.monitor(owner)
@@ -242,9 +242,9 @@ pub fn start_when_free(
   attempts attempts: Int,
 ) -> Result(Recorder, Error(PostgresError)) {
   let started =
-    recorder.new(file: path)
+    recorder.recorder(file: path)
     |> recorder.mode(recorder.Passthrough)
-    |> recorder.start
+    |> recorder.start_recorder
   case started, attempts > 1 {
     Ok(test_recorder), _ -> Ok(test_recorder)
     Error(failure), False -> Error(failure)
@@ -259,21 +259,21 @@ pub fn start_when_free(
 // what playback gives.
 fn record(scenario: Scenario, into: String) -> Result(Nil, String) {
   use test_recorder <- result.try(
-    recorder.new(file: into <> "/" <> scenario.name <> ".json")
+    recorder.recorder(file: into <> "/" <> scenario.name <> ".json")
     |> recorder.mode(recorder.Record)
     |> scenario.recorder_settings
-    |> recorder.start
+    |> recorder.start_recorder
     |> result.map_error(string.inspect),
   )
   use connection <- result.try(
     server_pools.config(server_port)
     |> scenario.app_settings
     |> config.record(test_recorder)
-    |> pool.start
+    |> pool.start_pool
     |> result.map_error(string.inspect),
   )
   let _recorded_result = scenario.run(connection)
-  pool.stop(connection)
+  pool.stop_pool(connection)
   Ok(Nil)
 }
 
@@ -356,7 +356,7 @@ pub fn scenarios() -> List(Scenario) {
     scenario("secret", check_password),
     Scenario(
       ..scenario("series_sql_only", select_series),
-      recorder_settings: recorder.match_on(_, match.sql_only),
+      recorder_settings: recorder.match_on(_, sql_only),
     ),
     Scenario(
       ..scenario("named_key", check_password),
@@ -409,7 +409,7 @@ pub fn api_key() -> Scenario {
 /// ```
 pub fn read_token(connection: Connection) -> ScenarioResult {
   query("SELECT 'sk_live_abc' AS token")
-  |> one(single(codecs.text), connection)
+  |> one(single(codec.text), connection)
   |> inspected
 }
 
@@ -440,7 +440,7 @@ pub fn identical() -> Scenario {
 /// // -> Ok("[1, 2, 3]")
 /// ```
 pub fn select_series(connection: Connection) -> ScenarioResult {
-  series_query(3) |> all(single(codecs.int), connection) |> inspected
+  series_query(3) |> all(single(codec.int), connection) |> inspected
 }
 
 /// `select_series` two times: one request more than the recording
@@ -467,10 +467,8 @@ pub fn select_series_twice(connection: Connection) -> ScenarioResult {
 /// // -> Error(RequestNotMatched) in playback of "two_parameters"
 /// ```
 pub fn select_three_then_two(connection: Connection) -> ScenarioResult {
-  use three <- result.try(
-    series_query(3) |> all(single(codecs.int), connection),
-  )
-  use two <- result.try(series_query(2) |> all(single(codecs.int), connection))
+  use three <- result.try(series_query(3) |> all(single(codec.int), connection))
+  use two <- result.try(series_query(2) |> all(single(codec.int), connection))
   Ok(string.inspect(#(three, two)))
 }
 
@@ -484,10 +482,8 @@ pub fn select_three_then_two(connection: Connection) -> ScenarioResult {
 /// // -> Ok("#([1, 2], [1, 2, 3])")
 /// ```
 pub fn select_two_series(connection: Connection) -> ScenarioResult {
-  use two <- result.try(series_query(2) |> all(single(codecs.int), connection))
-  use three <- result.try(
-    series_query(3) |> all(single(codecs.int), connection),
-  )
+  use two <- result.try(series_query(2) |> all(single(codec.int), connection))
+  use three <- result.try(series_query(3) |> all(single(codec.int), connection))
   Ok(string.inspect(#(two, three)))
 }
 
@@ -501,7 +497,7 @@ pub fn select_two_series(connection: Connection) -> ScenarioResult {
 /// // -> Error(RequestNotRecorded) in playback of "all"
 /// ```
 pub fn select_four(connection: Connection) -> ScenarioResult {
-  series_query(4) |> all(single(codecs.int), connection) |> inspected
+  series_query(4) |> all(single(codec.int), connection) |> inspected
 }
 
 /// The password whose hash `stored_hash` is.
@@ -567,15 +563,15 @@ pub fn check_password_in_plain(connection: Connection) -> ScenarioResult {
   "SELECT encode(sha256(convert_to($1, 'UTF8')), 'hex') = $2"
   |> query
   |> named("password.matches")
-  |> parameter(codecs.text, password)
-  |> parameter(codecs.text, stored_hash)
-  |> one(single(codecs.bool), connection)
+  |> parameter(codec.text, password)
+  |> parameter(codec.text, stored_hash)
+  |> one(single(codec.bool), connection)
   |> inspected
 }
 
 fn series_query(count: Int) -> query.Query {
   query("SELECT x FROM generate_series(1, $1) AS x")
-  |> parameter(codecs.int, count)
+  |> parameter(codec.int, count)
 }
 
 /// `one` of the length of an int4 array parameter.
@@ -588,8 +584,8 @@ fn series_query(count: Int) -> query.Query {
 /// ```
 pub fn count_array(connection: Connection) -> ScenarioResult {
   query("SELECT cardinality($1::int4[])")
-  |> parameter(array.array(codecs.int), [1, 2, 3])
-  |> one(single(codecs.int), connection)
+  |> parameter(codec.array(codec.int), [1, 2, 3])
+  |> one(single(codec.int), connection)
   |> inspected
 }
 
@@ -604,8 +600,8 @@ pub fn count_array(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn count_with_text(connection: Connection) -> ScenarioResult {
   query("SELECT cardinality($1::int4[])")
-  |> parameter(codecs.text, "{1,2,3}")
-  |> one(single(codecs.int), connection)
+  |> parameter(codec.text, "{1,2,3}")
+  |> one(single(codec.int), connection)
   |> inspected
 }
 
@@ -619,7 +615,7 @@ pub fn count_with_text(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn select_nothing(connection: Connection) -> ScenarioResult {
   query("SELECT 1 WHERE false")
-  |> maybe_one(single(codecs.int), connection)
+  |> maybe_one(single(codec.int), connection)
   |> inspected
 }
 
@@ -638,7 +634,7 @@ pub fn update_rows(connection: Connection) -> ScenarioResult {
       held,
     ))
     query("UPDATE counters SET id = id + $1")
-    |> parameter(codecs.int, 10)
+    |> parameter(codec.int, 10)
     |> affected(held)
   })
   |> result.flatten
@@ -681,14 +677,14 @@ pub fn count_in_transaction(connection: Connection) -> ScenarioResult {
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
   |> step(run_sql(
     "CREATE TEMPORARY TABLE notes (id int4) ON COMMIT DROP; INSERT INTO notes VALUES (1)",
     _,
   ))
   |> step(fn(held) {
-    query("SELECT count(*)::int4 FROM notes") |> one(single(codecs.int), held)
+    query("SELECT count(*)::int4 FROM notes") |> one(single(codec.int), held)
   })
   |> commit
   |> inspected
@@ -707,15 +703,15 @@ pub fn commit_after_conflict(connection: Connection) -> ScenarioResult {
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
-  |> run(fn(held) {
+  |> run_transaction(fn(held) {
     use Nil <- result.try(run_sql(
       "CREATE TEMPORARY TABLE tags (name text UNIQUE) ON COMMIT DROP; INSERT INTO tags VALUES ('a')",
       held,
     ))
     query("INSERT INTO tags VALUES ($1)")
-    |> parameter(codecs.text, "a")
+    |> parameter(codec.text, "a")
     |> affected(held)
     |> result.is_error
     |> Ok
@@ -745,7 +741,7 @@ pub fn store_users(connection: Connection) -> ScenarioResult {
       write: copy_users.user_fields,
     ))
     query("SELECT count(*)::int4 FROM copied_users")
-    |> one(single(codecs.int), held)
+    |> one(single(codec.int), held)
     |> result.map(fn(counted) { #(stored, counted) })
   })
   |> result.flatten
@@ -783,7 +779,7 @@ pub fn read_series(connection: Connection) -> ScenarioResult {
   copy_to(
     connection,
     query("SELECT x FROM generate_series(1, 3) AS x"),
-    read: single(codecs.int),
+    read: single(codec.int),
     from: [],
     with: list.prepend,
   )
@@ -802,7 +798,7 @@ pub fn read_series_divided_by_zero(connection: Connection) -> ScenarioResult {
   copy_to(
     connection,
     query("SELECT 1 / (3 - x) FROM generate_series(1, 5) AS x"),
-    read: single(codecs.int),
+    read: single(codec.int),
     from: [],
     with: list.prepend,
   )
@@ -821,7 +817,7 @@ pub fn read_missing_column(connection: Connection) -> ScenarioResult {
   copy_to(
     connection,
     query("SELECT no_such_column"),
-    read: single(codecs.int),
+    read: single(codec.int),
     from: [],
     with: list.prepend,
   )
@@ -841,7 +837,7 @@ pub fn read_null(connection: Connection) -> ScenarioResult {
   copy_to(
     connection,
     query("SELECT NULL::int4"),
-    read: single(codecs.int),
+    read: single(codec.int),
     from: [],
     with: list.prepend,
   )
@@ -864,7 +860,7 @@ pub fn insert_twice(connection: Connection) -> ScenarioResult {
       held,
     ))
     let insert =
-      query("INSERT INTO names VALUES ($1)") |> parameter(codecs.text, "ada")
+      query("INSERT INTO names VALUES ($1)") |> parameter(codec.text, "ada")
     use _first <- result.try(affected(insert, held))
     affected(insert, held)
   })
@@ -883,8 +879,8 @@ pub fn insert_twice(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn select_missing_column(connection: Connection) -> ScenarioResult {
   query("SELECT no_such_column + $1")
-  |> parameter(codecs.int, 1)
-  |> one(single(codecs.int), connection)
+  |> parameter(codec.int, 1)
+  |> one(single(codec.int), connection)
   |> inspected
 }
 

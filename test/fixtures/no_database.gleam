@@ -34,17 +34,17 @@ pub fn connection() -> Connection {
       |> result.map_error(string.inspect),
     )
     use Nil <- result.try(
-      simplifile.write(path, recording.to_file_text(Recording(entries: [])))
+      simplifile.write(path, recording.format_recording(Recording(entries: [])))
       |> result.map_error(string.inspect),
     )
     use test_recorder <- result.try(
-      recorder.new(file: path)
-      |> recorder.start
+      recorder.recorder(file: path)
+      |> recorder.start_recorder
       |> result.map_error(string.inspect),
     )
     config.default_config()
     |> config.record(test_recorder)
-    |> pool.start
+    |> pool.start_pool
     |> result.map_error(string.inspect)
   }
   |> result.lazy_unwrap(fn() {

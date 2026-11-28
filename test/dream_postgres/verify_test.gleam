@@ -1,7 +1,7 @@
 //// The boot check `verify` on PostgreSQL 16 to 19: each query is
 //// prepared and checked against the live database, and none runs.
 
-import dream_postgres/boot_check.{verify}
+import dream_postgres/boot_check.{verify_queries}
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
@@ -34,7 +34,7 @@ pub fn tests() -> TestSuite {
           |> run_with_temporary_table(
             "checked_users",
             boot_checks.columns,
-            fn(held) { verify(held, [boot_checks.queries()]) },
+            fn(held) { verify_queries(held, [boot_checks.queries()]) },
           )
           |> be_ok()
           |> be_equal(Nil)
@@ -45,7 +45,7 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_on_pool(fn(pool) {
-            verify(pool, [[boot_checks.add_one()], []])
+            verify_queries(pool, [[boot_checks.add_one()], []])
           })
           |> be_ok()
           |> be_equal(Nil)
@@ -58,7 +58,7 @@ pub fn tests() -> TestSuite {
           |> run_with_temporary_table(
             "checked_users",
             boot_checks.changed_columns,
-            fn(held) { verify(held, [[boot_checks.read()]]) },
+            fn(held) { verify_queries(held, [[boot_checks.read()]]) },
           )
           |> be_error()
           |> describe_each_error()
@@ -74,7 +74,7 @@ pub fn tests() -> TestSuite {
           |> run_with_temporary_table(
             "checked_users",
             boot_checks.missing_columns,
-            fn(held) { verify(held, [[boot_checks.read()]]) },
+            fn(held) { verify_queries(held, [[boot_checks.read()]]) },
           )
           |> be_error()
           |> describe_each_error()
@@ -90,7 +90,9 @@ pub fn tests() -> TestSuite {
           |> run_with_temporary_table(
             "checked_users",
             boot_checks.columns,
-            fn(held) { verify(held, [[boot_checks.find_with_wrong_codec()]]) },
+            fn(held) {
+              verify_queries(held, [[boot_checks.find_with_wrong_codec()]])
+            },
           )
           |> be_error()
           |> describe_each_error()
@@ -107,7 +109,7 @@ pub fn tests() -> TestSuite {
             "checked_users",
             boot_checks.changed_columns,
             fn(held) {
-              verify(held, [
+              verify_queries(held, [
                 boot_checks.queries(),
                 [boot_checks.find_with_wrong_codec()],
               ])
@@ -127,7 +129,7 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_with_table("checked_rows", fn(held) {
-            verify(held, [[boot_checks.insert_one()]])
+            verify_queries(held, [[boot_checks.insert_one()]])
           })
           |> leave_rows([])
           |> be_ok()
@@ -139,7 +141,7 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_on_stopped_pool(fn(stopped) {
-            verify(stopped, [[boot_checks.add_one()]])
+            verify_queries(stopped, [[boot_checks.add_one()]])
           })
           |> be_error()
           |> describe_each_error()
@@ -156,7 +158,7 @@ pub fn unit_tests() -> TestSuite {
   unit.describe("verify with no database", [
     unit.it("a connection with no database gives NoDatabaseToVerify", fn() {
       // Act and assert
-      verify(no_database.connection(), [boot_checks.queries()])
+      verify_queries(no_database.connection(), [boot_checks.queries()])
       |> should
       |> be_error()
       |> describe_each_error()

@@ -6,7 +6,7 @@
 //// temporary table on it, so no table stays on the server.
 
 import dream_errors.{Invalid, Unavailable}
-import dream_postgres/codecs
+import dream_postgres/codec
 import dream_postgres/config
 import dream_postgres/error
 import dream_postgres/pool.{with_connection, with_interceptor}
@@ -16,7 +16,7 @@ import dream_postgres/query.{
 import dream_postgres/row.{column, column_at, column_named, row, single}
 import dream_postgres/transaction.{
   ReadCommitted, RepeatableRead, Serializable, check, commit, isolation,
-  keep_both, read_only, run, step, step_with, transaction,
+  keep_both_errors, read_only, run_transaction, step, step_with, transaction,
 }
 import dream_test/context
 import dream_test/matchers.{
@@ -60,8 +60,8 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_pool(fn(connection) {
             query("SELECT generate_series(1, $1)")
-            |> parameter(codecs.int, 3)
-            |> all(single(codecs.int), connection)
+            |> parameter(codec.int, 3)
+            |> all(single(codec.int), connection)
           })
           |> be_ok()
           |> be_equal([1, 2, 3])
@@ -76,8 +76,8 @@ pub fn tests() -> TestSuite {
             |> named("seven")
             |> one(
               {
-                use number <- column(codecs.int)
-                use name <- column(codecs.text)
+                use number <- column(codec.int)
+                use name <- column(codec.text)
                 row(#(number, name))
               },
               connection,
@@ -95,8 +95,8 @@ pub fn tests() -> TestSuite {
             query("SELECT 1 AS first, 'two'::text AS second, 3 AS third")
             |> one(
               {
-                use third <- column_at(3, codecs.int)
-                use second <- column_named("second", codecs.text)
+                use third <- column_at(3, codec.int)
+                use second <- column_named("second", codec.text)
                 row(#(third, second))
               },
               connection,
@@ -112,7 +112,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_pool(fn(connection) {
             query("SELECT 1 WHERE false")
-            |> maybe_one(single(codecs.int), connection)
+            |> maybe_one(single(codec.int), connection)
           })
           |> be_ok()
           |> be_none()
@@ -156,7 +156,7 @@ pub fn tests() -> TestSuite {
               })
               |> result.flatten,
             )
-            pool.stop(held)
+            pool.stop_pool(held)
             Ok(inner)
           })
           |> leave_rows([1])
@@ -206,7 +206,7 @@ pub fn tests() -> TestSuite {
                 query(
                   "SELECT to_regclass('pg_temp.run_sql_rolled_back') IS NULL",
                 )
-                  |> one(single(codecs.bool), held),
+                  |> one(single(codec.bool), held),
               )
             })
           })
@@ -221,30 +221,30 @@ pub fn tests() -> TestSuite {
           |> run_on_stopped_pool(fn(connection) {
             [
               query("SELECT 1")
-                |> all(single(codecs.int), connection)
+                |> all(single(codec.int), connection)
                 |> result.replace(Nil),
               run_sql("SELECT 1", connection),
               with_connection(connection, fn(_held) { Nil }),
               transaction(
                 connection,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
                 |> step(client_statements.divide_by_zero)
                 |> commit
                 |> result.replace(Nil),
               {
-                use _transaction_connection <- run(transaction(
+                use _transaction_connection <- run_transaction(transaction(
                   connection,
                   database: function.identity,
-                  rollback_also_failed: keep_both,
+                  rollback_also_failed: keep_both_errors,
                 ))
                 Ok(Nil)
               },
               transaction(
                 connection,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
                 |> step(client_statements.divide_by_zero)
                 |> commit
@@ -263,7 +263,7 @@ pub fn tests() -> TestSuite {
             transaction(
               held,
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             )
             |> step(client_statements.insert(_, "committed_rows", 1))
             |> step(client_statements.insert(_, "committed_rows", 2))
@@ -282,7 +282,7 @@ pub fn tests() -> TestSuite {
             transaction(
               connection,
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             )
             |> step(fn(transaction_connection) {
               run_sql(
@@ -352,13 +352,13 @@ pub fn tests() -> TestSuite {
             )
             |> step(fn(transaction_connection) {
               query("SELECT 5")
-              |> one(single(codecs.int), transaction_connection)
+              |> one(single(codec.int), transaction_connection)
             })
             |> check(transfer_error.require_more_than(_, 1))
             |> step_with(fn(transaction_connection, found) {
               query("SELECT $1 * 10")
-              |> parameter(codecs.int, found)
-              |> one(single(codecs.int), transaction_connection)
+              |> parameter(codec.int, found)
+              |> one(single(codec.int), transaction_connection)
             })
             |> commit
           })
@@ -374,11 +374,11 @@ pub fn tests() -> TestSuite {
             transaction(
               held,
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             )
             |> step(fn(transaction_connection) {
               query("SELECT 4")
-              |> one(single(codecs.int), transaction_connection)
+              |> one(single(codec.int), transaction_connection)
             })
             |> step_with(fn(transaction_connection, id) {
               client_statements.insert(
@@ -403,7 +403,7 @@ pub fn tests() -> TestSuite {
               transaction(
                 connection,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
               |> isolation(level)
               |> step(client_statements.setting(_, "transaction_isolation"))
@@ -425,7 +425,7 @@ pub fn tests() -> TestSuite {
             transaction(
               connection,
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             )
             |> isolation(RepeatableRead)
             |> read_only
@@ -453,7 +453,7 @@ pub fn tests() -> TestSuite {
             transaction(
               connection,
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             )
             |> read_only
             |> step(run_sql(
@@ -477,7 +477,7 @@ pub fn tests() -> TestSuite {
               transaction(
                 held,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
               |> step(client_statements.insert(_, "swallowed_rows", 1))
               |> step(fn(transaction_connection) {
@@ -521,14 +521,14 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_with_table("branch_rows", fn(held) {
-            use transaction_connection <- run(transaction(
+            use transaction_connection <- run_transaction(transaction(
               held,
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             ))
             use found <- result.try(
               query("SELECT 2")
-              |> one(single(codecs.int), transaction_connection),
+              |> one(single(codec.int), transaction_connection),
             )
             use <- bool.lazy_guard(when: found <= 1, return: fn() {
               client_statements.insert(transaction_connection, "branch_rows", 0)
@@ -549,7 +549,7 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_with_table("run_error_rows", fn(held) {
-            use transaction_connection <- run(transaction(
+            use transaction_connection <- run_transaction(transaction(
               held,
               database: DatabaseFailed,
               rollback_also_failed: RollbackFailed,
@@ -577,14 +577,14 @@ pub fn tests() -> TestSuite {
             transaction(
               held,
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             )
             |> step(client_statements.insert(_, "nested_failed_rows", 1))
             |> step(fn(transaction_connection) {
               transaction(
                 transaction_connection,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
               |> step(client_statements.insert(_, "nested_failed_rows", 2))
               |> step(client_statements.divide_by_zero)
@@ -618,21 +618,21 @@ pub fn tests() -> TestSuite {
               transaction(
                 held,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
               |> step(client_statements.insert(_, "nested_kept_rows", 1))
               |> step(fn(transaction_connection) {
                 transaction(
                   transaction_connection,
                   database: function.identity,
-                  rollback_also_failed: keep_both,
+                  rollback_also_failed: keep_both_errors,
                 )
                 |> step(client_statements.insert(_, "nested_kept_rows", 2))
                 |> step(fn(inner_connection) {
                   transaction(
                     inner_connection,
                     database: function.identity,
-                    rollback_also_failed: keep_both,
+                    rollback_also_failed: keep_both_errors,
                   )
                   |> step(client_statements.insert(_, "nested_kept_rows", 3))
                   |> commit
@@ -657,14 +657,14 @@ pub fn tests() -> TestSuite {
               transaction(
                 held,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
               |> step(client_statements.insert(_, "nested_swallowed_rows", 1))
               |> step(fn(transaction_connection) {
                 transaction(
                   transaction_connection,
                   database: function.identity,
-                  rollback_also_failed: keep_both,
+                  rollback_also_failed: keep_both_errors,
                 )
                 |> step(client_statements.insert(_, "nested_swallowed_rows", 2))
                 |> step(fn(inner_connection) {
@@ -696,7 +696,7 @@ pub fn tests() -> TestSuite {
             )
             |> step(fn(transaction_connection) {
               query("SELECT 1")
-              |> one(single(codecs.int), transaction_connection)
+              |> one(single(codec.int), transaction_connection)
             })
             |> check(transfer_error.require_more_than(_, 1))
             |> commit
@@ -722,7 +722,7 @@ pub fn tests() -> TestSuite {
           pools
           |> should
           |> run_on_pool(fn(connection) {
-            use _transaction_connection <- run(transaction(
+            use _transaction_connection <- run_transaction(transaction(
               with_interceptor(connection, interceptors.refuse_rollback()),
               database: DatabaseFailed,
               rollback_also_failed: RollbackFailed,
@@ -753,7 +753,7 @@ pub fn tests() -> TestSuite {
             transaction(
               with_interceptor(connection, interceptors.refuse_rollback()),
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             )
             |> step(client_statements.divide_by_zero)
             |> commit
@@ -774,10 +774,10 @@ pub fn tests() -> TestSuite {
             pools
             |> should
             |> run_on_pool(fn(connection) {
-              use transaction_connection <- run(transaction(
+              use transaction_connection <- run_transaction(transaction(
                 connection,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               ))
               transaction(
                 with_interceptor(
@@ -785,7 +785,7 @@ pub fn tests() -> TestSuite {
                   interceptors.refuse_rollback(),
                 ),
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
               |> step(client_statements.divide_by_zero)
               |> commit
@@ -810,14 +810,14 @@ pub fn tests() -> TestSuite {
               transaction(
                 connection,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
               |> step(fn(transaction_connection) {
                 Ok([
                   transaction(
                     transaction_connection,
                     database: function.identity,
-                    rollback_also_failed: keep_both,
+                    rollback_also_failed: keep_both_errors,
                   )
                     |> isolation(Serializable)
                     |> step(client_statements.setting(
@@ -828,7 +828,7 @@ pub fn tests() -> TestSuite {
                   transaction(
                     transaction_connection,
                     database: function.identity,
-                    rollback_also_failed: keep_both,
+                    rollback_also_failed: keep_both_errors,
                   )
                     |> read_only
                     |> step(client_statements.setting(
@@ -856,7 +856,7 @@ pub fn tests() -> TestSuite {
               transaction(
                 connection,
                 database: function.identity,
-                rollback_also_failed: keep_both,
+                rollback_also_failed: keep_both_errors,
               )
               |> step(fn(transaction_connection) {
                 client_statements.divide_by_zero(transaction_connection)
@@ -866,7 +866,7 @@ pub fn tests() -> TestSuite {
                 transaction(
                   transaction_connection,
                   database: function.identity,
-                  rollback_also_failed: keep_both,
+                  rollback_also_failed: keep_both_errors,
                 )
                 |> step(client_statements.setting(_, "transaction_isolation"))
                 |> commit
@@ -893,7 +893,7 @@ pub fn unit_tests() -> TestSuite {
         // Act and assert
         config.default_config()
         |> config.host("")
-        |> pool.start
+        |> pool.start_pool
         |> should
         |> be_error()
         |> summarise_error()
@@ -904,7 +904,7 @@ pub fn unit_tests() -> TestSuite {
         // Act and assert
         config.default_config()
         |> config.port(0)
-        |> pool.start
+        |> pool.start_pool
         |> should
         |> be_error()
         |> summarise_error()
@@ -915,7 +915,7 @@ pub fn unit_tests() -> TestSuite {
         // Act and assert
         config.default_config()
         |> config.user("")
-        |> pool.start
+        |> pool.start_pool
         |> should
         |> be_error()
         |> summarise_error()
@@ -926,7 +926,7 @@ pub fn unit_tests() -> TestSuite {
         // Act and assert
         config.default_config()
         |> config.password("a\u{0000}b")
-        |> pool.start
+        |> pool.start_pool
         |> should
         |> be_error()
         |> summarise_error()
@@ -937,7 +937,7 @@ pub fn unit_tests() -> TestSuite {
         // Act and assert
         config.default_config()
         |> config.pool_size(0)
-        |> pool.start
+        |> pool.start_pool
         |> should
         |> be_error()
         |> summarise_error()
@@ -961,7 +961,7 @@ pub fn unit_tests() -> TestSuite {
           transaction.commit_answer(
             ["ROLLBACK"],
             Some(
-              error.server_error_from_report(server_reports.division_by_zero()),
+              error.report_to_server_error(server_reports.division_by_zero()),
             ),
           )
           |> should
@@ -1006,7 +1006,7 @@ pub fn unit_tests() -> TestSuite {
         config
         |> should
         |> run_on_started_pool(fn(connection) {
-          query("SELECT 1") |> all(single(codecs.int), connection)
+          query("SELECT 1") |> all(single(codec.int), connection)
         })
         |> be_error()
         |> have_kind_name()

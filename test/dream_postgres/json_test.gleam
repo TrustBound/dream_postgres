@@ -1,6 +1,6 @@
 //// The JSON document type.
 
-import dream_postgres/codecs/json
+import dream_postgres/json
 import dream_test/matchers.{be_equal, be_ok, be_true, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -15,7 +15,7 @@ pub fn tests() -> TestSuite {
       let value = gleam_json.object([#("a", gleam_json.int(1))])
 
       // Act
-      let text = json.from_json(value) |> json.to_string
+      let text = json.gleam_json_to_json(value) |> json.json_to_string
 
       // Assert
       text
@@ -25,7 +25,7 @@ pub fn tests() -> TestSuite {
     }),
     it("makes a document from valid JSON text", fn() {
       // Act
-      let text = json.from_string("[1, 2]") |> result.map(json.to_string)
+      let text = json.parse_json("[1, 2]") |> result.map(json.json_to_string)
 
       // Assert
       text
@@ -36,7 +36,7 @@ pub fn tests() -> TestSuite {
     }),
     it("refuses text that is not JSON", fn() {
       // Act
-      let refused = json.from_string("[1,") |> result.is_error
+      let refused = json.parse_json("[1,") |> result.is_error
 
       // Assert
       refused
@@ -46,10 +46,10 @@ pub fn tests() -> TestSuite {
     }),
     it("decodes a document", fn() {
       // Arrange
-      let document = json.from_json(gleam_json.int(7))
+      let document = json.gleam_json_to_json(gleam_json.int(7))
 
       // Act
-      let value = json.parse(document, decode.int)
+      let value = json.decode_json(document, decode.int)
 
       // Assert
       value

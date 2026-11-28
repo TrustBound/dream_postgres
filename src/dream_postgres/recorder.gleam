@@ -6,23 +6,23 @@
 //// ```gleam
 //// import dream_errors.{type Error}
 //// import dream_postgres/error.{type PostgresError}
+//// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 //// import dream_postgres/recorder.{
-////   type Mode, type Recorder, intercept, match_on, mode, new, start,
+////   type Mode, type Recorder, intercept, match_on, mode, recorder,
+////   sql_and_parameters, start_recorder,
 //// }
-//// import dream_postgres/recorder/match.{sql_and_parameters}
-//// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ////
 //// /// Starts the recorder of the test that creates an API key. The test
 //// /// gives the mode, which it reads from its own config.
 //// pub fn start_api_key_recorder(
 ////   recorder_mode: Mode,
 //// ) -> Result(Recorder, Error(PostgresError)) {
-////   new(file: "test/recordings/api_key_create.json")
+////   recorder(file: "test/recordings/api_key_create.json")
 ////   |> mode(recorder_mode)
 ////   |> match_on(sql_and_parameters)
 ////   |> intercept(generated_uuids(keep: []))
 ////   |> intercept(timestamps_near_now(window_days: 400))
-////   |> start
+////   |> start_recorder
 //// }
 //// ```
 ////
@@ -48,20 +48,21 @@
 
 import dream_errors.{type Error}
 import dream_postgres/copy/request.{
-  type RowWatcher, CopyRows, RecordedRows, RowWatcher,
+  type RowFeed, type RowWatcher, CopyRows, RecordedRows, RowWatcher,
 }
 import dream_postgres/driver/cell.{
-  type Cell, type StatementDescription, type TypeDescription,
+  type Cell, type StatementDescription, type TypeDescription, Binary, Null, Text,
 }
 import dream_postgres/error.{
   type PostgresError, type Reason, RecorderNotStarted, RecordingInUse,
   RecordingNotFound, RecordingNotWritten,
 }
 import dream_postgres/interceptor.{
-  type Interceptor, type Outcome, type Request, CopyFromAnswer, CopyToAnswer,
-  SqlAnswer, StatementAnswer,
+  type Interceptor, type Outcome, type Parameter, type Request, CopyFrom,
+  CopyFromAnswer, CopyTo, CopyToAnswer, Sql, SqlAnswer, Statement,
+  StatementAnswer,
 }
-import dream_postgres/recorder/match
+import dream_postgres/query/definition.{WrittenCell, WrittenSecret}
 import dream_postgres/recorder/recorder_process.{handle_message}
 import dream_postgres/recorder/recorder_state.{
   type Message, type Session, type State, AbortedBy, OwnerDown, PassingThrough,
@@ -77,11 +78,14 @@ import dream_postgres/recorder/written_entry.{
 }
 import dream_postgres/recording.{type RecordedEntry}
 import dream_postgres/secrets.{type Secrets}
+import gleam/bit_array
 import gleam/erlang/process.{type Down, type Pid, type Subject}
+import gleam/int
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{None, Some}
 import gleam/otp/actor
 import gleam/result
+import gleam/string
 
 /// What a recorder does with the requests of its connection.
 pub type Mode {
@@ -90,7 +94,7 @@ pub type Mode {
   /// new for each run.
   Record
   /// Nothing connects: the recording answers each request. A missing file
-  /// fails `start` with `RecordingNotFound`.
+  /// fails `start_recorder` with `RecordingNotFound`.
   Playback
   /// `Playback` when the recording file exists, else `Record`.
   RecordMissing
@@ -109,13 +113,13 @@ pub opaque type RecorderBuilder {
 }
 
 /// A started recorder. Attach it to a config with `config.record`.
-/// It stops with `pool.stop` of its connection, or when the
+/// It stops with `pool.stop_pool` of its connection, or when the
 /// process that started it ends.
 pub opaque type Recorder {
   Recorder(session: Session, subject: Subject(Message), pid: Pid)
 }
 
-/// How `pool.start` uses a recorder.
+/// How `pool.start_pool` uses a recorder.
 @internal
 pub type Attachment {
   /// A pool, with this interceptor after all other interceptors.
@@ -128,37 +132,37 @@ pub type Attachment {
 }
 
 /// A recorder of the recording file at `path`, in `Playback` mode, with
-/// the key `match.sql_and_parameters` and no interceptor.
+/// the key `sql_and_parameters` and no interceptor.
 ///
 /// ### Start the recorder of one test <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
 /// import dream_postgres/error.{type PostgresError}
+/// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 /// import dream_postgres/recorder.{
-///   type Mode, type Recorder, intercept, match_on, mode, new, start,
+///   type Mode, type Recorder, intercept, match_on, mode, recorder,
+///   sql_and_parameters, start_recorder,
 /// }
-/// import dream_postgres/recorder/match.{sql_and_parameters}
-/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
 /// /// Starts the recorder of the test that creates an API key. The test
 /// /// gives the mode, which it reads from its own config.
 /// pub fn start_api_key_recorder(
 ///   recorder_mode: Mode,
 /// ) -> Result(Recorder, Error(PostgresError)) {
-///   new(file: "test/recordings/api_key_create.json")
+///   recorder(file: "test/recordings/api_key_create.json")
 ///   |> mode(recorder_mode)
 ///   |> match_on(sql_and_parameters)
 ///   |> intercept(generated_uuids(keep: []))
 ///   |> intercept(timestamps_near_now(window_days: 400))
-///   |> start
+///   |> start_recorder
 /// }
 /// ```
-pub fn new(file path: String) -> RecorderBuilder {
+pub fn recorder(file path: String) -> RecorderBuilder {
   RecorderBuilder(
     path:,
     mode: Playback,
-    key: match.sql_and_parameters,
+    key: sql_and_parameters,
     interceptors: [],
   )
 }
@@ -170,30 +174,30 @@ pub fn new(file path: String) -> RecorderBuilder {
 /// ```gleam
 /// import dream_errors.{type Error}
 /// import dream_postgres/error.{type PostgresError}
+/// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 /// import dream_postgres/recorder.{
-///   type Mode, type Recorder, intercept, match_on, mode, new, start,
+///   type Mode, type Recorder, intercept, match_on, mode, recorder,
+///   sql_and_parameters, start_recorder,
 /// }
-/// import dream_postgres/recorder/match.{sql_and_parameters}
-/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
 /// /// Starts the recorder of the test that creates an API key. The test
 /// /// gives the mode, which it reads from its own config.
 /// pub fn start_api_key_recorder(
 ///   recorder_mode: Mode,
 /// ) -> Result(Recorder, Error(PostgresError)) {
-///   new(file: "test/recordings/api_key_create.json")
+///   recorder(file: "test/recordings/api_key_create.json")
 ///   |> mode(recorder_mode)
 ///   |> match_on(sql_and_parameters)
 ///   |> intercept(generated_uuids(keep: []))
 ///   |> intercept(timestamps_near_now(window_days: 400))
-///   |> start
+///   |> start_recorder
 /// }
 /// ```
 pub fn mode(builder: RecorderBuilder, mode: Mode) -> RecorderBuilder {
   RecorderBuilder(..builder, mode:)
 }
 
-/// Sets the key of each request: `match.sql_and_parameters`,
+/// Sets the key of each request: `sql_and_parameters`,
 /// `match.sql_only`, or a function of the app. The recorder saves the key
 /// with each request, and playback compares the key of each request with
 /// the key of the next recorded request.
@@ -204,19 +208,18 @@ pub fn mode(builder: RecorderBuilder, mode: Mode) -> RecorderBuilder {
 /// import dream_errors.{type Error}
 /// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/recorder.{
-///   type Mode, type Recorder, match_on, mode, new, start,
+///   type Mode, type Recorder, match_on, mode, recorder, sql_only, start_recorder,
 /// }
-/// import dream_postgres/recorder/match.{sql_only}
 ///
 /// /// A recorder that takes any parameters of the recorded SQL, for a test
 /// /// whose parameters change in each run.
 /// pub fn start_sql_only_recorder(
 ///   recorder_mode: Mode,
 /// ) -> Result(Recorder, Error(PostgresError)) {
-///   new(file: "test/recordings/api_key_list.json")
+///   recorder(file: "test/recordings/api_key_list.json")
 ///   |> mode(recorder_mode)
 ///   |> match_on(sql_only)
-///   |> start
+///   |> start_recorder
 /// }
 /// ```
 pub fn match_on(
@@ -230,30 +233,30 @@ pub fn match_on(
 /// keeps, after the interceptors added before. In `Record` mode it
 /// changes what is saved: the request and the answer. In `Playback` mode
 /// it changes the request before its key is made, and the app gets the
-/// saved answer. See `dream_postgres/recorder/normalize`.
+/// saved answer. See `dream_postgres/normalize`.
 ///
 /// ### Start the recorder of one test <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
 /// import dream_postgres/error.{type PostgresError}
+/// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 /// import dream_postgres/recorder.{
-///   type Mode, type Recorder, intercept, match_on, mode, new, start,
+///   type Mode, type Recorder, intercept, match_on, mode, recorder,
+///   sql_and_parameters, start_recorder,
 /// }
-/// import dream_postgres/recorder/match.{sql_and_parameters}
-/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
 /// /// Starts the recorder of the test that creates an API key. The test
 /// /// gives the mode, which it reads from its own config.
 /// pub fn start_api_key_recorder(
 ///   recorder_mode: Mode,
 /// ) -> Result(Recorder, Error(PostgresError)) {
-///   new(file: "test/recordings/api_key_create.json")
+///   recorder(file: "test/recordings/api_key_create.json")
 ///   |> mode(recorder_mode)
 ///   |> match_on(sql_and_parameters)
 ///   |> intercept(generated_uuids(keep: []))
 ///   |> intercept(timestamps_near_now(window_days: 400))
-///   |> start
+///   |> start_recorder
 /// }
 /// ```
 pub fn intercept(
@@ -277,26 +280,26 @@ pub fn intercept(
 /// ```gleam
 /// import dream_errors.{type Error}
 /// import dream_postgres/error.{type PostgresError}
+/// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 /// import dream_postgres/recorder.{
-///   type Mode, type Recorder, intercept, match_on, mode, new, start,
+///   type Mode, type Recorder, intercept, match_on, mode, recorder,
+///   sql_and_parameters, start_recorder,
 /// }
-/// import dream_postgres/recorder/match.{sql_and_parameters}
-/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
 /// /// Starts the recorder of the test that creates an API key. The test
 /// /// gives the mode, which it reads from its own config.
 /// pub fn start_api_key_recorder(
 ///   recorder_mode: Mode,
 /// ) -> Result(Recorder, Error(PostgresError)) {
-///   new(file: "test/recordings/api_key_create.json")
+///   recorder(file: "test/recordings/api_key_create.json")
 ///   |> mode(recorder_mode)
 ///   |> match_on(sql_and_parameters)
 ///   |> intercept(generated_uuids(keep: []))
 ///   |> intercept(timestamps_near_now(window_days: 400))
-///   |> start
+///   |> start_recorder
 /// }
 /// ```
-pub fn start(
+pub fn start_recorder(
   builder: RecorderBuilder,
 ) -> Result(Recorder, Error(PostgresError)) {
   let owner = process.self()
@@ -314,48 +317,169 @@ fn started_recorder(
   started: actor.Started(#(Subject(Message), Result(Session, Reason))),
 ) -> Result(Recorder, Reason) {
   let #(subject, loaded) = started.data
-  let recorder = Recorder(session: PassingThrough, subject:, pid: started.pid)
+  let new_recorder =
+    Recorder(session: PassingThrough, subject:, pid: started.pid)
   case loaded {
-    Ok(session) -> Ok(Recorder(..recorder, session:))
+    Ok(session) -> Ok(Recorder(..new_recorder, session:))
     Error(reason) -> {
-      stop(recorder)
+      stop(new_recorder)
       Error(reason)
     }
   }
 }
 
-/// How `pool.start` uses the recorder, with the secrets of the
+/// How `pool.start_pool` uses the recorder, with the secrets of the
 /// config it is attached to.
 @internal
-pub fn attachment(recorder: Recorder, secrets: Secrets) -> Attachment {
-  case recorder.session {
+pub fn attachment(active_recorder: Recorder, secrets: Secrets) -> Attachment {
+  case active_recorder.session {
     Saving ->
       RecordingPool(fn(request, next) {
-        record(recorder, secrets, request, next)
+        record(active_recorder, secrets, request, next)
       })
     PlayingBack ->
       NoPool(
         Replay(
           answer: fn(request) {
-            ask(recorder, Take(request, secrets, _)) |> result.flatten
+            ask(active_recorder, Take(request, secrets, _)) |> result.flatten
           },
-          aborted_by: fn() { ask(recorder, AbortedBy) },
+          aborted_by: fn() { ask(active_recorder, AbortedBy) },
         ),
-        recorder:,
+        recorder: active_recorder,
       )
     PassingThrough -> PlainPool
   }
 }
 
 /// Stops the recorder. A request after it fails with `RecorderStopped`.
-/// `pool.stop` of its connection calls it.
+/// `pool.stop_pool` of its connection calls it.
 @internal
-pub fn stop(recorder: Recorder) -> Nil {
-  let monitor = process.monitor(recorder.pid)
-  process.send(recorder.subject, Stop)
+pub fn stop(active_recorder: Recorder) -> Nil {
+  let monitor = process.monitor(active_recorder.pid)
+  process.send(active_recorder.subject, Stop)
   process.new_selector()
   |> process.select_specific_monitor(monitor, fn(_down: Down) { Nil })
   |> process.selector_receive_forever
+}
+
+// --- Request keys ----------------------------------------------------------------
+//
+// The keys of `match_on`: what a recorder makes of each request to check,
+// in playback, that it is the next request of the recording. A recorder
+// makes the key after its own interceptors, so a key holds the
+// placeholders of `dream_postgres/normalize`, not the random values.
+
+/// The key of the kind, the SQL, and each written parameter or row of the
+/// request. A secret parameter counts only by its position and its codec,
+/// so any value of the same codec matches it. The default of a recorder.
+///
+/// ### Start the recorder of one test <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_errors.{type Error}
+/// import dream_postgres/error.{type PostgresError}
+/// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
+/// import dream_postgres/recorder.{
+///   type Mode, type Recorder, intercept, match_on, mode, recorder,
+///   sql_and_parameters, start_recorder,
+/// }
+///
+/// /// Starts the recorder of the test that creates an API key. The test
+/// /// gives the mode, which it reads from its own config.
+/// pub fn start_api_key_recorder(
+///   recorder_mode: Mode,
+/// ) -> Result(Recorder, Error(PostgresError)) {
+///   recorder(file: "test/recordings/api_key_create.json")
+///   |> mode(recorder_mode)
+///   |> match_on(sql_and_parameters)
+///   |> intercept(generated_uuids(keep: []))
+///   |> intercept(timestamps_near_now(window_days: 400))
+///   |> start_recorder
+/// }
+/// ```
+pub fn sql_and_parameters(request: Request) -> String {
+  let parameter_lines =
+    list.index_map(request.parameters, fn(parameter, position) {
+      "$" <> int.to_string(position + 1) <> " " <> parameter_text(parameter)
+    })
+  let row_lines = case request.kind {
+    CopyFrom(rows:, ..) ->
+      feed_rows(rows, [])
+      |> list.index_map(fn(row, number) {
+        "row "
+        <> int.to_string(number + 1)
+        <> " "
+        <> string.join(list.map(row, parameter_text), ", ")
+      })
+    Statement | Sql | CopyTo -> []
+  }
+  string.join(
+    [sql_only(request), ..list.append(parameter_lines, row_lines)],
+    "\n",
+  )
+}
+
+/// The key of the kind and the SQL of the request: the parameters and the
+/// rows do not count.
+///
+/// ### Match on the SQL only <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_sql_only_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_errors.{type Error}
+/// import dream_postgres/error.{type PostgresError}
+/// import dream_postgres/recorder.{
+///   type Mode, type Recorder, match_on, mode, recorder, sql_only, start_recorder,
+/// }
+///
+/// /// A recorder that takes any parameters of the recorded SQL, for a test
+/// /// whose parameters change in each run.
+/// pub fn start_sql_only_recorder(
+///   recorder_mode: Mode,
+/// ) -> Result(Recorder, Error(PostgresError)) {
+///   recorder(file: "test/recordings/api_key_list.json")
+///   |> mode(recorder_mode)
+///   |> match_on(sql_only)
+///   |> start_recorder
+/// }
+/// ```
+pub fn sql_only(request: Request) -> String {
+  kind_name(request) <> "\n" <> request.sql
+}
+
+fn kind_name(request: Request) -> String {
+  case request.kind {
+    Statement -> "statement"
+    Sql -> "sql"
+    CopyFrom(..) -> "copy_from"
+    CopyTo -> "copy_to"
+  }
+}
+
+fn parameter_text(parameter: Parameter) -> String {
+  case definition.written(parameter) {
+    Some(WrittenCell(type_description:, cell:)) ->
+      type_description.name <> " " <> cell_text(cell)
+    Some(WrittenSecret(..)) -> "secret " <> definition.codec_name(parameter)
+    None -> "not written " <> definition.codec_name(parameter)
+  }
+}
+
+fn cell_text(cell: Cell) -> String {
+  case cell {
+    Binary(bytes:) -> "binary " <> bit_array.base16_encode(bytes)
+    Text(bytes:) -> "text " <> bit_array.base16_encode(bytes)
+    Null -> "null"
+  }
+}
+
+fn feed_rows(
+  rows: RowFeed,
+  read: List(List(Parameter)),
+) -> List(List(Parameter)) {
+  case request.next_row(rows) {
+    Some(#(values, rest)) -> feed_rows(rest, [values, ..read])
+    None -> list.reverse(read)
+  }
 }
 
 // --- The process --------------------------------------------------------------------
@@ -415,12 +539,12 @@ fn load(
 // Sends a message to the recorder and waits for its answer. A recorder
 // that is stopped gives `RecorderStopped`.
 fn ask(
-  recorder: Recorder,
+  active_recorder: Recorder,
   make: fn(Subject(answer)) -> Message,
 ) -> Result(answer, Reason) {
   let reply_to = process.new_subject()
-  let monitor = process.monitor(recorder.pid)
-  process.send(recorder.subject, make(reply_to))
+  let monitor = process.monitor(active_recorder.pid)
+  process.send(active_recorder.subject, make(reply_to))
   let answer =
     process.new_selector()
     |> process.select_map(reply_to, Ok)
@@ -439,7 +563,7 @@ fn ask(
 // copy of the request with the answer. The app gets the answer of the
 // database.
 fn record(
-  recorder: Recorder,
+  active_recorder: Recorder,
   secrets: Secrets,
   request: Request,
   next: fn(Request) -> Outcome,
@@ -455,31 +579,31 @@ fn record(
         types:,
         rows: request.watch(
           rows,
-          stream_watcher(recorder, secrets, copy, description, types, []),
+          stream_watcher(active_recorder, secrets, copy, description, types, []),
         ),
       ))
     Ok(StatementAnswer(types:, ..)) ->
-      save(recorder, secrets, copy, outcome, every_type(events, types))
+      save(active_recorder, secrets, copy, outcome, every_type(events, types))
     Ok(SqlAnswer(..)) | Ok(CopyFromAnswer(..)) | Error(_) ->
-      save(recorder, secrets, copy, outcome, every_type(events, []))
+      save(active_recorder, secrets, copy, outcome, every_type(events, []))
   }
 }
 
 fn save(
-  recorder: Recorder,
+  active_recorder: Recorder,
   secrets: Secrets,
   copy: Request,
   outcome: Outcome,
   types: List(TypeDescription),
 ) -> Outcome {
-  ask(recorder, Save(copy, outcome, types, secrets, _))
+  ask(active_recorder, Save(copy, outcome, types, secrets, _))
   |> result.flatten
   |> result.try(fn(_saved) { outcome })
 }
 
 // Sees each row of a `copy_to`, and saves the stream when it ends.
 fn stream_watcher(
-  recorder: Recorder,
+  active_recorder: Recorder,
   secrets: Secrets,
   copy: Request,
   description: StatementDescription,
@@ -488,7 +612,7 @@ fn stream_watcher(
 ) -> RowWatcher {
   RowWatcher(
     take: fn(cells) {
-      stream_watcher(recorder, secrets, copy, description, types, [
+      stream_watcher(active_recorder, secrets, copy, description, types, [
         cells,
         ..rows
       ])
@@ -503,7 +627,7 @@ fn stream_watcher(
             watchers: [],
           ),
         ))
-      save(recorder, secrets, copy, outcome, every_type([], types))
+      save(active_recorder, secrets, copy, outcome, every_type([], types))
       |> result.replace(Nil)
     },
   )

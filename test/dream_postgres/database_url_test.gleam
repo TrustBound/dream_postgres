@@ -5,7 +5,7 @@
 
 import dream_errors.{Invalid}
 import dream_postgres/error.{InvalidConfig, InvalidDatabaseUrl, PostgresError}
-import dream_postgres/url.{config_from_url}
+import dream_postgres/url.{parse_database_url}
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, group, it}
@@ -25,7 +25,7 @@ pub fn tests() -> TestSuite {
       list.map(database_urls.configs(), fn(example: ConfigExample) {
         it(example.url, fn() {
           // Act and assert
-          config_from_url(example.url)
+          parse_database_url(example.url)
           |> should
           |> be_ok()
           |> extract_printed()
@@ -39,7 +39,7 @@ pub fn tests() -> TestSuite {
       list.map(database_urls.faults(), fn(example: FaultExample) {
         it(example.url, fn() {
           // Act and assert
-          config_from_url(example.url)
+          parse_database_url(example.url)
           |> should
           |> be_error()
           |> be_equal(Invalid(
@@ -57,7 +57,7 @@ pub fn tests() -> TestSuite {
     ),
     it("the message of a fault holds no password", fn() {
       // Act and assert
-      config_from_url("postgres://ada:hunter2@db.example.com:0/app")
+      parse_database_url("postgres://ada:hunter2@db.example.com:0/app")
       |> should
       |> be_error()
       |> have_message()

@@ -2,7 +2,7 @@
 //// the setup, and each test plays one back on a connection whose port has
 //// no server, so playback cannot reach a database.
 
-import dream_postgres/codecs
+import dream_postgres/codec
 import dream_postgres/config
 import dream_postgres/copy.{copy_from, copy_to, table}
 import dream_postgres/error.{
@@ -10,11 +10,11 @@ import dream_postgres/error.{
   SecretColumnNotReplaced,
 }
 import dream_postgres/interceptor.{SqlAnswer, command}
+import dream_postgres/normalize
 import dream_postgres/pool.{with_interceptor}
 import dream_postgres/posix
 import dream_postgres/query.{affected, query}
 import dream_postgres/recorder
-import dream_postgres/recorder/normalize
 import dream_postgres/row.{single}
 import dream_postgres/secrets
 import dream_test/context
@@ -591,7 +591,7 @@ pub fn tests() -> TestSuite {
           runs
           |> should
           |> play_back("all", fn(connection) {
-            pool.stop(connection)
+            pool.stop_pool(connection)
             recorded_scenarios.select_series(connection)
           })
           |> be_error()
@@ -640,7 +640,7 @@ pub fn tests() -> TestSuite {
                 interceptors.answer_with(Ok(SqlAnswer(results: []))),
               ),
               query("SELECT 1"),
-              read: single(codecs.int),
+              read: single(codec.int),
               from: [],
               with: list.prepend,
             )
@@ -660,7 +660,7 @@ pub fn tests() -> TestSuite {
           // Act and assert
           recorded_scenarios.copy_of(runs, "all")
           |> result.map(fn(path) {
-            recorder.new(file: path)
+            recorder.recorder(file: path)
             |> recorder.mode(recorder.RecordMissing)
             |> recorded_scenarios.normalized
           })
@@ -682,7 +682,7 @@ pub fn tests() -> TestSuite {
           let path = recorded_scenarios.new_path(runs, "record_missing")
 
           // Act and assert
-          recorder.new(file: path)
+          recorder.recorder(file: path)
           |> recorder.mode(recorder.RecordMissing)
           |> should
           |> run_with_recorder(
@@ -701,7 +701,10 @@ pub fn tests() -> TestSuite {
         "Passthrough runs each request on the database",
         fn(runs: RecordedRuns) {
           // Act and assert
-          recorder.new(file: recorded_scenarios.new_path(runs, "passthrough"))
+          recorder.recorder(file: recorded_scenarios.new_path(
+            runs,
+            "passthrough",
+          ))
           |> recorder.mode(recorder.Passthrough)
           |> should
           |> run_with_recorder(
@@ -718,7 +721,7 @@ pub fn tests() -> TestSuite {
         let path = recorded_scenarios.new_path(runs, "passthrough")
 
         // Act and assert
-        recorder.new(file: path)
+        recorder.recorder(file: path)
         |> recorder.mode(recorder.Passthrough)
         |> should
         |> run_with_recorder(
@@ -738,15 +741,15 @@ pub fn tests() -> TestSuite {
           let path = recorded_scenarios.new_path(runs, "held")
 
           // Act and assert
-          recorder.new(file: path)
+          recorder.recorder(file: path)
           |> recorder.mode(recorder.Passthrough)
           |> should
           |> run_with_recorder(
             server_pools.config(recorded_scenarios.server_port),
             fn(_connection) {
-              recorder.new(file: path)
+              recorder.recorder(file: path)
               |> recorder.mode(recorder.Passthrough)
-              |> recorder.start
+              |> recorder.start_recorder
             },
           )
           |> be_error()
@@ -762,20 +765,20 @@ pub fn tests() -> TestSuite {
           // Arrange
           let path = recorded_scenarios.new_path(runs, "freed")
           let _first_run =
-            recorder.new(file: path)
+            recorder.recorder(file: path)
             |> recorder.mode(recorder.Passthrough)
-            |> recorder.start
+            |> recorder.start_recorder
             |> result.try(fn(test_recorder) {
               server_pools.config(recorded_scenarios.server_port)
               |> config.record(test_recorder)
-              |> pool.start
+              |> pool.start_pool
             })
-            |> result.map(pool.stop)
+            |> result.map(pool.stop_pool)
 
           // Act and assert
-          recorder.new(file: path)
+          recorder.recorder(file: path)
           |> recorder.mode(recorder.Passthrough)
-          |> recorder.start
+          |> recorder.start_recorder
           |> should
           |> be_ok()
           |> or_fail_with("Expected the path free after the first stop")
@@ -800,8 +803,8 @@ pub fn tests() -> TestSuite {
         let path = recorded_scenarios.new_path(runs, "missing")
 
         // Act and assert
-        recorder.new(file: path)
-        |> recorder.start
+        recorder.recorder(file: path)
+        |> recorder.start_recorder
         |> should
         |> be_error()
         |> have_cause()
@@ -819,8 +822,8 @@ pub fn tests() -> TestSuite {
             |> result.try(fn(_made) { simplifile.write(path, "{}") })
 
           // Act and assert
-          recorder.new(file: path)
-          |> recorder.start
+          recorder.recorder(file: path)
+          |> recorder.start_recorder
           |> should
           |> be_error()
           |> summarise_error()
@@ -839,8 +842,8 @@ pub fn tests() -> TestSuite {
           })
 
         // Act and assert
-        recorder.new(file: path)
-        |> recorder.start
+        recorder.recorder(file: path)
+        |> recorder.start_recorder
         |> should
         |> be_error()
         |> have_cause()
@@ -854,9 +857,9 @@ pub fn tests() -> TestSuite {
           recorded_scenarios.first_path(runs, "all") <> "/under/recording.json"
 
         // Act and assert
-        recorder.new(file: path)
+        recorder.recorder(file: path)
         |> recorder.mode(recorder.Record)
-        |> recorder.start
+        |> recorder.start_recorder
         |> should
         |> be_error()
         |> have_cause()
@@ -871,7 +874,7 @@ pub fn tests() -> TestSuite {
           let path = recorded_scenarios.new_path(runs, "blocked")
 
           // Act and assert
-          recorder.new(file: path)
+          recorder.recorder(file: path)
           |> recorder.mode(recorder.Record)
           |> should
           |> run_with_recorder(
@@ -894,13 +897,13 @@ pub fn tests() -> TestSuite {
         "a secret column that its codec cannot write fails the request",
         fn(runs: RecordedRuns) {
           // Act and assert
-          recorder.new(file: recorded_scenarios.new_path(runs, "token"))
+          recorder.recorder(file: recorded_scenarios.new_path(runs, "token"))
           |> recorder.mode(recorder.Record)
           |> should
           |> run_with_recorder(
             server_pools.config(recorded_scenarios.server_port)
               |> config.secrets(
-                secrets.new() |> secrets.column("token", codecs.int, with: 1),
+                secrets.new() |> secrets.column("token", codec.int, with: 1),
               ),
             recorded_scenarios.read_token,
           )
@@ -924,9 +927,9 @@ pub fn tests() -> TestSuite {
           // Act and assert
           {
             use test_recorder <- result.try(
-              recorder.new(file: path)
+              recorder.recorder(file: path)
               |> recorder.mode(recorder.Record)
-              |> recorder.start
+              |> recorder.start_recorder
               |> result.map_error(string.inspect),
             )
             use pool_child <- result.try(
@@ -1003,7 +1006,7 @@ pub fn tests() -> TestSuite {
         "a live copy_to stream goes through a normalizer as it is",
         fn(runs: RecordedRuns) {
           // Act and assert
-          recorder.new(file: recorded_scenarios.new_path(runs, "live_copy"))
+          recorder.recorder(file: recorded_scenarios.new_path(runs, "live_copy"))
           |> recorder.mode(recorder.Passthrough)
           |> should
           |> run_with_recorder(

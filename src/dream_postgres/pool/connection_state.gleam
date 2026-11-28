@@ -271,7 +271,7 @@ pub fn run_held_sql(
   sql: String,
 ) -> Result(List(CommandResult), Error(PostgresError)) {
   run_held_sql_with_postgres_error(held, sql)
-  |> result.map_error(error.to_dream_error)
+  |> result.map_error(error.postgres_error_to_dream_error)
 }
 
 // Runs a `run_sql` call, and gives its failure as the PostgresError itself, for a
@@ -421,7 +421,7 @@ pub fn failed_statement(
   case held.session {
     DatabaseSession(connection:, ..) ->
       connection_status.aborted_by(connection)
-      |> result.map(option.map(_, error.server_error_from_report))
+      |> result.map(option.map(_, error.report_to_server_error))
       |> result.map_error(driver_executor.connection_state_error_reason)
     ReplaySession(replay:, ..) -> replay.aborted_by()
   }

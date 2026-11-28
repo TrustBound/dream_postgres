@@ -1,54 +1,19 @@
-//// A JSON document, as PostgreSQL stores it in a `json` or `jsonb` column.
+//// The codecs of `json` and `jsonb`. The binary form of `jsonb` is a version
+//// byte, 1, then the text.
 ////
-//// The type is opaque, so a value of it always holds valid JSON: it is made
-//// from a `gleam/json` value, or from a text that parses.
-////
-//// `json` and `jsonb` are the codecs of the two column types.
+//// This module is internal to dream_postgres.
 
-import dream_postgres/codecs/codec_type.{
+import dream_postgres/codec/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
   utf8_bytes, utf8_text, wrong_size,
 }
 import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, Binary, BinaryFormat,
 }
+import dream_postgres/json.{type Json}
 import gleam/bit_array
-import gleam/dynamic/decode.{type Decoder}
-import gleam/json
 import gleam/result
 
-/// A valid JSON document.
-pub opaque type Json {
-  Json(text: String)
-}
-
-/// The JSON document `null`.
-pub const null = Json("null")
-
-/// The document of a `gleam/json` value.
-pub fn from_json(value: json.Json) -> Json {
-  Json(json.to_string(value))
-}
-
-/// The document of a text, if the text is valid JSON.
-pub fn from_string(text: String) -> Result(Json, json.DecodeError) {
-  json.parse(text, decode.dynamic)
-  |> result.replace(Json(text))
-}
-
-/// The text of a document.
-pub fn to_string(value: Json) -> String {
-  value.text
-}
-
-/// Decodes a document with a `gleam/dynamic/decode` decoder.
-pub fn parse(value: Json, decoder: Decoder(a)) -> Result(a, json.DecodeError) {
-  json.parse(value.text, decoder)
-}
-
-// --- Codecs ---------------------------------------------------------------------
-
-/// `json`, as a valid `Json` document.
 pub const json =
   Codec(
     name: "json",
@@ -60,7 +25,6 @@ pub const json =
     placeholder: placeholder_json,
   )
 
-/// `jsonb`, as a valid `Json` document.
 pub const jsonb =
   Codec(
     name: "jsonb",
@@ -72,7 +36,7 @@ pub const jsonb =
     placeholder: placeholder_json,
   )
 
-const placeholder_json = null
+const placeholder_json = json.null
 
 fn accepts_json(description: TypeDescription, _lookup: TypeLookup) -> Bool {
   is_base(description, ["json"])
@@ -83,7 +47,7 @@ fn encode_json(
   _description: TypeDescription,
   _lookup: TypeLookup,
 ) -> Result(Cell, String) {
-  Ok(Binary(bit_array.from_string(to_string(value))))
+  Ok(Binary(bit_array.from_string(json.json_to_string(value))))
 }
 
 fn decode_json(
@@ -105,7 +69,7 @@ fn encode_jsonb(
   _description: TypeDescription,
   _lookup: TypeLookup,
 ) -> Result(Cell, String) {
-  Ok(Binary(<<1, to_string(value):utf8>>))
+  Ok(Binary(<<1, json.json_to_string(value):utf8>>))
 }
 
 fn decode_jsonb(
@@ -124,6 +88,6 @@ fn decode_jsonb(
 }
 
 fn parse_json(text: String) -> Result(Json, DecodeIssue) {
-  from_string(text)
+  json.parse_json(text)
   |> result.replace_error(Malformed("the server sent text that is not JSON"))
 }

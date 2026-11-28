@@ -49,7 +49,7 @@ fn run_on_chosen(
     server_pools.config(pool.port)
     |> listener.start_listener
     |> result.map(fn(listener) { #(listener, pool.connection) })
-    |> result.map_error(error.describe)
+    |> result.map_error(error.describe_error)
   }
   case started {
     Ok(#(listener, connection)) -> {

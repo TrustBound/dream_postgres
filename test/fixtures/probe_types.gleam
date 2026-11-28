@@ -2,9 +2,7 @@
 //// make (`fixtures/probe_sessions`), and a codec for the text form of a
 //// type with no built-in codec.
 
-import dream_postgres/codecs.{type Codec}
-import dream_postgres/codecs/composite
-import dream_postgres/codecs/numeric
+import dream_postgres/codec.{type Codec}
 import dream_postgres/row/reader.{column, row}
 import gleam/option.{type Option, None}
 
@@ -41,7 +39,7 @@ pub type Order {
 /// codec.array(probe_types.mood_codec())
 /// ```
 pub fn mood_codec() -> Codec(Mood) {
-  codecs.enum("probe_mood", #(Sad, "sad"), [#(Okay, "ok"), #(Happy, "happy")])
+  codec.enum("probe_mood", #(Sad, "sad"), [#(Okay, "ok"), #(Happy, "happy")])
 }
 
 /// The codec of the composite `probe_address`.
@@ -52,19 +50,19 @@ pub fn mood_codec() -> Codec(Mood) {
 /// codec.array(probe_types.address_codec())
 /// ```
 pub fn address_codec() -> Codec(Address) {
-  composite.composite(
+  codec.composite(
     "probe_address",
     read: {
-      use street <- column(codecs.text)
-      use number <- column(codecs.int)
-      use note <- column(codecs.nullable(codecs.text))
+      use street <- column(codec.text)
+      use number <- column(codec.int)
+      use note <- column(codec.nullable(codec.text))
       row(Address(street:, number:, note:))
     },
     write: fn(address) {
       [
-        composite.field(codecs.text, address.street),
-        composite.field(codecs.int, address.number),
-        composite.field(codecs.nullable(codecs.text), address.note),
+        codec.field(codec.text, address.street),
+        codec.field(codec.int, address.number),
+        codec.field(codec.nullable(codec.text), address.note),
       ]
     },
     placeholder: Address(street: "", number: 0, note: None),
@@ -79,17 +77,17 @@ pub fn address_codec() -> Codec(Address) {
 /// codec.array(probe_types.line_item_codec())
 /// ```
 pub fn line_item_codec() -> Codec(LineItem) {
-  composite.composite(
+  codec.composite(
     "probe_line_item",
     read: {
-      use amount <- column(numeric.numeric)
-      use quantity <- column(codecs.int)
+      use amount <- column(codec.numeric)
+      use quantity <- column(codec.int)
       row(LineItem(amount:, quantity:))
     },
     write: fn(line_item) {
       [
-        composite.field(numeric.numeric, line_item.amount),
-        composite.field(codecs.int, line_item.quantity),
+        codec.field(codec.numeric, line_item.amount),
+        codec.field(codec.int, line_item.quantity),
       ]
     },
     placeholder: LineItem(amount: "0", quantity: 0),
@@ -105,17 +103,17 @@ pub fn line_item_codec() -> Codec(LineItem) {
 /// probe_types.order_codec()
 /// ```
 pub fn order_codec() -> Codec(Order) {
-  composite.composite(
+  codec.composite(
     "probe_order",
     read: {
       use item <- column(line_item_codec())
-      use note <- column(codecs.nullable(codecs.text))
+      use note <- column(codec.nullable(codec.text))
       row(Order(item:, note:))
     },
     write: fn(order) {
       [
-        composite.field(line_item_codec(), order.item),
-        composite.field(codecs.nullable(codecs.text), order.note),
+        codec.field(line_item_codec(), order.item),
+        codec.field(codec.nullable(codec.text), order.note),
       ]
     },
     placeholder: Order(item: LineItem(amount: "0", quantity: 0), note: None),
@@ -131,7 +129,7 @@ pub fn order_codec() -> Codec(Order) {
 /// probe_types.text_form_codec("ltree")
 /// ```
 pub fn text_form_codec(type_name: String) -> Codec(String) {
-  codecs.custom(
+  codec.custom(
     type_name:,
     to_text: fn(text) { text },
     from_text: Ok,

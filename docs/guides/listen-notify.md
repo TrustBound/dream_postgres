@@ -28,7 +28,7 @@ The channel name is exact: `Jobs` and `jobs` are two channels.
 
 ## Start a listener and listen
 
-`start_listener` takes a config, as `start` does. It uses the server, the login and the TLS of the config. The pool settings of the config do not apply. It waits until its connection is up, so a server that does not answer gives an error. Each `LISTEN` can take the query timeout of the config.
+`start_listener` takes a config, as `start_pool` does. It uses the server, the login and the TLS of the config. The pool settings of the config do not apply. It waits until its connection is up, so a server that does not answer gives an error. Each `LISTEN` can take the query timeout of the config.
 
 ### Start a listener and listen on a channel <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/listen_for_jobs.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -133,7 +133,7 @@ pub fn stop_listening(
 
 ```gleam
 import dream_postgres/config.{type Config}
-import dream_postgres/error.{describe}
+import dream_postgres/error.{describe_error}
 import dream_postgres/listener.{type ListenerName, supervised_listener}
 import gleam/otp/actor
 import gleam/otp/static_supervisor.{type Supervisor}
@@ -147,7 +147,7 @@ pub fn start_listener_supervisor(
 ) -> Result(actor.Started(Supervisor), String) {
   use listener_child <- result.try(
     supervised_listener(config, name: notifications)
-    |> result.map_error(describe),
+    |> result.map_error(describe_error),
   )
   static_supervisor.new(static_supervisor.OneForOne)
   |> static_supervisor.add(listener_child)

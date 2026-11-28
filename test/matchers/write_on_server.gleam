@@ -1,8 +1,8 @@
 //// A matcher that sends the value of the chain to a probe server as `$1`
 //// and gives the server's text of it.
 
-import dream_postgres/codecs.{type Codec}
-import dream_postgres/codecs/codec_type
+import dream_postgres/codec.{type Codec}
+import dream_postgres/codec/codec_type
 import dream_postgres/driver/cell.{
   type TypeDescription, Binary, Null, Text, TextFormat,
 }

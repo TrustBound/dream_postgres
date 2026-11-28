@@ -1,7 +1,7 @@
 import dream_errors.{type Error}
 import dream_postgres/config.{type Config, record}
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{start, stop}
+import dream_postgres/pool.{start_pool, stop_pool}
 import dream_postgres/recorder.{type Recorder}
 import gleam/result
 import snippets/app_config.{app_config}
@@ -18,10 +18,10 @@ pub fn run_create_api_key(
   use connection <- result.try(
     app_config(server)
     |> record(test_recorder)
-    |> start,
+    |> start_pool,
   )
   let created =
     with_api_keys_table(connection, create_api_key(_, owner, "s3cret"))
-  stop(connection)
+  stop_pool(connection)
   created
 }

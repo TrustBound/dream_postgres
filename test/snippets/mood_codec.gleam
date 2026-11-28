@@ -1,4 +1,4 @@
-import dream_postgres/codecs.{type Codec, enum}
+import dream_postgres/codec.{type Codec, enum}
 
 /// The values of the PostgreSQL enum
 /// `CREATE TYPE mood AS ENUM ('happy', 'sad')`.

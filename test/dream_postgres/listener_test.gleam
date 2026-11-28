@@ -114,7 +114,7 @@ pub fn tests() -> TestSuite {
             |> run_with_supervised_listener(name, fn(gate, connection) {
               use _subscription <- result.try(
                 listen(named_listener(name), "named_jobs", messages)
-                |> result.map_error(error.describe),
+                |> result.map_error(error.describe_error),
               )
               listener_gate.open_gate(gate)
               use states <- result.try(listen_messages.receive_messages(
@@ -124,7 +124,7 @@ pub fn tests() -> TestSuite {
               ))
               use Nil <- result.try(
                 run_sql("NOTIFY named_jobs, 'by name'", connection)
-                |> result.map_error(error.describe),
+                |> result.map_error(error.describe_error),
               )
               listen_messages.receive_messages(messages, count: 1, within: 5000)
               |> result.map(list.append(states, _))
@@ -153,7 +153,7 @@ pub fn tests() -> TestSuite {
             |> run_with_supervised_listener(name, fn(gate, connection) {
               use _subscription <- result.try(
                 listen(named_listener(name), "revived_jobs", messages)
-                |> result.map_error(error.describe),
+                |> result.map_error(error.describe_error),
               )
               listener_gate.open_gate(gate)
               use first_states <- result.try(listen_messages.receive_messages(
@@ -173,7 +173,7 @@ pub fn tests() -> TestSuite {
               ))
               use Nil <- result.try(
                 run_sql("NOTIFY revived_jobs, 'after the crash'", connection)
-                |> result.map_error(error.describe),
+                |> result.map_error(error.describe_error),
               )
               listen_messages.receive_messages(messages, count: 1, within: 5000)
               |> result.map(fn(notified) {
@@ -388,7 +388,7 @@ fn listen_failure_tests() {
       process_message.ListenRefused(report, Idle)
       |> should
       |> map_listen_failure()
-      |> be_equal(error.Server(error.server_error_from_report(report)))
+      |> be_equal(error.Server(error.report_to_server_error(report)))
       |> or_fail_with("Expected the report as a Server reason")
     }),
     unit.it("an unexpected answer is UnexpectedListenAnswer", fn() {

@@ -4,7 +4,7 @@
 //// the same checks before anything is sent, as the parameters and the
 //// rows of a query.
 
-import dream_postgres/codecs/codec_type.{type TypeLookup}
+import dream_postgres/codec/codec_type.{type TypeLookup}
 import dream_postgres/copy/binary_format.{type StreamReader}
 import dream_postgres/copy/request.{
   type CopyRows, type RowFeed, type RowWatcher, type Table, CopyRows,

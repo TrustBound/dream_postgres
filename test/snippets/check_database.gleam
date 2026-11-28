@@ -1,5 +1,5 @@
 import dream_errors.{type Error}
-import dream_postgres/boot_check.{verify}
+import dream_postgres/boot_check.{verify_queries}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import snippets/user_checks.{queries}
@@ -8,5 +8,5 @@ import snippets/user_checks.{queries}
 pub fn check_database(
   connection: Connection,
 ) -> Result(Nil, List(Error(PostgresError))) {
-  verify(connection, [queries()])
+  verify_queries(connection, [queries()])
 }

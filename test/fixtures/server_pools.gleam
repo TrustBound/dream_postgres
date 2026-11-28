@@ -107,11 +107,11 @@ pub fn chosen(pools: ServerPools) -> Result(ServerPool, String) {
 
 fn start_pool(server: Server) -> Result(ServerPool, String) {
   config(server.port)
-  |> pool.start
+  |> pool.start_pool
   |> result.map(ServerPool(server.version, server.port, _))
-  |> result.map_error(error.describe)
+  |> result.map_error(error.describe_error)
 }
 
 fn stop_pool(pool: ServerPool) -> Nil {
-  pool.stop(pool.connection)
+  pool.stop_pool(pool.connection)
 }

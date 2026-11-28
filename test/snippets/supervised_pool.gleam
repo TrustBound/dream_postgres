@@ -1,7 +1,7 @@
 import dream_errors.{type Error}
-import dream_postgres/codecs.{text}
+import dream_postgres/codec.{text}
 import dream_postgres/config.{type Config}
-import dream_postgres/error.{type PostgresError, describe}
+import dream_postgres/error.{type PostgresError, describe_error}
 import dream_postgres/pool.{type PoolName, named_connection, supervised}
 import dream_postgres/query.{one, query}
 import dream_postgres/row.{single}
@@ -17,7 +17,7 @@ pub fn start_supervisor(
 ) -> Result(actor.Started(Supervisor), String) {
   use pool_child <- result.try(
     supervised(config, name: pool_name)
-    |> result.map_error(describe),
+    |> result.map_error(describe_error),
   )
   static_supervisor.new(static_supervisor.OneForOne)
   |> static_supervisor.add(pool_child)

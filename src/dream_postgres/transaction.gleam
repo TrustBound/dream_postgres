@@ -5,13 +5,14 @@
 ////
 //// ```gleam
 //// import dream_errors.{type Error}
-//// import dream_postgres/codecs.{int}
+//// import dream_postgres/codec.{int}
 //// import dream_postgres/error.{type PostgresError}
 //// import dream_postgres/pool.{type Connection}
 //// import dream_postgres/query.{one, query}
 //// import dream_postgres/row.{single}
 //// import dream_postgres/transaction.{
-////   RepeatableRead, commit, isolation, keep_both, read_only, step, transaction,
+////   RepeatableRead, commit, isolation, keep_both_errors, read_only, step,
+////   transaction,
 //// }
 //// import gleam/function
 ////
@@ -23,7 +24,7 @@
 ////   transaction(
 ////     connection,
 ////     database: function.identity,
-////     rollback_also_failed: keep_both,
+////     rollback_also_failed: keep_both_errors,
 ////   )
 ////   |> isolation(RepeatableRead)
 ////   |> read_only
@@ -69,7 +70,7 @@ pub type Isolation {
   Serializable
 }
 
-/// A transaction plan with no step yet. Only such a plan can go to `run`.
+/// A transaction plan with no step yet. Only such a plan can go to `run_transaction`.
 pub type NoSteps
 
 /// A transaction plan with one step or more. Such a plan goes to `commit`.
@@ -89,7 +90,7 @@ pub fn isolation_sql(isolation: Isolation) -> String {
 /// it into one `PostgresError`, for a transaction where every error is a
 /// database error. The reason `RollbackAlsoFailed` keeps both errors
 /// whole, and `error.sql_state` gives the SQLSTATE of the step.
-pub fn keep_both(
+pub fn keep_both_errors(
   step_error: Error(PostgresError),
   rollback_error: PostgresError,
 ) -> PostgresError {
@@ -101,7 +102,7 @@ pub fn keep_both(
 }
 
 /// A transaction plan: its connection, its options and its steps. Nothing
-/// is sent before `commit` or `run`. `value` is the result of the last
+/// is sent before `commit` or `run_transaction`. `value` is the result of the last
 /// step, `cause` is the cause of the plan's `dream_errors.Error`, and
 /// `steps` is `NoSteps` or `HasSteps`.
 pub opaque type Transaction(value, cause, steps) {
@@ -125,7 +126,7 @@ pub opaque type Transaction(value, cause, steps) {
 /// - `rollback_also_failed` makes the cause for a failed step whose
 ///   `ROLLBACK` also failed. It gets the error of the step and the error
 ///   of the rollback, and the plan gives `Unavailable` with that cause.
-///   `transaction.keep_both` joins the two into one `PostgresError`.
+///   `transaction.keep_both_errors` joins the two into one `PostgresError`.
 ///
 /// On the connection of a transaction, the plan runs as a savepoint: its
 /// failure undoes only its own work.
@@ -259,8 +260,8 @@ pub fn commit(
 
 /// Runs the plan with one callback that does all the work with the
 /// connection of the transaction. `Ok` commits, and `Error` rolls back. A
-/// plan with steps cannot go to `run`.
-pub fn run(
+/// plan with steps cannot go to `run_transaction`.
+pub fn run_transaction(
   plan: Transaction(Nil, cause, NoSteps),
   callback: fn(Connection) -> Result(value, Error(cause)),
 ) -> Result(value, Error(cause)) {

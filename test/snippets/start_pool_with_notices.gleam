@@ -1,7 +1,7 @@
 import dream_errors.{type Error}
 import dream_postgres/config.{type Config, type ServerNotice, notices}
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{type Connection, start}
+import dream_postgres/pool.{type Connection, start_pool}
 import gleam/erlang/process.{type Subject}
 
 pub fn start_pool_with_notices(
@@ -10,5 +10,5 @@ pub fn start_pool_with_notices(
 ) -> Result(Connection, Error(PostgresError)) {
   config
   |> notices(notice_subject)
-  |> start
+  |> start_pool
 }

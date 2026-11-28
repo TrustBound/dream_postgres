@@ -1,6 +1,3 @@
-//// The Gleam values of PostgreSQL's time types that `gleam_time` does not
-//// have. Dates, times of day and timestamps use `gleam_time`'s own types.
-////
 //// The codecs of `date`, `time`, `timetz`, `timestamp`, `timestamptz` and
 //// `interval`, in PostgreSQL's binary formats:
 ////
@@ -14,39 +11,19 @@
 //// The largest and the smallest value of the integer are `infinity` and
 //// `-infinity` for `date`, `timestamp` and `timestamptz`.
 
-import dream_postgres/codecs/codec_type.{
+import dream_postgres/codec/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, OutOfRange, binary_bytes, is_base,
   wrong_size,
 }
 import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
+import dream_postgres/time.{
+  type Interval, type MaybeInfinite, type TimeWithOffset, Finite, Interval,
+  NegativeInfinity, PositiveInfinity, TimeWithOffset,
+}
 import gleam/int
 import gleam/result
 import gleam/time/calendar.{type Date, type TimeOfDay, Date, TimeOfDay}
 import gleam/time/timestamp.{type Timestamp}
-
-/// An `interval`, as PostgreSQL stores it: months, days and microseconds,
-/// each kept apart. A month has no fixed number of days and a day has no
-/// fixed number of seconds (time zones), so the three parts do not fold
-/// into one duration.
-pub type Interval {
-  Interval(months: Int, days: Int, microseconds: Int)
-}
-
-/// A `timetz`: a time of day and its offset from UTC, in seconds east of
-/// UTC. `+02:00` is an offset of 7200.
-pub type TimeWithOffset {
-  TimeWithOffset(time: TimeOfDay, offset_seconds: Int)
-}
-
-/// A date or a timestamp that can be infinite. PostgreSQL stores
-/// `infinity` and `-infinity` in `date`, `timestamp` and `timestamptz`.
-pub type MaybeInfinite(a) {
-  Finite(value: a)
-  PositiveInfinity
-  NegativeInfinity
-}
-
-// --- Codecs ---------------------------------------------------------------------
 
 // Seconds from 1970-01-01 to 2000-01-01, the epoch of PostgreSQL.
 const postgres_epoch_unix_seconds = 946_684_800
@@ -67,8 +44,6 @@ const int64_smallest = -9_223_372_036_854_775_808
 
 // --- date ---------------------------------------------------------------------
 
-/// `date`, as `gleam_time`'s `Date`. `infinity` and `-infinity` give
-/// `OutOfRange`: read them with `date_or_infinite`.
 pub const date =
   Codec(
     name: "date",
@@ -80,7 +55,6 @@ pub const date =
     placeholder: Date(2000, calendar.January, 1),
   )
 
-/// `date`, as a `MaybeInfinite(Date)`, which holds `infinity` too.
 pub const date_or_infinite =
   Codec(
     name: "date or infinite",
@@ -184,7 +158,6 @@ fn date_text(value: Date) -> String {
 
 // --- time ---------------------------------------------------------------------
 
-/// `time`, as `gleam_time`'s `TimeOfDay`, to the microsecond.
 pub const time =
   Codec(
     name: "time",
@@ -260,7 +233,6 @@ fn time_text(value: TimeOfDay) -> String {
 
 // --- timetz -------------------------------------------------------------------
 
-/// `timetz`, as a `TimeWithOffset`.
 pub const time_with_offset =
   Codec(
     name: "time with offset",
@@ -315,9 +287,7 @@ fn decode_time_with_offset(
 
 // --- timestamp and timestamptz ------------------------------------------------
 
-/// `timestamp`, as `gleam_time`'s `Timestamp`, read as UTC. A value is
-/// rounded to the nearest microsecond, as PostgreSQL stores it.
-pub const timestamp =
+pub const timestamp_codec =
   Codec(
     name: "timestamp",
     gleam_type: "Timestamp",
@@ -328,7 +298,6 @@ pub const timestamp =
     placeholder: timestamp.unix_epoch,
   )
 
-/// `timestamp`, as a `MaybeInfinite(Timestamp)`, which holds `infinity` too.
 pub const timestamp_or_infinite =
   Codec(
     name: "timestamp or infinite",
@@ -340,7 +309,6 @@ pub const timestamp_or_infinite =
     placeholder: PositiveInfinity,
   )
 
-/// `timestamptz`, as `gleam_time`'s `Timestamp`.
 pub const timestamp_with_time_zone =
   Codec(
     name: "timestamp with time zone",
@@ -352,7 +320,6 @@ pub const timestamp_with_time_zone =
     placeholder: timestamp.unix_epoch,
   )
 
-/// `timestamptz`, as a `MaybeInfinite(Timestamp)`.
 pub const timestamp_with_time_zone_or_infinite =
   Codec(
     name: "timestamp with time zone or infinite",
@@ -451,7 +418,6 @@ fn timestamp_of_microseconds(microseconds: Int) -> Timestamp {
 
 // --- interval -----------------------------------------------------------------
 
-/// `interval`, as an `Interval` of months, days and microseconds.
 pub const interval =
   Codec(
     name: "interval",
@@ -463,9 +429,6 @@ pub const interval =
     placeholder: Interval(0, 0, 0),
   )
 
-/// `interval`, as a `MaybeInfinite(Interval)`, for the infinite intervals of
-/// PostgreSQL 17 and later. PostgreSQL 16 has no infinite interval: it
-/// reads `PositiveInfinity` as the largest finite interval.
 pub const interval_or_infinite =
   Codec(
     name: "interval or infinite",

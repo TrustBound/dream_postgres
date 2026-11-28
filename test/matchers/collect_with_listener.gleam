@@ -57,10 +57,10 @@ fn collect_on_chosen(
     use listener <- result.try(
       server_pools.config(pool.port)
       |> listener.start_listener
-      |> result.map_error(error.describe),
+      |> result.map_error(error.describe_error),
     )
     let worked =
-      work(listener, pool.connection) |> result.map_error(error.describe)
+      work(listener, pool.connection) |> result.map_error(error.describe_error)
     let messages = collect(subject, milliseconds, [])
     listener.stop_listener(listener)
     result.replace(worked, messages)

@@ -14,23 +14,23 @@
 //// ```gleam
 //// import dream_errors.{type Error}
 //// import dream_postgres/error.{type PostgresError}
+//// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 //// import dream_postgres/recorder.{
-////   type Mode, type Recorder, intercept, match_on, mode, new, start,
+////   type Mode, type Recorder, intercept, match_on, mode, recorder,
+////   sql_and_parameters, start_recorder,
 //// }
-//// import dream_postgres/recorder/match.{sql_and_parameters}
-//// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ////
 //// /// Starts the recorder of the test that creates an API key. The test
 //// /// gives the mode, which it reads from its own config.
 //// pub fn start_api_key_recorder(
 ////   recorder_mode: Mode,
 //// ) -> Result(Recorder, Error(PostgresError)) {
-////   new(file: "test/recordings/api_key_create.json")
+////   recorder(file: "test/recordings/api_key_create.json")
 ////   |> mode(recorder_mode)
 ////   |> match_on(sql_and_parameters)
 ////   |> intercept(generated_uuids(keep: []))
 ////   |> intercept(timestamps_near_now(window_days: 400))
-////   |> start
+////   |> start_recorder
 //// }
 //// ```
 
@@ -84,23 +84,23 @@ const text_types = ["text", "varchar", "bpchar", "name", "json", "xml"]
 /// ```gleam
 /// import dream_errors.{type Error}
 /// import dream_postgres/error.{type PostgresError}
+/// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 /// import dream_postgres/recorder.{
-///   type Mode, type Recorder, intercept, match_on, mode, new, start,
+///   type Mode, type Recorder, intercept, match_on, mode, recorder,
+///   sql_and_parameters, start_recorder,
 /// }
-/// import dream_postgres/recorder/match.{sql_and_parameters}
-/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
 /// /// Starts the recorder of the test that creates an API key. The test
 /// /// gives the mode, which it reads from its own config.
 /// pub fn start_api_key_recorder(
 ///   recorder_mode: Mode,
 /// ) -> Result(Recorder, Error(PostgresError)) {
-///   new(file: "test/recordings/api_key_create.json")
+///   recorder(file: "test/recordings/api_key_create.json")
 ///   |> mode(recorder_mode)
 ///   |> match_on(sql_and_parameters)
 ///   |> intercept(generated_uuids(keep: []))
 ///   |> intercept(timestamps_near_now(window_days: 400))
-///   |> start
+///   |> start_recorder
 /// }
 /// ```
 pub fn generated_uuids(keep keep: List(String)) -> Interceptor {
@@ -121,23 +121,23 @@ pub fn generated_uuids(keep keep: List(String)) -> Interceptor {
 /// ```gleam
 /// import dream_errors.{type Error}
 /// import dream_postgres/error.{type PostgresError}
+/// import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 /// import dream_postgres/recorder.{
-///   type Mode, type Recorder, intercept, match_on, mode, new, start,
+///   type Mode, type Recorder, intercept, match_on, mode, recorder,
+///   sql_and_parameters, start_recorder,
 /// }
-/// import dream_postgres/recorder/match.{sql_and_parameters}
-/// import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 ///
 /// /// Starts the recorder of the test that creates an API key. The test
 /// /// gives the mode, which it reads from its own config.
 /// pub fn start_api_key_recorder(
 ///   recorder_mode: Mode,
 /// ) -> Result(Recorder, Error(PostgresError)) {
-///   new(file: "test/recordings/api_key_create.json")
+///   recorder(file: "test/recordings/api_key_create.json")
 ///   |> mode(recorder_mode)
 ///   |> match_on(sql_and_parameters)
 ///   |> intercept(generated_uuids(keep: []))
 ///   |> intercept(timestamps_near_now(window_days: 400))
-///   |> start
+///   |> start_recorder
 /// }
 /// ```
 pub fn timestamps_near_now(window_days window_days: Int) -> Interceptor {

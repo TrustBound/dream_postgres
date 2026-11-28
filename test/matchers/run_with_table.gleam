@@ -57,7 +57,7 @@ fn run_on_chosen(
     with_connection(pool.connection, fn(held) {
       run_on_table(held, table, work)
     })
-    |> result.map_error(error.describe)
+    |> result.map_error(error.describe_error)
     |> result.flatten
   }
   case ran {
@@ -81,14 +81,15 @@ fn run_on_table(
 ) -> Result(TableRun(a), String) {
   use Nil <- result.try(
     run_sql("CREATE TEMPORARY TABLE " <> table <> " (id int4)", held)
-    |> result.map_error(error.describe),
+    |> result.map_error(error.describe_error),
   )
   let outcome = work(held)
   use rows <- result.try(
-    client_statements.ids(held, table) |> result.map_error(error.describe),
+    client_statements.ids(held, table) |> result.map_error(error.describe_error),
   )
   use Nil <- result.try(
-    run_sql("DROP TABLE " <> table, held) |> result.map_error(error.describe),
+    run_sql("DROP TABLE " <> table, held)
+    |> result.map_error(error.describe_error),
   )
   Ok(TableRun(outcome:, rows:))
 }

@@ -10,14 +10,14 @@ pub fn write_recording(
   path: String,
   entries: List(RecordedEntry),
 ) -> Result(Nil, Posix) {
-  write_file(path, <<recording.to_file_text(Recording(entries:)):utf8>>)
+  write_file(path, <<recording.format_recording(Recording(entries:)):utf8>>)
 }
 
 pub fn read_recording(path: String) -> Result(List(RecordedEntry), Reason) {
   use bytes <- result.try(
     read_file(path) |> result.map_error(RecordingNotRead(path, _)),
   )
-  recording.from_file_bytes(bytes)
+  recording.parse_recording(bytes)
   |> result.map(fn(read) { read.entries })
   |> result.map_error(fn(decode_error: json.DecodeError) {
     RecordingNotDecoded(path:, reason: decode_error)

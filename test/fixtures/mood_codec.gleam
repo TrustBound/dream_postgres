@@ -1,6 +1,6 @@
 //// An enum codec for the enum type `mood` of the test catalog.
 
-import dream_postgres/codecs.{type Codec}
+import dream_postgres/codec.{type Codec}
 
 /// A mood. `Angry` has no label in the codec, so the codec cannot write it.
 pub type Mood {
@@ -19,5 +19,5 @@ pub type Mood {
 /// |> encode_as(mood_codec(), type_catalog.mood())
 /// ```
 pub fn mood_codec() -> Codec(Mood) {
-  codecs.enum("mood", #(Happy, "happy"), [#(Sad, "sad")])
+  codec.enum("mood", #(Happy, "happy"), [#(Sad, "sad")])
 }

@@ -27,7 +27,7 @@ pub fn run_on_pool_with_subject(
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(#(connection, subject)) -> {
       let outcome = work(connection, subject)
-      pool.stop(connection)
+      pool.stop_pool(connection)
       MatchOk(outcome)
     }
   }

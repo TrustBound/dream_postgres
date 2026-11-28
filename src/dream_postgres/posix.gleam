@@ -396,7 +396,7 @@ pub fn posix_codes() -> List(Posix) {
 /// example the atom `econnrefused`. A name that the type does not list is
 /// `Unlisted(name)`, so no error is lost.
 @external(erlang, "dream_postgres_posix_ffi", "from_reason")
-pub fn from_reason(reason: Dynamic) -> Result(Posix, NotAnAtom)
+pub fn reason_to_posix(reason: Dynamic) -> Result(Posix, NotAnAtom)
 
 /// The reason of a socket error was not an atom, so it is not an error
 /// name of the operating system.
@@ -406,4 +406,4 @@ pub type NotAnAtom {
 
 /// The name that OTP gives an error, for example `"econnrefused"`.
 @external(erlang, "dream_postgres_posix_ffi", "name")
-pub fn name(posix: Posix) -> String
+pub fn posix_name(posix: Posix) -> String

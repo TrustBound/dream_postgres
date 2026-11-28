@@ -32,5 +32,6 @@ pub fn find_unlisted_class_mismatches(
 fn unlisted_class_differs(named_code: #(String, String)) -> Bool {
   let #(code, _condition_name) = named_code
   let unlisted = Unlisted(string.slice(code, 0, 2) <> "ZZZ")
-  sql_state.class(unlisted) != sql_state.class(sql_state.from_string(code))
+  sql_state.sql_state_class(unlisted)
+  != sql_state.sql_state_class(sql_state.parse_sql_state(code))
 }

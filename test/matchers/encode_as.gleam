@@ -1,7 +1,7 @@
 //// A matcher that writes the value of the chain with a codec, as a value of
 //// a type of the test catalog (`fixtures/type_catalog`).
 
-import dream_postgres/codecs/codec_type.{type Codec}
+import dream_postgres/codec/codec_type.{type Codec}
 import dream_postgres/driver/cell.{type Cell, type TypeDescription}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import fixtures/type_catalog

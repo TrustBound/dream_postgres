@@ -1,5 +1,5 @@
 import dream_postgres/config.{type Config, record}
-import dream_postgres/error.{describe}
+import dream_postgres/error.{describe_error}
 import dream_postgres/pool.{type PoolName, supervised}
 import dream_postgres/recorder.{type Recorder}
 import gleam/otp/actor
@@ -19,7 +19,7 @@ pub fn start_app_supervisor(
     app_config(server)
     |> record(test_recorder)
     |> supervised(name: pool_name)
-    |> result.map_error(describe),
+    |> result.map_error(describe_error),
   )
   static_supervisor.new(static_supervisor.OneForOne)
   |> static_supervisor.add(pool_child)

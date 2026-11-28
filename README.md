@@ -53,7 +53,7 @@ import dream_postgres/config.{
   TlsOff, database, default_config, host, password, pool_size, port, tls, user,
 }
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{type Connection, start}
+import dream_postgres/pool.{type Connection, start_pool}
 
 /// Starts a pool of 4 connections to the database `dream_test` on this
 /// machine. The local test server has no certificate, so TLS is off.
@@ -66,7 +66,7 @@ pub fn connect(port_number: Int) -> Result(Connection, Error(PostgresError)) {
   |> password("dream")
   |> pool_size(4)
   |> tls(TlsOff)
-  |> start
+  |> start_pool
 }
 ```
 
@@ -75,7 +75,7 @@ Read each row into a value with a row reader:
 ### A row reader for users <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a> <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/docs/guides/queries.md#a-row-reader-for-users-"><img align="right" alt="Guide: Queries" title="Guide: Queries" src="https://img.shields.io/badge/%F0%9F%93%96_read-guide-blue.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codecs.{int, text}
+import dream_postgres/codec.{int, text}
 import dream_postgres/row.{type Row, column, row}
 
 pub type User {
@@ -97,7 +97,7 @@ Run a query with parameters:
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{text}
+import dream_postgres/codec.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}
@@ -122,7 +122,7 @@ pub fn create_user(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{text}
+import dream_postgres/codec.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{maybe_one, named, parameter, query}
@@ -148,7 +148,7 @@ Run several statements as one transaction:
 
 ```gleam
 import dream_errors.{type Error, Invalid}
-import dream_postgres/codecs.{int}
+import dream_postgres/codec.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{affected, one, parameter, query}

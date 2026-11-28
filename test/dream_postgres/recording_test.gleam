@@ -13,10 +13,10 @@ pub fn tests() -> TestSuite {
       // Arrange
       let written =
         sample_recording.every_form()
-        |> recording.to_file_text
+        |> recording.format_recording
 
       // Act and assert
-      recording.from_file_bytes(<<written:utf8>>)
+      recording.parse_recording(<<written:utf8>>)
       |> should
       |> be_ok()
       |> be_equal(sample_recording.every_form())
@@ -24,7 +24,7 @@ pub fn tests() -> TestSuite {
     }),
     it("writes an empty recording on four lines", fn() {
       // Act and assert
-      recording.to_file_text(Recording(entries: []))
+      recording.format_recording(Recording(entries: []))
       |> should
       |> be_equal(
         "{\n  \"dream_postgres_recording\": 1,\n  \"entries\": []\n}\n",
@@ -33,7 +33,7 @@ pub fn tests() -> TestSuite {
     }),
     it("refuses a cell that is not hex", fn() {
       // Act and assert
-      recording.from_file_bytes(<<
+      recording.parse_recording(<<
         "{\"dream_postgres_recording\": 1, \"entries\": [{\"key\": \"k\", \"sql\": {\"sql\": \"SELECT 1\", \"outcome\": {\"answer\": {\"results\": [{\"count\": 1, \"rows\": [[{\"text\": \"zz\"}]], \"tag\": \"SELECT 1\"}]}}}}]}":utf8,
       >>)
       |> should
@@ -42,7 +42,7 @@ pub fn tests() -> TestSuite {
     }),
     it("refuses another format number", fn() {
       // Act and assert
-      recording.from_file_bytes(<<
+      recording.parse_recording(<<
         "{\"dream_postgres_recording\": 2, \"entries\": []}":utf8,
       >>)
       |> should

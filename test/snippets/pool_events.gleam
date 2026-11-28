@@ -4,8 +4,8 @@ import dream_postgres/config.{
   Held, Reconnected, Refused, Replacing, Returned, Stopping, Waiting,
   pool_events,
 }
-import dream_postgres/error.{type PostgresError, describe}
-import dream_postgres/pool.{type Connection, start}
+import dream_postgres/error.{type PostgresError, describe_error}
+import dream_postgres/pool.{type Connection, start_pool}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/pair
@@ -19,7 +19,7 @@ pub fn start_with_pool_events(
   let event_subject = process.new_subject()
   config
   |> pool_events(event_subject)
-  |> start
+  |> start_pool
   |> result.map(pair.new(_, event_subject))
 }
 
@@ -28,16 +28,17 @@ pub fn event_line(event: PoolEvent) -> String {
   case event {
     Connected(slot:) -> slot_text(slot) <> " connected"
     Disconnected(slot:, reason:) ->
-      slot_text(slot) <> " lost its session: " <> describe(reason)
+      slot_text(slot) <> " lost its session: " <> describe_error(reason)
     Reconnected(slot:) -> slot_text(slot) <> " connected again"
     ConnectFailed(slot:, error: failure) ->
-      slot_text(slot) <> " did not connect: " <> describe(failure)
+      slot_text(slot) <> " did not connect: " <> describe_error(failure)
     Replacing(slot:) -> slot_text(slot) <> " is replaced"
     Free(slot:) -> slot_text(slot) <> " is free"
     Held(slot:) -> slot_text(slot) <> " is held"
     Returned(slot:) -> slot_text(slot) <> " came back"
     Waiting(count:) -> int.to_string(count) <> " calls wait for a connection"
-    Refused(error: failure) -> "a call got no connection: " <> describe(failure)
+    Refused(error: failure) ->
+      "a call got no connection: " <> describe_error(failure)
     Stopping -> "the pool stops"
   }
 }

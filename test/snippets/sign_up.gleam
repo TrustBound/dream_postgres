@@ -1,11 +1,11 @@
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int}
+import dream_postgres/codec.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}
 import dream_postgres/row.{single}
 import dream_postgres/transaction.{
-  commit, keep_both, step, step_with, transaction,
+  commit, keep_both_errors, step, step_with, transaction,
 }
 import gleam/function
 import snippets/create_user.{create_user}
@@ -21,7 +21,7 @@ pub fn sign_up(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
   |> step(create_user(_, email, name))
   |> step_with(open_account)

@@ -4,8 +4,7 @@
 //// server.
 
 import dream_errors.{Failed, Invalid, NotFound, Retry, Timeout, Unavailable}
-import dream_postgres/codecs
-import dream_postgres/codecs/json
+import dream_postgres/codec
 import dream_postgres/config
 import dream_postgres/error
 import dream_postgres/query.{one, parameter, query, run_sql}
@@ -103,7 +102,7 @@ fn connecting_tests() {
       |> should
       |> be_ok()
       |> run_and_stop_pool(fn(connection) {
-        query("SELECT 1") |> one(single(codecs.int), connection)
+        query("SELECT 1") |> one(single(codec.int), connection)
       })
       |> be_ok()
       |> be_equal(1)
@@ -119,7 +118,7 @@ fn connecting_tests() {
       |> should
       |> be_ok()
       |> run_and_stop_pool(fn(connection) {
-        query("SELECT 1") |> one(single(codecs.int), connection)
+        query("SELECT 1") |> one(single(codec.int), connection)
       })
       |> be_ok()
       |> be_equal(1)
@@ -132,7 +131,7 @@ fn connecting_tests() {
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
-        |> one(single(codecs.bool), connection)
+        |> one(single(codec.bool), connection)
       })
       |> be_ok()
       |> be_equal(True)
@@ -144,7 +143,7 @@ fn connecting_tests() {
       |> slow_reconnects
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> one(single(codecs.int), connection)
+        query("SELECT 1") |> one(single(codec.int), connection)
       })
       |> be_ok()
       |> be_equal(1)
@@ -173,12 +172,12 @@ fn connecting_tests() {
       |> run_on_started_pool(fn(connection) {
         use _first <- result.try(
           query("SELECT $1::int8")
-          |> parameter(codecs.int, 1)
-          |> one(single(codecs.int), connection),
+          |> parameter(codec.int, 1)
+          |> one(single(codec.int), connection),
         )
         query("SELECT $1::int8")
-        |> parameter(codecs.int, 2)
-        |> one(single(codecs.int), connection)
+        |> parameter(codec.int, 2)
+        |> one(single(codec.int), connection)
       })
       |> be_ok()
       |> be_equal(2)
@@ -190,7 +189,7 @@ fn connecting_tests() {
       |> busy_service
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> one(single(codecs.int), connection)
+        query("SELECT 1") |> one(single(codec.int), connection)
       })
       |> be_ok()
       |> be_equal(1)
@@ -677,8 +676,8 @@ fn codec_tests() {
       |> should
       |> run_on_pool(fn(connection) {
         query("SELECT $1::jsonb")
-        |> parameter(json.jsonb, theme_document(theme))
-        |> one(single(json.jsonb), connection)
+        |> parameter(codec.jsonb, theme_document(theme))
+        |> one(single(codec.jsonb), connection)
         |> result.map(theme_from_document)
       })
       |> be_ok()

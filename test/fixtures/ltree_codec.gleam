@@ -1,6 +1,6 @@
 //// A custom codec for the extension type `ltree`, in the text format.
 
-import dream_postgres/codecs.{type Codec}
+import dream_postgres/codec.{type Codec}
 
 /// A codec that writes and reads an `ltree` path as its text. It refuses
 /// the text `bad` with the error `not an ltree`, so that tests can see the
@@ -14,7 +14,7 @@ import dream_postgres/codecs.{type Codec}
 /// |> encode_as(ltree_codec.ltree_codec(), type_catalog.ltree())
 /// ```
 pub fn ltree_codec() -> Codec(String) {
-  codecs.custom(
+  codec.custom(
     type_name: "ltree",
     to_text: fn(path) { path },
     from_text: read_path,

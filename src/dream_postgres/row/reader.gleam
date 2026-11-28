@@ -8,7 +8,7 @@
 //// comes. The read of a row then follows that list, and refuses a reader
 //// that reads other columns for some values.
 
-import dream_postgres/codecs/codec_type.{
+import dream_postgres/codec/codec_type.{
   type Codec, type DecodeIssue, type TypeLookup, Malformed, NullValue,
   OutOfRange,
 }

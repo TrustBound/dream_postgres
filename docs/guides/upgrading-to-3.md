@@ -27,11 +27,11 @@ dream_postgres 3.0 is a new client. Version 2.x wrapped `dream_postgres_client`,
 |---|---|
 | `client.new(pool_name)` | `default_config()`. A pool needs a name only under a supervisor: `supervised(config, name:)`. |
 | `client.host`, `port`, `database`, `user`, `password`, `pool_size` | the same names in `dream_postgres/config` |
-| `client.connect(config)` | `start(config)` |
+| `client.connect(config)` | `start_pool(config)` |
 | `dream_postgres_client.supervised(config)` | `supervised(config, name:)` |
 | `dream_postgres_client.named_connection(name)` | `named_connection(name)` |
 | `client.from_url(url)`, `client.parse_config(name, url)` | none: see [What 3.0 does not have](#what-30-does-not-have) |
-| `client.check(connection)` | none. To check the queries against the schema at boot, use `verify`. |
+| `client.check(connection)` | none. To check the queries against the schema at boot, use `verify_queries`. |
 | `dream_postgres_client.query(sql)` | `query(sql)` |
 | `dream_postgres_client.parameter(dream_postgres_client.int(x))` | `parameter(codec.int, x)` |
 | `dream_postgres_client.returning(decoder)` | a row reader: `column`, `column_at`, `column_named`, `row`, `single` |
@@ -40,16 +40,16 @@ dream_postgres 3.0 is a new client. Version 2.x wrapped `dream_postgres_client`,
 | `dream_postgres_client.execute(connection)` for a command | `affected(connection)`, which gives the row count |
 | `query.NotFound`, `query.DatabaseError` | the kinds of `dream_errors.Error`, such as `NotFound`, `Conflict` and `Unavailable` |
 | `dream_postgres_client.ConstraintViolated(constraint:, ..)` | the kind `Conflict`, and `error.constraint_name(error)` |
-| `dream_postgres_client.transaction(connection, callback)` | `transaction(connection, database:, rollback_also_failed:)`, then `run(plan, callback)`, or a pipe of `step`, `check` and `commit`. The error is a `dream_errors.Error(cause)`, and a failed rollback keeps both errors. See the [transactions guide](transactions.md). |
-| `recorder.new()`, `directory`, `name` | `recorder.new(file: path)`, with the whole path |
-| `recorder.mode`, `recorder.start` | the same names in `dream_postgres/recorder` |
+| `dream_postgres_client.transaction(connection, callback)` | `transaction(connection, database:, rollback_also_failed:)`, then `run_transaction(plan, callback)`, or a pipe of `step`, `check` and `commit`. The error is a `dream_errors.Error(cause)`, and a failed rollback keeps both errors. See the [transactions guide](transactions.md). |
+| `recorder.new()`, `directory`, `name` | `recorder.recorder(file: path)`, with the whole path |
+| `recorder.mode`, `recorder.start` | `mode` and `start_recorder` in `dream_postgres/recorder` |
 | `recorder.connect(recorder, config)` | `config \|> record(recorder) \|> start` |
-| `recorder.stop(recorder)`, which gave `Result(Nil, String)` | `stop(connection)`, which also stops the recorder |
+| `recorder.stop(recorder)`, which gave `Result(Nil, String)` | `stop_pool(connection)`, which also stops the recorder |
 | `recorder.Record`, `recorder.Playback`, `recorder.Passthrough` | the same, and `recorder.RecordMissing` |
 | `recorder.parse_mode` | none: the test reads the mode from its own config |
 | `recorder.key` | `recorder.match_on`, with `match.sql_and_parameters`, `match.sql_only` or a function of the app |
 | `query_transformer`, `result_transformer` | `recorder.intercept`, such as `normalize.generated_uuids` and `normalize.timestamps_near_now` |
-| `recorder.error`, `recorder.describe_error` | the reasons `RequestNotRecorded`, `RequestNotMatched` and `RecorderStopped` of `dream_postgres/error`, and `error.describe` |
+| `recorder.error`, `recorder.describe_error` | the reasons `RequestNotRecorded`, `RequestNotMatched` and `RecorderStopped` of `dream_postgres/error`, and `error.describe_error` |
 
 ## Start a pool
 
@@ -81,7 +81,7 @@ import dream_postgres/config.{
   database, default_config, host, password, pool_size, port, user,
 }
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{type Connection, start}
+import dream_postgres/pool.{type Connection, start_pool}
 
 /// The pool of the 2.x README, in the 3.0 form. It has no pool name: a
 /// name is only for a pool under a supervisor.
@@ -93,11 +93,11 @@ pub fn connect_database() -> Result(Connection, Error(PostgresError)) {
   |> user("postgres")
   |> password("secret")
   |> pool_size(15)
-  |> start
+  |> start_pool
 }
 ```
 
-`start` gives `Result(Connection, Error(PostgresError))`. A config that is not valid is an error of `start`, with the reason `InvalidConfig`. The connections connect in the background, so a server that does not answer shows as an error of the first query.
+`start_pool` gives `Result(Connection, Error(PostgresError))`. A config that is not valid is an error of `start_pool`, with the reason `InvalidConfig`. The connections connect in the background, so a server that does not answer shows as an error of the first query.
 
 ## Run a query
 
@@ -137,7 +137,7 @@ In 3.0, a row reader reads each column with a codec, and `one` gives the one row
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int, text}
+import dream_postgres/codec.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query}
@@ -244,7 +244,7 @@ In 3.0, a unique violation has the kind `Conflict`. `error.constraint_name` give
 
 ```gleam
 import dream_errors.{type Error, Conflict}
-import dream_postgres/codecs.{int, text}
+import dream_postgres/codec.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query}
@@ -303,9 +303,9 @@ pub fn start_supervised(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{text}
+import dream_postgres/codec.{text}
 import dream_postgres/config.{type Config}
-import dream_postgres/error.{type PostgresError, describe}
+import dream_postgres/error.{type PostgresError, describe_error}
 import dream_postgres/pool.{type PoolName, named_connection, supervised}
 import dream_postgres/query.{one, query}
 import dream_postgres/row.{single}
@@ -321,7 +321,7 @@ pub fn start_supervisor(
 ) -> Result(actor.Started(Supervisor), String) {
   use pool_child <- result.try(
     supervised(config, name: pool_name)
-    |> result.map_error(describe),
+    |> result.map_error(describe_error),
   )
   static_supervisor.new(static_supervisor.OneForOne)
   |> static_supervisor.add(pool_child)
@@ -377,34 +377,34 @@ pub fn connect(
 ```gleam
 import dream_errors.{type Error}
 import dream_postgres/error.{type PostgresError}
+import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 import dream_postgres/recorder.{
-  type Mode, type Recorder, intercept, match_on, mode, new, start,
+  type Mode, type Recorder, intercept, match_on, mode, recorder,
+  sql_and_parameters, start_recorder,
 }
-import dream_postgres/recorder/match.{sql_and_parameters}
-import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 
 /// Starts the recorder of the test that creates an API key. The test
 /// gives the mode, which it reads from its own config.
 pub fn start_api_key_recorder(
   recorder_mode: Mode,
 ) -> Result(Recorder, Error(PostgresError)) {
-  new(file: "test/recordings/api_key_create.json")
+  recorder(file: "test/recordings/api_key_create.json")
   |> mode(recorder_mode)
   |> match_on(sql_and_parameters)
   |> intercept(generated_uuids(keep: []))
   |> intercept(timestamps_near_now(window_days: 400))
-  |> start
+  |> start_recorder
 }
 ```
 
-`config.record` attaches the recorder to the 3.0 `Config`, and `pool.start` makes the connection. In playback mode it connects to nothing. The recording file of 2.x has another format, so record each test again in 3.0. The [recorded queries guide](recorded-queries.md) shows the new file.
+`config.record` attaches the recorder to the 3.0 `Config`, and `pool.start_pool` makes the connection. In playback mode it connects to nothing. The recording file of 2.x has another format, so record each test again in 3.0. The [recorded queries guide](recorded-queries.md) shows the new file.
 
 ## What 3.0 does not have
 
 These 2.x functions have no 3.0 form:
 
 - `client.from_url` and `client.parse_config`: 3.0 reads no `DATABASE_URL`. Set each part of the config with its own function.
-- `client.check`: 3.0 has no call that only checks that the database answers. `verify` checks the queries against the schema at boot.
+- `client.check`: 3.0 has no call that only checks that the database answers. `verify_queries` checks the queries against the schema at boot.
 - `recorder.parse_mode`: the test reads the mode from its own config, and gives the `recorder.Mode` value to `recorder.mode`.
 
 ## Where to go next

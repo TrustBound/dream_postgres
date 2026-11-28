@@ -29,7 +29,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -47,7 +47,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -68,7 +68,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -89,7 +89,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -110,7 +110,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -131,7 +131,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -154,7 +154,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -180,7 +180,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -201,7 +201,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -222,7 +222,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -243,7 +243,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -264,7 +264,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -280,7 +280,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.ConnectionLost(error.Reset))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -298,7 +298,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -313,7 +313,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.NoConnection)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -334,7 +334,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -352,7 +352,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -371,7 +371,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.ParameterCountMismatch(2, 1))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -394,7 +394,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -413,7 +413,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.ColumnCountMismatch(2, 3))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -437,7 +437,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -456,7 +456,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.NoColumnAtPosition(4, 3))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -474,7 +474,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.NoColumnNamed("title"))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -490,7 +490,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.AmbiguousColumnName("id", 2))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -509,7 +509,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.ColumnReadTwice(1, "id"))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -527,7 +527,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.MixedColumnReaders)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -546,7 +546,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.StatementChangedDuringRun)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -566,7 +566,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.ReaderDependsOnValue(2))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -588,7 +588,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -607,7 +607,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.UnexpectedNull(1, "total"))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -630,7 +630,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -653,7 +653,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -671,7 +671,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.TooManyRows(2))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -689,7 +689,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.CommitRolledBack(None))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -708,7 +708,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.RequestNotRecorded("SELECT 1"))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -730,7 +730,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -748,7 +748,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.RecorderStopped)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -767,7 +767,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -788,7 +788,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -810,7 +810,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -832,7 +832,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -853,7 +853,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -874,7 +874,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -889,7 +889,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.PoolHasNoDatabase)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -911,7 +911,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -930,7 +930,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.InterceptorFailed("read only"))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -956,7 +956,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -980,7 +980,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1001,7 +1001,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1025,7 +1025,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1044,7 +1044,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1063,7 +1063,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1082,7 +1082,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1103,7 +1103,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1124,7 +1124,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1145,7 +1145,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1164,7 +1164,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1185,7 +1185,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1206,7 +1206,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1225,7 +1225,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1244,7 +1244,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1263,7 +1263,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1281,7 +1281,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1299,7 +1299,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.CopyNotRunning)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1315,7 +1315,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.CopyNotStarted(statement_ran: True))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1338,7 +1338,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1360,7 +1360,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1387,7 +1387,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1409,7 +1409,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1427,7 +1427,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1445,7 +1445,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.ConnectionProcessDown)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1460,7 +1460,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.UnknownType(90_000))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1478,7 +1478,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1496,7 +1496,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.CatalogProcessDown)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1514,7 +1514,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1536,7 +1536,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1557,7 +1557,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1582,7 +1582,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1608,7 +1608,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1637,7 +1637,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1663,7 +1663,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1689,7 +1689,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1715,7 +1715,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1739,7 +1739,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1763,7 +1763,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -1786,7 +1786,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1810,7 +1810,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1834,7 +1834,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1858,7 +1858,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1886,7 +1886,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1910,7 +1910,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1934,7 +1934,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1958,7 +1958,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -1982,7 +1982,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -2005,7 +2005,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2029,7 +2029,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2053,7 +2053,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2079,7 +2079,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2101,7 +2101,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -2124,7 +2124,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2148,7 +2148,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2170,7 +2170,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -2197,7 +2197,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2223,7 +2223,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2247,7 +2247,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2271,7 +2271,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2295,7 +2295,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2319,7 +2319,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2343,7 +2343,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2367,7 +2367,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2391,7 +2391,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2415,7 +2415,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2439,7 +2439,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2463,7 +2463,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2487,7 +2487,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2511,7 +2511,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2535,7 +2535,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2559,7 +2559,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2583,7 +2583,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2607,7 +2607,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2631,7 +2631,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2655,7 +2655,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2679,7 +2679,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2703,7 +2703,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2727,7 +2727,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2751,7 +2751,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2775,7 +2775,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2795,7 +2795,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.UnexpectedIdleMessage(error.NoData))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -2818,7 +2818,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2842,7 +2842,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2866,7 +2866,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2890,7 +2890,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2914,7 +2914,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2938,7 +2938,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2962,7 +2962,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -2986,7 +2986,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3013,7 +3013,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3038,7 +3038,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3063,7 +3063,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3088,7 +3088,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3113,7 +3113,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3138,7 +3138,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3163,7 +3163,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3188,7 +3188,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3213,7 +3213,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3238,7 +3238,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3263,7 +3263,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3288,7 +3288,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3313,7 +3313,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3338,7 +3338,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3362,7 +3362,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3383,7 +3383,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3404,7 +3404,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3427,7 +3427,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3451,7 +3451,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3475,7 +3475,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3499,7 +3499,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3523,7 +3523,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3543,7 +3543,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.InvalidConfig(error.EmptyUser))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3564,7 +3564,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3587,7 +3587,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3609,7 +3609,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3632,7 +3632,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3656,7 +3656,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3680,7 +3680,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3703,7 +3703,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3727,7 +3727,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3749,7 +3749,7 @@ pub fn tests() -> TestSuite {
             postgres_failure.with_reason(error.OptionsInNestedTransaction)
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3769,14 +3769,14 @@ pub fn tests() -> TestSuite {
           // Arrange
           let failure =
             postgres_failure.with_reason(error.RollbackAlsoFailed(
-              step_error: error.to_dream_error(postgres_failure.with_reason(
-                error.NoConnection,
-              )),
+              step_error: error.postgres_error_to_dream_error(
+                postgres_failure.with_reason(error.NoConnection),
+              ),
               rollback_error: postgres_failure.with_reason(error.PoolStopped),
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -3798,7 +3798,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3821,7 +3821,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3840,7 +3840,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.CopyQueryHasParameters(2))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3861,7 +3861,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3882,7 +3882,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3903,7 +3903,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3924,7 +3924,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3945,7 +3945,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3966,7 +3966,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3984,7 +3984,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.PoolStopped)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -3999,7 +3999,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.NoDatabaseToVerify)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4017,7 +4017,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.ChannelTooLong("jobs"))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4035,7 +4035,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.SubscriberHasNoProcess)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4053,7 +4053,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.UnexpectedListenAnswer)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4071,7 +4071,7 @@ pub fn tests() -> TestSuite {
         let failure = postgres_failure.with_reason(error.ListenerStopped)
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4089,7 +4089,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4110,7 +4110,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4131,7 +4131,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4156,7 +4156,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4182,7 +4182,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4206,7 +4206,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4230,7 +4230,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4252,7 +4252,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4273,7 +4273,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4296,7 +4296,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4318,7 +4318,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4341,7 +4341,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4365,7 +4365,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4389,7 +4389,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4415,7 +4415,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4435,7 +4435,7 @@ pub fn tests() -> TestSuite {
           postgres_failure.with_reason(error.ConnectFailed(error.SetupTimedOut))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4456,7 +4456,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4479,7 +4479,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4503,7 +4503,7 @@ pub fn tests() -> TestSuite {
             ))
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4527,7 +4527,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4549,7 +4549,7 @@ pub fn tests() -> TestSuite {
           ))
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4572,7 +4572,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4600,7 +4600,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4628,7 +4628,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4656,7 +4656,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4682,7 +4682,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4708,7 +4708,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4730,7 +4730,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4753,7 +4753,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4778,7 +4778,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4804,7 +4804,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4830,7 +4830,7 @@ pub fn tests() -> TestSuite {
             )
 
           // Act
-          let found = error.to_dream_error(failure)
+          let found = error.postgres_error_to_dream_error(failure)
 
           // Assert
           found
@@ -4859,7 +4859,7 @@ pub fn tests() -> TestSuite {
           )
 
         // Act
-        let found = error.to_dream_error(failure)
+        let found = error.postgres_error_to_dream_error(failure)
 
         // Assert
         found
@@ -4879,7 +4879,7 @@ pub fn tests() -> TestSuite {
         let name = Some("user.find")
 
         // Act
-        let found = error.no_rows(name)
+        let found = error.no_rows_error(name)
 
         // Assert
         found
@@ -4892,7 +4892,7 @@ pub fn tests() -> TestSuite {
         let name = None
 
         // Act
-        let found = error.no_rows(name)
+        let found = error.no_rows_error(name)
 
         // Assert
         found
@@ -4907,7 +4907,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("ERROR")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found
@@ -4944,7 +4944,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("ERROR")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -4957,7 +4957,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("FATAL")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -4970,7 +4970,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("PANIC")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -4983,7 +4983,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("WARNING")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -4996,7 +4996,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("NOTICE")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -5009,7 +5009,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("DEBUG")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -5022,7 +5022,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("INFO")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -5035,7 +5035,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("LOG")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -5048,7 +5048,7 @@ pub fn tests() -> TestSuite {
         let report = server_reports.unique_violation("SHOUT")
 
         // Act
-        let found = error.server_error_from_report(report)
+        let found = error.report_to_server_error(report)
 
         // Assert
         found.severity
@@ -5063,7 +5063,7 @@ pub fn tests() -> TestSuite {
       it("reads the server error of a server failure", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(
               error.Server(server_error.with_sql_state(
                 sql_state.UniqueViolation,
@@ -5088,7 +5088,7 @@ pub fn tests() -> TestSuite {
       it("reads the server error of a refused login", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(
               error.ConnectFailed(
                 error.LoginRefused(server_error.with_sql_state(
@@ -5115,7 +5115,7 @@ pub fn tests() -> TestSuite {
       it("reads the server error of the step of a failed rollback", fn() {
         // Arrange
         let step_error =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(
               error.Server(server_error.with_sql_state(
                 sql_state.UniqueViolation,
@@ -5124,7 +5124,7 @@ pub fn tests() -> TestSuite {
             ),
           )
         let failure =
-          error.to_dream_error(transaction.keep_both(
+          error.postgres_error_to_dream_error(transaction.keep_both_errors(
             step_error,
             postgres_failure.with_reason(error.PoolStopped),
           ))
@@ -5145,7 +5145,7 @@ pub fn tests() -> TestSuite {
       it("reads the server error of a commit that rolled back", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(
               error.CommitRolledBack(
                 Some(server_error.with_sql_state(
@@ -5174,7 +5174,7 @@ pub fn tests() -> TestSuite {
       it("has the server error of a later statement of a `run_sql` call", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(error.SqlStatementFailed(
               statements_run: 1,
               server_error: server_error.with_sql_state(
@@ -5202,7 +5202,7 @@ pub fn tests() -> TestSuite {
       it("has no server error for a timeout", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(error.QueryTimeout(
               stopped_on_server: True,
             )),
@@ -5219,7 +5219,7 @@ pub fn tests() -> TestSuite {
       }),
       it("has no server error for NotFound", fn() {
         // Arrange
-        let failure = error.no_rows(None)
+        let failure = error.no_rows_error(None)
 
         // Act
         let found = error.server_error(failure)
@@ -5233,7 +5233,7 @@ pub fn tests() -> TestSuite {
       it("reads the SQLSTATE", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(
               error.Server(server_error.with_sql_state(
                 sql_state.UniqueViolation,
@@ -5255,7 +5255,7 @@ pub fn tests() -> TestSuite {
       it("reads the constraint name", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(
               error.Server(server_error.with_sql_state(
                 sql_state.UniqueViolation,
@@ -5277,7 +5277,7 @@ pub fn tests() -> TestSuite {
       it("reads the table name", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(
               error.Server(server_error.with_sql_state(
                 sql_state.UniqueViolation,
@@ -5299,7 +5299,7 @@ pub fn tests() -> TestSuite {
       it("reads the column name", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(
               error.Server(server_error.with_sql_state(
                 sql_state.UniqueViolation,
@@ -5321,14 +5321,14 @@ pub fn tests() -> TestSuite {
       it("describes a failure for a log line", fn() {
         // Arrange
         let failure =
-          error.to_dream_error(
+          error.postgres_error_to_dream_error(
             postgres_failure.with_reason(error.QueryTimeout(
               stopped_on_server: True,
             )),
           )
 
         // Act
-        let found = error.describe(failure)
+        let found = error.describe_error(failure)
 
         // Assert
         found

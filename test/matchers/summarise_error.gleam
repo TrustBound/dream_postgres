@@ -50,14 +50,16 @@ fn cause_summary(failure: Error(PostgresError)) -> String {
 
 fn reason_summary(reason: Reason) -> String {
   case reason {
-    error.Server(server_error) -> sql_state.to_string(server_error.sql_state)
+    error.Server(server_error) ->
+      sql_state.sql_state_to_string(server_error.sql_state)
     error.CommitRolledBack(cause: Some(server_error)) ->
-      "CommitRolledBack " <> sql_state.to_string(server_error.sql_state)
+      "CommitRolledBack "
+      <> sql_state.sql_state_to_string(server_error.sql_state)
     error.SqlStatementFailed(statements_run:, server_error:) ->
       "SqlStatementFailed "
       <> int.to_string(statements_run)
       <> " "
-      <> sql_state.to_string(server_error.sql_state)
+      <> sql_state.sql_state_to_string(server_error.sql_state)
     error.RollbackAlsoFailed(step_error:, rollback_error:) ->
       "RollbackAlsoFailed "
       <> summary(step_error)

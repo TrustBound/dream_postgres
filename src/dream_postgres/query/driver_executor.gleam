@@ -174,7 +174,7 @@ pub fn connection_end_reason(end: ConnectionEnd) -> Reason {
     connection_event.ConnectionLost(reason:) ->
       error.ConnectionLost(loss_reason(reason))
     connection_event.ServerEndedConnection(report:) ->
-      error.Server(error.server_error_from_report(report))
+      error.Server(error.report_to_server_error(report))
     connection_event.ProtocolViolation(violation:) ->
       violation_reason(violation)
   }
@@ -194,7 +194,7 @@ pub fn prepare_error_reason(
     connection_request_failure.PrepareUnencodable(error: encode_error) ->
       error.RequestNotWritable(request_fault(encode_error))
     connection_request_failure.PrepareRefused(report:, transaction_status: _) ->
-      error.Server(error.server_error_from_report(report))
+      error.Server(error.report_to_server_error(report))
   }
 }
 
@@ -209,7 +209,7 @@ pub fn run_error_reason(run_error: RunError, endpoint: Endpoint) -> Reason {
     connection_request_failure.RunUnencodable(error: encode_error) ->
       error.RequestNotWritable(request_fault(encode_error))
     connection_request_failure.RunRefused(report:, transaction_status: _) ->
-      error.Server(error.server_error_from_report(report))
+      error.Server(error.report_to_server_error(report))
     connection_request_failure.RunCopyRefused ->
       error.CopyStatementRefused(statements_run: 0)
     connection_request_failure.RunStatementChanged(description: _) ->
@@ -233,7 +233,7 @@ pub fn simple_query_error_reason(
     connection_request_failure.SimpleQueryRefused(
       report:,
       transaction_status: _,
-    ) -> error.Server(error.server_error_from_report(report))
+    ) -> error.Server(error.report_to_server_error(report))
     connection_request_failure.SimpleQueryFailed(
       completed:,
       report:,
@@ -241,7 +241,7 @@ pub fn simple_query_error_reason(
     ) ->
       error.SqlStatementFailed(
         statements_run: list.length(completed),
-        server_error: error.server_error_from_report(report),
+        server_error: error.report_to_server_error(report),
       )
     connection_request_failure.SimpleQueryCopyRefused(completed:) ->
       error.CopyStatementRefused(statements_run: list.length(completed))
@@ -265,7 +265,7 @@ pub fn copy_error_reason(
     connection_request_failure.CopyUnencodable(error: encode_error) ->
       error.RequestNotWritable(request_fault(encode_error))
     connection_request_failure.CopyRefused(report:, transaction_status: _) ->
-      error.Server(error.server_error_from_report(report))
+      error.Server(error.report_to_server_error(report))
     connection_request_failure.CopyNotStarted(completed:) ->
       error.CopyNotStarted(statement_ran: option.is_some(completed))
   }
@@ -279,7 +279,7 @@ pub fn chunk_error_reason(chunk_error: ChunkError) -> Reason {
       request_failure_reason(failure)
     connection_request_failure.ChunkCopyNotRunning -> error.CopyNotRunning
     connection_request_failure.ChunkRefused(report:, transaction_status: _) ->
-      error.Server(error.server_error_from_report(report))
+      error.Server(error.report_to_server_error(report))
   }
 }
 
@@ -321,7 +321,7 @@ pub fn housekeeping_error_reason(
     connection_request_failure.HousekeepingRefused(
       report:,
       transaction_status: _,
-    ) -> error.Server(error.server_error_from_report(report))
+    ) -> error.Server(error.report_to_server_error(report))
     connection_request_failure.HousekeepingAnswerUnexpected ->
       error.UnreadableCatalog(error.UnexpectedCatalogAnswer)
   }
@@ -374,7 +374,7 @@ fn send_lost_reason(send_error: SendError) -> error.LostReason {
 // that the type does not list is `Unlisted(name)`.
 fn posix_error(name: String) -> posix.Posix {
   posix.posix_codes()
-  |> list.find(fn(code) { posix.name(code) == name })
+  |> list.find(fn(code) { posix.posix_name(code) == name })
   |> result.unwrap(posix.Unlisted(name:))
 }
 
@@ -571,7 +571,7 @@ fn exit_reason_text(exit_reason: process.ExitReason) -> String {
 pub fn listen_failure_reason(failure: ListenFailure) -> Reason {
   case failure {
     process_message.ListenRefused(report:, transaction_status: _) ->
-      error.Server(error.server_error_from_report(report))
+      error.Server(error.report_to_server_error(report))
     process_message.ListenAnswerUnexpected -> error.UnexpectedListenAnswer
     process_message.ListenDeadlinePassed(cancelled:) ->
       error.QueryTimeout(stopped_on_server: cancelled)
@@ -704,7 +704,7 @@ fn transport_connect_failure(
 fn login_failure(login_error: LoginError) -> error.ConnectFailure {
   case login_error {
     login.ServerRejectedLogin(report:) ->
-      error.LoginRefused(error.server_error_from_report(report))
+      error.LoginRefused(error.report_to_server_error(report))
     login.UnexpectedMessage(message:) ->
       error.UnexpectedLoginMessage(server_message_kind(message))
     login.UnsupportedLoginMethod(method:) ->

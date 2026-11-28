@@ -4,7 +4,7 @@
 //// lifecycle hooks of a suite, and pick the version of a group with
 //// `choose_version` in its `before_all`.
 
-import dream_postgres/codecs/codec_type.{type DecodeIssue}
+import dream_postgres/codec/codec_type.{type DecodeIssue}
 import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, type TypeKind, Binary, Null, Text,
   TypeDescription,

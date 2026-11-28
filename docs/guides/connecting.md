@@ -47,7 +47,7 @@ The login uses the method that the server asks for: SCRAM-SHA-256, MD5, a cleart
 
 ## Start and stop a pool
 
-`start` checks the config and starts the pool, linked to the calling process:
+`start_pool` checks the config and starts the pool, linked to the calling process:
 
 ### Start a pool <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -57,7 +57,7 @@ import dream_postgres/config.{
   TlsOff, database, default_config, host, password, pool_size, port, tls, user,
 }
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{type Connection, start}
+import dream_postgres/pool.{type Connection, start_pool}
 
 /// Starts a pool of 4 connections to the database `dream_test` on this
 /// machine. The local test server has no certificate, so TLS is off.
@@ -70,17 +70,17 @@ pub fn connect(port_number: Int) -> Result(Connection, Error(PostgresError)) {
   |> password("dream")
   |> pool_size(4)
   |> tls(TlsOff)
-  |> start
+  |> start_pool
 }
 ```
 
-A wrong config, such as an empty host or a pool size below 1, is an `Invalid` error from `start`. The connections connect in the background, so a server that does not answer shows as the error of the first query. While no connection is connected and the last connect failed, a call gets that connect error at once. So a wrong password or a server that is down reaches the caller with no wait.
+A wrong config, such as an empty host or a pool size below 1, is an `Invalid` error from `start_pool`. The connections connect in the background, so a server that does not answer shows as the error of the first query. While no connection is connected and the last connect failed, a call gets that connect error at once. So a wrong password or a server that is down reaches the caller with no wait.
 
-`stop` stops the pool and closes its connections. The calls that hold a connection get at most 5 seconds to finish.
+`stop_pool` stops the pool and closes its connections. The calls that hold a connection get at most 5 seconds to finish.
 
 ## Connect with a URL
 
-`config_from_url(url)` reads a `postgres://` or `postgresql://` URL as libpq reads it, and gives a config:
+`parse_database_url(url)` reads a `postgres://` or `postgresql://` URL as libpq reads it, and gives a config:
 
 `postgresql://user:password@host:port/database?sslmode=verify-full`
 
@@ -90,7 +90,7 @@ A wrong config, such as an empty host or a pool size below 1, is an `Invalid` er
 - The URL must name a host. With no host, libpq uses a Unix socket, and dream_postgres has no Unix socket connection.
 - With no `sslmode`, the TLS is the TLS of `default_config`, which is the same as `verify-full`. libpq starts with `prefer`, which checks no certificate.
 
-The other settings of the config keep their defaults. Change them with the setting functions after `config_from_url`:
+The other settings of the config keep their defaults. Change them with the setting functions after `parse_database_url`:
 
 ### Start a pool from a URL <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/database_url.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -98,8 +98,8 @@ The other settings of the config keep their defaults. Change them with the setti
 import dream_errors.{type Error}
 import dream_postgres/config.{pool_size}
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{type Connection, start}
-import dream_postgres/url.{config_from_url}
+import dream_postgres/pool.{type Connection, start_pool}
+import dream_postgres/url.{parse_database_url}
 import gleam/result
 
 /// Starts a pool of 4 connections from a database URL, such as
@@ -107,10 +107,10 @@ import gleam/result
 pub fn connect_with_url(
   database_url: String,
 ) -> Result(Connection, Error(PostgresError)) {
-  use config <- result.try(config_from_url(database_url))
+  use config <- result.try(parse_database_url(database_url))
   config
   |> pool_size(4)
-  |> start
+  |> start_pool
 }
 ```
 
@@ -215,9 +215,9 @@ A pool that runs for the whole life of an app goes under the app's supervisor. `
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{text}
+import dream_postgres/codec.{text}
 import dream_postgres/config.{type Config}
-import dream_postgres/error.{type PostgresError, describe}
+import dream_postgres/error.{type PostgresError, describe_error}
 import dream_postgres/pool.{type PoolName, named_connection, supervised}
 import dream_postgres/query.{one, query}
 import dream_postgres/row.{single}
@@ -233,7 +233,7 @@ pub fn start_supervisor(
 ) -> Result(actor.Started(Supervisor), String) {
   use pool_child <- result.try(
     supervised(config, name: pool_name)
-    |> result.map_error(describe),
+    |> result.map_error(describe_error),
   )
   static_supervisor.new(static_supervisor.OneForOne)
   |> static_supervisor.add(pool_child)
@@ -261,7 +261,7 @@ A config with a recorder in `Playback` mode also works with `supervised`. The po
 
 ```gleam
 import dream_postgres/config.{type Config, record}
-import dream_postgres/error.{describe}
+import dream_postgres/error.{describe_error}
 import dream_postgres/pool.{type PoolName, supervised}
 import dream_postgres/recorder.{type Recorder}
 import gleam/otp/actor
@@ -281,7 +281,7 @@ pub fn start_app_supervisor(
     app_config(server)
     |> record(test_recorder)
     |> supervised(name: pool_name)
-    |> result.map_error(describe),
+    |> result.map_error(describe_error),
   )
   static_supervisor.new(static_supervisor.OneForOne)
   |> static_supervisor.add(pool_child)
@@ -362,7 +362,7 @@ A statement can send notices, such as a `NOTICE` or a `WARNING` from `RAISE`. `n
 import dream_errors.{type Error}
 import dream_postgres/config.{type Config, type ServerNotice, notices}
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{type Connection, start}
+import dream_postgres/pool.{type Connection, start_pool}
 import gleam/erlang/process.{type Subject}
 import gleam/pair
 import gleam/result
@@ -375,7 +375,7 @@ pub fn start_with_notices(
   let notice_subject = process.new_subject()
   config
   |> notices(notice_subject)
-  |> start
+  |> start_pool
   |> result.map(pair.new(_, notice_subject))
 }
 
@@ -386,7 +386,7 @@ pub fn notice_line(notice: ServerNotice) -> String {
 }
 ```
 
-A `ServerNotice` has the fields of a server error: the severity, the SQLSTATE, the message, the detail, the hint, and more. A notice that came before the pool stopped reaches the subject before `stop` returns.
+A `ServerNotice` has the fields of a server error: the severity, the SQLSTATE, the message, the detail, the hint, and more. A notice that came before the pool stopped reaches the subject before `stop_pool` returns.
 
 ## Pool events
 
@@ -417,8 +417,8 @@ import dream_postgres/config.{
   Held, Reconnected, Refused, Replacing, Returned, Stopping, Waiting,
   pool_events,
 }
-import dream_postgres/error.{type PostgresError, describe}
-import dream_postgres/pool.{type Connection, start}
+import dream_postgres/error.{type PostgresError, describe_error}
+import dream_postgres/pool.{type Connection, start_pool}
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/pair
@@ -432,7 +432,7 @@ pub fn start_with_pool_events(
   let event_subject = process.new_subject()
   config
   |> pool_events(event_subject)
-  |> start
+  |> start_pool
   |> result.map(pair.new(_, event_subject))
 }
 
@@ -441,16 +441,17 @@ pub fn event_line(event: PoolEvent) -> String {
   case event {
     Connected(slot:) -> slot_text(slot) <> " connected"
     Disconnected(slot:, reason:) ->
-      slot_text(slot) <> " lost its session: " <> describe(reason)
+      slot_text(slot) <> " lost its session: " <> describe_error(reason)
     Reconnected(slot:) -> slot_text(slot) <> " connected again"
     ConnectFailed(slot:, error: failure) ->
-      slot_text(slot) <> " did not connect: " <> describe(failure)
+      slot_text(slot) <> " did not connect: " <> describe_error(failure)
     Replacing(slot:) -> slot_text(slot) <> " is replaced"
     Free(slot:) -> slot_text(slot) <> " is free"
     Held(slot:) -> slot_text(slot) <> " is held"
     Returned(slot:) -> slot_text(slot) <> " came back"
     Waiting(count:) -> int.to_string(count) <> " calls wait for a connection"
-    Refused(error: failure) -> "a call got no connection: " <> describe(failure)
+    Refused(error: failure) ->
+      "a call got no connection: " <> describe_error(failure)
     Stopping -> "the pool stops"
   }
 }
@@ -460,4 +461,4 @@ fn slot_text(slot: Int) -> String {
 }
 ```
 
-An event that came before the pool stopped reaches the subject before `stop` returns.
+An event that came before the pool stopped reaches the subject before `stop_pool` returns.

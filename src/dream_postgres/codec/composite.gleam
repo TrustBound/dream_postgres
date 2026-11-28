@@ -7,77 +7,28 @@
 //// The codec reads a value with a row reader, the same as a row of a
 //// query, and writes it as a list of fields in the type's order.
 
-import dream_postgres/codecs.{type Codec}
-import dream_postgres/codecs/codec_type.{
-  type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes,
+import dream_postgres/codec/codec_type.{
+  type Codec, type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes,
 }
 import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, Array, Base, Binary, ColumnDescription,
   Composite, Domain, Enum, Multirange, Null, Pseudo, Range, Text,
 }
 import dream_postgres/error
-import dream_postgres/query/definition.{type Value, value_of}
-import dream_postgres/row.{type Row}
-import dream_postgres/row/reader.{type DescribedColumn, DescribedColumn}
+import dream_postgres/query/definition.{type Value}
+import dream_postgres/row/reader.{
+  type DescribedColumn, type Row, DescribedColumn,
+}
 import gleam/bit_array
 import gleam/int
 import gleam/list
 import gleam/result
 
 /// A codec of the composite type `type_name`.
-/// A field of a composite value, with its codec, for the `write` function
-/// of `composite`.
-pub type Field =
-  Value
-
-/// A field of a composite value: its codec and its value. The fields go in
-/// the order of the type's fields.
-pub fn field(codec: Codec(a), value: a) -> Field {
-  value_of(codec, value)
-}
-
-/// A codec of a composite type. It reads a value with a row reader, the
-/// same as a row of a query, and writes it as a list of fields in the
-/// type's order. Each field's codec must use the binary format, as every
-/// codec of this module does except `custom`.
-///
-/// ### A codec of a composite type <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/address_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/codecs.{type Codec, nullable, text}
-/// import dream_postgres/codecs/composite.{type Field, composite, field}
-/// import dream_postgres/row.{column, row}
-/// import gleam/option.{type Option, None}
-///
-/// /// The values of the PostgreSQL composite type
-/// /// `CREATE TYPE address AS (street text, city text)`.
-/// pub type Address {
-///   Address(street: String, city: Option(String))
-/// }
-///
-/// /// Reads an address with a row reader, and writes it as its fields in the
-/// /// order of the type.
-/// pub fn address_codec() -> Codec(Address) {
-///   composite(
-///     "address",
-///     read: {
-///       use street <- column(text)
-///       use city <- column(nullable(text))
-///       row(Address(street:, city:))
-///     },
-///     write: address_fields,
-///     placeholder: Address(street: "", city: None),
-///   )
-/// }
-///
-/// fn address_fields(address: Address) -> List(Field) {
-///   [field(text, address.street), field(nullable(text), address.city)]
-/// }
-/// ```
 pub fn composite(
   type_name type_name: String,
   read reader: Row(a),
-  write to_fields: fn(a) -> List(Field),
+  write to_fields: fn(a) -> List(Value),
   placeholder placeholder: a,
 ) -> Codec(a) {
   Codec(

@@ -42,7 +42,7 @@ pub fn busy_service(config: Config) -> Config {
 
 ## The pool size
 
-`pool_size` sets the number of connections. The default is 10, and a size below 1 is an `Invalid` error from `start`.
+`pool_size` sets the number of connections. The default is 10, and a size below 1 is an `Invalid` error from `start_pool`.
 
 Each connection is one session on the server. The server refuses a session above its `max_connections` setting. So the sizes of all pools on all instances of your app, added together, must stay below that setting, with space for the sessions of other clients.
 
@@ -84,7 +84,7 @@ Five more settings change the times of the pool. Each time is in milliseconds:
 | `health_check_interval` | Interval between health checks | 30_000 |
 | `return_rollback_timeout` | Longest time of the rollback when a call gives back a connection | 5000 |
 
-A value below 1 is an `InvalidConfig` error at `start` and at `supervised`, with the fault `InvalidConnectTimeout`, `InvalidSetupTimeout`, `InvalidCancelTimeout`, `InvalidHealthCheckInterval` or `InvalidReturnRollbackTimeout`. Nothing starts.
+A value below 1 is an `InvalidConfig` error at `start_pool` and at `supervised`, with the fault `InvalidConnectTimeout`, `InvalidSetupTimeout`, `InvalidCancelTimeout`, `InvalidHealthCheckInterval` or `InvalidReturnRollbackTimeout`. Nothing starts.
 
 ### A pool on a distant server <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/distant_server.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -116,7 +116,7 @@ These times are fixed in this version. No setting changes them.
 |---|---|
 | Longest time of a health check | 5 seconds |
 | Longest time that a send waits while the server reads nothing | 5 seconds |
-| Time that `stop` gives the calls that hold a connection | 5 seconds |
+| Time that `stop_pool` gives the calls that hold a connection | 5 seconds |
 
 ## Watch the pool
 

@@ -4,7 +4,7 @@
 import dream_postgres/driver/cell.{Binary, Null, Text}
 import dream_postgres/error.{InterceptorFailed}
 import dream_postgres/interceptor.{CopyFromAnswer}
-import dream_postgres/recorder/normalize
+import dream_postgres/normalize
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}

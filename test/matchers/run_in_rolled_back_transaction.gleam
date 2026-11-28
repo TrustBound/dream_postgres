@@ -5,7 +5,7 @@
 import dream_errors.{type Error, Failed}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
-import dream_postgres/transaction.{run, transaction}
+import dream_postgres/transaction.{run_transaction, transaction}
 import dream_test/types.{
   type MatchResult, AssertionFailure, CustomMatcherFailure, MatchFailed, MatchOk,
 }
@@ -62,13 +62,19 @@ fn roll_back(
       database: DatabaseFailed,
       rollback_also_failed: RollbackFailed,
     )
-    |> run(fn(held) { Error(Failed("rolled back", WorkDone(work(held)))) })
+    |> run_transaction(fn(held) {
+      Error(Failed("rolled back", WorkDone(work(held))))
+    })
   case result.map_error(ended, dream_errors.cause) {
     Error(Some(WorkDone(value:))) -> MatchOk(value)
     Error(Some(DatabaseFailed(error: failure))) ->
-      not_run(error.describe(error.to_dream_error(failure)))
+      not_run(
+        error.describe_error(error.postgres_error_to_dream_error(failure)),
+      )
     Error(Some(RollbackFailed(rollback_error:, ..))) ->
-      not_run(error.describe(error.to_dream_error(rollback_error)))
+      not_run(
+        error.describe_error(error.postgres_error_to_dream_error(rollback_error)),
+      )
     Error(None) -> not_run("the transaction gave NotFound")
     Ok(Nil) -> not_run("the transaction committed")
   }

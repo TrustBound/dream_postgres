@@ -2,9 +2,9 @@
 //// (`type_catalog.label()`), whose `path` field has a codec in the text
 //// format.
 
-import dream_postgres/codecs
-import dream_postgres/codecs/codec_type.{type Codec}
-import dream_postgres/codecs/composite
+import dream_postgres/codec
+import dream_postgres/codec/codec_type.{type Codec}
+import dream_postgres/codec/composite as composite_codecs
 import dream_postgres/query/definition
 import dream_postgres/row/reader.{column, row}
 import fixtures/ltree_codec.{ltree_codec}
@@ -21,10 +21,10 @@ import fixtures/ltree_codec.{ltree_codec}
 /// |> encode_as(label_codec(), type_catalog.label())
 /// ```
 pub fn label_codec() -> Codec(#(String, String)) {
-  composite.composite(
+  composite_codecs.composite(
     type_name: "label",
     read: {
-      use name <- column(codecs.text)
+      use name <- column(codec.text)
       use path <- column(ltree_codec())
       row(#(name, path))
     },
@@ -33,9 +33,9 @@ pub fn label_codec() -> Codec(#(String, String)) {
   )
 }
 
-fn label_fields(label: #(String, String)) -> List(composite.Field) {
+fn label_fields(label: #(String, String)) -> List(codec.Field) {
   [
-    definition.value_of(codecs.text, label.0),
+    definition.value_of(codec.text, label.0),
     definition.value_of(ltree_codec(), label.1),
   ]
 }

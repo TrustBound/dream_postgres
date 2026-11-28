@@ -18,6 +18,6 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 pub fn stop_pool(result: MatchResult(Connection)) -> MatchResult(Nil) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
-    MatchOk(connection) -> MatchOk(pool.stop(connection))
+    MatchOk(connection) -> MatchOk(pool.stop_pool(connection))
   }
 }

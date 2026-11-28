@@ -44,12 +44,12 @@ fn run_on_new_pool(
     use pool <- result.try(server_pools.chosen(pools))
     server_pools.config(pool.port)
     |> config.pool_size(1)
-    |> pool.start
-    |> result.map_error(error.describe)
+    |> pool.start_pool
+    |> result.map_error(error.describe_error)
   }
   case started {
     Ok(connection) -> {
-      pool.stop(connection)
+      pool.stop_pool(connection)
       MatchOk(work(connection))
     }
     Error(reason) ->

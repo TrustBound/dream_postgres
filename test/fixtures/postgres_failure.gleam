@@ -28,5 +28,5 @@ pub fn with_reason(reason: Reason) -> PostgresError {
 /// ```
 pub fn without_query(reason: Reason) -> Error(PostgresError) {
   PostgresError(query_name: None, sql: None, reason:)
-  |> error.to_dream_error
+  |> error.postgres_error_to_dream_error
 }

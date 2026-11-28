@@ -24,7 +24,7 @@ A recorder records the requests of a test and the answers of PostgreSQL to one J
 | Mode | The connection | The file |
 |---|---|---|
 | `recorder.Record` | a live pool of the config, with the recorder after all other interceptors | written new at the start, then each request and its answer before the answer returns |
-| `recorder.Playback` | no pool starts and nothing connects: after the interceptors of the config, the recording answers each request | read at the start. A missing file fails `recorder.start` with `RecordingNotFound` |
+| `recorder.Playback` | no pool starts and nothing connects: after the interceptors of the config, the recording answers each request | read at the start. A missing file fails `recorder.start_recorder` with `RecordingNotFound` |
 | `recorder.RecordMissing` | `Playback` when the file exists, else `Record` | read, or written |
 | `recorder.Passthrough` | a live pool of the config | not read and not written |
 
@@ -37,7 +37,7 @@ The app and its tests share one config. It holds the interceptors of the app and
 ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codecs.{text}
+import dream_postgres/codec.{text}
 import dream_postgres/config.{type Config, intercept, secrets}
 import dream_postgres/secrets
 import snippets/request_tagging.{tag_with_app_name}
@@ -63,8 +63,7 @@ This function creates an API key, then reads it back by the id that the database
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int, text, uuid}
-import dream_postgres/codecs/time.{timestamp_with_time_zone}
+import dream_postgres/codec.{int, text, timestamp_with_time_zone, uuid}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query, secret_parameter}
@@ -114,38 +113,38 @@ The database makes the id with `gen_random_uuid()` and the time with `now()`, so
 
 ## Start a recorder
 
-`recorder.new` takes the path of the recording file. There is no default path. The test gives the mode, which it reads from its own config:
+`recorder.recorder` takes the path of the recording file. There is no default path. The test gives the mode, which it reads from its own config:
 
 ### Start the recorder of one test <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_api_key_recorder.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
 import dream_postgres/error.{type PostgresError}
+import dream_postgres/normalize.{generated_uuids, timestamps_near_now}
 import dream_postgres/recorder.{
-  type Mode, type Recorder, intercept, match_on, mode, new, start,
+  type Mode, type Recorder, intercept, match_on, mode, recorder,
+  sql_and_parameters, start_recorder,
 }
-import dream_postgres/recorder/match.{sql_and_parameters}
-import dream_postgres/recorder/normalize.{generated_uuids, timestamps_near_now}
 
 /// Starts the recorder of the test that creates an API key. The test
 /// gives the mode, which it reads from its own config.
 pub fn start_api_key_recorder(
   recorder_mode: Mode,
 ) -> Result(Recorder, Error(PostgresError)) {
-  new(file: "test/recordings/api_key_create.json")
+  recorder(file: "test/recordings/api_key_create.json")
   |> mode(recorder_mode)
   |> match_on(sql_and_parameters)
   |> intercept(generated_uuids(keep: []))
   |> intercept(timestamps_near_now(window_days: 400))
-  |> start
+  |> start_recorder
 }
 ```
 
-`recorder.start` fails with `Error(PostgresError)`, the same type as `pool.start`. The recorder stops when its connection stops, or when the process that started it ends.
+`recorder.start_recorder` fails with `Error(PostgresError)`, the same type as `pool.start_pool`. The recorder stops when its connection stops, or when the process that started it ends.
 
 ## Record, then play back
 
-`config.record` attaches the recorder to the config. Then `pool.start` makes the connection of the mode:
+`config.record` attaches the recorder to the config. Then `pool.start_pool` makes the connection of the mode:
 
 ### Run the test in either mode <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/run_create_api_key.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -153,7 +152,7 @@ pub fn start_api_key_recorder(
 import dream_errors.{type Error}
 import dream_postgres/config.{type Config, record}
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{start, stop}
+import dream_postgres/pool.{start_pool, stop_pool}
 import dream_postgres/recorder.{type Recorder}
 import gleam/result
 import snippets/app_config.{app_config}
@@ -170,11 +169,11 @@ pub fn run_create_api_key(
   use connection <- result.try(
     app_config(server)
     |> record(test_recorder)
-    |> start,
+    |> start_pool,
   )
   let created =
     with_api_keys_table(connection, create_api_key(_, owner, "s3cret"))
-  stop(connection)
+  stop_pool(connection)
   created
 }
 ```
@@ -224,7 +223,7 @@ To play back in CI, commit the recording file with the test. To record again, fo
 
 ```gleam
 import dream_postgres/config.{type Config, record}
-import dream_postgres/error.{describe}
+import dream_postgres/error.{describe_error}
 import dream_postgres/pool.{type PoolName, supervised}
 import dream_postgres/recorder.{type Recorder}
 import gleam/otp/actor
@@ -244,7 +243,7 @@ pub fn start_app_supervisor(
     app_config(server)
     |> record(test_recorder)
     |> supervised(name: pool_name)
-    |> result.map_error(describe),
+    |> result.map_error(describe_error),
   )
   static_supervisor.new(static_supervisor.OneForOne)
   |> static_supervisor.add(pool_child)
@@ -269,19 +268,18 @@ Playback follows the recorded order. At each request, the recorder makes the key
 import dream_errors.{type Error}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/recorder.{
-  type Mode, type Recorder, match_on, mode, new, start,
+  type Mode, type Recorder, match_on, mode, recorder, sql_only, start_recorder,
 }
-import dream_postgres/recorder/match.{sql_only}
 
 /// A recorder that takes any parameters of the recorded SQL, for a test
 /// whose parameters change in each run.
 pub fn start_sql_only_recorder(
   recorder_mode: Mode,
 ) -> Result(Recorder, Error(PostgresError)) {
-  new(file: "test/recordings/api_key_list.json")
+  recorder(file: "test/recordings/api_key_list.json")
   |> mode(recorder_mode)
   |> match_on(sql_only)
-  |> start
+  |> start_recorder
 }
 ```
 
@@ -323,7 +321,7 @@ In playback, a secret parameter matches any value with the same codec at the sam
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{bool, text}
+import dream_postgres/codec.{bool, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query, secret_parameter}
@@ -351,7 +349,7 @@ A request after the last recorded request fails with `RequestNotRecorded`, of th
 
 A request after the connection stopped fails with `RecorderStopped`, of the kind `Unavailable`.
 
-`verify` on a playback connection fails with `NoDatabaseToVerify`, because a recording has no schema to check. The [boot check guide](boot-check.md) shows `verify`.
+`verify_queries` on a playback connection fails with `NoDatabaseToVerify`, because a recording has no schema to check. The [boot check guide](boot-check.md) shows `verify_queries`.
 
 ## The recording file
 
@@ -376,7 +374,7 @@ This recording holds one `BEGIN`:
 }
 ```
 
-The number `dream_postgres_recording` is the format of the file. A file of another format does not load. `dream_postgres/recording` has the types of the file, and `recording.from_file_bytes` and `recording.to_file_text` read and write it.
+The number `dream_postgres_recording` is the format of the file. A file of another format does not load. `dream_postgres/recording` has the types of the file, and `recording.parse_recording` and `recording.format_recording` read and write it.
 
 ## What a recording does not hold
 
@@ -387,7 +385,7 @@ The number `dream_postgres_recording` is the format of the file. A file of anoth
 
 ## When a recorder fails
 
-`recorder.start` fails with one of these reasons of `dream_postgres/error`:
+`recorder.start_recorder` fails with one of these reasons of `dream_postgres/error`:
 
 | Reason | When |
 |---|---|

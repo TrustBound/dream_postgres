@@ -46,7 +46,7 @@ fn driver_times_of(config: Config) -> MatchResult(#(Int, Int, Int, Int, Int)) {
         operator: "extract_driver_times",
         message: "",
         payload: Some(CustomMatcherFailure(
-          actual: error.describe(failure),
+          actual: error.describe_error(failure),
           description: "expected a driver pool config",
         )),
       ))

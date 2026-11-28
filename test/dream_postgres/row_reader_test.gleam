@@ -1,8 +1,7 @@
 //// Row readers: the check of a reader against the columns of a result,
 //// and the read of a row.
 
-import dream_postgres/codecs
-import dream_postgres/codecs/numeric
+import dream_postgres/codec
 import dream_postgres/driver/cell.{Binary, BinaryFormat, Null, TextFormat}
 import dream_postgres/error.{
   AmbiguousColumnName, ColumnCountMismatch, ColumnReadTwice, ColumnTypeMismatch,
@@ -54,7 +53,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a reader of fewer columns than the result", fn() {
         // Arrange
-        let reader = single(codecs.int)
+        let reader = single(codec.int)
 
         // Act and assert
         reader
@@ -79,9 +78,9 @@ pub fn tests() -> TestSuite {
       it("refuses a codec that does not take the column's type", fn() {
         // Arrange
         let reader = {
-          use id <- column(codecs.int)
-          use name <- column(codecs.int)
-          use score <- column(numeric.numeric)
+          use id <- column(codec.int)
+          use name <- column(codec.int)
+          use score <- column(codec.numeric)
           row(#(id, name, score))
         }
 
@@ -100,7 +99,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a position past the last column", fn() {
         // Arrange
-        let reader = column_at(4, codecs.int, row)
+        let reader = column_at(4, codec.int, row)
 
         // Act and assert
         reader
@@ -112,7 +111,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses the position 0", fn() {
         // Arrange
-        let reader = column_at(0, codecs.int, row)
+        let reader = column_at(0, codec.int, row)
 
         // Act and assert
         reader
@@ -124,7 +123,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a name that no column has", fn() {
         // Arrange
-        let reader = column_named("email", codecs.text, row)
+        let reader = column_named("email", codec.text, row)
 
         // Act and assert
         reader
@@ -136,7 +135,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a name that two columns have", fn() {
         // Arrange
-        let reader = column_named("id", codecs.int, row)
+        let reader = column_named("id", codec.int, row)
 
         // Act and assert
         reader
@@ -152,8 +151,8 @@ pub fn tests() -> TestSuite {
       it("refuses a column read two times", fn() {
         // Arrange
         let reader = {
-          use first <- column_at(1, codecs.int)
-          use second <- column_named("id", codecs.int)
+          use first <- column_at(1, codec.int)
+          use second <- column_named("id", codec.int)
           row(#(first, second))
         }
 
@@ -168,8 +167,8 @@ pub fn tests() -> TestSuite {
       it("refuses a reader that mixes column with column_at", fn() {
         // Arrange
         let reader = {
-          use id <- column(codecs.int)
-          use name <- column_at(2, codecs.text)
+          use id <- column(codec.int)
+          use name <- column_at(2, codec.text)
           row(#(id, name))
         }
 
@@ -211,7 +210,7 @@ pub fn tests() -> TestSuite {
       }),
       it("reads a single column", fn() {
         // Arrange
-        let reader = single(codecs.int)
+        let reader = single(codec.int)
 
         // Act and assert
         reader
@@ -241,7 +240,7 @@ pub fn tests() -> TestSuite {
       }),
       it("reads a NULL with a nullable codec", fn() {
         // Arrange
-        let reader = single(codecs.nullable(codecs.text))
+        let reader = single(codec.nullable(codec.text))
 
         // Act and assert
         reader
@@ -253,7 +252,7 @@ pub fn tests() -> TestSuite {
       }),
       it("gives ValueOutOfRange for a value the codec cannot hold", fn() {
         // Arrange
-        let reader = single(codecs.float)
+        let reader = single(codec.float)
 
         // Act and assert
         reader
@@ -267,7 +266,7 @@ pub fn tests() -> TestSuite {
       }),
       it("gives DecodeFailed for bytes the codec cannot read", fn() {
         // Arrange
-        let reader = single(codecs.int)
+        let reader = single(codec.int)
 
         // Act and assert
         reader

@@ -118,7 +118,7 @@ pub fn start_listener(
 ///
 /// ```gleam
 /// import dream_postgres/config.{type Config}
-/// import dream_postgres/error.{describe}
+/// import dream_postgres/error.{describe_error}
 /// import dream_postgres/listener.{type ListenerName, supervised_listener}
 /// import gleam/otp/actor
 /// import gleam/otp/static_supervisor.{type Supervisor}
@@ -132,7 +132,7 @@ pub fn start_listener(
 /// ) -> Result(actor.Started(Supervisor), String) {
 ///   use listener_child <- result.try(
 ///     supervised_listener(config, name: notifications)
-///     |> result.map_error(describe),
+///     |> result.map_error(describe_error),
 ///   )
 ///   static_supervisor.new(static_supervisor.OneForOne)
 ///   |> static_supervisor.add(listener_child)

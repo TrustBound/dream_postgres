@@ -1,7 +1,7 @@
 //// A pool under the app's supervisor: its child specification, the
 //// connection from its name, and the name after a restart.
 
-import dream_postgres/codecs
+import dream_postgres/codec
 import dream_postgres/error
 import dream_postgres/pool.{named_connection}
 import dream_postgres/query.{all, query}
@@ -27,7 +27,7 @@ pub fn tests() -> TestSuite {
       server_pools.config(5441)
       |> should
       |> run_on_supervised_pool(name, fn(_supervisor) {
-        all(query("SELECT 1"), single(codecs.int), named_connection(name))
+        all(query("SELECT 1"), single(codec.int), named_connection(name))
       })
       |> be_ok()
       |> be_equal([1])
@@ -46,7 +46,7 @@ pub fn tests() -> TestSuite {
         |> result.map(fn(_killed) { supervisors.wait_for_restarts(supervisor) })
         |> result.replace_error(error.PoolStopped)
         |> result.try(fn(_restarted) {
-          all(query("SELECT 2"), single(codecs.int), named_connection(name))
+          all(query("SELECT 2"), single(codec.int), named_connection(name))
           |> result.map_error(fn(_failure) { error.PoolStopped })
         })
       })
@@ -71,7 +71,7 @@ pub fn tests() -> TestSuite {
       // Act and assert
       all(
         query("SELECT 1"),
-        single(codecs.int),
+        single(codec.int),
         named_connection(process.new_name("no_pool_runs_here")),
       )
       |> should

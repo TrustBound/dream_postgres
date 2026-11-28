@@ -1,7 +1,7 @@
 //// The runners against a fake executor: the prepare, the checks, the run
 //// and the read of the rows.
 
-import dream_postgres/codecs
+import dream_postgres/codec
 import dream_postgres/driver/cell.{
   Binary, BinaryFormat, ParameterDescription, StatementDescription, TextFormat,
 }
@@ -133,7 +133,7 @@ pub fn tests() -> TestSuite {
       found
       |> should
       |> be_error()
-      |> be_equal(error.no_rows(Some("post.find")))
+      |> be_equal(error.no_rows_error(Some("post.find")))
       |> or_fail_with("Expected NotFound with the name post.find")
     }),
     it("gives None when maybe_one finds no row", fn() {
@@ -200,7 +200,7 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_error()
       |> be_equal(
-        error.to_dream_error(PostgresError(
+        error.postgres_error_to_dream_error(PostgresError(
           query_name: None,
           sql: Some(posts.sql()),
           reason: TooManyRows(2),
@@ -212,7 +212,7 @@ pub fn tests() -> TestSuite {
       // Arrange
       let subject =
         definition.query("UPDATE posts SET title = title WHERE user_id = $1")
-        |> definition.parameter(codecs.int, 7)
+        |> definition.parameter(codec.int, 7)
       let executor =
         fake_executor.returning(
           StatementDescription(
@@ -283,7 +283,7 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_error()
       |> be_equal(
-        error.to_dream_error(PostgresError(
+        error.postgres_error_to_dream_error(PostgresError(
           query_name: None,
           sql: Some(posts.sql()),
           reason: QueryTimeout(stopped_on_server: True),
@@ -308,7 +308,7 @@ pub fn tests() -> TestSuite {
       let found =
         runner.all(
           subject,
-          single(codecs.int),
+          single(codec.int),
           runner.DatabaseLayer(executor),
           [],
         )
@@ -318,7 +318,7 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_error()
       |> be_equal(
-        error.to_dream_error(PostgresError(
+        error.postgres_error_to_dream_error(PostgresError(
           query_name: None,
           sql: Some("SELECT 1"),
           reason: QueryTimeout(stopped_on_server: True),
@@ -343,7 +343,7 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_error()
       |> be_equal(
-        error.to_dream_error(PostgresError(
+        error.postgres_error_to_dream_error(PostgresError(
           query_name: None,
           sql: Some(posts.sql()),
           reason: ParameterCountMismatch(expected: 1, got: 0),
@@ -360,7 +360,7 @@ pub fn tests() -> TestSuite {
       let found =
         runner.all(
           posts.query(),
-          single(codecs.int),
+          single(codec.int),
           runner.DatabaseLayer(executor),
           [],
         )
@@ -370,7 +370,7 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_error()
       |> be_equal(
-        error.to_dream_error(PostgresError(
+        error.postgres_error_to_dream_error(PostgresError(
           query_name: None,
           sql: Some(posts.sql()),
           reason: ColumnCountMismatch(expected: 1, got: 2),
@@ -400,7 +400,7 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_error()
       |> be_equal(
-        error.to_dream_error(PostgresError(
+        error.postgres_error_to_dream_error(PostgresError(
           query_name: None,
           sql: Some(posts.sql()),
           reason: QueryTimeout(stopped_on_server: True),
@@ -430,7 +430,7 @@ pub fn tests() -> TestSuite {
       let found =
         runner.all(
           posts.query(),
-          single(codecs.int),
+          single(codec.int),
           runner.DatabaseLayer(executor),
           [],
         )
@@ -464,7 +464,7 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_error()
       |> be_equal(
-        error.to_dream_error(PostgresError(
+        error.postgres_error_to_dream_error(PostgresError(
           query_name: None,
           sql: Some(posts.sql()),
           reason: StatementChangedDuringRun,
@@ -493,7 +493,7 @@ pub fn tests() -> TestSuite {
       |> should
       |> be_error()
       |> be_equal(
-        error.to_dream_error(PostgresError(
+        error.postgres_error_to_dream_error(PostgresError(
           query_name: None,
           sql: Some(posts.sql()),
           reason: DecodeFailed(

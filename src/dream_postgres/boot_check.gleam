@@ -14,8 +14,8 @@ import gleam/list
 import gleam/option.{None}
 import gleam/result
 
-/// A query and how its rows are read, for `verify`. Make one with
-/// `checked` for a query whose rows are read, or `checked_command` for a
+/// A query and how its rows are read, for `verify_queries`. Make one with
+/// `query_check` for a query whose rows are read, or `command_check` for a
 /// command whose rows are not read.
 pub opaque type QueryCheck {
   QueryCheck(check: fn(runner.Executor) -> Result(Nil, Error(PostgresError)))
@@ -26,13 +26,13 @@ pub opaque type QueryCheck {
 ///
 /// The check uses the codecs of the parameters, not their values: a query
 /// that is built only for the check gives each parameter
-/// `codec.placeholder` of its codec.
+/// `codec.codec_placeholder` of its codec.
 ///
 /// ### Make the checks of the queries of a module <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_checks.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
-/// import dream_postgres/codecs.{int, placeholder, text}
+/// import dream_postgres/boot_check.{type QueryCheck, command_check, query_check}
+/// import dream_postgres/codec.{codec_placeholder, int, text}
 /// import dream_postgres/query.{named, parameter, query}
 /// import dream_postgres/row.{column, row}
 ///
@@ -42,20 +42,20 @@ pub opaque type QueryCheck {
 ///   [
 ///     query("SELECT id, email FROM users WHERE id = $1")
 ///       |> named("user.find")
-///       |> parameter(int, placeholder(int))
-///       |> checked({
+///       |> parameter(int, codec_placeholder(int))
+///       |> query_check({
 ///         use id <- column(int)
 ///         use email <- column(text)
 ///         row(#(id, email))
 ///       }),
 ///     query("DELETE FROM users WHERE id = $1")
 ///       |> named("user.delete")
-///       |> parameter(int, placeholder(int))
-///       |> checked_command,
+///       |> parameter(int, codec_placeholder(int))
+///       |> command_check,
 ///   ]
 /// }
 /// ```
-pub fn checked(query: Query, reader: Row(a)) -> QueryCheck {
+pub fn query_check(query: Query, reader: Row(a)) -> QueryCheck {
   QueryCheck(check: runner.check_rows(query, reader, _))
 }
 
@@ -64,8 +64,8 @@ pub fn checked(query: Query, reader: Row(a)) -> QueryCheck {
 /// ### Make the checks of the queries of a module <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_checks.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
-/// import dream_postgres/codecs.{int, placeholder, text}
+/// import dream_postgres/boot_check.{type QueryCheck, command_check, query_check}
+/// import dream_postgres/codec.{codec_placeholder, int, text}
 /// import dream_postgres/query.{named, parameter, query}
 /// import dream_postgres/row.{column, row}
 ///
@@ -75,20 +75,20 @@ pub fn checked(query: Query, reader: Row(a)) -> QueryCheck {
 ///   [
 ///     query("SELECT id, email FROM users WHERE id = $1")
 ///       |> named("user.find")
-///       |> parameter(int, placeholder(int))
-///       |> checked({
+///       |> parameter(int, codec_placeholder(int))
+///       |> query_check({
 ///         use id <- column(int)
 ///         use email <- column(text)
 ///         row(#(id, email))
 ///       }),
 ///     query("DELETE FROM users WHERE id = $1")
 ///       |> named("user.delete")
-///       |> parameter(int, placeholder(int))
-///       |> checked_command,
+///       |> parameter(int, codec_placeholder(int))
+///       |> command_check,
 ///   ]
 /// }
 /// ```
-pub fn checked_command(query: Query) -> QueryCheck {
+pub fn command_check(query: Query) -> QueryCheck {
   QueryCheck(check: runner.check_command(query, _))
 }
 
@@ -112,7 +112,7 @@ pub fn checked_command(query: Query) -> QueryCheck {
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres/boot_check.{verify}
+/// import dream_postgres/boot_check.{verify_queries}
 /// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/pool.{type Connection}
 /// import snippets/user_checks.{queries}
@@ -121,13 +121,13 @@ pub fn checked_command(query: Query) -> QueryCheck {
 /// pub fn check_database(
 ///   connection: Connection,
 /// ) -> Result(Nil, List(Error(PostgresError))) {
-///   verify(connection, [queries()])
+///   verify_queries(connection, [queries()])
 /// }
 /// ```
 ///
 /// A failure reads, for example, `user.find: column 2 (email) is int4, and
 /// the query reads it with the text codec`.
-pub fn verify(
+pub fn verify_queries(
   connection: Connection,
   checks: List(List(QueryCheck)),
 ) -> Result(Nil, List(Error(PostgresError))) {

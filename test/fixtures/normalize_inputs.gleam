@@ -1,8 +1,9 @@
 //// Requests and answers for the tests of the normalizers, the keys and
 //// the secrets, with cells written already as a recorder sees them.
 
-import dream_postgres/codecs
-import dream_postgres/codecs/composite
+import dream_postgres/recorder.{sql_and_parameters}
+
+import dream_postgres/codec
 import dream_postgres/copy/request.{CopyRows, RecordedRows}
 import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, Base, Binary, CommandResult,
@@ -14,7 +15,6 @@ import dream_postgres/interceptor.{
   Statement, StatementAnswer,
 }
 import dream_postgres/query/definition.{type Value}
-import dream_postgres/recorder/match
 import fixtures/column_description
 import gleam/list
 import gleam/option.{None}
@@ -127,7 +127,7 @@ pub fn copied_rows_of(type_name: String, rows: List(List(Cell))) -> Outcome {
 /// ```
 pub fn written(type_name: String, cell: Cell) -> Value {
   definition.written_as(
-    composite.field(codecs.bytea, <<>>),
+    codec.field(codec.bytea, <<>>),
     type_named(type_name),
     cell,
   )
@@ -143,7 +143,7 @@ pub fn written(type_name: String, cell: Cell) -> Value {
 /// ```
 pub fn written_secret() -> List(Value) {
   definition.query("SELECT $1")
-  |> definition.secret_parameter(codecs.text, "hunter2")
+  |> definition.secret_parameter(codec.text, "hunter2")
   |> definition.values
   |> list.map(definition.written_as(
     _,
@@ -160,7 +160,7 @@ pub fn written_secret() -> List(Value) {
 /// normalize_inputs.not_written()
 /// ```
 pub fn not_written() -> Value {
-  composite.field(codecs.int, 1)
+  codec.field(codec.int, 1)
 }
 
 /// A statement with the SQL and the parameters.
@@ -214,7 +214,7 @@ pub fn answering(outcome: Outcome) -> fn(Request) -> Outcome {
 /// interceptor(request, normalize_inputs.refusing_with_key)
 /// ```
 pub fn refusing_with_key(request: Request) -> Outcome {
-  Error(InterceptorFailed(reason: match.sql_and_parameters(request)))
+  Error(InterceptorFailed(reason: sql_and_parameters(request)))
 }
 
 /// A binary `timestamptz` cell of now.

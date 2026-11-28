@@ -1,5 +1,4 @@
-import dream_postgres/codecs.{type Codec, int, nullable}
-import dream_postgres/codecs/array.{array}
+import dream_postgres/codec.{type Codec, array, int, nullable}
 import gleam/option.{type Option}
 
 /// A codec of `int4[]` whose elements can be NULL.

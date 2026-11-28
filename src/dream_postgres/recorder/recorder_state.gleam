@@ -22,7 +22,7 @@ pub type Session {
 
 pub fn start_failure(reason: Reason) -> Error(PostgresError) {
   PostgresError(query_name: None, sql: None, reason:)
-  |> error.to_dream_error
+  |> error.postgres_error_to_dream_error
 }
 
 pub type State {

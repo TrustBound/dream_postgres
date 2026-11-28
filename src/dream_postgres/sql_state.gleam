@@ -542,7 +542,7 @@ pub type SqlState {
 
 /// The SQLSTATE of a five-character code. A code that no supported
 /// version has gives `Unlisted`, so a newer server never fails here.
-pub fn from_string(code: String) -> SqlState {
+pub fn parse_sql_state(code: String) -> SqlState {
   case code {
     "00000" -> SuccessfulCompletion
     "01000" -> Warning
@@ -813,7 +813,7 @@ pub fn from_string(code: String) -> SqlState {
 }
 
 /// The five-character code of a SQLSTATE, for example `"23505"`.
-pub fn to_string(sql_state: SqlState) -> String {
+pub fn sql_state_to_string(sql_state: SqlState) -> String {
   case sql_state {
     SuccessfulCompletion -> "00000"
     Warning -> "01000"
@@ -1086,7 +1086,7 @@ pub fn to_string(sql_state: SqlState) -> String {
 /// The condition name of a SQLSTATE, as PostgreSQL's documentation and
 /// PL/pgSQL name it, for example `"unique_violation"`. An `Unlisted`
 /// code has no name.
-pub fn name(sql_state: SqlState) -> Result(String, UnlistedCode) {
+pub fn sql_state_name(sql_state: SqlState) -> Result(String, UnlistedCode) {
   case sql_state {
     SuccessfulCompletion -> Ok("successful_completion")
     Warning -> Ok("warning")
@@ -1490,7 +1490,7 @@ pub type Class {
 
 /// The class of a SQLSTATE. Every listed code has a listed class. An
 /// `Unlisted` code gives the class of its first two characters.
-pub fn class(sql_state: SqlState) -> Class {
+pub fn sql_state_class(sql_state: SqlState) -> Class {
   case sql_state {
     SuccessfulCompletion -> SuccessfulCompletionClass
     Warning -> WarningClass

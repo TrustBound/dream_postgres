@@ -39,7 +39,7 @@ This example has its own cause type, so that a rule can refuse the move:
 
 ```gleam
 import dream_errors.{type Error, Invalid}
-import dream_postgres/codecs.{int}
+import dream_postgres/codec.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{affected, one, parameter, query}
@@ -124,7 +124,7 @@ fn credit(
 
 When the first account has 40 and the move takes 1000, `check` gives `Invalid("not enough funds", NotEnoughFunds(balance: 40, wanted: 1000))`, and the rollback undoes the debit. A database error keeps its kind: a deadlock is `Retry` with the cause `Database(postgres_error)`.
 
-A plan where every error is a database error uses `function.identity` and `transaction.keep_both`. Its errors stay `Error(PostgresError)`, as the next examples show.
+A plan where every error is a database error uses `function.identity` and `transaction.keep_both_errors`. Its errors stay `Error(PostgresError)`, as the next examples show.
 
 ## Pass a value to the next step
 
@@ -134,13 +134,13 @@ A plan where every error is a database error uses `function.identity` and `trans
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int}
+import dream_postgres/codec.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}
 import dream_postgres/row.{single}
 import dream_postgres/transaction.{
-  commit, keep_both, step, step_with, transaction,
+  commit, keep_both_errors, step, step_with, transaction,
 }
 import gleam/function
 import snippets/create_user.{create_user}
@@ -156,7 +156,7 @@ pub fn sign_up(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
   |> step(create_user(_, email, name))
   |> step_with(open_account)
@@ -191,14 +191,14 @@ fn open_account(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int}
+import dream_postgres/codec.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, query}
 import dream_postgres/row.{single}
 import dream_postgres/transaction.{
-  RepeatableRead, commit, isolation, keep_both, read_only, step, step_with,
-  transaction,
+  RepeatableRead, commit, isolation, keep_both_errors, read_only, step,
+  step_with, transaction,
 }
 import gleam/function
 import gleam/pair
@@ -213,7 +213,7 @@ pub fn balance_report(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
   |> isolation(RepeatableRead)
   |> read_only
@@ -237,18 +237,20 @@ A serialization failure is a `Retry` error: nothing happened, and a new run of t
 
 ## A transaction as one callback
 
-`run(plan, callback)` runs a plan with one callback that does all the work with the connection of the transaction. `Ok` from the callback commits, and `Error` rolls back. Only a plan with no steps can go to `run`, and the compiler checks this:
+`run_transaction(plan, callback)` runs a plan with one callback that does all the work with the connection of the transaction. `Ok` from the callback commits, and `Error` rolls back. Only a plan with no steps can go to `run_transaction`, and the compiler checks this:
 
 ### Move a whole balance <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/move_balance.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int}
+import dream_postgres/codec.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}
 import dream_postgres/row.{single}
-import dream_postgres/transaction.{keep_both, run, transaction}
+import dream_postgres/transaction.{
+  keep_both_errors, run_transaction, transaction,
+}
 import gleam/function
 import gleam/result
 
@@ -262,9 +264,9 @@ pub fn move_balance(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
-  |> run(move_balance_in(_, from_account, to_account))
+  |> run_transaction(move_balance_in(_, from_account, to_account))
 }
 
 fn move_balance_in(
@@ -321,7 +323,9 @@ A transaction on the connection of a transaction runs as a savepoint. Its failur
 import dream_errors.{type Error}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
-import dream_postgres/transaction.{commit, keep_both, run, step, transaction}
+import dream_postgres/transaction.{
+  commit, keep_both_errors, run_transaction, step, transaction,
+}
 import gleam/function
 import gleam/list
 import gleam/result
@@ -338,9 +342,9 @@ pub fn import_users(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
-  |> run(import_each(_, people))
+  |> run_transaction(import_each(_, people))
 }
 
 fn import_each(
@@ -362,7 +366,7 @@ fn import_one(
   transaction(
     transaction_connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
   |> step(create_user(_, email, name))
   |> commit
@@ -383,7 +387,7 @@ After a statement fails, PostgreSQL ignores every statement up to the end of the
 import dream_errors.{type Error}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
-import dream_postgres/transaction.{commit, keep_both, step, transaction}
+import dream_postgres/transaction.{commit, keep_both_errors, step, transaction}
 import gleam/function
 import snippets/create_user.{create_user}
 
@@ -398,7 +402,7 @@ pub fn create_user_and_drop_error(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
   |> step(insert_and_drop_error(_, email, name))
   |> commit
@@ -420,6 +424,6 @@ fn insert_and_drop_error(
 
 After an error of a step, the plan sends `ROLLBACK`. When the rollback also fails, the plan gives `Unavailable("the rollback after a failed step failed", cause)`. The cause is what `rollback_also_failed` makes from the two errors: the error of the step, and the `PostgresError` of the rollback. No error is lost. `Unavailable` says that the connection or the server failed, and the pool rolls back or replaces that connection when the call ends.
 
-`transaction.keep_both` is the `rollback_also_failed` of a plan with the cause `PostgresError`. It gives a `PostgresError` with the reason `RollbackAlsoFailed(step_error:, rollback_error:)`, which holds both errors. `error.sql_state` and `error.server_error` of the result give the server error of the step.
+`transaction.keep_both_errors` is the `rollback_also_failed` of a plan with the cause `PostgresError`. It gives a `PostgresError` with the reason `RollbackAlsoFailed(step_error:, rollback_error:)`, which holds both errors. `error.sql_state` and `error.server_error` of the result give the server error of the step.
 
-The same rule applies to `run`, and to a savepoint whose `ROLLBACK TO SAVEPOINT` fails.
+The same rule applies to `run_transaction`, and to a savepoint whose `ROLLBACK TO SAVEPOINT` fails.

@@ -1,25 +1,17 @@
-//// The Gleam value of PostgreSQL's `tid`: where a row version is stored.
+//// The codec of `tid`, in PostgreSQL's binary format: the block number
+//// (32 bits), then the offset (16 bits).
 ////
-//// In PostgreSQL's binary format: the block number (32 bits), then the
-//// offset (16 bits).
+//// This module is internal to dream_postgres.
 
-import dream_postgres/codecs/codec_type.{
+import dream_postgres/codec/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, binary_bytes, is_base, wrong_size,
 }
 import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
+import dream_postgres/tid.{type Tid, Tid}
 import gleam/int
 import gleam/result
 
-/// A row version's place: its block number (0 to 4294967295) and its
-/// position in the block (0 to 65535).
-pub type Tid {
-  Tid(block: Int, offset: Int)
-}
-
-// --- Codecs ---------------------------------------------------------------------
-
-/// `tid`, as a `Tid`.
-pub const tid =
+pub const tid_codec =
   Codec(
     name: "tid",
     gleam_type: "Tid",

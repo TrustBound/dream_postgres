@@ -1,9 +1,10 @@
 //// The keys of a recorder, on requests with cells that are written
 //// already, with no database.
 
+import dream_postgres/recorder.{sql_and_parameters, sql_only}
+
 import dream_postgres/driver/cell.{Binary, Null, Text}
 import dream_postgres/interceptor.{CopyTo, Request, Sql}
-import dream_postgres/recorder/match
 import dream_test/matchers.{be_equal, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}
@@ -18,7 +19,7 @@ pub fn tests() -> TestSuite {
       normalize_inputs.statement("SELECT $1", [
         normalize_inputs.written("int4", Binary(<<1:32>>)),
       ])
-      |> match.sql_and_parameters
+      |> sql_and_parameters
       |> should
       |> be_equal("statement\nSELECT $1\n$1 int4 binary 00000001")
       |> or_fail_with("Expected the type and the hex of the cell")
@@ -28,7 +29,7 @@ pub fn tests() -> TestSuite {
       normalize_inputs.statement("SELECT $1", [
         normalize_inputs.written("text", Text(<<"ab":utf8>>)),
       ])
-      |> match.sql_and_parameters
+      |> sql_and_parameters
       |> should
       |> be_equal("statement\nSELECT $1\n$1 text text 6162")
       |> or_fail_with("Expected the type and the hex of the text cell")
@@ -38,7 +39,7 @@ pub fn tests() -> TestSuite {
       normalize_inputs.statement("SELECT $1", [
         normalize_inputs.written("int4", Null),
       ])
-      |> match.sql_and_parameters
+      |> sql_and_parameters
       |> should
       |> be_equal("statement\nSELECT $1\n$1 int4 null")
       |> or_fail_with("Expected the NULL")
@@ -46,7 +47,7 @@ pub fn tests() -> TestSuite {
     it("sql_and_parameters keys a secret parameter by its codec only", fn() {
       // Act and assert
       normalize_inputs.statement("SELECT $1", normalize_inputs.written_secret())
-      |> match.sql_and_parameters
+      |> sql_and_parameters
       |> should
       |> be_equal("statement\nSELECT $1\n$1 secret text")
       |> or_fail_with("Expected the codec of the secret and no value")
@@ -57,7 +58,7 @@ pub fn tests() -> TestSuite {
         [normalize_inputs.written("int4", Binary(<<1:32>>))],
         [normalize_inputs.written("int4", Null)],
       ])
-      |> match.sql_and_parameters
+      |> sql_and_parameters
       |> should
       |> be_equal(
         "copy_from\nCOPY items FROM STDIN\nrow 1 int4 binary 00000001\nrow 2 int4 null",
@@ -69,7 +70,7 @@ pub fn tests() -> TestSuite {
       normalize_inputs.statement("SELECT $1", [
         normalize_inputs.written("int4", Binary(<<1:32>>)),
       ])
-      |> match.sql_only
+      |> sql_only
       |> should
       |> be_equal("statement\nSELECT $1")
       |> or_fail_with("Expected the kind and the SQL")
@@ -77,7 +78,7 @@ pub fn tests() -> TestSuite {
     it("sql_only keys a `run_sql` call by its kind and SQL", fn() {
       // Act and assert
       Request(sql: "SELECT 1", name: None, parameters: [], kind: Sql)
-      |> match.sql_only
+      |> sql_only
       |> should
       |> be_equal("sql\nSELECT 1")
       |> or_fail_with("Expected the kind sql")
@@ -85,7 +86,7 @@ pub fn tests() -> TestSuite {
     it("sql_only keys a COPY TO by its kind and SQL", fn() {
       // Act and assert
       Request(sql: "SELECT 1", name: None, parameters: [], kind: CopyTo)
-      |> match.sql_only
+      |> sql_only
       |> should
       |> be_equal("copy_to\nSELECT 1")
       |> or_fail_with("Expected the kind copy_to")

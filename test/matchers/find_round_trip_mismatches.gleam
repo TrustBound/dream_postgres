@@ -32,8 +32,9 @@ pub fn find_round_trip_mismatches(
 
 fn does_not_round_trip(named_code: #(String, String)) -> Bool {
   let #(code, condition_name) = named_code
-  let parsed = sql_state.from_string(code)
-  sql_state.to_string(parsed) != code
-  || sql_state.name(parsed) != Ok(condition_name)
-  || sql_state.class(parsed) == UnlistedClass(string.slice(code, 0, 2))
+  let parsed = sql_state.parse_sql_state(code)
+  sql_state.sql_state_to_string(parsed) != code
+  || sql_state.sql_state_name(parsed) != Ok(condition_name)
+  || sql_state.sql_state_class(parsed)
+  == UnlistedClass(string.slice(code, 0, 2))
 }

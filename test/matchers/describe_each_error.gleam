@@ -25,6 +25,6 @@ pub fn describe_each_error(
 ) -> MatchResult(List(String)) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
-    MatchOk(failures) -> MatchOk(list.map(failures, error.describe))
+    MatchOk(failures) -> MatchOk(list.map(failures, error.describe_error))
   }
 }

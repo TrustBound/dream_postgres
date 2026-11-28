@@ -1,5 +1,5 @@
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int}
+import dream_postgres/codec.{int}
 import dream_postgres/copy.{copy_to}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}

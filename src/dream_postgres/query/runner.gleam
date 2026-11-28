@@ -6,7 +6,7 @@
 //// last step of the chain prepares, checks and runs it.
 
 import dream_errors.{type Error}
-import dream_postgres/codecs/codec_type.{type TypeLookup}
+import dream_postgres/codec/codec_type.{type TypeLookup}
 import dream_postgres/driver/cell.{
   type Cell, type ColumnDescription, type CommandResult, type Format,
   type StatementDescription, type TypeDescription, Array, Base, Composite,
@@ -35,7 +35,7 @@ pub type Executor {
     prepare: fn(String, Option(String)) -> Result(StatementDescription, Reason),
     /// Prepares the SQL and gives the server's description of it now, also
     /// when the connection holds the statement in its cache. The checks of
-    /// `verify` use it, so a changed schema always shows.
+    /// `verify_queries` use it, so a changed schema always shows.
     describe_current: fn(String, Option(String)) ->
       Result(StatementDescription, Reason),
     /// Gives what a type OID is.
@@ -98,7 +98,7 @@ pub fn one(
   use found <- result.try(maybe_one(query, reader, lowest, interceptors))
   case found {
     Some(value) -> Ok(value)
-    None -> Error(error.no_rows(definition.name(query)))
+    None -> Error(error.no_rows_error(definition.name(query)))
   }
 }
 
@@ -479,5 +479,5 @@ fn failure(query: Query, reason: Reason) -> Error(PostgresError) {
     sql: Some(definition.sql(query)),
     reason:,
   )
-  |> error.to_dream_error
+  |> error.postgres_error_to_dream_error
 }

@@ -11,7 +11,7 @@ pub fn failure(
   reason: Reason,
 ) -> Error(PostgresError) {
   error.PostgresError(query_name:, sql:, reason:)
-  |> error.to_dream_error
+  |> error.postgres_error_to_dream_error
 }
 
 /// The failure of a call that has no query, such as a bad config.

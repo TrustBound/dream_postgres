@@ -2,8 +2,7 @@
 //// check of a reader sees only the branch of the placeholder value of each
 //// codec, 0 for `codec.int`, so a read must refuse another branch.
 
-import dream_postgres/codecs
-import dream_postgres/codecs/numeric
+import dream_postgres/codec
 import dream_postgres/row/reader.{type Row, column, row}
 import gleam/option.{type Option, None, Some}
 
@@ -19,10 +18,10 @@ import gleam/option.{type Option, None, Some}
 /// // -> Ok(#(0, Some("Ada")))
 /// ```
 pub fn branching() -> Row(#(Int, Option(String))) {
-  use kind <- column(codecs.int)
+  use kind <- column(codec.int)
   case kind {
     0 -> {
-      use name <- column(codecs.text)
+      use name <- column(codec.text)
       row(#(kind, Some(name)))
     }
     _ -> row(#(kind, None))
@@ -42,14 +41,14 @@ pub fn branching() -> Row(#(Int, Option(String))) {
 /// // -> Error(ReaderDependsOnValue(read: 2))
 /// ```
 pub fn switching() -> Row(#(Int, String)) {
-  use kind <- column(codecs.int)
+  use kind <- column(codec.int)
   case kind {
     0 -> {
-      use name <- column(codecs.text)
+      use name <- column(codec.text)
       row(#(kind, name))
     }
     _ -> {
-      use score <- column(numeric.numeric)
+      use score <- column(codec.numeric)
       row(#(kind, score))
     }
   }

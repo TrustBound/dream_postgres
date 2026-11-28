@@ -3,8 +3,8 @@
 //// for `verify` in the shape of a generated model module: each query is
 //// built with the placeholder of each parameter's codec.
 
-import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
-import dream_postgres/codecs
+import dream_postgres/boot_check.{type QueryCheck, command_check, query_check}
+import dream_postgres/codec
 import dream_postgres/query.{named, parameter, query}
 import dream_postgres/row.{column, row}
 
@@ -39,11 +39,11 @@ pub fn queries() -> List(QueryCheck) {
 pub fn read() -> QueryCheck {
   query("SELECT id, email, nickname FROM checked_users WHERE id = $1")
   |> named("user.read")
-  |> parameter(codecs.int, codecs.placeholder(codecs.int))
-  |> checked({
-    use id <- column(codecs.int)
-    use email <- column(codecs.text)
-    use nickname <- column(codecs.nullable(codecs.text))
+  |> parameter(codec.int, codec.codec_placeholder(codec.int))
+  |> query_check({
+    use id <- column(codec.int)
+    use email <- column(codec.text)
+    use nickname <- column(codec.nullable(codec.text))
     row(#(id, email, nickname))
   })
 }
@@ -58,13 +58,13 @@ pub fn read() -> QueryCheck {
 pub fn create() -> QueryCheck {
   query("INSERT INTO checked_users (id, email, nickname) VALUES ($1, $2, $3)")
   |> named("user.create")
-  |> parameter(codecs.int, codecs.placeholder(codecs.int))
-  |> parameter(codecs.text, codecs.placeholder(codecs.text))
+  |> parameter(codec.int, codec.codec_placeholder(codec.int))
+  |> parameter(codec.text, codec.codec_placeholder(codec.text))
   |> parameter(
-    codecs.nullable(codecs.text),
-    codecs.placeholder(codecs.nullable(codecs.text)),
+    codec.nullable(codec.text),
+    codec.codec_placeholder(codec.nullable(codec.text)),
   )
-  |> checked_command
+  |> command_check
 }
 
 /// `user.delete`: deletes the user with an id.
@@ -77,8 +77,8 @@ pub fn create() -> QueryCheck {
 pub fn delete() -> QueryCheck {
   query("DELETE FROM checked_users WHERE id = $1")
   |> named("user.delete")
-  |> parameter(codecs.int, codecs.placeholder(codecs.int))
-  |> checked_command
+  |> parameter(codec.int, codec.codec_placeholder(codec.int))
+  |> command_check
 }
 
 /// `user.find_by_email`, which gives its `text` parameter with the `int`
@@ -92,8 +92,8 @@ pub fn delete() -> QueryCheck {
 pub fn find_with_wrong_codec() -> QueryCheck {
   query("SELECT id FROM checked_users WHERE email = $1")
   |> named("user.find_by_email")
-  |> parameter(codecs.int, codecs.placeholder(codecs.int))
-  |> checked(row.single(codecs.int))
+  |> parameter(codec.int, codec.codec_placeholder(codec.int))
+  |> query_check(row.single(codec.int))
 }
 
 /// `user.insert_one`: inserts the row with the id 1 into the table
@@ -107,8 +107,8 @@ pub fn find_with_wrong_codec() -> QueryCheck {
 pub fn insert_one() -> QueryCheck {
   query("INSERT INTO checked_rows (id) VALUES ($1)")
   |> named("user.insert_one")
-  |> parameter(codecs.int, codecs.placeholder(codecs.int))
-  |> checked_command
+  |> parameter(codec.int, codec.codec_placeholder(codec.int))
+  |> command_check
 }
 
 /// `server.add_one`: reads a number from a parameter, on no table.
@@ -121,6 +121,6 @@ pub fn insert_one() -> QueryCheck {
 pub fn add_one() -> QueryCheck {
   query("SELECT $1::int4 + 1")
   |> named("server.add_one")
-  |> parameter(codecs.int, codecs.placeholder(codecs.int))
-  |> checked(row.single(codecs.int))
+  |> parameter(codec.int, codec.codec_placeholder(codec.int))
+  |> query_check(row.single(codec.int))
 }

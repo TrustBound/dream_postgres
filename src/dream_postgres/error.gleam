@@ -233,7 +233,7 @@ pub type Reason {
   PoolStartFailed(failure: PoolStartFailure)
   /// The pool is stopped, or it is gone.
   PoolStopped
-  /// `verify` was given a connection with no database, such as the
+  /// `verify_queries` was given a connection with no database, such as the
   /// connection of a recorder in playback mode, so no query was checked.
   NoDatabaseToVerify
   /// A transaction inside a transaction sets an isolation level or read
@@ -252,7 +252,7 @@ pub type Reason {
   )
   /// A field of `copy_from`, or a column that the row reader of `copy_to`
   /// reads, has a codec in the text format. A binary COPY needs a codec in
-  /// the binary format, as every codec of `dream_postgres/codecs` is except
+  /// the binary format, as every codec of `dream_postgres/codec` is except
   /// `custom`. `position` counts from 1.
   CopyNeedsBinaryCodec(position: Int, name: String, codec: String)
   /// The query of `copy_to` has `count` parameters. PostgreSQL takes no
@@ -339,11 +339,11 @@ pub type ConfigFault {
   /// The startup message of the login settings has `length` bytes, which
   /// is too long for its 32-bit length field.
   StartupMessageTooLong(length: Int)
-  /// The URL of `url.config_from_url` is not valid.
+  /// The URL of `url.parse_database_url` is not valid.
   InvalidDatabaseUrl(fault: UrlFault)
 }
 
-/// Why the URL of `url.config_from_url` is not valid. No fault
+/// Why the URL of `url.parse_database_url` is not valid. No fault
 /// holds the password of the URL.
 pub type UrlFault {
   /// The URL has no `://` after its scheme.
@@ -730,7 +730,9 @@ pub type LostReason {
 /// Every reason has its own clause. A server error maps by its SQLSTATE
 /// class: every class has its own clause, so a new class of a newer server
 /// is `Failed` only because `UnlistedClass` says so.
-pub fn to_dream_error(error: PostgresError) -> Error(PostgresError) {
+pub fn postgres_error_to_dream_error(
+  error: PostgresError,
+) -> Error(PostgresError) {
   let PostgresError(query_name:, sql: _, reason:) = error
   let prefix = case query_name {
     Some(name) -> name <> ": "
@@ -899,7 +901,7 @@ pub fn to_dream_error(error: PostgresError) -> Error(PostgresError) {
           <> "the recording "
           <> path
           <> " could not be written: "
-          <> posix.name(reason),
+          <> posix.posix_name(reason),
         error,
       )
     RequestNotMatched(recorded_sql:, sql:) ->
@@ -919,7 +921,7 @@ pub fn to_dream_error(error: PostgresError) -> Error(PostgresError) {
           <> "the recording "
           <> path
           <> " could not be read: "
-          <> posix.name(reason),
+          <> posix.posix_name(reason),
         error,
       )
     RecordingNotDecoded(path:, reason: _) ->
@@ -1048,7 +1050,7 @@ pub fn to_dream_error(error: PostgresError) -> Error(PostgresError) {
           <> "the rollback after a failed step failed. The step: "
           <> dream_errors.message(step_error)
           <> ". The rollback: "
-          <> dream_errors.message(to_dream_error(rollback_error)),
+          <> dream_errors.message(postgres_error_to_dream_error(rollback_error)),
         error,
       )
     UnexpectedCommitAnswer(tags:) ->
@@ -1437,13 +1439,13 @@ fn protocol_step_text(step: ProtocolStep) -> String {
 @internal
 pub fn reason_message(reason: Reason) -> String {
   PostgresError(query_name: None, sql: None, reason:)
-  |> to_dream_error
+  |> postgres_error_to_dream_error
   |> dream_errors.message
 }
 
 /// The dream_errors value for a query that `one` expected one row from,
 /// and that returned none.
-pub fn no_rows(query_name: Option(String)) -> Error(PostgresError) {
+pub fn no_rows_error(query_name: Option(String)) -> Error(PostgresError) {
   case query_name {
     Some(name) -> NotFound(name <> ": the query returned no row")
     None -> NotFound("the query returned no row")
@@ -1456,7 +1458,7 @@ fn server_to_dream_error(
   error: PostgresError,
 ) -> Error(PostgresError) {
   let message = prefix <> server_message(server_error)
-  case sql_state.class(server_error.sql_state) {
+  case sql_state.sql_state_class(server_error.sql_state) {
     IntegrityConstraintViolationClass ->
       integrity_error(message, server_error.sql_state, error)
     TransactionRollbackClass ->
@@ -1562,7 +1564,7 @@ fn prerequisite_error(
 }
 
 fn server_message(server_error: ServerError) -> String {
-  let code = sql_state.to_string(server_error.sql_state)
+  let code = sql_state.sql_state_to_string(server_error.sql_state)
   case server_error.constraint {
     Some(constraint) ->
       server_error.message
@@ -1591,7 +1593,7 @@ fn connect_failure_message(failure: ConnectFailure) -> String {
       <> ", which is not supported"
     OsRefused(error: posix_error) ->
       "the operating system refused the connection ("
-      <> posix.name(posix_error)
+      <> posix.posix_name(posix_error)
       <> ")"
     ConnectionBroke(reason:) ->
       "the connection broke during the login: " <> lost_reason_message(reason)
@@ -1675,14 +1677,14 @@ fn lost_reason_message(lost: LostReason) -> String {
     Reset -> "the connection was reset"
     TlsAlertRaised(alert:) -> "the TLS layer raised the alert " <> alert
     OsError(error: posix_error) ->
-      "the connection failed (" <> posix.name(posix_error) <> ")"
+      "the connection failed (" <> posix.posix_name(posix_error) <> ")"
     SendTimedOut ->
       "the database read nothing within the send timeout, so the connection was closed"
   }
 }
 
 /// The server error of a server report.
-pub fn server_error_from_report(report: ServerReport) -> ServerError {
+pub fn report_to_server_error(report: ServerReport) -> ServerError {
   let ServerReport(
     severity:,
     localized_severity:,
@@ -1706,7 +1708,7 @@ pub fn server_error_from_report(report: ServerReport) -> ServerError {
   ) = report
   ServerError(
     severity: severity_from_string(severity),
-    sql_state: sql_state.from_string(code),
+    sql_state: sql_state.parse_sql_state(code),
     message:,
     detail:,
     hint:,
@@ -1779,7 +1781,7 @@ pub fn column_name(error: Error(PostgresError)) -> Option(String) {
 
 /// The text of a failure for a log line: the dream_errors kind, then the
 /// message. It never holds a parameter value.
-pub fn describe(error: Error(PostgresError)) -> String {
+pub fn describe_error(error: Error(PostgresError)) -> String {
   dream_errors.kind_name(error)
   <> ": "
   <> string.trim(dream_errors.message(error))

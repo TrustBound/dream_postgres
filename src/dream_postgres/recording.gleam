@@ -275,15 +275,15 @@ pub fn failure_reason(failure: RecordedFailure) -> Reason {
 /// ### The text of an empty recording <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/empty_recording_text.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/recording.{Recording, to_file_text}
+/// import dream_postgres/recording.{Recording, format_recording}
 ///
 /// /// The text of a recording with no request:
 /// /// "{\n  \"dream_postgres_recording\": 1,\n  \"entries\": []\n}\n"
 /// pub fn empty_recording_text() -> String {
-///   to_file_text(Recording(entries: []))
+///   format_recording(Recording(entries: []))
 /// }
 /// ```
-pub fn to_file_text(recording: Recording) -> String {
+pub fn format_recording(recording: Recording) -> String {
   let entries = case recording.entries {
     [] -> "[]"
     entries ->
@@ -437,7 +437,10 @@ fn server_error_json(server_error: ServerError) -> Json {
   let number = fn(value) { json.nullable(value, json.int) }
   sorted_object([
     #("severity", json.string(severity_name(server_error.severity))),
-    #("code", json.string(sql_state.to_string(server_error.sql_state))),
+    #(
+      "code",
+      json.string(sql_state.sql_state_to_string(server_error.sql_state)),
+    ),
     #("message", json.string(server_error.message)),
     #("detail", text(server_error.detail)),
     #("hint", text(server_error.hint)),
@@ -580,15 +583,15 @@ fn kind_json(kind: TypeKind) -> Json {
 /// ### Read a recording file <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/read_recording.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/recording.{type Recording, from_file_bytes}
+/// import dream_postgres/recording.{type Recording, parse_recording}
 /// import gleam/json
 ///
 /// /// Reads the bytes of a recording file.
 /// pub fn read_recording(bytes: BitArray) -> Result(Recording, json.DecodeError) {
-///   from_file_bytes(bytes)
+///   parse_recording(bytes)
 /// }
 /// ```
-pub fn from_file_bytes(bytes: BitArray) -> Result(Recording, json.DecodeError) {
+pub fn parse_recording(bytes: BitArray) -> Result(Recording, json.DecodeError) {
   json.parse_bits(bytes, recording_decoder())
 }
 
@@ -760,7 +763,7 @@ fn server_error_decoder() -> Decoder(ServerError) {
     }),
   )
   decode.success(
-    error.server_error_from_report(cell.ServerReport(
+    error.report_to_server_error(cell.ServerReport(
       severity:,
       localized_severity:,
       code:,

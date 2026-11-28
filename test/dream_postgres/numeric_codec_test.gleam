@@ -2,8 +2,8 @@
 //// format: the bytes that numeric_in and numeric_send give for a text, and
 //// the text that numeric_recv and numeric_out give for the bytes.
 
-import dream_postgres/codecs/codec_type.{Malformed, NullValue}
-import dream_postgres/codecs/numeric
+import dream_postgres/codec
+import dream_postgres/codec/codec_type.{Malformed, NullValue}
 import dream_postgres/driver/cell.{Binary, BinaryFormat, Null}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,
@@ -23,7 +23,7 @@ pub fn tests() -> TestSuite {
     group("codec", [
       it("takes numeric", fn() {
         // Arrange
-        let subject = numeric.numeric
+        let subject = codec.numeric
 
         // Act and assert
         subject
@@ -34,7 +34,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses int4", fn() {
         // Arrange
-        let subject = numeric.numeric
+        let subject = codec.numeric
 
         // Act and assert
         subject
@@ -45,7 +45,7 @@ pub fn tests() -> TestSuite {
       }),
       it("uses the binary format", fn() {
         // Arrange
-        let subject = numeric.numeric
+        let subject = codec.numeric
 
         // Act
         let format = codec_type.format(subject)
@@ -58,7 +58,7 @@ pub fn tests() -> TestSuite {
       }),
       it("has the placeholder 0", fn() {
         // Arrange
-        let subject = numeric.numeric
+        let subject = codec.numeric
 
         // Act
         let placeholder = codec_type.placeholder(subject)
@@ -80,7 +80,7 @@ pub fn tests() -> TestSuite {
           // Act and assert
           text
           |> should
-          |> encode_as(numeric.numeric, type_catalog.numeric())
+          |> encode_as(codec.numeric, type_catalog.numeric())
           |> be_ok()
           |> be_equal(Binary(example.value))
           |> or_fail_with(
@@ -101,7 +101,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             cell
             |> should
-            |> decode_as(numeric.numeric, type_catalog.numeric())
+            |> decode_as(codec.numeric, type_catalog.numeric())
             |> be_ok()
             |> be_equal(example.canonical)
             |> or_fail_with(
@@ -118,7 +118,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             cell
             |> should
-            |> decode_as(numeric.numeric, type_catalog.numeric())
+            |> decode_as(codec.numeric, type_catalog.numeric())
             |> be_ok()
             |> be_equal("0.12")
             |> or_fail_with("Expected 0.1234 cut to the display scale 2")
@@ -130,7 +130,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             cell
             |> should
-            |> decode_as(numeric.numeric, type_catalog.numeric())
+            |> decode_as(codec.numeric, type_catalog.numeric())
             |> be_ok()
             |> be_equal("0.0")
             |> or_fail_with("Expected -0.0001 cut to 0.0 with no sign")
@@ -142,7 +142,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             cell
             |> should
-            |> decode_as(numeric.numeric, type_catalog.numeric())
+            |> decode_as(codec.numeric, type_catalog.numeric())
             |> be_ok()
             |> be_equal("-1.50")
             |> or_fail_with("Expected -1.5 with the display scale 2")
@@ -154,7 +154,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             cell
             |> should
-            |> decode_as(numeric.numeric, type_catalog.numeric())
+            |> decode_as(codec.numeric, type_catalog.numeric())
             |> be_ok()
             |> be_equal("0.00")
             |> or_fail_with("Expected a value far below 0.01 to read as 0.00")
@@ -166,7 +166,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             cell
             |> should
-            |> decode_as(numeric.numeric, type_catalog.numeric())
+            |> decode_as(codec.numeric, type_catalog.numeric())
             |> be_ok()
             |> be_equal("5")
             |> or_fail_with("Expected a leading zero digit to read as 5")
@@ -178,7 +178,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             cell
             |> should
-            |> decode_as(numeric.numeric, type_catalog.numeric())
+            |> decode_as(codec.numeric, type_catalog.numeric())
             |> be_ok()
             |> be_equal("NaN")
             |> or_fail_with("Expected NaN, with its digits not read")
@@ -197,7 +197,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             value
             |> should
-            |> encode_as(numeric.numeric, type_catalog.numeric())
+            |> encode_as(codec.numeric, type_catalog.numeric())
             |> be_error()
             |> be_equal(string.inspect(text) <> " is not a numeric value")
             |> or_fail_with(
@@ -213,7 +213,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             value
             |> should
-            |> encode_as(numeric.numeric, type_catalog.numeric())
+            |> encode_as(codec.numeric, type_catalog.numeric())
             |> be_error()
             |> be_equal(string.inspect(text) <> " is out of range for numeric")
             |> or_fail_with(
@@ -231,7 +231,7 @@ pub fn tests() -> TestSuite {
               // Act and assert
               huge_hexadecimal
               |> should
-              |> encode_as(numeric.numeric, type_catalog.numeric())
+              |> encode_as(codec.numeric, type_catalog.numeric())
               |> be_error()
               |> be_equal(
                 string.inspect(huge_hexadecimal)
@@ -253,7 +253,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(numeric.numeric, type_catalog.numeric())
+        |> decode_as(codec.numeric, type_catalog.numeric())
         |> be_error()
         |> be_equal(NullValue)
         |> or_fail_with("Expected NullValue for NULL")
@@ -265,7 +265,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(numeric.numeric, type_catalog.numeric())
+        |> decode_as(codec.numeric, type_catalog.numeric())
         |> be_error()
         |> be_equal(Malformed("a numeric value is cut short"))
         |> or_fail_with("Expected a header of six bytes to be cut short")
@@ -277,7 +277,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(numeric.numeric, type_catalog.numeric())
+        |> decode_as(codec.numeric, type_catalog.numeric())
         |> be_error()
         |> be_equal(Malformed("a numeric value is cut short"))
         |> or_fail_with("Expected one digit of two to be cut short")
@@ -289,7 +289,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(numeric.numeric, type_catalog.numeric())
+        |> decode_as(codec.numeric, type_catalog.numeric())
         |> be_error()
         |> be_equal(Malformed("a numeric value has bytes after its digits"))
         |> or_fail_with("Expected a byte after the digits to be refused")
@@ -301,7 +301,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(numeric.numeric, type_catalog.numeric())
+        |> decode_as(codec.numeric, type_catalog.numeric())
         |> be_error()
         |> be_equal(Malformed("0x1234 is not a numeric sign"))
         |> or_fail_with("Expected the sign 0x1234 to be refused")
@@ -313,7 +313,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(numeric.numeric, type_catalog.numeric())
+        |> decode_as(codec.numeric, type_catalog.numeric())
         |> be_error()
         |> be_equal(Malformed("the display scale 16384 is too large"))
         |> or_fail_with("Expected the display scale 16384 to be refused")
@@ -325,7 +325,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(numeric.numeric, type_catalog.numeric())
+        |> decode_as(codec.numeric, type_catalog.numeric())
         |> be_error()
         |> be_equal(Malformed("the numeric digit 10000 is not below 10000"))
         |> or_fail_with("Expected the digit 10000 to be refused")
@@ -337,7 +337,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(numeric.numeric, type_catalog.numeric())
+        |> decode_as(codec.numeric, type_catalog.numeric())
         |> be_error()
         |> be_equal(Malformed("the numeric digit 65535 is not below 10000"))
         |> or_fail_with("Expected the digit 65535 to be refused")

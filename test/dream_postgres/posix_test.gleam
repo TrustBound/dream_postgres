@@ -23,7 +23,9 @@ pub fn tests() -> TestSuite {
 
       // Act
       let listed =
-        posix.posix_codes() |> list.map(posix.name) |> list.sort(string.compare)
+        posix.posix_codes()
+        |> list.map(posix.posix_name)
+        |> list.sort(string.compare)
 
       // Assert
       listed
@@ -35,7 +37,8 @@ pub fn tests() -> TestSuite {
       // Act
       let round_trips =
         list.all(posix.posix_codes(), fn(code) {
-          posix.from_reason(atom.from_name(posix.name(code))) == Ok(code)
+          posix.reason_to_posix(atom.from_name(posix.posix_name(code)))
+          == Ok(code)
         })
 
       // Assert
@@ -49,7 +52,7 @@ pub fn tests() -> TestSuite {
       let reason = atom.from_name("econnrefused")
 
       // Act
-      let code = posix.from_reason(reason)
+      let code = posix.reason_to_posix(reason)
 
       // Assert
       code
@@ -63,7 +66,7 @@ pub fn tests() -> TestSuite {
       let reason = atom.from_name("errno_999")
 
       // Act
-      let code = posix.from_reason(reason)
+      let code = posix.reason_to_posix(reason)
 
       // Assert
       code
@@ -77,7 +80,7 @@ pub fn tests() -> TestSuite {
       let reason = dynamic.int(7)
 
       // Act
-      let code = posix.from_reason(reason)
+      let code = posix.reason_to_posix(reason)
 
       // Assert
       code
@@ -88,7 +91,7 @@ pub fn tests() -> TestSuite {
     }),
     it("names an Unlisted value by the name it holds", fn() {
       // Act
-      let name = posix.name(Unlisted("errno_999"))
+      let name = posix.posix_name(Unlisted("errno_999"))
 
       // Assert
       name

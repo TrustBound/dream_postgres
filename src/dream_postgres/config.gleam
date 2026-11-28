@@ -2,7 +2,7 @@
 //// pool, TLS, the statement cache, the interceptors, the secrets, a
 //// recorder, and the subjects for notices and pool events. Build one with
 //// `default_config` and the functions that set one field each, then give it
-//// to `pool.start` or `pool.supervised`.
+//// to `pool.start_pool` or `pool.supervised`.
 
 import dream_errors.{type Error}
 import dream_postgres/driver/cell.{type ServerReport}
@@ -40,7 +40,7 @@ import gleam/result
 ///   database, default_config, host, password, pool_size, user,
 /// }
 /// import dream_postgres/error.{type PostgresError}
-/// import dream_postgres/pool.{type Connection, start}
+/// import dream_postgres/pool.{type Connection, start_pool}
 ///
 /// pub fn start_app_pool(
 ///   app_password: String,
@@ -51,7 +51,7 @@ import gleam/result
 ///   |> user("app")
 ///   |> password(app_password)
 ///   |> pool_size(15)
-///   |> start
+///   |> start_pool
 /// }
 /// ```
 pub opaque type Config {
@@ -99,14 +99,14 @@ pub opaque type Config {
 /// import dream_errors.{type Error}
 /// import dream_postgres/config.{default_config, host}
 /// import dream_postgres/error.{type PostgresError}
-/// import dream_postgres/pool.{type Connection, start}
+/// import dream_postgres/pool.{type Connection, start_pool}
 ///
 /// pub fn start_pool_on(
 ///   server_host: String,
 /// ) -> Result(Connection, Error(PostgresError)) {
 ///   default_config()
 ///   |> host(server_host)
-///   |> start
+///   |> start_pool
 /// }
 /// ```
 pub fn default_config() -> Config {
@@ -183,14 +183,14 @@ pub fn checkout_timeout(config: Config, milliseconds: Int) -> Config {
 
 /// Sets the longest time in milliseconds of each TCP connect, TLS answer
 /// and TLS handshake of a new connection. The default is 5000. A value
-/// below 1 is `InvalidConfig` at `start` and at `supervised`.
+/// below 1 is `InvalidConfig` at `start_pool` and at `supervised`.
 pub fn connect_timeout(config: Config, milliseconds: Int) -> Config {
   Config(..config, connect_timeout_milliseconds: milliseconds)
 }
 
 /// Sets the longest time in milliseconds of one setup of a new
 /// connection: the TCP connect, TLS and the login together. The default
-/// is 10_000. A value below 1 is `InvalidConfig` at `start` and at
+/// is 10_000. A value below 1 is `InvalidConfig` at `start_pool` and at
 /// `supervised`.
 pub fn setup_timeout(config: Config, milliseconds: Int) -> Config {
   Config(..config, setup_timeout_milliseconds: milliseconds)
@@ -199,14 +199,14 @@ pub fn setup_timeout(config: Config, milliseconds: Int) -> Config {
 /// Sets the longest time in milliseconds of the cancel after a query
 /// timeout. When the cancel takes longer, the pool closes and replaces
 /// the connection. The default is 2000. A value below 1 is
-/// `InvalidConfig` at `start` and at `supervised`.
+/// `InvalidConfig` at `start_pool` and at `supervised`.
 pub fn cancel_timeout(config: Config, milliseconds: Int) -> Config {
   Config(..config, cancel_timeout_milliseconds: milliseconds)
 }
 
 /// Sets the time in milliseconds between two health checks of a
 /// connection that was free and unused for the whole interval. The
-/// default is 30_000. A value below 1 is `InvalidConfig` at `start` and
+/// default is 30_000. A value below 1 is `InvalidConfig` at `start_pool` and
 /// at `supervised`.
 pub fn health_check_interval(config: Config, milliseconds: Int) -> Config {
   Config(..config, health_check_interval_milliseconds: milliseconds)
@@ -215,7 +215,7 @@ pub fn health_check_interval(config: Config, milliseconds: Int) -> Config {
 /// Sets the longest time in milliseconds of the `ROLLBACK` that the pool
 /// sends when a call gives back a connection with a transaction open.
 /// When the rollback takes longer, the pool replaces the connection. The
-/// default is 5000. A value below 1 is `InvalidConfig` at `start` and at
+/// default is 5000. A value below 1 is `InvalidConfig` at `start_pool` and at
 /// `supervised`.
 pub fn return_rollback_timeout(config: Config, milliseconds: Int) -> Config {
   Config(..config, return_rollback_timeout_milliseconds: milliseconds)
@@ -256,7 +256,7 @@ pub fn reconnect_strategy(
 /// import dream_errors.{type Error}
 /// import dream_postgres/config.{type Config, intercept}
 /// import dream_postgres/error.{type PostgresError}
-/// import dream_postgres/pool.{type Connection, start}
+/// import dream_postgres/pool.{type Connection, start_pool}
 /// import snippets/request_tagging.{log_slow_queries, tag_with_app_name}
 ///
 /// pub fn start_tagged_pool(
@@ -265,7 +265,7 @@ pub fn reconnect_strategy(
 ///   config
 ///   |> intercept(tag_with_app_name)
 ///   |> intercept(log_slow_queries)
-///   |> start
+///   |> start_pool
 /// }
 /// ```
 pub fn intercept(config: Config, added_interceptor: Interceptor) -> Config {
@@ -284,7 +284,7 @@ pub fn intercept(config: Config, added_interceptor: Interceptor) -> Config {
 /// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/codecs.{text}
+/// import dream_postgres/codec.{text}
 /// import dream_postgres/config.{type Config, intercept, secrets}
 /// import dream_postgres/secrets
 /// import snippets/request_tagging.{tag_with_app_name}
@@ -305,13 +305,13 @@ pub fn secrets(config: Config, declared: Secrets) -> Config {
   Config(..config, secrets: declared)
 }
 
-/// Attaches a started recorder: `start` and `supervised` then make the
+/// Attaches a started recorder: `start_pool` and `supervised` then make the
 /// connection of the recorder's mode. In `Record` mode it is a pool with
 /// the recorder after all other interceptors. In `Playback` mode it has no
-/// database: `start` gives a connection that the recording answers, and
+/// database: `start_pool` gives a connection that the recording answers, and
 /// `supervised` gives a pool under the name that starts no connection and
 /// answers from the recording. In `Passthrough` mode it is a pool, and
-/// nothing is saved. `stop` of the connection stops the recorder.
+/// nothing is saved. `stop_pool` of the connection stops the recorder.
 ///
 /// ### Connect the code under test to its recording <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/run_create_api_key.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
@@ -319,7 +319,7 @@ pub fn secrets(config: Config, declared: Secrets) -> Config {
 /// import dream_errors.{type Error}
 /// import dream_postgres/config.{type Config, record}
 /// import dream_postgres/error.{type PostgresError}
-/// import dream_postgres/pool.{start, stop}
+/// import dream_postgres/pool.{start_pool, stop_pool}
 /// import dream_postgres/recorder.{type Recorder}
 /// import gleam/result
 /// import snippets/app_config.{app_config}
@@ -336,11 +336,11 @@ pub fn secrets(config: Config, declared: Secrets) -> Config {
 ///   use connection <- result.try(
 ///     app_config(server)
 ///     |> record(test_recorder)
-///     |> start,
+///     |> start_pool,
 ///   )
 ///   let created =
 ///     with_api_keys_table(connection, create_api_key(_, owner, "s3cret"))
-///   stop(connection)
+///   stop_pool(connection)
 ///   created
 /// }
 /// ```
@@ -398,7 +398,7 @@ pub type Authorities {
 ///   AuthorityFile, CheckAuthorityAndHost, TlsRequired, default_config, host, tls,
 /// }
 /// import dream_postgres/error.{type PostgresError}
-/// import dream_postgres/pool.{type Connection, start}
+/// import dream_postgres/pool.{type Connection, start_pool}
 ///
 /// pub fn start_pool_with_private_authority(
 ///   server_host: String,
@@ -409,7 +409,7 @@ pub type Authorities {
 ///     check: CheckAuthorityAndHost(AuthorityFile("/etc/ssl/database-ca.crt")),
 ///     direct: False,
 ///   ))
-///   |> start
+///   |> start_pool
 /// }
 /// ```
 pub fn tls(config: Config, tls: Tls) -> Config {
@@ -437,14 +437,14 @@ pub type StatementCache {
 /// import dream_errors.{type Error}
 /// import dream_postgres/config.{type Config, NoStatementCache, statement_cache}
 /// import dream_postgres/error.{type PostgresError}
-/// import dream_postgres/pool.{type Connection, start}
+/// import dream_postgres/pool.{type Connection, start_pool}
 ///
 /// pub fn start_pool_without_statement_cache(
 ///   config: Config,
 /// ) -> Result(Connection, Error(PostgresError)) {
 ///   config
 ///   |> statement_cache(NoStatementCache)
-///   |> start
+///   |> start_pool
 /// }
 /// ```
 pub fn statement_cache(
@@ -488,7 +488,7 @@ pub type ServerNotice {
 /// Sends each notice of each connection of the pool to the subject, as it
 /// arrives: the notices of the statements, and the notices that come
 /// between them. A notice that came before the pool stopped reaches the
-/// subject before `stop` returns.
+/// subject before `stop_pool` returns.
 ///
 /// ### Send the notices to a subject <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_pool_with_notices.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
@@ -496,7 +496,7 @@ pub type ServerNotice {
 /// import dream_errors.{type Error}
 /// import dream_postgres/config.{type Config, type ServerNotice, notices}
 /// import dream_postgres/error.{type PostgresError}
-/// import dream_postgres/pool.{type Connection, start}
+/// import dream_postgres/pool.{type Connection, start_pool}
 /// import gleam/erlang/process.{type Subject}
 ///
 /// pub fn start_pool_with_notices(
@@ -505,7 +505,7 @@ pub type ServerNotice {
 /// ) -> Result(Connection, Error(PostgresError)) {
 ///   config
 ///   |> notices(notice_subject)
-///   |> start
+///   |> start_pool
 /// }
 /// ```
 pub fn notices(config: Config, subject: Subject(ServerNotice)) -> Config {
@@ -544,7 +544,7 @@ pub type PoolEvent {
 
 /// Sends each event of the pool to the subject, in the order the pool
 /// changed. An event that came before the pool stopped reaches the
-/// subject before `stop` returns.
+/// subject before `stop_pool` returns.
 ///
 /// ### Send the pool events to a subject <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/start_pool_with_events.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
@@ -552,7 +552,7 @@ pub type PoolEvent {
 /// import dream_errors.{type Error}
 /// import dream_postgres/config.{type Config, type PoolEvent, pool_events}
 /// import dream_postgres/error.{type PostgresError}
-/// import dream_postgres/pool.{type Connection, start}
+/// import dream_postgres/pool.{type Connection, start_pool}
 /// import gleam/erlang/process.{type Subject}
 ///
 /// pub fn start_pool_with_events(
@@ -561,7 +561,7 @@ pub type PoolEvent {
 /// ) -> Result(Connection, Error(PostgresError)) {
 ///   config
 ///   |> pool_events(event_subject)
-///   |> start
+///   |> start_pool
 /// }
 /// ```
 pub fn pool_events(config: Config, subject: Subject(PoolEvent)) -> Config {
@@ -806,7 +806,7 @@ pub fn server_notice(report: ServerReport) -> ServerNotice {
     routine:,
     localized_severity:,
     other_fields:,
-  ) = error.server_error_from_report(report)
+  ) = error.report_to_server_error(report)
   ServerNotice(
     severity:,
     sql_state:,

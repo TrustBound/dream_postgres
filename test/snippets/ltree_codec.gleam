@@ -1,4 +1,4 @@
-import dream_postgres/codecs.{type Codec, custom}
+import dream_postgres/codec.{type Codec, custom}
 import gleam/list
 import gleam/string
 

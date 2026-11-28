@@ -1,7 +1,7 @@
 //// The composite codec against the exact bytes of PostgreSQL's binary
 //// record format.
 
-import dream_postgres/codecs/codec_type.{Malformed, NullValue}
+import dream_postgres/codec/codec_type.{Malformed, NullValue}
 import dream_postgres/driver/cell.{Base, Binary, Null, TypeDescription}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,

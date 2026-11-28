@@ -1,7 +1,9 @@
 //// The codec of `bit` and `varbit`, in PostgreSQL's binary format: the
 //// number of bits (32 bits), then the bits, padded with zeros to whole bytes.
+////
+//// This module is internal to dream_postgres.
 
-import dream_postgres/codecs/codec_type.{
+import dream_postgres/codec/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
   wrong_size,
 }
@@ -9,7 +11,6 @@ import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
 import gleam/bit_array
 import gleam/result
 
-/// `bit` and `varbit`, as a `BitArray` of exactly their bits.
 pub const bit_string =
   Codec(
     name: "bit string",

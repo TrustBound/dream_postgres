@@ -2,7 +2,7 @@
 //// version, with the tables of the docs' examples in a new schema of its
 //// own, for some work.
 
-import dream_postgres/codecs
+import dream_postgres/codec
 import dream_postgres/error
 import dream_postgres/pool.{type Connection, with_connection}
 import dream_postgres/query.{one, query, run_sql}
@@ -51,7 +51,7 @@ fn run_on_chosen(
   let ran = {
     use pool <- result.try(server_pools.chosen(pools))
     with_connection(pool.connection, run_in_schema(_, work))
-    |> result.map_error(error.describe)
+    |> result.map_error(error.describe_error)
     |> result.flatten
   }
   case ran {
@@ -74,8 +74,8 @@ fn run_in_schema(
 ) -> Result(a, String) {
   use process_id <- result.try(
     query("SELECT pg_backend_pid()")
-    |> one(single(codecs.int), held)
-    |> result.map_error(error.describe),
+    |> one(single(codec.int), held)
+    |> result.map_error(error.describe_error),
   )
   let schema = "examples_" <> int.to_string(process_id)
   use Nil <- result.try(
@@ -87,14 +87,14 @@ fn run_in_schema(
         <> ", public",
       held,
     )
-    |> result.map_error(error.describe),
+    |> result.map_error(error.describe_error),
   )
   let made =
-    create_tables.create_tables(held) |> result.map_error(error.describe)
+    create_tables.create_tables(held) |> result.map_error(error.describe_error)
   let outcome = result.map(made, fn(_made) { work(held) })
   let dropped =
     run_sql("DROP SCHEMA " <> schema <> " CASCADE; RESET search_path", held)
-    |> result.map_error(error.describe)
+    |> result.map_error(error.describe_error)
   use Nil <- result.try(dropped)
   outcome
 }

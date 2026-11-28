@@ -2,7 +2,7 @@
 //// `SELECT id, title FROM posts WHERE user_id = $1`, with its statement,
 //// its row reader and the cells of its rows.
 
-import dream_postgres/codecs
+import dream_postgres/codec
 import dream_postgres/driver/cell.{
   type Cell, type StatementDescription, Binary, ParameterDescription,
   StatementDescription,
@@ -31,7 +31,7 @@ pub fn sql() -> String {
 /// ```
 pub fn query() -> Query {
   definition.query(sql())
-  |> definition.parameter(codecs.int, 7)
+  |> definition.parameter(codec.int, 7)
 }
 
 /// The description of the prepared posts query: one `int4` parameter, and
@@ -58,8 +58,8 @@ pub fn statement() -> StatementDescription {
 /// // -> Ok([#(1, "First")])
 /// ```
 pub fn reader() -> Row(#(Int, String)) {
-  use id <- column(codecs.int)
-  use title <- column(codecs.text)
+  use id <- column(codec.int)
+  use title <- column(codec.text)
   row(#(id, title))
 }
 

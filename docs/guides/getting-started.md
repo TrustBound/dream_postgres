@@ -28,7 +28,7 @@ You also need a PostgreSQL server. The tests of this package run against Postgre
 
 ## Step 1: Start a pool
 
-A pool is a set of connections to one database. Build its settings with `default_config` and one function for each setting, then call `start`:
+A pool is a set of connections to one database. Build its settings with `default_config` and one function for each setting, then call `start_pool`:
 
 ### Start a pool <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/connect.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
@@ -38,7 +38,7 @@ import dream_postgres/config.{
   TlsOff, database, default_config, host, password, pool_size, port, tls, user,
 }
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{type Connection, start}
+import dream_postgres/pool.{type Connection, start_pool}
 
 /// Starts a pool of 4 connections to the database `dream_test` on this
 /// machine. The local test server has no certificate, so TLS is off.
@@ -51,11 +51,11 @@ pub fn connect(port_number: Int) -> Result(Connection, Error(PostgresError)) {
   |> password("dream")
   |> pool_size(4)
   |> tls(TlsOff)
-  |> start
+  |> start_pool
 }
 ```
 
-`start` checks the config, starts the pool and links it to the calling process. The connections connect in the background. So `start` returns before the server answers, and a server that does not answer shows as the error of the first query.
+`start_pool` checks the config, starts the pool and links it to the calling process. The connections connect in the background. So `start_pool` returns before the server answers, and a server that does not answer shows as the error of the first query.
 
 The default config requires TLS. It checks the certificate of the server against the authorities of the operating system, and it checks that the certificate names the host. A local test server has no certificate, so this example turns TLS off with `tls(TlsOff)`. In production, keep TLS on. The [connecting guide](connecting.md#tls) shows each TLS setting.
 
@@ -100,7 +100,7 @@ A row reader says how to read one row of a result. `column` reads the next colum
 ### A row reader for users <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codecs.{int, text}
+import dream_postgres/codec.{int, text}
 import dream_postgres/row.{type Row, column, row}
 
 pub type User {
@@ -116,7 +116,7 @@ pub fn user_row() -> Row(User) {
 }
 ```
 
-A codec connects a Gleam type and a PostgreSQL type. `codecs.int` reads `int2`, `int4`, `int8` and `oid` as `Int`. `codecs.text` reads `text`, `varchar` and the other text types as `String`. The [codecs guide](codecs.md) lists each codec.
+A codec connects a Gleam type and a PostgreSQL type. `codec.int` reads `int2`, `int4`, `int8` and `oid` as `Int`. `codec.text` reads `text`, `varchar` and the other text types as `String`. The [codecs guide](codecs.md) lists each codec.
 
 ## Step 4: Store a user
 
@@ -126,7 +126,7 @@ A codec connects a Gleam type and a PostgreSQL type. `codecs.int` reads `int2`, 
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{text}
+import dream_postgres/codec.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}
@@ -157,7 +157,7 @@ The server prepares each statement and describes its parameters and columns. Bef
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{text}
+import dream_postgres/codec.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{maybe_one, named, parameter, query}
@@ -206,7 +206,7 @@ pub fn list_users(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int, text}
+import dream_postgres/codec.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{affected, parameter, query}
@@ -228,7 +228,7 @@ pub fn rename_user(
 
 ## Step 7: Stop the pool
 
-`pool.stop(connection)` stops the pool and closes its connections. The calls that hold a connection get at most 5 seconds to finish. A pool that runs for the whole life of an app goes under the app's supervisor instead. The [connecting guide](connecting.md#run-the-pool-under-a-supervisor) shows how.
+`pool.stop_pool(connection)` stops the pool and closes its connections. The calls that hold a connection get at most 5 seconds to finish. A pool that runs for the whole life of an app goes under the app's supervisor instead. The [connecting guide](connecting.md#run-the-pool-under-a-supervisor) shows how.
 
 ## Where to go next
 

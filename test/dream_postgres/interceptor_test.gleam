@@ -1,8 +1,7 @@
 //// Interceptors: the outcome builders and the chain of the runners with
 //// no server, then the chain of the client on PostgreSQL 16 to 19.
 
-import dream_postgres/codecs
-import dream_postgres/codecs/composite
+import dream_postgres/codec
 import dream_postgres/config
 import dream_postgres/driver/cell.{
   CommandResult, StatementDescription, TypeDescription,
@@ -21,7 +20,7 @@ import dream_postgres/query.{
 import dream_postgres/query/runner
 import dream_postgres/row.{single}
 import dream_postgres/sql_state.{DeadlockDetected}
-import dream_postgres/transaction.{commit, keep_both, step, transaction}
+import dream_postgres/transaction.{commit, keep_both_errors, step, transaction}
 import dream_test/context
 import dream_test/matchers.{
   be_equal, be_error, be_ok, contain_string, or_fail_with, should,
@@ -56,7 +55,7 @@ pub fn unit_tests() -> TestSuite {
   unit.describe("interceptors with no server", [
     unit.it("rows refuses a field that its column type does not take", fn() {
       // Act and assert
-      rows([column("id", "text")], [[composite.field(codecs.int, 1)]])
+      rows([column("id", "text")], [[codec.field(codec.int, 1)]])
       |> should
       |> be_error()
       |> be_equal(ParameterTypeMismatch(
@@ -111,9 +110,9 @@ pub fn unit_tests() -> TestSuite {
     unit.it("string.inspect of a request marks a secret parameter", fn() {
       // Act and assert
       query("SELECT $1")
-      |> secret_parameter(codecs.text, "hunter2")
+      |> secret_parameter(codec.text, "hunter2")
       |> one(
-        single(codecs.text),
+        single(codec.text),
         with_interceptor(
           no_database.connection(),
           interceptors.refuse_with_request_text(),
@@ -128,9 +127,9 @@ pub fn unit_tests() -> TestSuite {
     unit.it("string.inspect of a request holds no secret value", fn() {
       // Act and assert
       query("SELECT $1")
-      |> secret_parameter(codecs.text, "hunter2")
+      |> secret_parameter(codec.text, "hunter2")
       |> one(
-        single(codecs.text),
+        single(codec.text),
         with_interceptor(
           no_database.connection(),
           interceptors.refuse_with_request_text(),
@@ -165,7 +164,7 @@ pub fn unit_tests() -> TestSuite {
       // Act and assert
       runner.all(
         posts.query(),
-        single(codecs.int),
+        single(codec.int),
         runner.DatabaseLayer(fake_executor.returning(posts.statement(), [])),
         [
           interceptors.answer_with(
@@ -190,7 +189,7 @@ pub fn unit_tests() -> TestSuite {
       // Act and assert
       runner.one(
         posts.query(),
-        single(codecs.int),
+        single(codec.int),
         runner.DatabaseLayer(fake_executor.returning(posts.statement(), [])),
         [
           interceptors.answer_with(
@@ -240,7 +239,7 @@ pub fn tests() -> TestSuite {
             |> run_on_pool(fn(connection) {
               query("SELECT 'x'::text")
               |> one(
-                single(codecs.text),
+                single(codec.text),
                 connection
                   |> with_interceptor(interceptors.append_to_sql(" || 'a'"))
                   |> with_interceptor(interceptors.append_to_sql(" || 'b'")),
@@ -258,7 +257,7 @@ pub fn tests() -> TestSuite {
           |> run_on_pool(fn(connection) {
             query("SELECT 1")
             |> one(
-              single(codecs.int),
+              single(codec.int),
               with_interceptor(
                 connection,
                 interceptors.replace_sql("SELECT 'one'::text AS word"),
@@ -283,7 +282,7 @@ pub fn tests() -> TestSuite {
           |> run_on_configured_pool(
             config.intercept(_, interceptors.append_to_sql(" || 'a'")),
             fn(connection) {
-              query("SELECT 'x'::text") |> one(single(codecs.text), connection)
+              query("SELECT 'x'::text") |> one(single(codec.text), connection)
             },
           )
           |> be_ok()
@@ -339,12 +338,12 @@ pub fn tests() -> TestSuite {
                 interceptors.answer_with(
                   rows([column("id", "int4"), column("title", "text")], [
                     [
-                      composite.field(codecs.int, 1),
-                      composite.field(codecs.text, "First"),
+                      codec.field(codec.int, 1),
+                      codec.field(codec.text, "First"),
                     ],
                     [
-                      composite.field(codecs.int, 2),
-                      composite.field(codecs.text, "Second"),
+                      codec.field(codec.int, 2),
+                      codec.field(codec.text, "Second"),
                     ],
                   ]),
                 ),
@@ -406,7 +405,7 @@ pub fn tests() -> TestSuite {
             query("SELECT 1")
             |> named("post.create")
             |> one(
-              single(codecs.int),
+              single(codec.int),
               with_interceptor(
                 connection,
                 interceptors.fail_named(
@@ -435,7 +434,7 @@ pub fn tests() -> TestSuite {
                 ),
               ),
               database: function.identity,
-              rollback_also_failed: keep_both,
+              rollback_also_failed: keep_both_errors,
             )
             |> step(client_statements.insert(_, "intercepted_rows", 1))
             |> step(fn(transaction_connection) {

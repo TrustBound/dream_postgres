@@ -1,6 +1,6 @@
 //// A matcher that gives the floats of each vector of a list in the chain.
 
-import dream_postgres/codecs/vector.{type Vector}
+import dream_postgres/vector.{type Vector}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/list
 

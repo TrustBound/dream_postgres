@@ -1,6 +1,6 @@
 //// A matcher that gives the text of the JSON document of the chain.
 
-import dream_postgres/codecs/json.{type Json}
+import dream_postgres/json.{type Json}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the text of the JSON document, as it was read or made. The chain
@@ -19,6 +19,6 @@ import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 pub fn have_json_text(result: MatchResult(Json)) -> MatchResult(String) {
   case result {
     MatchFailed(failure) -> MatchFailed(failure)
-    MatchOk(value) -> MatchOk(json.to_string(value))
+    MatchOk(value) -> MatchOk(json.json_to_string(value))
   }
 }

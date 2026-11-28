@@ -2,7 +2,7 @@
 //// a division by zero, and a read of a setting.
 
 import dream_errors.{type Error}
-import dream_postgres/codecs
+import dream_postgres/codec
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{affected, all, one, parameter, query}
@@ -22,7 +22,7 @@ pub fn insert(
   id: Int,
 ) -> Result(Int, Error(PostgresError)) {
   query("INSERT INTO " <> table <> " (id) VALUES ($1)")
-  |> parameter(codecs.int, id)
+  |> parameter(codec.int, id)
   |> affected(connection)
 }
 
@@ -39,7 +39,7 @@ pub fn ids(
   table: String,
 ) -> Result(List(Int), Error(PostgresError)) {
   query("SELECT id FROM " <> table <> " ORDER BY id")
-  |> all(single(codecs.int), connection)
+  |> all(single(codec.int), connection)
 }
 
 /// Runs `SELECT 1 / 0`, which the server refuses with SQLSTATE 22012.
@@ -54,7 +54,7 @@ pub fn divide_by_zero(
   connection: Connection,
 ) -> Result(Int, Error(PostgresError)) {
   query("SELECT 1 / 0")
-  |> one(single(codecs.int), connection)
+  |> one(single(codec.int), connection)
 }
 
 /// The value of the setting `name`.
@@ -70,6 +70,6 @@ pub fn setting(
   name: String,
 ) -> Result(String, Error(PostgresError)) {
   query("SELECT current_setting($1)")
-  |> parameter(codecs.text, name)
-  |> one(single(codecs.text), connection)
+  |> parameter(codec.text, name)
+  |> one(single(codec.text), connection)
 }

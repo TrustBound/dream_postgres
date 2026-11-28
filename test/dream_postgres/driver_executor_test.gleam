@@ -5,9 +5,7 @@
 //// tests. A test that writes rows makes its own temporary table, so no
 //// table stays on the server.
 
-import dream_postgres/codecs
-import dream_postgres/codecs/array
-import dream_postgres/codecs/numeric
+import dream_postgres/codec
 import dream_postgres/driver/catalog
 import dream_postgres/driver/catalog_table
 import dream_postgres/driver/cell.{BinaryFormat, Idle, Text}
@@ -92,11 +90,11 @@ pub fn tests() -> TestSuite {
                   <> ") AS mixed(id, name, maybe, amount, items) ORDER BY id",
                 ),
                 {
-                  use id <- column(codecs.int)
-                  use name <- column(codecs.text)
-                  use maybe <- column(codecs.nullable(codecs.int))
-                  use amount <- column(numeric.numeric)
-                  use items <- column(array.array(codecs.int))
+                  use id <- column(codec.int)
+                  use name <- column(codec.text)
+                  use maybe <- column(codec.nullable(codec.int))
+                  use amount <- column(codec.numeric)
+                  use items <- column(codec.array(codec.int))
                   row(#(id, name, maybe, amount, items))
                 },
                 runner.DatabaseLayer(executor),
@@ -118,8 +116,8 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.one(
               definition.query("SELECT 41 + $1")
-                |> definition.parameter(codecs.int, 1),
-              single(codecs.int),
+                |> definition.parameter(codec.int, 1),
+              single(codec.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -135,8 +133,8 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
               definition.query("SELECT generate_series(1, $1)")
-                |> definition.parameter(codecs.int, 0),
-              single(codecs.int),
+                |> definition.parameter(codec.int, 0),
+              single(codec.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -152,8 +150,8 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
               definition.query("SELECT generate_series(1, $1)")
-                |> definition.parameter(codecs.int, 1),
-              single(codecs.int),
+                |> definition.parameter(codec.int, 1),
+              single(codec.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -170,8 +168,8 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
               definition.query("SELECT generate_series(1, $1)")
-                |> definition.parameter(codecs.int, 2),
-              single(codecs.int),
+                |> definition.parameter(codec.int, 2),
+              single(codec.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -204,7 +202,7 @@ pub fn tests() -> TestSuite {
                 definition.query(
                   "UPDATE executor_counts SET id = id + 10 WHERE id > $1",
                 )
-                  |> definition.parameter(codecs.int, 1),
+                  |> definition.parameter(codec.int, 1),
                 runner.DatabaseLayer(executor),
                 [],
               ),
@@ -228,14 +226,14 @@ pub fn tests() -> TestSuite {
               let inserted =
                 runner.affected(
                   definition.query("INSERT INTO executor_mismatch VALUES ($1)")
-                    |> definition.parameter(codecs.text, "1"),
+                    |> definition.parameter(codec.text, "1"),
                   runner.DatabaseLayer(executor),
                   [],
                 )
               use count <- result.try(
                 runner.one(
                   definition.query("SELECT count(*) FROM executor_mismatch"),
-                  single(codecs.int),
+                  single(codec.int),
                   runner.DatabaseLayer(executor),
                   [],
                 ),
@@ -245,7 +243,7 @@ pub fn tests() -> TestSuite {
             |> be_ok()
             |> be_equal(#(
               Error(
-                error.to_dream_error(PostgresError(
+                error.postgres_error_to_dream_error(PostgresError(
                   query_name: None,
                   sql: Some("INSERT INTO executor_mismatch VALUES ($1)"),
                   reason: error.ParameterTypeMismatch(
@@ -275,14 +273,14 @@ pub fn tests() -> TestSuite {
                   definition.query(
                     "INSERT INTO executor_returning VALUES (5) RETURNING id",
                   ),
-                  single(codecs.text),
+                  single(codec.text),
                   runner.DatabaseLayer(executor),
                   [],
                 )
               use count <- result.try(
                 runner.one(
                   definition.query("SELECT count(*) FROM executor_returning"),
-                  single(codecs.int),
+                  single(codec.int),
                   runner.DatabaseLayer(executor),
                   [],
                 ),
@@ -292,7 +290,7 @@ pub fn tests() -> TestSuite {
             |> be_ok()
             |> be_equal(#(
               Error(
-                error.to_dream_error(PostgresError(
+                error.postgres_error_to_dream_error(PostgresError(
                   query_name: None,
                   sql: Some(
                     "INSERT INTO executor_returning VALUES (5) RETURNING id",
@@ -319,7 +317,7 @@ pub fn tests() -> TestSuite {
             |> run_on_executor(fn(executor) {
               runner.one(
                 definition.query("SELECT NULL::int4 AS total"),
-                single(codecs.int),
+                single(codec.int),
                 runner.DatabaseLayer(executor),
                 [],
               )
@@ -345,7 +343,7 @@ pub fn tests() -> TestSuite {
             |> run_on_executor(fn(executor) {
               runner.affected(
                 definition.query("INSERT INTO executor_unique VALUES ($1)")
-                  |> definition.parameter(codecs.int, 1),
+                  |> definition.parameter(codec.int, 1),
                 runner.DatabaseLayer(executor),
                 [],
               )
@@ -363,7 +361,7 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.all(
               definition.query("SELEC 1"),
-              single(codecs.int),
+              single(codec.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -413,7 +411,7 @@ pub fn tests() -> TestSuite {
               use _first <- result.try(
                 runner.all(
                   select_all,
-                  single(codecs.int),
+                  single(codec.int),
                   runner.DatabaseLayer(executor),
                   [],
                 ),
@@ -429,7 +427,7 @@ pub fn tests() -> TestSuite {
               )
               runner.all(
                 select_all,
-                single(codecs.int),
+                single(codec.int),
                 runner.DatabaseLayer(executor),
                 [],
               )
@@ -492,7 +490,7 @@ pub fn mapping_tests() -> TestSuite {
         connection_request_failure.RunRefused(report, Idle)
         |> should
         |> map_run_error()
-        |> be_equal(error.Server(error.server_error_from_report(report)))
+        |> be_equal(error.Server(error.report_to_server_error(report)))
         |> or_fail_with("Expected the report as a Server reason")
       }),
       unit.it(
@@ -511,7 +509,7 @@ pub fn mapping_tests() -> TestSuite {
           |> map_simple_query_error()
           |> be_equal(error.SqlStatementFailed(
             statements_run: 1,
-            server_error: error.server_error_from_report(report),
+            server_error: error.report_to_server_error(report),
           ))
           |> or_fail_with(
             "Expected SqlStatementFailed after 1 statement with the report",
@@ -528,7 +526,7 @@ pub fn mapping_tests() -> TestSuite {
         )
         |> should
         |> map_request_failure()
-        |> be_equal(error.Server(error.server_error_from_report(report)))
+        |> be_equal(error.Server(error.report_to_server_error(report)))
         |> or_fail_with("Expected the report of the end as a Server reason")
       }),
       unit.it(
@@ -799,7 +797,7 @@ pub fn mapping_tests() -> TestSuite {
         |> map_prepare_error()
         |> be_equal(
           error.Server(
-            error.server_error_from_report(
+            error.report_to_server_error(
               server_reports.administrator_shutdown(),
             ),
           ),
@@ -909,7 +907,7 @@ pub fn mapping_tests() -> TestSuite {
         |> be_equal(
           runner.RunFailed(
             error.Server(
-              error.server_error_from_report(
+              error.report_to_server_error(
                 server_reports.administrator_shutdown(),
               ),
             ),
@@ -978,7 +976,7 @@ pub fn mapping_tests() -> TestSuite {
         |> map_simple_query_error()
         |> be_equal(
           error.Server(
-            error.server_error_from_report(
+            error.report_to_server_error(
               server_reports.administrator_shutdown(),
             ),
           ),
@@ -1048,7 +1046,7 @@ pub fn mapping_tests() -> TestSuite {
         |> map_copy_error()
         |> be_equal(
           error.Server(
-            error.server_error_from_report(
+            error.report_to_server_error(
               server_reports.administrator_shutdown(),
             ),
           ),
@@ -1077,7 +1075,7 @@ pub fn mapping_tests() -> TestSuite {
         |> map_chunk_error()
         |> be_equal(
           error.Server(
-            error.server_error_from_report(
+            error.report_to_server_error(
               server_reports.administrator_shutdown(),
             ),
           ),
@@ -2038,7 +2036,7 @@ pub fn mapping_tests() -> TestSuite {
         |> map_catalog_error()
         |> be_equal(
           error.Server(
-            error.server_error_from_report(
+            error.report_to_server_error(
               server_reports.administrator_shutdown(),
             ),
           ),
@@ -2503,7 +2501,7 @@ pub fn mapping_tests() -> TestSuite {
         |> map_connect_failure("db", 5432)
         |> be_equal(
           error.LoginRefused(
-            error.server_error_from_report(
+            error.report_to_server_error(
               server_reports.administrator_shutdown(),
             ),
           ),

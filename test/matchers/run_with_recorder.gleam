@@ -46,14 +46,14 @@ fn run_started(
   work: fn(Connection) -> a,
 ) -> MatchResult(a) {
   let ran = {
-    use test_recorder <- result.try(recorder.start(builder))
+    use test_recorder <- result.try(recorder.start_recorder(builder))
     use connection <- result.try(
       config
       |> config.record(test_recorder)
-      |> pool.start,
+      |> pool.start_pool,
     )
     let done = work(connection)
-    pool.stop(connection)
+    pool.stop_pool(connection)
     Ok(done)
   }
   case ran {

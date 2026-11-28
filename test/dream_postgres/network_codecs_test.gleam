@@ -1,14 +1,13 @@
 //// The network, bit string, tid and hstore codecs against the exact bytes
 //// of PostgreSQL's binary formats, and the network value functions.
 
-import dream_postgres/codecs/bit_string
-import dream_postgres/codecs/codec_type.{Malformed}
-import dream_postgres/codecs/hstore
-import dream_postgres/codecs/network.{
+import dream_postgres/codec
+import dream_postgres/codec/codec_type.{Malformed}
+import dream_postgres/driver/cell.{Binary, Null}
+import dream_postgres/network.{
   IpNetwork, Ipv4, Ipv6, NotAMacAddress, NotAnIpNetwork,
 }
-import dream_postgres/codecs/tid.{Tid}
-import dream_postgres/driver/cell.{Binary, Null}
+import dream_postgres/tid.{Tid}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,
 }
@@ -30,7 +29,7 @@ pub fn tests() -> TestSuite {
     group("inet and cidr", [
       it("takes inet", fn() {
         // Arrange
-        let subject = network.ip_network
+        let subject = codec.ip_network
 
         // Act and assert
         subject
@@ -41,7 +40,7 @@ pub fn tests() -> TestSuite {
       }),
       it("takes cidr", fn() {
         // Arrange
-        let subject = network.ip_network
+        let subject = codec.ip_network
 
         // Act and assert
         subject
@@ -57,7 +56,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(network.ip_network, type_catalog.base("inet"))
+        |> encode_as(codec.ip_network, type_catalog.base("inet"))
         |> be_ok()
         |> be_equal(Binary(<<2, 24, 0, 4, 192, 168, 0, 1>>))
         |> or_fail_with("Expected 192.168.0.1/24 as an inet of family 2")
@@ -69,7 +68,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(network.ip_network, type_catalog.base("cidr"))
+        |> encode_as(codec.ip_network, type_catalog.base("cidr"))
         |> be_ok()
         |> be_equal(Binary(<<2, 8, 1, 4, 10, 0, 0, 0>>))
         |> or_fail_with("Expected 10.0.0.0/8 with the cidr flag set")
@@ -81,7 +80,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(network.ip_network, type_catalog.base("inet"))
+        |> encode_as(codec.ip_network, type_catalog.base("inet"))
         |> be_ok()
         |> be_equal(
           Binary(<<3, 128, 0, 16, network_bytes.ipv6_address():bits>>),
@@ -95,7 +94,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(network.ip_network, type_catalog.base("cidr"))
+        |> encode_as(codec.ip_network, type_catalog.base("cidr"))
         |> be_error()
         |> be_equal(
           "10.0.0.1/8 has bits set right of its prefix, which cidr does not take",
@@ -109,7 +108,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(network.ip_network, type_catalog.base("cidr"))
+        |> encode_as(codec.ip_network, type_catalog.base("cidr"))
         |> be_error()
         |> be_equal(
           "2001:db8::1/32 has bits set right of its prefix, which cidr does not take",
@@ -125,7 +124,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(network.ip_network, type_catalog.base("inet"))
+        |> encode_as(codec.ip_network, type_catalog.base("inet"))
         |> be_error()
         |> be_equal("300.0.0.1 is not a valid network")
         |> or_fail_with("Expected the part 300 to make the network not valid")
@@ -137,7 +136,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(network.ip_network, type_catalog.base("cidr"))
+        |> decode_as(codec.ip_network, type_catalog.base("cidr"))
         |> be_ok()
         |> be_equal(IpNetwork(Ipv4(10, 0, 0, 0), 8))
         |> or_fail_with("Expected the network 10.0.0.0/8")
@@ -149,7 +148,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(network.ip_network, type_catalog.base("inet"))
+        |> decode_as(codec.ip_network, type_catalog.base("inet"))
         |> be_ok()
         |> be_equal(IpNetwork(Ipv6(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 64))
         |> or_fail_with("Expected the network 2001:db8::1/64")
@@ -161,7 +160,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(network.ip_network, type_catalog.base("inet"))
+        |> decode_as(codec.ip_network, type_catalog.base("inet"))
         |> be_error()
         |> be_equal(Malformed("7 bytes are not a inet value"))
         |> or_fail_with("Expected an IPv4 address of 3 bytes to be malformed")
@@ -173,7 +172,7 @@ pub fn tests() -> TestSuite {
         let text = "192.168.0.1"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -188,7 +187,7 @@ pub fn tests() -> TestSuite {
         let text = "10.0.0.0/8"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -203,7 +202,7 @@ pub fn tests() -> TestSuite {
         let text = "0:0:0:0:0:0:0:1"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -218,7 +217,7 @@ pub fn tests() -> TestSuite {
         let text = "2001:db8:0:0:0:0:0:1"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -233,7 +232,7 @@ pub fn tests() -> TestSuite {
         let text = "1:0:0:0:0:0:0:0"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -248,7 +247,7 @@ pub fn tests() -> TestSuite {
         let text = "1:0:0:2:3:0:0:4"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -263,7 +262,7 @@ pub fn tests() -> TestSuite {
         let text = "1:0:2:3:4:5:6:7"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -278,7 +277,7 @@ pub fn tests() -> TestSuite {
         let text = "::ffff:1.2.3.4"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -293,7 +292,7 @@ pub fn tests() -> TestSuite {
         let text = "::1.2.3.4"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -310,7 +309,7 @@ pub fn tests() -> TestSuite {
         let text = "2001:db8::/32"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -325,7 +324,7 @@ pub fn tests() -> TestSuite {
         let text = "fe80::1%eth0"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -339,7 +338,7 @@ pub fn tests() -> TestSuite {
         let text = "10.0.0.0/08"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -353,7 +352,7 @@ pub fn tests() -> TestSuite {
         let text = "10.0.0.0/33"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -367,7 +366,7 @@ pub fn tests() -> TestSuite {
         let text = "10.0.0.0/x"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -381,7 +380,7 @@ pub fn tests() -> TestSuite {
         let text = "10.0.0/8"
 
         // Act
-        let parsed = network.ip_network_from_string(text)
+        let parsed = network.parse_ip_network(text)
 
         // Assert
         parsed
@@ -422,7 +421,7 @@ pub fn tests() -> TestSuite {
     group("mac addresses", [
       it("takes macaddr8", fn() {
         // Arrange
-        let subject = network.mac_address
+        let subject = codec.mac_address
 
         // Act and assert
         subject
@@ -436,7 +435,7 @@ pub fn tests() -> TestSuite {
         let text = "08:00:2b:01:02:03"
 
         // Act
-        let parsed = network.mac_address_from_string(text)
+        let parsed = network.parse_mac_address(text)
 
         // Assert
         parsed
@@ -453,7 +452,7 @@ pub fn tests() -> TestSuite {
         let text = "08-00-2B-01-02-03-04-05"
 
         // Act
-        let parsed = network.mac_address_from_string(text)
+        let parsed = network.parse_mac_address(text)
 
         // Assert
         parsed
@@ -470,7 +469,7 @@ pub fn tests() -> TestSuite {
         let text = "08:00:2b:01:02"
 
         // Act
-        let parsed = network.mac_address_from_string(text)
+        let parsed = network.parse_mac_address(text)
 
         // Assert
         parsed
@@ -484,7 +483,7 @@ pub fn tests() -> TestSuite {
         let text = "08:00:2b:01:02:zz"
 
         // Act
-        let parsed = network.mac_address_from_string(text)
+        let parsed = network.parse_mac_address(text)
 
         // Assert
         parsed
@@ -498,7 +497,7 @@ pub fn tests() -> TestSuite {
         let text = "8:00:2b:01:02:03"
 
         // Act
-        let parsed = network.mac_address_from_string(text)
+        let parsed = network.parse_mac_address(text)
 
         // Assert
         parsed
@@ -512,13 +511,13 @@ pub fn tests() -> TestSuite {
         let bytes = <<8, 0, 43, 1, 2, 3>>
 
         // Act
-        let address = network.mac_address_from_bit_array(bytes)
+        let address = network.bit_array_to_mac_address(bytes)
 
         // Assert
         address
         |> should
         |> be_ok()
-        |> encode_as(network.mac_address, type_catalog.base("macaddr"))
+        |> encode_as(codec.mac_address, type_catalog.base("macaddr"))
         |> be_ok()
         |> be_equal(Binary(<<8, 0, 43, 1, 2, 3>>))
         |> or_fail_with("Expected the 6 bytes as they are in a macaddr")
@@ -528,13 +527,13 @@ pub fn tests() -> TestSuite {
         let bytes = <<8, 0, 43, 1, 2, 3>>
 
         // Act
-        let address = network.mac_address_from_bit_array(bytes)
+        let address = network.bit_array_to_mac_address(bytes)
 
         // Assert
         address
         |> should
         |> be_ok()
-        |> encode_as(network.mac_address, type_catalog.base("macaddr8"))
+        |> encode_as(codec.mac_address, type_catalog.base("macaddr8"))
         |> be_ok()
         |> be_equal(Binary(<<8, 0, 43, 1, 2, 3>>))
         |> or_fail_with("Expected the 6 bytes as they are in a macaddr8")
@@ -544,13 +543,13 @@ pub fn tests() -> TestSuite {
         let bytes = <<8, 0, 43, 1, 2, 3, 4, 5>>
 
         // Act
-        let address = network.mac_address_from_bit_array(bytes)
+        let address = network.bit_array_to_mac_address(bytes)
 
         // Assert
         address
         |> should
         |> be_ok()
-        |> encode_as(network.mac_address, type_catalog.base("macaddr"))
+        |> encode_as(codec.mac_address, type_catalog.base("macaddr"))
         |> be_error()
         |> be_equal("08:00:2b:01:02:03:04:05 has 8 bytes, and macaddr holds 6")
         |> or_fail_with("Expected macaddr to refuse an address of 8 bytes")
@@ -562,7 +561,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(network.mac_address, type_catalog.base("macaddr8"))
+        |> decode_as(codec.mac_address, type_catalog.base("macaddr8"))
         |> be_ok()
         |> have_mac_address_text()
         |> be_equal("01:02:03:04:05:06:07:08")
@@ -577,13 +576,13 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(network.mac_address, type_catalog.base("macaddr8"))
+        |> decode_as(codec.mac_address, type_catalog.base("macaddr8"))
         |> be_error()
         |> or_fail_with("Expected 7 bytes to be refused as a MAC address")
       }),
       it("has the zero address as its placeholder", fn() {
         // Arrange
-        let subject = network.mac_address
+        let subject = codec.mac_address
 
         // Act
         let placeholder = codec_type.placeholder(subject)
@@ -599,7 +598,7 @@ pub fn tests() -> TestSuite {
     group("bit strings", [
       it("takes varbit", fn() {
         // Arrange
-        let subject = bit_string.bit_string
+        let subject = codec.bit_string
 
         // Act and assert
         subject
@@ -615,7 +614,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(bit_string.bit_string, type_catalog.base("varbit"))
+        |> encode_as(codec.bit_string, type_catalog.base("varbit"))
         |> be_ok()
         |> be_equal(Binary(<<3:size(32), 0b10100000>>))
         |> or_fail_with(
@@ -629,7 +628,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(bit_string.bit_string, type_catalog.base("bit"))
+        |> encode_as(codec.bit_string, type_catalog.base("bit"))
         |> be_ok()
         |> be_equal(Binary(<<16:size(32), 1, 2>>))
         |> or_fail_with("Expected the length 16 and the two bytes")
@@ -641,7 +640,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(bit_string.bit_string, type_catalog.base("varbit"))
+        |> decode_as(codec.bit_string, type_catalog.base("varbit"))
         |> be_ok()
         |> be_equal(<<5:size(3)>>)
         |> or_fail_with("Expected the three bits 101")
@@ -653,7 +652,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(bit_string.bit_string, type_catalog.base("varbit"))
+        |> decode_as(codec.bit_string, type_catalog.base("varbit"))
         |> be_error()
         |> be_equal(Malformed("the bit string is shorter than its length"))
         |> or_fail_with("Expected 8 bits for a length of 9 to be malformed")
@@ -665,7 +664,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(bit_string.bit_string, type_catalog.base("varbit"))
+        |> decode_as(codec.bit_string, type_catalog.base("varbit"))
         |> be_error()
         |> be_equal(Malformed("2 bytes are not a varbit value"))
         |> or_fail_with("Expected a length of two bytes to be malformed")
@@ -674,7 +673,7 @@ pub fn tests() -> TestSuite {
     group("tid", [
       it("takes tid", fn() {
         // Arrange
-        let subject = tid.tid
+        let subject = codec.tid
 
         // Act and assert
         subject
@@ -690,7 +689,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(tid.tid, type_catalog.base("tid"))
+        |> encode_as(codec.tid, type_catalog.base("tid"))
         |> be_ok()
         |> be_equal(Binary(<<7:size(32), 3:size(16)>>))
         |> or_fail_with(
@@ -704,7 +703,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(tid.tid, type_catalog.base("tid"))
+        |> encode_as(codec.tid, type_catalog.base("tid"))
         |> be_error()
         |> be_equal("(7,65536) is out of range for tid")
         |> or_fail_with("Expected the offset 65536 to be out of range")
@@ -716,7 +715,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(tid.tid, type_catalog.base("tid"))
+        |> decode_as(codec.tid, type_catalog.base("tid"))
         |> be_ok()
         |> be_equal(Tid(7, 3))
         |> or_fail_with("Expected the tid (7,3)")
@@ -728,7 +727,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(tid.tid, type_catalog.base("tid"))
+        |> decode_as(codec.tid, type_catalog.base("tid"))
         |> be_error()
         |> be_equal(Malformed("5 bytes are not a tid value"))
         |> or_fail_with("Expected five bytes to be a malformed tid")
@@ -737,7 +736,7 @@ pub fn tests() -> TestSuite {
     group("hstore", [
       it("takes hstore", fn() {
         // Arrange
-        let subject = hstore.hstore()
+        let subject = codec.hstore()
 
         // Act and assert
         subject
@@ -753,7 +752,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> encode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_ok()
         |> be_equal(Binary(hstore_bytes.one_pair()))
         |> or_fail_with("Expected the bytes of the pair a, b")
@@ -765,7 +764,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> encode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_ok()
         |> be_equal(Binary(hstore_bytes.null_pair()))
         |> or_fail_with("Expected the bytes of the key a with the length -1")
@@ -777,7 +776,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_ok()
         |> be_equal(dict.from_list([#("a", Some("b"))]))
         |> or_fail_with("Expected the pair a, b")
@@ -789,7 +788,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_ok()
         |> be_equal(dict.from_list([#("a", None)]))
         |> or_fail_with("Expected the key a with no value")
@@ -801,7 +800,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> be_equal(Malformed("the hstore has bytes after its last pair"))
         |> or_fail_with("Expected a byte after the last pair to be malformed")
@@ -813,7 +812,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> be_equal(Malformed("the hstore's pairs are cut short"))
         |> or_fail_with("Expected two pairs with no bytes to be malformed")
@@ -825,7 +824,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> be_equal(Malformed("the text is not UTF-8"))
         |> or_fail_with("Expected the key byte 255 to be refused as not UTF-8")
@@ -837,7 +836,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> be_equal(Malformed("1 bytes are not a hstore value"))
         |> or_fail_with("Expected a count of one byte to be malformed")
@@ -849,13 +848,13 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
+        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> or_fail_with("Expected NULL to be refused as an hstore")
       }),
       it("has an empty placeholder", fn() {
         // Arrange
-        let subject = hstore.hstore()
+        let subject = codec.hstore()
 
         // Act
         let placeholder = codec_type.placeholder(subject)

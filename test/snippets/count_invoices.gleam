@@ -1,11 +1,13 @@
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int}
+import dream_postgres/codec.{int}
 import dream_postgres/copy.{copy_to}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, query}
 import dream_postgres/row.{single}
-import dream_postgres/transaction.{keep_both, run, transaction}
+import dream_postgres/transaction.{
+  keep_both_errors, run_transaction, transaction,
+}
 import gleam/function
 import gleam/list
 
@@ -18,9 +20,9 @@ pub fn count_invoices(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
-  |> run(count_invoices_in_transaction)
+  |> run_transaction(count_invoices_in_transaction)
 }
 
 fn count_invoices_in_transaction(

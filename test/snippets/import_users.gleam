@@ -1,7 +1,9 @@
 import dream_errors.{type Error}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
-import dream_postgres/transaction.{commit, keep_both, run, step, transaction}
+import dream_postgres/transaction.{
+  commit, keep_both_errors, run_transaction, step, transaction,
+}
 import gleam/function
 import gleam/list
 import gleam/result
@@ -18,9 +20,9 @@ pub fn import_users(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
-  |> run(import_each(_, people))
+  |> run_transaction(import_each(_, people))
 }
 
 fn import_each(
@@ -42,7 +44,7 @@ fn import_one(
   transaction(
     transaction_connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
   |> step(create_user(_, email, name))
   |> commit

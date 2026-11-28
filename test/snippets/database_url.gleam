@@ -1,8 +1,8 @@
 import dream_errors.{type Error}
 import dream_postgres/config.{pool_size}
 import dream_postgres/error.{type PostgresError}
-import dream_postgres/pool.{type Connection, start}
-import dream_postgres/url.{config_from_url}
+import dream_postgres/pool.{type Connection, start_pool}
+import dream_postgres/url.{parse_database_url}
 import gleam/result
 
 /// Starts a pool of 4 connections from a database URL, such as
@@ -10,8 +10,8 @@ import gleam/result
 pub fn connect_with_url(
   database_url: String,
 ) -> Result(Connection, Error(PostgresError)) {
-  use config <- result.try(config_from_url(database_url))
+  use config <- result.try(parse_database_url(database_url))
   config
   |> pool_size(4)
-  |> start
+  |> start_pool
 }

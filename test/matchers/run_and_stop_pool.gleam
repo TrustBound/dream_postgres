@@ -28,7 +28,7 @@ pub fn run_and_stop_pool(
     MatchFailed(failure) -> MatchFailed(failure)
     MatchOk(connection) -> {
       let outcome = work(connection)
-      pool.stop(connection)
+      pool.stop_pool(connection)
       MatchOk(outcome)
     }
   }

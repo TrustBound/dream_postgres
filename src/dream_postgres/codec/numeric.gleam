@@ -15,7 +15,7 @@
 //// takes the texts that PostgreSQL's `numeric_in` takes, and gives the
 //// bytes that its `numeric_send` gives for that value.
 
-import dream_postgres/codecs/codec_type.{
+import dream_postgres/codec/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
 }
 import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
@@ -25,9 +25,7 @@ import gleam/list
 import gleam/result
 import gleam/string
 
-/// `numeric`, as its exact text, for example `"1234.5600"`, `"NaN"` or
-/// `"Infinity"`. No digit is lost, and no float rounding happens. It uses
-/// the binary format, so it also reads a numeric field of a composite.
+/// `numeric`, as its exact text, in the binary format.
 pub const numeric =
   Codec(
     name: "numeric",

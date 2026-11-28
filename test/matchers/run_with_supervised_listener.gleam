@@ -82,7 +82,7 @@ fn run_behind_gate(
       longest_delay_milliseconds: 50,
     )
     |> listener.supervised_listener(name:)
-    |> result.map_error(error.describe),
+    |> result.map_error(error.describe_error),
   )
   use started <- result.try(
     static_supervisor.new(static_supervisor.OneForOne)

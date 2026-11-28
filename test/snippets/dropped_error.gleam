@@ -1,7 +1,7 @@
 import dream_errors.{type Error}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
-import dream_postgres/transaction.{commit, keep_both, step, transaction}
+import dream_postgres/transaction.{commit, keep_both_errors, step, transaction}
 import gleam/function
 import snippets/create_user.{create_user}
 
@@ -16,7 +16,7 @@ pub fn create_user_and_drop_error(
   transaction(
     connection,
     database: function.identity,
-    rollback_also_failed: keep_both,
+    rollback_also_failed: keep_both_errors,
   )
   |> step(insert_and_drop_error(_, email, name))
   |> commit

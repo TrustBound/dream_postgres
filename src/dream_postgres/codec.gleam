@@ -1,20 +1,12 @@
 //// A codec writes one Gleam type as a PostgreSQL value, and reads it back.
 ////
-//// The same codec gives a parameter and reads a column.
-////
-//// This module has the `Codec` type, the codecs of `Int`, `Float`, `Bool`,
-//// `String`, `BitArray` and `Uuid`, and `nullable`, `enum` and `custom`.
-//// Every other PostgreSQL type family has its own module in
-//// `dream_postgres/codecs/`, with its Gleam types and its codecs: `array`,
-//// `composite`, `numeric`, `bit_string`, `hstore`, `time`, `json`, `range`,
-//// `network`, `geometry`, `text_search`, `vector` and `tid`.
+//// The same codec gives a parameter and reads a column:
 ////
 //// ### Give an array parameter <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/existing_post_ids.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ////
 //// ```gleam
 //// import dream_errors.{type Error}
-//// import dream_postgres/codecs.{int}
-//// import dream_postgres/codecs/array.{array}
+//// import dream_postgres/codec.{array, int}
 //// import dream_postgres/error.{type PostgresError}
 //// import dream_postgres/pool.{type Connection}
 //// import dream_postgres/query.{all, parameter, query}
@@ -36,16 +28,33 @@
 //// that PostgreSQL gives the parameter or the column. A codec that does not
 //// take that type stops the query before anything runs.
 
-import dream_postgres/codecs/codec_type.{
+import dream_postgres/codec/array
+import dream_postgres/codec/bit_string
+import dream_postgres/codec/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, OutOfRange, binary_bytes,
   is_base, special_float, utf8_text, wrong_size,
 }
+import dream_postgres/codec/composite
+import dream_postgres/codec/geometry as geometry_codecs
+import dream_postgres/codec/hstore
+import dream_postgres/codec/json as json_codecs
+import dream_postgres/codec/network as network_codecs
+import dream_postgres/codec/numeric
+import dream_postgres/codec/range as range_codecs
+import dream_postgres/codec/text_search as text_search_codecs
+import dream_postgres/codec/tid as tid_codecs
+import dream_postgres/codec/time as time_codecs
+import dream_postgres/codec/vector as vector_codecs
 import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, Array, Base, Binary, BinaryFormat, Composite,
   Domain, Enum, Multirange, Null, Pseudo, Range, Text, TextFormat,
 }
+import dream_postgres/query/definition
+import dream_postgres/range.{type Range}
+import dream_postgres/row/reader.{type Row}
 import dream_uuid.{type Uuid}
 import gleam/bit_array
+import gleam/dict.{type Dict}
 import gleam/float
 import gleam/int
 import gleam/list
@@ -59,14 +68,14 @@ pub type Codec(a) =
   codec_type.Codec(a)
 
 /// A value of the codec's type, for a query that is built only to be
-/// checked, such as a query of `boot_check.checked`. A check uses the
+/// checked, such as a query of `boot_check.query_check`. A check uses the
 /// codec of a parameter, never its value.
 ///
 /// ### Make the checks of the queries of a module <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_checks.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
-/// import dream_postgres/codecs.{int, placeholder, text}
+/// import dream_postgres/boot_check.{type QueryCheck, command_check, query_check}
+/// import dream_postgres/codec.{codec_placeholder, int, text}
 /// import dream_postgres/query.{named, parameter, query}
 /// import dream_postgres/row.{column, row}
 ///
@@ -76,20 +85,20 @@ pub type Codec(a) =
 ///   [
 ///     query("SELECT id, email FROM users WHERE id = $1")
 ///       |> named("user.find")
-///       |> parameter(int, placeholder(int))
-///       |> checked({
+///       |> parameter(int, codec_placeholder(int))
+///       |> query_check({
 ///         use id <- column(int)
 ///         use email <- column(text)
 ///         row(#(id, email))
 ///       }),
 ///     query("DELETE FROM users WHERE id = $1")
 ///       |> named("user.delete")
-///       |> parameter(int, placeholder(int))
-///       |> checked_command,
+///       |> parameter(int, codec_placeholder(int))
+///       |> command_check,
 ///   ]
 /// }
 /// ```
-pub fn placeholder(codec: Codec(a)) -> a {
+pub fn codec_placeholder(codec: Codec(a)) -> a {
   codec_type.placeholder(codec)
 }
 
@@ -119,6 +128,24 @@ pub fn nullable(inner: Codec(a)) -> Codec(Option(a)) {
   )
 }
 
+/// A codec of a one-dimensional array, as a `List`. An element that is NULL
+/// needs a nullable element codec:
+///
+/// ### An array whose elements can be NULL <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/scores_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/codec.{type Codec, array, int, nullable}
+/// import gleam/option.{type Option}
+///
+/// /// A codec of `int4[]` whose elements can be NULL.
+/// pub fn scores_codec() -> Codec(List(Option(Int))) {
+///   array(nullable(int))
+/// }
+/// ```
+pub fn array(element: Codec(a)) -> Codec(List(a)) {
+  array.array(element)
+}
+
 /// A codec of a PostgreSQL enum. The labels must be the labels of the
 /// enum type in the database, all of them, or the check before the run
 /// refuses the query.
@@ -126,7 +153,7 @@ pub fn nullable(inner: Codec(a)) -> Codec(Option(a)) {
 /// ### A codec of an enum type <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/mood_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/codecs.{type Codec, enum}
+/// import dream_postgres/codec.{type Codec, enum}
 ///
 /// /// The values of the PostgreSQL enum
 /// /// `CREATE TYPE mood AS ENUM ('happy', 'sad')`.
@@ -213,7 +240,7 @@ fn decode_enum_label(
 /// ### A codec of the ltree extension <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/ltree_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/codecs.{type Codec, custom}
+/// import dream_postgres/codec.{type Codec, custom}
 /// import gleam/list
 /// import gleam/string
 ///
@@ -341,6 +368,190 @@ pub const uuid =
     decode: decode_uuid,
     placeholder: placeholder_uuid,
   )
+
+/// `numeric`, as its exact text, for example `"1234.5600"`, `"NaN"` or
+/// `"Infinity"`. No digit is lost, and no float rounding happens. It uses
+/// the binary format, so it also reads a numeric field of a composite.
+pub const numeric = numeric.numeric
+
+/// `json`, as a valid `Json` document.
+pub const json = json_codecs.json
+
+/// `jsonb`, as a valid `Json` document.
+pub const jsonb = json_codecs.jsonb
+
+/// `date`, as `gleam_time`'s `Date`. `infinity` and `-infinity` give
+/// `OutOfRange`: read them with `date_or_infinite`.
+pub const date = time_codecs.date
+
+/// `date`, as a `MaybeInfinite(Date)`, which holds `infinity` too.
+pub const date_or_infinite = time_codecs.date_or_infinite
+
+/// `time`, as `gleam_time`'s `TimeOfDay`, to the microsecond.
+pub const time = time_codecs.time
+
+/// `timetz`, as a `TimeWithOffset`.
+pub const time_with_offset = time_codecs.time_with_offset
+
+/// `timestamp`, as `gleam_time`'s `Timestamp`, read as UTC. A value is
+/// rounded to the nearest microsecond, as PostgreSQL stores it.
+pub const timestamp = time_codecs.timestamp_codec
+
+/// `timestamp`, as a `MaybeInfinite(Timestamp)`, which holds `infinity` too.
+pub const timestamp_or_infinite = time_codecs.timestamp_or_infinite
+
+/// `timestamptz`, as `gleam_time`'s `Timestamp`.
+pub const timestamp_with_time_zone = time_codecs.timestamp_with_time_zone
+
+/// `timestamptz`, as a `MaybeInfinite(Timestamp)`.
+pub const timestamp_with_time_zone_or_infinite =
+  time_codecs.timestamp_with_time_zone_or_infinite
+
+/// `interval`, as an `Interval` of months, days and microseconds.
+pub const interval = time_codecs.interval
+
+/// `interval`, as a `MaybeInfinite(Interval)`, for the infinite intervals of
+/// PostgreSQL 17 and later. PostgreSQL 16 has no infinite interval: it
+/// reads `PositiveInfinity` as the largest finite interval.
+pub const interval_or_infinite = time_codecs.interval_or_infinite
+
+/// `inet` and `cidr`, as an `IpNetwork`. A `cidr` parameter with bits set
+/// right of its prefix is refused before the query is sent.
+pub const ip_network = network_codecs.ip_network
+
+/// `macaddr` and `macaddr8`, as a `MacAddress`.
+pub const mac_address = network_codecs.mac_address
+
+/// `bit` and `varbit`, as a `BitArray` of exactly their bits.
+pub const bit_string = bit_string.bit_string
+
+/// `tid`, as a `Tid`.
+pub const tid = tid_codecs.tid_codec
+
+/// The extension type `hstore`, as a `Dict` of keys to values that can be
+/// NULL. A function, because a constant cannot hold a `Dict`.
+pub fn hstore() -> Codec(Dict(String, Option(String))) {
+  hstore.hstore()
+}
+
+/// `point`, as a `Point`.
+pub const point = geometry_codecs.point
+
+/// `line`, as a `Line`.
+pub const line = geometry_codecs.line
+
+/// `lseg`, as a `LineSegment`.
+pub const line_segment = geometry_codecs.line_segment
+
+/// `box`, as a `Box`.
+pub const box = geometry_codecs.box
+
+/// `path`, as a `Path`.
+pub const path = geometry_codecs.path
+
+/// `polygon`, as a `Polygon`.
+pub const polygon = geometry_codecs.polygon
+
+/// `circle`, as a `Circle`.
+pub const circle = geometry_codecs.circle
+
+/// A codec of a range of the element codec's type, for any range type
+/// whose element the element codec takes:
+///
+/// ### A codec of a date range <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/booking_period_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/codec.{type Codec, date, range}
+/// import dream_postgres/range.{type Range}
+/// import gleam/time/calendar.{type Date}
+///
+/// /// A codec of `daterange`.
+/// pub fn booking_period_codec() -> Codec(Range(Date)) {
+///   range(date)
+/// }
+/// ```
+pub fn range(element: Codec(a)) -> Codec(Range(a)) {
+  range_codecs.range(element)
+}
+
+/// A codec of a multirange, as a list of ranges.
+pub fn multirange(element: Codec(a)) -> Codec(List(Range(a))) {
+  range_codecs.multirange(element)
+}
+
+/// `tsvector`, as a list of lexemes.
+pub const text_search_vector = text_search_codecs.text_search_vector
+
+/// `tsquery`, as a `TsQuery`.
+pub const text_search_query = text_search_codecs.text_search_query
+
+/// The pgvector type `vector`, as a `Vector`.
+pub const vector = vector_codecs.vector
+
+/// The pgvector type `halfvec`, as a `HalfVector`.
+pub const half_vector = vector_codecs.half_vector
+
+/// The pgvector type `sparsevec`, as a `SparseVector`.
+pub const sparse_vector = vector_codecs.sparse_vector
+
+/// A field of a composite value, with its codec, for the `write` function
+/// of `composite`.
+pub type Field =
+  definition.Value
+
+/// A field of a composite value: its codec and its value. The fields go in
+/// the order of the type's fields.
+pub fn field(codec: Codec(a), value: a) -> Field {
+  definition.value_of(codec, value)
+}
+
+/// A codec of a composite type. It reads a value with a row reader, the
+/// same as a row of a query, and writes it as a list of fields in the
+/// type's order. Each field's codec must use the binary format, as every
+/// codec of this module does except `custom`.
+///
+/// ### A codec of a composite type <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/address_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/codec.{
+///   type Codec, type Field, composite, field, nullable, text,
+/// }
+/// import dream_postgres/row.{column, row}
+/// import gleam/option.{type Option, None}
+///
+/// /// The values of the PostgreSQL composite type
+/// /// `CREATE TYPE address AS (street text, city text)`.
+/// pub type Address {
+///   Address(street: String, city: Option(String))
+/// }
+///
+/// /// Reads an address with a row reader, and writes it as its fields in the
+/// /// order of the type.
+/// pub fn address_codec() -> Codec(Address) {
+///   composite(
+///     "address",
+///     read: {
+///       use street <- column(text)
+///       use city <- column(nullable(text))
+///       row(Address(street:, city:))
+///     },
+///     write: address_fields,
+///     placeholder: Address(street: "", city: None),
+///   )
+/// }
+///
+/// fn address_fields(address: Address) -> List(Field) {
+///   [field(text, address.street), field(nullable(text), address.city)]
+/// }
+/// ```
+pub fn composite(
+  type_name: String,
+  read reader: Row(a),
+  write to_fields: fn(a) -> List(Field),
+  placeholder placeholder: a,
+) -> Codec(a) {
+  composite.composite(type_name:, read: reader, write: to_fields, placeholder:)
+}
 
 // --- int -----------------------------------------------------------------------
 

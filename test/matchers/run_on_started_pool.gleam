@@ -38,10 +38,10 @@ pub fn run_on_started_pool(
 }
 
 fn run_on_pool_of(config: Config, work: fn(Connection) -> a) -> MatchResult(a) {
-  case pool.start(config) {
+  case pool.start_pool(config) {
     Ok(connection) -> {
       let outcome = work(connection)
-      pool.stop(connection)
+      pool.stop_pool(connection)
       MatchOk(outcome)
     }
     Error(failure) ->
@@ -49,7 +49,7 @@ fn run_on_pool_of(config: Config, work: fn(Connection) -> a) -> MatchResult(a) {
         operator: "run_on_started_pool",
         message: "",
         payload: Some(CustomMatcherFailure(
-          actual: error.describe(failure),
+          actual: error.describe_error(failure),
           description: "expected the pool to start",
         )),
       ))

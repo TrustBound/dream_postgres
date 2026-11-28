@@ -50,21 +50,21 @@ fn play_back_runs(
   let played = {
     use path <- result.try(recorded_scenarios.copy_of(runs, recording))
     use test_recorder <- result.try(
-      recorder.new(file: path)
+      recorder.recorder(file: path)
       |> recorder.mode(recorder.Playback)
       |> settings.recorder_settings
-      |> recorder.start
+      |> recorder.start_recorder
       |> result.map_error(string.inspect),
     )
     use connection <- result.try(
       server_pools.config(recorded_scenarios.closed_port)
       |> settings.app_settings
       |> config.record(test_recorder)
-      |> pool.start
+      |> pool.start_pool
       |> result.map_error(string.inspect),
     )
     let ran = scenario(connection)
-    pool.stop(connection)
+    pool.stop_pool(connection)
     Ok(ran)
   }
   case played {

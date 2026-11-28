@@ -1,6 +1,6 @@
 //// Database URLs: the parts of a `postgres://` or `postgresql://` URL, read
 //// as libpq reads them. The module `dream_postgres/url` gives the public
-//// function `config_from_url`, which makes a config of the parts.
+//// function `parse_database_url`, which makes a config of the parts.
 
 import dream_postgres/error.{
   type UrlFault, type UrlPart, InvalidPercentEncoding, InvalidUrlPort,

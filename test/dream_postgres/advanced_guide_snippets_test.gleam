@@ -6,8 +6,7 @@
 //// listener test on PostgreSQL 17, so that the two listeners of the
 //// channel `jobs` never get each other's notifications.
 
-import dream_postgres/codecs
-import dream_postgres/codecs/range.{Exclusive, Inclusive, Range}
+import dream_postgres/codec
 import dream_postgres/config.{type PoolEvent, type ServerNotice, Connected}
 import dream_postgres/error
 import dream_postgres/listener.{
@@ -15,6 +14,7 @@ import dream_postgres/listener.{
 }
 import dream_postgres/pool.{with_connection}
 import dream_postgres/query.{affected, named, one, parameter, query, run_sql}
+import dream_postgres/range.{Exclusive, Inclusive, Range}
 import dream_postgres/recorder
 import dream_postgres/recording
 import dream_postgres/row.{single}
@@ -171,7 +171,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> be_ok()
           |> run_and_stop_pool(fn(pool) {
-            query("SELECT current_query()") |> one(single(codecs.text), pool)
+            query("SELECT current_query()") |> one(single(codec.text), pool)
           })
           |> be_ok()
           |> be_equal("/* billing */ SELECT current_query()")
@@ -210,7 +210,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> be_ok()
           |> run_and_stop_pool(fn(pool) {
-            query("SELECT 1") |> one(single(codecs.int), pool)
+            query("SELECT 1") |> one(single(codec.int), pool)
           })
           |> be_ok()
           |> be_equal(1)
@@ -528,10 +528,10 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
             // Act and assert
             copied
             |> result.try(fn(_copied) {
-              recorder.new(file: path)
+              recorder.recorder(file: path)
               |> recorded_scenarios.normalized
-              |> recorder.start
-              |> result.map_error(error.describe)
+              |> recorder.start_recorder
+              |> result.map_error(error.describe_error)
             })
             |> result.try(start_app_supervisor(
               server_pools.config(1),
@@ -631,13 +631,13 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
                 fn(held) {
                   use _deleted <- result.try(
                     query("DELETE FROM users WHERE id = $1")
-                    |> parameter(codecs.int, 1)
+                    |> parameter(codec.int, 1)
                     |> affected(held)
                     |> result.map_error(list.wrap),
                   )
                   use _found <- result.try(
                     query("SELECT id, email FROM users WHERE id = $1")
-                    |> parameter(codecs.int, 1)
+                    |> parameter(codec.int, 1)
                     |> affected(held)
                     |> result.map_error(list.wrap),
                   )
@@ -674,11 +674,11 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
           |> run_with_supervised_listener(notifications, fn(gate, connection) {
             use _subscription <- result.try(
               listen_by_name(notifications, jobs)
-              |> result.map_error(error.describe),
+              |> result.map_error(error.describe_error),
             )
             use events <- result.try(
               job_events(notifications, jobs)
-              |> result.map_error(error.describe),
+              |> result.map_error(error.describe_error),
             )
             listener_gate.open_gate(gate)
             use _states <- result.try(listen_messages.receive_messages(
@@ -688,7 +688,7 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
             ))
             use Nil <- result.try(
               run_sql("NOTIFY jobs, 'build-43'", connection)
-              |> result.map_error(error.describe),
+              |> result.map_error(error.describe_error),
             )
             let job = next_job(jobs)
             stop_listener(named_listener(notifications))
@@ -807,7 +807,7 @@ pub fn unit_tests() -> TestSuite {
       // Act
       let written =
         read_recording(bytes)
-        |> result.map(recording.to_file_text)
+        |> result.map(recording.format_recording)
 
       // Assert
       written

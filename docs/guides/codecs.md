@@ -1,6 +1,6 @@
 # Codecs
 
-A codec connects a Gleam type and a PostgreSQL type. It writes a Gleam value as a parameter, and it reads a column back into a Gleam value. The module `dream_postgres/codecs` has the codecs. This guide lists each codec with the PostgreSQL types that it takes, then shows the codecs that you build: nullable values, arrays, enums, JSON, types with no codec, and composite types.
+A codec connects a Gleam type and a PostgreSQL type. It writes a Gleam value as a parameter, and it reads a column back into a Gleam value. The module `dream_postgres/codec` has the codecs. This guide lists each codec with the PostgreSQL types that it takes, then shows the codecs that you build: nullable values, arrays, enums, JSON, types with no codec, and composite types.
 
 ## Table of Contents
 
@@ -16,78 +16,76 @@ A codec connects a Gleam type and a PostgreSQL type. It writes a Gleam value as 
 
 ## The checks of a codec
 
-Each codec knows the PostgreSQL types that it takes. Before each run, dream_postgres checks the codec of each parameter and of each column against the type that the server gave. A codec that does not take the type is a `Failed` error, and the query does not run. So `codecs.int` cannot read a `text` column by mistake.
+Each codec knows the PostgreSQL types that it takes. Before each run, dream_postgres checks the codec of each parameter and of each column against the type that the server gave. A codec that does not take the type is a `Failed` error, and the query does not run. So `codec.int` cannot read a `text` column by mistake.
 
-A value that does not fit is refused before the query goes to the server. For example, `codecs.int` refuses 40000 for an `int2` parameter.
+A value that does not fit is refused before the query goes to the server. For example, `codec.int` refuses 40000 for an `int2` parameter.
 
 ## Every codec
 
-`dream_postgres/codecs` has the `Codec` type, the codecs of Gleam's own types, and `nullable`, `enum` and `custom`. Every other PostgreSQL type family has its own module in `dream_postgres/codecs/`, with its Gleam types and its codecs. In this table, the part before the dot is the module: `codecs.int` is `dream_postgres/codecs`, and `time.date` is `dream_postgres/codecs/time`.
-
 | Codec | PostgreSQL types | Gleam type |
 |---|---|---|
-| `codecs.int` | `int2`, `int4`, `int8`, `oid` | `Int` |
-| `codecs.float` | `float4`, `float8` | `Float` |
-| `codecs.bool` | `bool` | `Bool` |
-| `codecs.text` | `text`, `varchar`, `bpchar`, `char`, `name`, and the extension type `citext` | `String` |
-| `codecs.bytea` | `bytea` | `BitArray` |
-| `codecs.uuid` | `uuid` | `dream_uuid.Uuid` |
-| `numeric.numeric` | `numeric` | `String`, the exact text, such as `"1234.5600"` |
-| `json.json` | `json` | `dream_postgres/codecs/json.Json` |
-| `json.jsonb` | `jsonb` | `dream_postgres/codecs/json.Json` |
-| `time.date` | `date` | `gleam/time/calendar.Date` |
-| `time.date_or_infinite` | `date` | `MaybeInfinite(Date)` |
-| `time.time` | `time` | `gleam/time/calendar.TimeOfDay` |
-| `time.time_with_offset` | `timetz` | `dream_postgres/codecs/time.TimeWithOffset` |
-| `time.timestamp` | `timestamp`, read as UTC | `gleam/time/timestamp.Timestamp` |
-| `time.timestamp_or_infinite` | `timestamp` | `MaybeInfinite(Timestamp)` |
-| `time.timestamp_with_time_zone` | `timestamptz` | `Timestamp` |
-| `time.timestamp_with_time_zone_or_infinite` | `timestamptz` | `MaybeInfinite(Timestamp)` |
-| `time.interval` | `interval` | `dream_postgres/codecs/time.Interval` |
-| `time.interval_or_infinite` | `interval` | `MaybeInfinite(Interval)` |
-| `network.ip_network` | `inet`, `cidr` | `dream_postgres/codecs/network.IpNetwork` |
-| `network.mac_address` | `macaddr`, `macaddr8` | `dream_postgres/codecs/network.MacAddress` |
-| `bit_string.bit_string` | `bit`, `varbit` | `BitArray` of exactly their bits |
-| `tid.tid` | `tid` | `dream_postgres/codecs/tid.Tid` |
-| `hstore.hstore()` | the extension type `hstore` | `Dict(String, Option(String))` |
-| `geometry.point` | `point` | `dream_postgres/codecs/geometry.Point` |
-| `geometry.line` | `line` | `Line` |
-| `geometry.line_segment` | `lseg` | `LineSegment` |
-| `geometry.box` | `box` | `Box` |
-| `geometry.path` | `path` | `Path` |
-| `geometry.polygon` | `polygon` | `Polygon` |
-| `geometry.circle` | `circle` | `Circle` |
-| `range.range(element)` | a range type of the element, such as `int4range`, `daterange` or `tstzrange` | `dream_postgres/codecs/range.Range(a)` |
-| `range.multirange(element)` | a multirange type of the element | `List(Range(a))` |
-| `text_search.text_search_vector` | `tsvector` | `dream_postgres/codecs/text_search.TsVector` |
-| `text_search.text_search_query` | `tsquery` | `TsQuery` |
-| `vector.vector` | the pgvector type `vector` | `dream_postgres/codecs/vector.Vector` |
-| `vector.half_vector` | the pgvector type `halfvec` | `HalfVector` |
-| `vector.sparse_vector` | the pgvector type `sparsevec` | `SparseVector` |
-| `codecs.nullable(inner)` | the types of `inner`, and NULL | `Option(a)` |
-| `array.array(element)` | a one-dimensional array of the element type | `List(a)` |
-| `codecs.enum(..)` | one enum type | your own type |
-| `codecs.custom(..)` | one type, in its text form | your own type |
-| `composite.composite(..)` | one composite type | your own type |
+| `codec.int` | `int2`, `int4`, `int8`, `oid` | `Int` |
+| `codec.float` | `float4`, `float8` | `Float` |
+| `codec.bool` | `bool` | `Bool` |
+| `codec.text` | `text`, `varchar`, `bpchar`, `char`, `name`, and the extension type `citext` | `String` |
+| `codec.bytea` | `bytea` | `BitArray` |
+| `codec.uuid` | `uuid` | `dream_uuid.Uuid` |
+| `codec.numeric` | `numeric` | `String`, the exact text, such as `"1234.5600"` |
+| `codec.json` | `json` | `dream_postgres/json.Json` |
+| `codec.jsonb` | `jsonb` | `dream_postgres/json.Json` |
+| `codec.date` | `date` | `gleam/time/calendar.Date` |
+| `codec.date_or_infinite` | `date` | `MaybeInfinite(Date)` |
+| `codec.time` | `time` | `gleam/time/calendar.TimeOfDay` |
+| `codec.time_with_offset` | `timetz` | `dream_postgres/time.TimeWithOffset` |
+| `codec.timestamp` | `timestamp`, read as UTC | `gleam/time/timestamp.Timestamp` |
+| `codec.timestamp_or_infinite` | `timestamp` | `MaybeInfinite(Timestamp)` |
+| `codec.timestamp_with_time_zone` | `timestamptz` | `Timestamp` |
+| `codec.timestamp_with_time_zone_or_infinite` | `timestamptz` | `MaybeInfinite(Timestamp)` |
+| `codec.interval` | `interval` | `dream_postgres/time.Interval` |
+| `codec.interval_or_infinite` | `interval` | `MaybeInfinite(Interval)` |
+| `codec.ip_network` | `inet`, `cidr` | `dream_postgres/network.IpNetwork` |
+| `codec.mac_address` | `macaddr`, `macaddr8` | `dream_postgres/network.MacAddress` |
+| `codec.bit_string` | `bit`, `varbit` | `BitArray` of exactly their bits |
+| `codec.tid` | `tid` | `dream_postgres/tid.Tid` |
+| `codec.hstore()` | the extension type `hstore` | `Dict(String, Option(String))` |
+| `codec.point` | `point` | `dream_postgres/geometry.Point` |
+| `codec.line` | `line` | `Line` |
+| `codec.line_segment` | `lseg` | `LineSegment` |
+| `codec.box` | `box` | `Box` |
+| `codec.path` | `path` | `Path` |
+| `codec.polygon` | `polygon` | `Polygon` |
+| `codec.circle` | `circle` | `Circle` |
+| `codec.range(element)` | a range type of the element, such as `int4range`, `daterange` or `tstzrange` | `dream_postgres/range.Range(a)` |
+| `codec.multirange(element)` | a multirange type of the element | `List(Range(a))` |
+| `codec.text_search_vector` | `tsvector` | `dream_postgres/text_search.TsVector` |
+| `codec.text_search_query` | `tsquery` | `TsQuery` |
+| `codec.vector` | the pgvector type `vector` | `dream_postgres/vector.Vector` |
+| `codec.half_vector` | the pgvector type `halfvec` | `HalfVector` |
+| `codec.sparse_vector` | the pgvector type `sparsevec` | `SparseVector` |
+| `codec.nullable(inner)` | the types of `inner`, and NULL | `Option(a)` |
+| `codec.array(element)` | a one-dimensional array of the element type | `List(a)` |
+| `codec.enum(..)` | one enum type | your own type |
+| `codec.custom(..)` | one type, in its text form | your own type |
+| `codec.composite(..)` | one composite type | your own type |
 
 Some values need care:
 
-- `codecs.float` gives `OutOfRange` for `NaN` and the infinities, because a `Float` cannot hold them.
-- `numeric.numeric` keeps every digit. No float rounding happens. It also reads `"NaN"` and `"Infinity"`.
-- `time.date`, `time.timestamp` and `time.timestamp_with_time_zone` give `OutOfRange` for `infinity` and `-infinity`. The `_or_infinite` codecs read them as `PositiveInfinity` and `NegativeInfinity`.
-- `time.timestamp` rounds a value to the nearest microsecond, as PostgreSQL stores it.
-- `time.interval_or_infinite` reads the infinite intervals of PostgreSQL 17 and later. PostgreSQL 16 has no infinite interval, and it reads a `PositiveInfinity` parameter as the largest finite interval.
-- `network.ip_network` refuses a `cidr` parameter with bits set right of its prefix, before the query goes to the server.
+- `codec.float` gives `OutOfRange` for `NaN` and the infinities, because a `Float` cannot hold them.
+- `codec.numeric` keeps every digit. No float rounding happens. It also reads `"NaN"` and `"Infinity"`.
+- `codec.date`, `codec.timestamp` and `codec.timestamp_with_time_zone` give `OutOfRange` for `infinity` and `-infinity`. The `_or_infinite` codecs read them as `PositiveInfinity` and `NegativeInfinity`.
+- `codec.timestamp` rounds a value to the nearest microsecond, as PostgreSQL stores it.
+- `codec.interval_or_infinite` reads the infinite intervals of PostgreSQL 17 and later. PostgreSQL 16 has no infinite interval, and it reads a `PositiveInfinity` parameter as the largest finite interval.
+- `codec.ip_network` refuses a `cidr` parameter with bits set right of its prefix, before the query goes to the server.
 
 ## NULL
 
-A codec reads a NULL column as an error: `UnexpectedNull`, which names the column. `codecs.nullable(inner)` takes NULL too, as `None`, and writes `None` as NULL. This query reads the balance of each user, and a user with no account has no balance:
+A codec reads a NULL column as an error: `UnexpectedNull`, which names the column. `codec.nullable(inner)` takes NULL too, as `None`, and writes `None` as NULL. This query reads the balance of each user, and a user with no account has no balance:
 
 ### Read a column that can be NULL <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/balances.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int, nullable, text}
+import dream_postgres/codec.{int, nullable, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{all, query}
@@ -113,14 +111,13 @@ pub fn balances(
 
 ## Arrays
 
-`array.array(element)` reads and writes a one-dimensional array as a `List`. An array whose elements can be NULL needs a nullable element codec, `array.array(codec.nullable(codec.int))`:
+`codec.array(element)` reads and writes a one-dimensional array as a `List`. An array whose elements can be NULL needs a nullable element codec, `codec.array(codec.nullable(codec.int))`:
 
 ### An array parameter <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/find_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codecs.{int}
-import dream_postgres/codecs/array.{array}
+import dream_postgres/codec.{array, int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{all, parameter, query}
@@ -141,12 +138,12 @@ pub fn find_users(
 
 ## Enums
 
-`codecs.enum(type_name, first, rest)` takes the name of the enum type and each value with its label. The labels must be every label of the type in the database, or the check before the run refuses the query:
+`codec.enum(type_name, first, rest)` takes the name of the enum type and each value with its label. The labels must be every label of the type in the database, or the check before the run refuses the query:
 
 ### An enum codec <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/mood_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codecs.{type Codec, enum}
+import dream_postgres/codec.{type Codec, enum}
 
 /// The values of the PostgreSQL enum
 /// `CREATE TYPE mood AS ENUM ('happy', 'sad')`.
@@ -163,12 +160,12 @@ pub fn mood_codec() -> Codec(Mood) {
 
 ## JSON
 
-`json.json` and `json.jsonb` read and write a `Json` value of `dream_postgres/codecs/json`. That value is always a valid JSON document. `json.from_json` makes one from a `gleam_json` value, and `json.parse` reads it with a decoder:
+`codec.json` and `codec.jsonb` read and write a `Json` value of `dream_postgres/json`. That value is always a valid JSON document. `json.gleam_json_to_json` makes one from a `gleam_json` value, and `json.decode_json` reads it with a decoder:
 
 ### Write and read a JSON document <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/theme_json.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codecs/json.{type Json, from_json, parse}
+import dream_postgres/json.{type Json, decode_json, gleam_json_to_json}
 import gleam/dynamic/decode
 import gleam/json as gleam_json
 
@@ -182,14 +179,14 @@ pub fn theme_document(theme: Theme) -> Json {
     #("dark", gleam_json.bool(theme.dark)),
     #("font_size", gleam_json.int(theme.font_size)),
   ])
-  |> from_json
+  |> gleam_json_to_json
 }
 
 /// The theme of a JSON document that a `json` or a `jsonb` column gave.
 pub fn theme_from_document(
   document: Json,
 ) -> Result(Theme, gleam_json.DecodeError) {
-  parse(document, theme_decoder())
+  decode_json(document, theme_decoder())
 }
 
 fn theme_decoder() -> decode.Decoder(Theme) {
@@ -199,16 +196,16 @@ fn theme_decoder() -> decode.Decoder(Theme) {
 }
 ```
 
-`json.from_string` makes a value from a text, and gives an error for a text that is not valid JSON. `json.to_string` gives the text.
+`json.parse_json` makes a value from a text, and gives an error for a text that is not valid JSON. `json.json_to_string` gives the text.
 
 ## A type with no codec
 
-`codecs.custom` makes a codec for a type that dream_postgres has no codec for, such as the type of an extension. It reads and writes the text form of the type. The `from_text` function gives an error for a text that it cannot read:
+`codec.custom` makes a codec for a type that dream_postgres has no codec for, such as the type of an extension. It reads and writes the text form of the type. The `from_text` function gives an error for a text that it cannot read:
 
 ### A codec for ltree <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/category_path_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codecs.{type Codec, custom}
+import dream_postgres/codec.{type Codec, custom}
 import gleam/string
 
 /// A path of the extension type `ltree`, such as `shop.books.poetry`.
@@ -239,13 +236,14 @@ A custom codec uses the text format, so a composite type cannot hold it.
 
 ## Composite types
 
-`composite.composite` makes a codec of a composite type. It reads a value with a row reader, the same as a row of a query. It writes a value as a list of `composite.field` values, in the order of the fields of the type:
+`codec.composite` makes a codec of a composite type. It reads a value with a row reader, the same as a row of a query. It writes a value as a list of `codec.field` values, in the order of the fields of the type:
 
 ### A composite codec <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/address_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codecs.{type Codec, nullable, text}
-import dream_postgres/codecs/composite.{type Field, composite, field}
+import dream_postgres/codec.{
+  type Codec, type Field, composite, field, nullable, text,
+}
 import dream_postgres/row.{column, row}
 import gleam/option.{type Option, None}
 
@@ -277,4 +275,4 @@ fn address_fields(address: Address) -> List(Field) {
 
 ## Placeholders
 
-Each codec has a placeholder: a value of its type for a query that only gets checked and never runs, such as a query of the boot check. `codecs.placeholder(codec)` gives it. `codecs.custom` and `composite.composite` take the placeholder as an argument. The placeholder of `codecs.enum` is its first value. The [boot check guide](boot-check.md) shows its use.
+Each codec has a placeholder: a value of its type for a query that only gets checked and never runs, such as a query of the boot check. `codec.codec_placeholder(codec)` gives it. `codec.custom` and `codec.composite` take the placeholder as an argument. The placeholder of `codec.enum` is its first value. The [boot check guide](boot-check.md) shows its use.
