@@ -3,11 +3,11 @@
 
 import dream_postgres/codec
 import dream_postgres/codecs/codec_type.{Malformed}
-import dream_postgres/driver/cell.{Binary, Null}
-import dream_postgres/network.{
+import dream_postgres/codecs/network.{
   IpNetwork, Ipv4, Ipv6, NotAMacAddress, NotAnIpNetwork,
 }
-import dream_postgres/tid.{Tid}
+import dream_postgres/codecs/tid.{Tid}
+import dream_postgres/driver/cell.{Binary, Null}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,
 }
@@ -29,7 +29,7 @@ pub fn tests() -> TestSuite {
     group("inet and cidr", [
       it("takes inet", fn() {
         // Arrange
-        let subject = codec.ip_network
+        let subject = network.ip_network
 
         // Act and assert
         subject
@@ -40,7 +40,7 @@ pub fn tests() -> TestSuite {
       }),
       it("takes cidr", fn() {
         // Arrange
-        let subject = codec.ip_network
+        let subject = network.ip_network
 
         // Act and assert
         subject
@@ -56,7 +56,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.ip_network, type_catalog.base("inet"))
+        |> encode_as(network.ip_network, type_catalog.base("inet"))
         |> be_ok()
         |> be_equal(Binary(<<2, 24, 0, 4, 192, 168, 0, 1>>))
         |> or_fail_with("Expected 192.168.0.1/24 as an inet of family 2")
@@ -68,7 +68,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.ip_network, type_catalog.base("cidr"))
+        |> encode_as(network.ip_network, type_catalog.base("cidr"))
         |> be_ok()
         |> be_equal(Binary(<<2, 8, 1, 4, 10, 0, 0, 0>>))
         |> or_fail_with("Expected 10.0.0.0/8 with the cidr flag set")
@@ -80,7 +80,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.ip_network, type_catalog.base("inet"))
+        |> encode_as(network.ip_network, type_catalog.base("inet"))
         |> be_ok()
         |> be_equal(
           Binary(<<3, 128, 0, 16, network_bytes.ipv6_address():bits>>),
@@ -94,7 +94,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.ip_network, type_catalog.base("cidr"))
+        |> encode_as(network.ip_network, type_catalog.base("cidr"))
         |> be_error()
         |> be_equal(
           "10.0.0.1/8 has bits set right of its prefix, which cidr does not take",
@@ -108,7 +108,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.ip_network, type_catalog.base("cidr"))
+        |> encode_as(network.ip_network, type_catalog.base("cidr"))
         |> be_error()
         |> be_equal(
           "2001:db8::1/32 has bits set right of its prefix, which cidr does not take",
@@ -124,7 +124,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.ip_network, type_catalog.base("inet"))
+        |> encode_as(network.ip_network, type_catalog.base("inet"))
         |> be_error()
         |> be_equal("300.0.0.1 is not a valid network")
         |> or_fail_with("Expected the part 300 to make the network not valid")
@@ -136,7 +136,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.ip_network, type_catalog.base("cidr"))
+        |> decode_as(network.ip_network, type_catalog.base("cidr"))
         |> be_ok()
         |> be_equal(IpNetwork(Ipv4(10, 0, 0, 0), 8))
         |> or_fail_with("Expected the network 10.0.0.0/8")
@@ -148,7 +148,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.ip_network, type_catalog.base("inet"))
+        |> decode_as(network.ip_network, type_catalog.base("inet"))
         |> be_ok()
         |> be_equal(IpNetwork(Ipv6(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 64))
         |> or_fail_with("Expected the network 2001:db8::1/64")
@@ -160,7 +160,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.ip_network, type_catalog.base("inet"))
+        |> decode_as(network.ip_network, type_catalog.base("inet"))
         |> be_error()
         |> be_equal(Malformed("7 bytes are not a inet value"))
         |> or_fail_with("Expected an IPv4 address of 3 bytes to be malformed")
@@ -421,7 +421,7 @@ pub fn tests() -> TestSuite {
     group("mac addresses", [
       it("takes macaddr8", fn() {
         // Arrange
-        let subject = codec.mac_address
+        let subject = network.mac_address
 
         // Act and assert
         subject
@@ -517,7 +517,7 @@ pub fn tests() -> TestSuite {
         address
         |> should
         |> be_ok()
-        |> encode_as(codec.mac_address, type_catalog.base("macaddr"))
+        |> encode_as(network.mac_address, type_catalog.base("macaddr"))
         |> be_ok()
         |> be_equal(Binary(<<8, 0, 43, 1, 2, 3>>))
         |> or_fail_with("Expected the 6 bytes as they are in a macaddr")
@@ -533,7 +533,7 @@ pub fn tests() -> TestSuite {
         address
         |> should
         |> be_ok()
-        |> encode_as(codec.mac_address, type_catalog.base("macaddr8"))
+        |> encode_as(network.mac_address, type_catalog.base("macaddr8"))
         |> be_ok()
         |> be_equal(Binary(<<8, 0, 43, 1, 2, 3>>))
         |> or_fail_with("Expected the 6 bytes as they are in a macaddr8")
@@ -549,7 +549,7 @@ pub fn tests() -> TestSuite {
         address
         |> should
         |> be_ok()
-        |> encode_as(codec.mac_address, type_catalog.base("macaddr"))
+        |> encode_as(network.mac_address, type_catalog.base("macaddr"))
         |> be_error()
         |> be_equal("08:00:2b:01:02:03:04:05 has 8 bytes, and macaddr holds 6")
         |> or_fail_with("Expected macaddr to refuse an address of 8 bytes")
@@ -561,7 +561,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.mac_address, type_catalog.base("macaddr8"))
+        |> decode_as(network.mac_address, type_catalog.base("macaddr8"))
         |> be_ok()
         |> have_mac_address_text()
         |> be_equal("01:02:03:04:05:06:07:08")
@@ -576,13 +576,13 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.mac_address, type_catalog.base("macaddr8"))
+        |> decode_as(network.mac_address, type_catalog.base("macaddr8"))
         |> be_error()
         |> or_fail_with("Expected 7 bytes to be refused as a MAC address")
       }),
       it("has the zero address as its placeholder", fn() {
         // Arrange
-        let subject = codec.mac_address
+        let subject = network.mac_address
 
         // Act
         let placeholder = codec_type.placeholder(subject)
@@ -673,7 +673,7 @@ pub fn tests() -> TestSuite {
     group("tid", [
       it("takes tid", fn() {
         // Arrange
-        let subject = codec.tid
+        let subject = tid.tid
 
         // Act and assert
         subject
@@ -689,7 +689,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.tid, type_catalog.base("tid"))
+        |> encode_as(tid.tid, type_catalog.base("tid"))
         |> be_ok()
         |> be_equal(Binary(<<7:size(32), 3:size(16)>>))
         |> or_fail_with(
@@ -703,7 +703,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.tid, type_catalog.base("tid"))
+        |> encode_as(tid.tid, type_catalog.base("tid"))
         |> be_error()
         |> be_equal("(7,65536) is out of range for tid")
         |> or_fail_with("Expected the offset 65536 to be out of range")
@@ -715,7 +715,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.tid, type_catalog.base("tid"))
+        |> decode_as(tid.tid, type_catalog.base("tid"))
         |> be_ok()
         |> be_equal(Tid(7, 3))
         |> or_fail_with("Expected the tid (7,3)")
@@ -727,7 +727,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.tid, type_catalog.base("tid"))
+        |> decode_as(tid.tid, type_catalog.base("tid"))
         |> be_error()
         |> be_equal(Malformed("5 bytes are not a tid value"))
         |> or_fail_with("Expected five bytes to be a malformed tid")

@@ -63,7 +63,8 @@ This function creates an API key, then reads it back by the id that the database
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int, text, timestamp_with_time_zone, uuid}
+import dream_postgres/codec.{int, text, uuid}
+import dream_postgres/codecs/time.{timestamp_with_time_zone}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query, secret_parameter}

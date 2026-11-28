@@ -1,6 +1,6 @@
 //// The JSON document type.
 
-import dream_postgres/json
+import dream_postgres/codecs/json
 import dream_test/matchers.{be_equal, be_ok, be_true, or_fail_with, should}
 import dream_test/suite.{type TestSuite}
 import dream_test/unit.{describe, it}

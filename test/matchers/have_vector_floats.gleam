@@ -1,6 +1,6 @@
 //// A matcher that gives the floats of the pgvector `vector` of the chain.
 
-import dream_postgres/vector.{type Vector}
+import dream_postgres/codecs/vector.{type Vector}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the floats of the vector, in order. The chain goes on with the list.

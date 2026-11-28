@@ -22,6 +22,8 @@ A value that does not fit is refused before the query goes to the server. For ex
 
 ## Every codec
 
+`dream_postgres/codec` has the codecs of Gleam's own types and the functions that build a codec from other codecs. Each PostgreSQL type family has its own module in `dream_postgres/codecs/`, with its types and its codecs. In this table, the part before the dot is the module: `codec.int` is `dream_postgres/codec`, and `time.date` is `dream_postgres/codecs/time`.
+
 | Codec | PostgreSQL types | Gleam type |
 |---|---|---|
 | `codec.int` | `int2`, `int4`, `int8`, `oid` | `Int` |
@@ -31,37 +33,37 @@ A value that does not fit is refused before the query goes to the server. For ex
 | `codec.bytea` | `bytea` | `BitArray` |
 | `codec.uuid` | `uuid` | `dream_uuid.Uuid` |
 | `codec.numeric` | `numeric` | `String`, the exact text, such as `"1234.5600"` |
-| `codec.json` | `json` | `dream_postgres/json.Json` |
-| `codec.jsonb` | `jsonb` | `dream_postgres/json.Json` |
-| `codec.date` | `date` | `gleam/time/calendar.Date` |
-| `codec.date_or_infinite` | `date` | `MaybeInfinite(Date)` |
-| `codec.time` | `time` | `gleam/time/calendar.TimeOfDay` |
-| `codec.time_with_offset` | `timetz` | `dream_postgres/time.TimeWithOffset` |
-| `codec.timestamp` | `timestamp`, read as UTC | `gleam/time/timestamp.Timestamp` |
-| `codec.timestamp_or_infinite` | `timestamp` | `MaybeInfinite(Timestamp)` |
-| `codec.timestamp_with_time_zone` | `timestamptz` | `Timestamp` |
-| `codec.timestamp_with_time_zone_or_infinite` | `timestamptz` | `MaybeInfinite(Timestamp)` |
-| `codec.interval` | `interval` | `dream_postgres/time.Interval` |
-| `codec.interval_or_infinite` | `interval` | `MaybeInfinite(Interval)` |
-| `codec.ip_network` | `inet`, `cidr` | `dream_postgres/network.IpNetwork` |
-| `codec.mac_address` | `macaddr`, `macaddr8` | `dream_postgres/network.MacAddress` |
+| `json.json` | `json` | `dream_postgres/codecs/json.Json` |
+| `json.jsonb` | `jsonb` | `dream_postgres/codecs/json.Json` |
+| `time.date` | `date` | `gleam/time/calendar.Date` |
+| `time.date_or_infinite` | `date` | `MaybeInfinite(Date)` |
+| `time.time` | `time` | `gleam/time/calendar.TimeOfDay` |
+| `time.time_with_offset` | `timetz` | `dream_postgres/codecs/time.TimeWithOffset` |
+| `time.timestamp` | `timestamp`, read as UTC | `gleam/time/timestamp.Timestamp` |
+| `time.timestamp_or_infinite` | `timestamp` | `MaybeInfinite(Timestamp)` |
+| `time.timestamp_with_time_zone` | `timestamptz` | `Timestamp` |
+| `time.timestamp_with_time_zone_or_infinite` | `timestamptz` | `MaybeInfinite(Timestamp)` |
+| `time.interval` | `interval` | `dream_postgres/codecs/time.Interval` |
+| `time.interval_or_infinite` | `interval` | `MaybeInfinite(Interval)` |
+| `network.ip_network` | `inet`, `cidr` | `dream_postgres/codecs/network.IpNetwork` |
+| `network.mac_address` | `macaddr`, `macaddr8` | `dream_postgres/codecs/network.MacAddress` |
 | `codec.bit_string` | `bit`, `varbit` | `BitArray` of exactly their bits |
-| `codec.tid` | `tid` | `dream_postgres/tid.Tid` |
+| `tid.tid` | `tid` | `dream_postgres/codecs/tid.Tid` |
 | `codec.hstore()` | the extension type `hstore` | `Dict(String, Option(String))` |
-| `codec.point` | `point` | `dream_postgres/geometry.Point` |
-| `codec.line` | `line` | `Line` |
-| `codec.line_segment` | `lseg` | `LineSegment` |
-| `codec.box` | `box` | `Box` |
-| `codec.path` | `path` | `Path` |
-| `codec.polygon` | `polygon` | `Polygon` |
-| `codec.circle` | `circle` | `Circle` |
-| `codec.range(element)` | a range type of the element, such as `int4range`, `daterange` or `tstzrange` | `dream_postgres/range.Range(a)` |
-| `codec.multirange(element)` | a multirange type of the element | `List(Range(a))` |
-| `codec.text_search_vector` | `tsvector` | `dream_postgres/text_search.TsVector` |
-| `codec.text_search_query` | `tsquery` | `TsQuery` |
-| `codec.vector` | the pgvector type `vector` | `dream_postgres/vector.Vector` |
-| `codec.half_vector` | the pgvector type `halfvec` | `HalfVector` |
-| `codec.sparse_vector` | the pgvector type `sparsevec` | `SparseVector` |
+| `geometry.point` | `point` | `dream_postgres/codecs/geometry.Point` |
+| `geometry.line` | `line` | `Line` |
+| `geometry.line_segment` | `lseg` | `LineSegment` |
+| `geometry.box` | `box` | `Box` |
+| `geometry.path` | `path` | `Path` |
+| `geometry.polygon` | `polygon` | `Polygon` |
+| `geometry.circle` | `circle` | `Circle` |
+| `range.range(element)` | a range type of the element, such as `int4range`, `daterange` or `tstzrange` | `dream_postgres/codecs/range.Range(a)` |
+| `range.multirange(element)` | a multirange type of the element | `List(Range(a))` |
+| `text_search.text_search_vector` | `tsvector` | `dream_postgres/codecs/text_search.TsVector` |
+| `text_search.text_search_query` | `tsquery` | `TsQuery` |
+| `vector.vector` | the pgvector type `vector` | `dream_postgres/codecs/vector.Vector` |
+| `vector.half_vector` | the pgvector type `halfvec` | `HalfVector` |
+| `vector.sparse_vector` | the pgvector type `sparsevec` | `SparseVector` |
 | `codec.nullable(inner)` | the types of `inner`, and NULL | `Option(a)` |
 | `codec.array(element)` | a one-dimensional array of the element type | `List(a)` |
 | `codec.enum(..)` | one enum type | your own type |
@@ -72,10 +74,10 @@ Some values need care:
 
 - `codec.float` gives `OutOfRange` for `NaN` and the infinities, because a `Float` cannot hold them.
 - `codec.numeric` keeps every digit. No float rounding happens. It also reads `"NaN"` and `"Infinity"`.
-- `codec.date`, `codec.timestamp` and `codec.timestamp_with_time_zone` give `OutOfRange` for `infinity` and `-infinity`. The `_or_infinite` codecs read them as `PositiveInfinity` and `NegativeInfinity`.
-- `codec.timestamp` rounds a value to the nearest microsecond, as PostgreSQL stores it.
-- `codec.interval_or_infinite` reads the infinite intervals of PostgreSQL 17 and later. PostgreSQL 16 has no infinite interval, and it reads a `PositiveInfinity` parameter as the largest finite interval.
-- `codec.ip_network` refuses a `cidr` parameter with bits set right of its prefix, before the query goes to the server.
+- `time.date`, `time.timestamp` and `time.timestamp_with_time_zone` give `OutOfRange` for `infinity` and `-infinity`. The `_or_infinite` codecs read them as `PositiveInfinity` and `NegativeInfinity`.
+- `time.timestamp` rounds a value to the nearest microsecond, as PostgreSQL stores it.
+- `time.interval_or_infinite` reads the infinite intervals of PostgreSQL 17 and later. PostgreSQL 16 has no infinite interval, and it reads a `PositiveInfinity` parameter as the largest finite interval.
+- `network.ip_network` refuses a `cidr` parameter with bits set right of its prefix, before the query goes to the server.
 
 ## NULL
 
@@ -160,12 +162,12 @@ pub fn mood_codec() -> Codec(Mood) {
 
 ## JSON
 
-`codec.json` and `codec.jsonb` read and write a `Json` value of `dream_postgres/json`. That value is always a valid JSON document. `json.from_json` makes one from a `gleam_json` value, and `json.parse` reads it with a decoder:
+`json.json` and `json.jsonb` read and write a `Json` value of `dream_postgres/codecs/json`. That value is always a valid JSON document. `json.from_json` makes one from a `gleam_json` value, and `json.parse` reads it with a decoder:
 
 ### Write and read a JSON document <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/theme_json.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/json.{type Json, from_json, parse}
+import dream_postgres/codecs/json.{type Json, from_json, parse}
 import gleam/dynamic/decode
 import gleam/json as gleam_json
 

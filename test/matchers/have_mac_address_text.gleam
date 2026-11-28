@@ -1,7 +1,7 @@
 //// A matcher that gives the text of the MAC address of the chain, as
 //// PostgreSQL writes it.
 
-import dream_postgres/network.{type MacAddress}
+import dream_postgres/codecs/network.{type MacAddress}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the text of the MAC address: lower case hex bytes with colons. The

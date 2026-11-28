@@ -1,7 +1,7 @@
 //// Text search vectors and queries, and their bytes in PostgreSQL's binary
 //// formats.
 
-import dream_postgres/text_search.{
+import dream_postgres/codecs/text_search.{
   type TsQuery, And, Not, Or, Phrase, Term, WeightA, WeightB, WeightC, WeightD,
 }
 

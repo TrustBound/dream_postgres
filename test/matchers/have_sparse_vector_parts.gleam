@@ -1,7 +1,7 @@
 //// A matcher that gives the dimensions and the elements of the sparse
 //// vector of the chain.
 
-import dream_postgres/vector.{type SparseVector}
+import dream_postgres/codecs/vector.{type SparseVector}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import gleam/dict.{type Dict}
 

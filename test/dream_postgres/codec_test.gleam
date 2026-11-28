@@ -4,11 +4,11 @@
 
 import dream_postgres/codec
 import dream_postgres/codecs/codec_type.{Malformed, NullValue, OutOfRange}
+import dream_postgres/codecs/json
 import dream_postgres/driver/cell.{
   Array, Base, Binary, BinaryFormat, Composite, Domain, Enum, Multirange, Null,
   Pseudo, Range, Text, TextFormat, TypeDescription,
 }
-import dream_postgres/json
 import dream_test/matchers.{
   be_empty, be_equal, be_error, be_false, be_none, be_ok, be_some, be_true,
   or_fail_with, should,
@@ -715,7 +715,7 @@ pub fn tests() -> TestSuite {
     group("json and jsonb", [
       it("takes json", fn() {
         // Arrange
-        let subject = codec.json
+        let subject = json.json
 
         // Act and assert
         subject
@@ -726,7 +726,7 @@ pub fn tests() -> TestSuite {
       }),
       it("takes jsonb", fn() {
         // Arrange
-        let subject = codec.jsonb
+        let subject = json.jsonb
 
         // Act and assert
         subject
@@ -743,7 +743,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         document
         |> should
-        |> encode_as(codec.json, type_catalog.base_with_id(114, "json"))
+        |> encode_as(json.json, type_catalog.base_with_id(114, "json"))
         |> be_ok()
         |> be_equal(Binary(<<"{\"a\":1}":utf8>>))
         |> or_fail_with("Expected the text {\"a\":1}")
@@ -755,7 +755,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.json, type_catalog.base_with_id(114, "json"))
+        |> decode_as(json.json, type_catalog.base_with_id(114, "json"))
         |> be_ok()
         |> be_equal(
           json.from_json(gleam_json.object([#("a", gleam_json.int(1))])),
@@ -769,7 +769,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.json, type_catalog.base_with_id(114, "json"))
+        |> decode_as(json.json, type_catalog.base_with_id(114, "json"))
         |> be_error()
         |> be_equal(Malformed("the server sent text that is not JSON"))
         |> or_fail_with("Expected the text { to be no JSON")
@@ -782,7 +782,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         document
         |> should
-        |> encode_as(codec.jsonb, type_catalog.base_with_id(3802, "jsonb"))
+        |> encode_as(json.jsonb, type_catalog.base_with_id(3802, "jsonb"))
         |> be_ok()
         |> be_equal(Binary(<<1, "{\"a\":1}":utf8>>))
         |> or_fail_with("Expected the version byte 1 and the text {\"a\":1}")
@@ -794,7 +794,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.jsonb, type_catalog.base_with_id(3802, "jsonb"))
+        |> decode_as(json.jsonb, type_catalog.base_with_id(3802, "jsonb"))
         |> be_ok()
         |> be_equal(
           json.from_json(gleam_json.object([#("a", gleam_json.int(1))])),
@@ -810,7 +810,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.jsonb, type_catalog.base_with_id(3802, "jsonb"))
+        |> decode_as(json.jsonb, type_catalog.base_with_id(3802, "jsonb"))
         |> be_error()
         |> be_equal(Malformed("3 bytes are not a jsonb value"))
         |> or_fail_with("Expected the version byte 2 to be refused")
@@ -822,14 +822,14 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.jsonb, type_catalog.base_with_id(3802, "jsonb"))
+        |> decode_as(json.jsonb, type_catalog.base_with_id(3802, "jsonb"))
         |> be_error()
         |> be_equal(Malformed("the text is not UTF-8"))
         |> or_fail_with("Expected the byte 255 to be no UTF-8 text")
       }),
       it("has the null placeholder", fn() {
         // Arrange
-        let subject = codec.json
+        let subject = json.json
 
         // Act
         let placeholder = codec_type.placeholder(subject)

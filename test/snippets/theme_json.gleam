@@ -1,4 +1,4 @@
-import dream_postgres/json.{type Json, from_json, parse}
+import dream_postgres/codecs/json.{type Json, from_json, parse}
 import gleam/dynamic/decode
 import gleam/json as gleam_json
 

@@ -4,9 +4,9 @@
 
 import dream_postgres/codec.{type Codec}
 import dream_postgres/codecs/codec_type.{OutOfRange}
+import dream_postgres/codecs/geometry.{type Point}
+import dream_postgres/codecs/range.{Inclusive, Unbounded}
 import dream_postgres/driver/cell.{Binary}
-import dream_postgres/geometry.{type Point}
-import dream_postgres/range.{Inclusive, Unbounded}
 import dream_postgres/row/reader.{column, row}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,
@@ -31,7 +31,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.point, type_catalog.point())
+        |> decode_as(geometry.point, type_catalog.point())
         |> be_error()
         |> be_equal(OutOfRange("Infinity"))
         |> or_fail_with("Expected a point with y at Infinity to be refused")
@@ -43,7 +43,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.point, type_catalog.point())
+        |> decode_as(geometry.point, type_catalog.point())
         |> be_error()
         |> be_equal(OutOfRange("-Infinity"))
         |> or_fail_with("Expected a point with x at -Infinity to be refused")
@@ -56,7 +56,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.line, type_catalog.base_with_id(628, "line"))
+        |> decode_as(geometry.line, type_catalog.base_with_id(628, "line"))
         |> be_error()
         |> be_equal(OutOfRange("NaN"))
         |> or_fail_with("Expected a line with a NaN constant to be refused")
@@ -69,7 +69,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.line_segment, type_catalog.base_with_id(601, "lseg"))
+        |> decode_as(
+          geometry.line_segment,
+          type_catalog.base_with_id(601, "lseg"),
+        )
         |> be_error()
         |> be_equal(OutOfRange("NaN"))
         |> or_fail_with("Expected a line segment with a NaN y to be refused")
@@ -82,7 +85,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.box, type_catalog.base_with_id(603, "box"))
+        |> decode_as(geometry.box, type_catalog.base_with_id(603, "box"))
         |> be_error()
         |> be_equal(OutOfRange("NaN"))
         |> or_fail_with("Expected a box with a NaN x to be refused")
@@ -100,7 +103,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.path, type_catalog.base_with_id(602, "path"))
+        |> decode_as(geometry.path, type_catalog.base_with_id(602, "path"))
         |> be_error()
         |> be_equal(OutOfRange("NaN"))
         |> or_fail_with("Expected a path with a NaN y to be refused")
@@ -118,7 +121,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.polygon, type_catalog.base_with_id(604, "polygon"))
+        |> decode_as(
+          geometry.polygon,
+          type_catalog.base_with_id(604, "polygon"),
+        )
         |> be_error()
         |> be_equal(OutOfRange("Infinity"))
         |> or_fail_with("Expected a polygon with x at Infinity to be refused")
@@ -131,14 +137,14 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.circle, type_catalog.base_with_id(718, "circle"))
+        |> decode_as(geometry.circle, type_catalog.base_with_id(718, "circle"))
         |> be_error()
         |> be_equal(OutOfRange("Infinity"))
         |> or_fail_with("Expected a circle of radius Infinity to be refused")
       }),
       it("gives OutOfRange for a point array with a NaN coordinate", fn() {
         // Arrange
-        let points: Codec(List(Point)) = codec.array(codec.point)
+        let points: Codec(List(Point)) = codec.array(geometry.point)
         let cell =
           Binary(<<
             1:size(32),
@@ -180,7 +186,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         bounds
         |> should
-        |> encode_as(codec.range(codec.numeric), type_catalog.numeric_range())
+        |> encode_as(range.range(codec.numeric), type_catalog.numeric_range())
         |> be_error()
         |> be_equal("\"abc\" is not a numeric value")
         |> or_fail_with("Expected the bound abc to be refused")

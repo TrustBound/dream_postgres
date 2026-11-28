@@ -1,7 +1,7 @@
 //// A matcher that gives the text of the IP network of the chain, as
 //// PostgreSQL writes it.
 
-import dream_postgres/network.{type IpNetwork}
+import dream_postgres/codecs/network.{type IpNetwork}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the text of the network. The chain goes on with the text.

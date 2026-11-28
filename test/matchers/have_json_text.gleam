@@ -1,6 +1,6 @@
 //// A matcher that gives the text of the JSON document of the chain.
 
-import dream_postgres/json.{type Json}
+import dream_postgres/codecs/json.{type Json}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 
 /// Give the text of the JSON document, as it was read or made. The chain

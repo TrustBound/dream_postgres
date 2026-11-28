@@ -4,20 +4,20 @@
 
 import dream_postgres/codec
 import dream_postgres/codecs/codec_type.{OutOfRange}
-import dream_postgres/geometry.{
+import dream_postgres/codecs/geometry.{
   Box, Circle, Line, LineSegment, Path, Point, Polygon,
 }
-import dream_postgres/json
-import dream_postgres/network.{IpNetwork, Ipv4, Ipv6}
-import dream_postgres/range.{EmptyRange, Exclusive, Inclusive, Unbounded}
-import dream_postgres/text_search.{
+import dream_postgres/codecs/json
+import dream_postgres/codecs/network.{IpNetwork, Ipv4, Ipv6}
+import dream_postgres/codecs/range.{EmptyRange, Exclusive, Inclusive, Unbounded}
+import dream_postgres/codecs/text_search.{
   And, Lexeme, Not, Or, Phrase, Term, WeightA, WeightB, WeightD,
 }
-import dream_postgres/tid.{Tid}
-import dream_postgres/time.{
+import dream_postgres/codecs/tid.{Tid}
+import dream_postgres/codecs/time.{
   Finite, Interval, NegativeInfinity, PositiveInfinity, TimeWithOffset,
 }
-import dream_postgres/vector
+import dream_postgres/codecs/vector
 import dream_test/context
 import dream_test/matchers.{
   be_equal, be_error, be_none, be_ok, be_some, or_fail_with, should,
@@ -952,7 +952,7 @@ pub fn tests() -> TestSuite {
             json.from_string("{\"b\":1,  \"a\":[1,2]}")
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.json, "json")
+            |> write_on_server(sessions, json.json, "json")
             |> be_ok()
             |> be_some()
             |> be_equal("{\"b\":1,  \"a\":[1,2]}")
@@ -964,7 +964,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("{\"b\":1,  \"a\":[1,2]}")
             |> should
-            |> read_on_server(sessions, codec.json, "json")
+            |> read_on_server(sessions, json.json, "json")
             |> be_ok()
             |> have_json_text()
             |> be_equal("{\"b\":1,  \"a\":[1,2]}")
@@ -977,7 +977,7 @@ pub fn tests() -> TestSuite {
             json.from_string("\"text\"")
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.json, "json")
+            |> write_on_server(sessions, json.json, "json")
             |> be_ok()
             |> be_some()
             |> be_equal("\"text\"")
@@ -987,7 +987,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("\"text\"")
             |> should
-            |> read_on_server(sessions, codec.json, "json")
+            |> read_on_server(sessions, json.json, "json")
             |> be_ok()
             |> have_json_text()
             |> be_equal("\"text\"")
@@ -1000,7 +1000,7 @@ pub fn tests() -> TestSuite {
             json.from_string("null")
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.json, "json")
+            |> write_on_server(sessions, json.json, "json")
             |> be_ok()
             |> be_some()
             |> be_equal("null")
@@ -1010,7 +1010,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("null")
             |> should
-            |> read_on_server(sessions, codec.json, "json")
+            |> read_on_server(sessions, json.json, "json")
             |> be_ok()
             |> have_json_text()
             |> be_equal("null")
@@ -1023,7 +1023,7 @@ pub fn tests() -> TestSuite {
               json.from_string("{\"a\": 1, \"b\": [true, null, \"é\"]}")
               |> should
               |> be_ok()
-              |> write_on_server(sessions, codec.jsonb, "jsonb")
+              |> write_on_server(sessions, json.jsonb, "jsonb")
               |> be_ok()
               |> be_some()
               |> be_equal("{\"a\": 1, \"b\": [true, null, \"é\"]}")
@@ -1036,7 +1036,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("{\"a\": 1, \"b\": [true, null, \"é\"]}")
             |> should
-            |> read_on_server(sessions, codec.jsonb, "jsonb")
+            |> read_on_server(sessions, json.jsonb, "jsonb")
             |> be_ok()
             |> have_json_text()
             |> be_equal("{\"a\": 1, \"b\": [true, null, \"é\"]}")
@@ -1049,7 +1049,7 @@ pub fn tests() -> TestSuite {
             json.from_string("{\"b\":2,\"a\":1}")
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.jsonb, "jsonb")
+            |> write_on_server(sessions, json.jsonb, "jsonb")
             |> be_ok()
             |> be_some()
             |> be_equal("{\"a\": 1, \"b\": 2}")
@@ -1061,7 +1061,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("{\"a\": 1, \"b\": 2}")
             |> should
-            |> read_on_server(sessions, codec.jsonb, "jsonb")
+            |> read_on_server(sessions, json.jsonb, "jsonb")
             |> be_ok()
             |> have_json_text()
             |> be_equal("{\"a\": 1, \"b\": 2}")
@@ -1074,7 +1074,7 @@ pub fn tests() -> TestSuite {
             json.from_string("12.50")
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.jsonb, "jsonb")
+            |> write_on_server(sessions, json.jsonb, "jsonb")
             |> be_ok()
             |> be_some()
             |> be_equal("12.50")
@@ -1084,7 +1084,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("12.50")
             |> should
-            |> read_on_server(sessions, codec.jsonb, "jsonb")
+            |> read_on_server(sessions, json.jsonb, "jsonb")
             |> be_ok()
             |> have_json_text()
             |> be_equal("12.50")
@@ -1195,7 +1195,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Date(2024, February, 29)
             |> should
-            |> write_on_server(sessions, codec.date, "date")
+            |> write_on_server(sessions, time.date, "date")
             |> be_ok()
             |> be_some()
             |> be_equal("2024-02-29")
@@ -1205,7 +1205,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("2024-02-29")
             |> should
-            |> read_on_server(sessions, codec.date, "date")
+            |> read_on_server(sessions, time.date, "date")
             |> be_ok()
             |> be_equal(Date(2024, February, 29))
             |> or_fail_with(
@@ -1216,7 +1216,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Date(1, January, 1)
             |> should
-            |> write_on_server(sessions, codec.date, "date")
+            |> write_on_server(sessions, time.date, "date")
             |> be_ok()
             |> be_some()
             |> be_equal("0001-01-01")
@@ -1226,7 +1226,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("0001-01-01")
             |> should
-            |> read_on_server(sessions, codec.date, "date")
+            |> read_on_server(sessions, time.date, "date")
             |> be_ok()
             |> be_equal(Date(1, January, 1))
             |> or_fail_with(
@@ -1237,7 +1237,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Date(-43, March, 15)
             |> should
-            |> write_on_server(sessions, codec.date, "date")
+            |> write_on_server(sessions, time.date, "date")
             |> be_ok()
             |> be_some()
             |> be_equal("0044-03-15 BC")
@@ -1247,7 +1247,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("0044-03-15 BC")
             |> should
-            |> read_on_server(sessions, codec.date, "date")
+            |> read_on_server(sessions, time.date, "date")
             |> be_ok()
             |> be_equal(Date(-43, March, 15))
             |> or_fail_with(
@@ -1258,7 +1258,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Date(10_000, January, 1)
             |> should
-            |> write_on_server(sessions, codec.date, "date")
+            |> write_on_server(sessions, time.date, "date")
             |> be_ok()
             |> be_some()
             |> be_equal("10000-01-01")
@@ -1268,7 +1268,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("10000-01-01")
             |> should
-            |> read_on_server(sessions, codec.date, "date")
+            |> read_on_server(sessions, time.date, "date")
             |> be_ok()
             |> be_equal(Date(10_000, January, 1))
             |> or_fail_with(
@@ -1279,7 +1279,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("infinity")
             |> should
-            |> read_on_server(sessions, codec.date, "date")
+            |> read_on_server(sessions, time.date, "date")
             |> be_error()
             |> be_equal(ReadDecodeFailed(OutOfRange("infinity")))
             |> or_fail_with("Expected the codec to refuse the date infinity")
@@ -1288,7 +1288,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Finite(Date(2000, January, 1))
             |> should
-            |> write_on_server(sessions, codec.date_or_infinite, "date")
+            |> write_on_server(sessions, time.date_or_infinite, "date")
             |> be_ok()
             |> be_some()
             |> be_equal("2000-01-01")
@@ -1298,7 +1298,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("2000-01-01")
             |> should
-            |> read_on_server(sessions, codec.date_or_infinite, "date")
+            |> read_on_server(sessions, time.date_or_infinite, "date")
             |> be_ok()
             |> be_equal(Finite(Date(2000, January, 1)))
             |> or_fail_with(
@@ -1309,7 +1309,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             PositiveInfinity
             |> should
-            |> write_on_server(sessions, codec.date_or_infinite, "date")
+            |> write_on_server(sessions, time.date_or_infinite, "date")
             |> be_ok()
             |> be_some()
             |> be_equal("infinity")
@@ -1319,7 +1319,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("infinity")
             |> should
-            |> read_on_server(sessions, codec.date_or_infinite, "date")
+            |> read_on_server(sessions, time.date_or_infinite, "date")
             |> be_ok()
             |> be_equal(PositiveInfinity)
             |> or_fail_with(
@@ -1330,7 +1330,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             NegativeInfinity
             |> should
-            |> write_on_server(sessions, codec.date_or_infinite, "date")
+            |> write_on_server(sessions, time.date_or_infinite, "date")
             |> be_ok()
             |> be_some()
             |> be_equal("-infinity")
@@ -1340,7 +1340,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("-infinity")
             |> should
-            |> read_on_server(sessions, codec.date_or_infinite, "date")
+            |> read_on_server(sessions, time.date_or_infinite, "date")
             |> be_ok()
             |> be_equal(NegativeInfinity)
             |> or_fail_with(
@@ -1351,7 +1351,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             TimeOfDay(13, 45, 30, 123_456_000)
             |> should
-            |> write_on_server(sessions, codec.time, "time")
+            |> write_on_server(sessions, time.time, "time")
             |> be_ok()
             |> be_some()
             |> be_equal("13:45:30.123456")
@@ -1361,7 +1361,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("13:45:30.123456")
             |> should
-            |> read_on_server(sessions, codec.time, "time")
+            |> read_on_server(sessions, time.time, "time")
             |> be_ok()
             |> be_equal(TimeOfDay(13, 45, 30, 123_456_000))
             |> or_fail_with(
@@ -1372,7 +1372,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             TimeOfDay(0, 0, 0, 0)
             |> should
-            |> write_on_server(sessions, codec.time, "time")
+            |> write_on_server(sessions, time.time, "time")
             |> be_ok()
             |> be_some()
             |> be_equal("00:00:00")
@@ -1382,7 +1382,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("00:00:00")
             |> should
-            |> read_on_server(sessions, codec.time, "time")
+            |> read_on_server(sessions, time.time, "time")
             |> be_ok()
             |> be_equal(TimeOfDay(0, 0, 0, 0))
             |> or_fail_with(
@@ -1393,7 +1393,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             TimeOfDay(23, 59, 59, 999_999_000)
             |> should
-            |> write_on_server(sessions, codec.time, "time")
+            |> write_on_server(sessions, time.time, "time")
             |> be_ok()
             |> be_some()
             |> be_equal("23:59:59.999999")
@@ -1403,7 +1403,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("23:59:59.999999")
             |> should
-            |> read_on_server(sessions, codec.time, "time")
+            |> read_on_server(sessions, time.time, "time")
             |> be_ok()
             |> be_equal(TimeOfDay(23, 59, 59, 999_999_000))
             |> or_fail_with(
@@ -1414,7 +1414,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             TimeOfDay(24, 0, 0, 0)
             |> should
-            |> write_on_server(sessions, codec.time, "time")
+            |> write_on_server(sessions, time.time, "time")
             |> be_ok()
             |> be_some()
             |> be_equal("24:00:00")
@@ -1424,7 +1424,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("24:00:00")
             |> should
-            |> read_on_server(sessions, codec.time, "time")
+            |> read_on_server(sessions, time.time, "time")
             |> be_ok()
             |> be_equal(TimeOfDay(24, 0, 0, 0))
             |> or_fail_with(
@@ -1435,7 +1435,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             TimeWithOffset(TimeOfDay(13, 45, 30, 0), 7200)
             |> should
-            |> write_on_server(sessions, codec.time_with_offset, "timetz")
+            |> write_on_server(sessions, time.time_with_offset, "timetz")
             |> be_ok()
             |> be_some()
             |> be_equal("13:45:30+02")
@@ -1445,7 +1445,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("13:45:30+02")
             |> should
-            |> read_on_server(sessions, codec.time_with_offset, "timetz")
+            |> read_on_server(sessions, time.time_with_offset, "timetz")
             |> be_ok()
             |> be_equal(TimeWithOffset(TimeOfDay(13, 45, 30, 0), 7200))
             |> or_fail_with(
@@ -1456,7 +1456,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             TimeWithOffset(TimeOfDay(1, 2, 3, 4000), -19_800)
             |> should
-            |> write_on_server(sessions, codec.time_with_offset, "timetz")
+            |> write_on_server(sessions, time.time_with_offset, "timetz")
             |> be_ok()
             |> be_some()
             |> be_equal("01:02:03.000004-05:30")
@@ -1468,7 +1468,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("01:02:03.000004-05:30")
             |> should
-            |> read_on_server(sessions, codec.time_with_offset, "timetz")
+            |> read_on_server(sessions, time.time_with_offset, "timetz")
             |> be_ok()
             |> be_equal(TimeWithOffset(TimeOfDay(1, 2, 3, 4000), -19_800))
             |> or_fail_with(
@@ -1483,7 +1483,7 @@ pub fn tests() -> TestSuite {
               offset: duration.seconds(0),
             )
             |> should
-            |> write_on_server(sessions, codec.timestamp, "timestamp")
+            |> write_on_server(sessions, time.timestamp, "timestamp")
             |> be_ok()
             |> be_some()
             |> be_equal("2024-02-29 13:45:30.123456")
@@ -1495,7 +1495,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("2024-02-29 13:45:30.123456")
             |> should
-            |> read_on_server(sessions, codec.timestamp, "timestamp")
+            |> read_on_server(sessions, time.timestamp, "timestamp")
             |> be_ok()
             |> be_equal(timestamp.from_calendar(
               date: Date(2024, February, 29),
@@ -1514,7 +1514,7 @@ pub fn tests() -> TestSuite {
               offset: duration.seconds(0),
             )
             |> should
-            |> write_on_server(sessions, codec.timestamp, "timestamp")
+            |> write_on_server(sessions, time.timestamp, "timestamp")
             |> be_ok()
             |> be_some()
             |> be_equal("1970-01-01 00:00:00")
@@ -1526,7 +1526,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("1970-01-01 00:00:00")
             |> should
-            |> read_on_server(sessions, codec.timestamp, "timestamp")
+            |> read_on_server(sessions, time.timestamp, "timestamp")
             |> be_ok()
             |> be_equal(timestamp.from_calendar(
               date: Date(1970, January, 1),
@@ -1545,7 +1545,7 @@ pub fn tests() -> TestSuite {
               offset: duration.seconds(0),
             )
             |> should
-            |> write_on_server(sessions, codec.timestamp, "timestamp")
+            |> write_on_server(sessions, time.timestamp, "timestamp")
             |> be_ok()
             |> be_some()
             |> be_equal("1900-01-01 00:00:00.000001")
@@ -1557,7 +1557,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("1900-01-01 00:00:00.000001")
             |> should
-            |> read_on_server(sessions, codec.timestamp, "timestamp")
+            |> read_on_server(sessions, time.timestamp, "timestamp")
             |> be_ok()
             |> be_equal(timestamp.from_calendar(
               date: Date(1900, January, 1),
@@ -1574,7 +1574,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.timestamp_or_infinite,
+              time.timestamp_or_infinite,
               "timestamp",
             )
             |> be_ok()
@@ -1586,11 +1586,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("infinity")
             |> should
-            |> read_on_server(
-              sessions,
-              codec.timestamp_or_infinite,
-              "timestamp",
-            )
+            |> read_on_server(sessions, time.timestamp_or_infinite, "timestamp")
             |> be_ok()
             |> be_equal(PositiveInfinity)
             |> or_fail_with(
@@ -1603,7 +1599,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.timestamp_or_infinite,
+              time.timestamp_or_infinite,
               "timestamp",
             )
             |> be_ok()
@@ -1615,11 +1611,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("-infinity")
             |> should
-            |> read_on_server(
-              sessions,
-              codec.timestamp_or_infinite,
-              "timestamp",
-            )
+            |> read_on_server(sessions, time.timestamp_or_infinite, "timestamp")
             |> be_ok()
             |> be_equal(NegativeInfinity)
             |> or_fail_with(
@@ -1636,7 +1628,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.timestamp_with_time_zone,
+              time.timestamp_with_time_zone,
               "timestamptz",
             )
             |> be_ok()
@@ -1652,7 +1644,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.timestamp_with_time_zone,
+              time.timestamp_with_time_zone,
               "timestamptz",
             )
             |> be_ok()
@@ -1671,7 +1663,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.timestamp_with_time_zone_or_infinite,
+              time.timestamp_with_time_zone_or_infinite,
               "timestamptz",
             )
             |> be_ok()
@@ -1685,7 +1677,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.timestamp_with_time_zone_or_infinite,
+              time.timestamp_with_time_zone_or_infinite,
               "timestamptz",
             )
             |> be_ok()
@@ -1700,7 +1692,7 @@ pub fn tests() -> TestSuite {
               // Act and assert
               Interval(14, 3, 3_723_000_004)
               |> should
-              |> write_on_server(sessions, codec.interval, "interval")
+              |> write_on_server(sessions, time.interval, "interval")
               |> be_ok()
               |> be_some()
               |> be_equal("1 year 2 mons 3 days 01:02:03.000004")
@@ -1715,7 +1707,7 @@ pub fn tests() -> TestSuite {
               // Act and assert
               Some("1 year 2 mons 3 days 01:02:03.000004")
               |> should
-              |> read_on_server(sessions, codec.interval, "interval")
+              |> read_on_server(sessions, time.interval, "interval")
               |> be_ok()
               |> be_equal(Interval(14, 3, 3_723_000_004))
               |> or_fail_with(
@@ -1727,7 +1719,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Interval(-1, -2, -3_000_000)
             |> should
-            |> write_on_server(sessions, codec.interval, "interval")
+            |> write_on_server(sessions, time.interval, "interval")
             |> be_ok()
             |> be_some()
             |> be_equal("-1 mons -2 days -00:00:03")
@@ -1739,7 +1731,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("-1 mons -2 days -00:00:03")
             |> should
-            |> read_on_server(sessions, codec.interval, "interval")
+            |> read_on_server(sessions, time.interval, "interval")
             |> be_ok()
             |> be_equal(Interval(-1, -2, -3_000_000))
             |> or_fail_with(
@@ -1750,7 +1742,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Interval(0, 0, 0)
             |> should
-            |> write_on_server(sessions, codec.interval, "interval")
+            |> write_on_server(sessions, time.interval, "interval")
             |> be_ok()
             |> be_some()
             |> be_equal("00:00:00")
@@ -1760,7 +1752,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("00:00:00")
             |> should
-            |> read_on_server(sessions, codec.interval, "interval")
+            |> read_on_server(sessions, time.interval, "interval")
             |> be_ok()
             |> be_equal(Interval(0, 0, 0))
             |> or_fail_with(
@@ -1775,7 +1767,7 @@ pub fn tests() -> TestSuite {
               |> should
               |> write_on_server(
                 sessions,
-                codec.interval_or_infinite,
+                time.interval_or_infinite,
                 "interval",
               )
               |> be_ok()
@@ -1792,11 +1784,7 @@ pub fn tests() -> TestSuite {
               // Act and assert
               Some("1 year 2 mons 3 days 01:02:03.000004")
               |> should
-              |> read_on_server(
-                sessions,
-                codec.interval_or_infinite,
-                "interval",
-              )
+              |> read_on_server(sessions, time.interval_or_infinite, "interval")
               |> be_ok()
               |> be_equal(Finite(Interval(14, 3, 3_723_000_004)))
               |> or_fail_with(
@@ -1809,7 +1797,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             IpNetwork(Ipv4(192, 168, 0, 1), 32)
             |> should
-            |> write_on_server(sessions, codec.ip_network, "inet")
+            |> write_on_server(sessions, network.ip_network, "inet")
             |> be_ok()
             |> be_some()
             |> be_equal("192.168.0.1/32")
@@ -1819,7 +1807,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("192.168.0.1/32")
             |> should
-            |> read_on_server(sessions, codec.ip_network, "inet")
+            |> read_on_server(sessions, network.ip_network, "inet")
             |> be_ok()
             |> be_equal(IpNetwork(Ipv4(192, 168, 0, 1), 32))
             |> or_fail_with(
@@ -1830,7 +1818,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             IpNetwork(Ipv4(10, 1, 2, 3), 8)
             |> should
-            |> write_on_server(sessions, codec.ip_network, "inet")
+            |> write_on_server(sessions, network.ip_network, "inet")
             |> be_ok()
             |> be_some()
             |> be_equal("10.1.2.3/8")
@@ -1840,7 +1828,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("10.1.2.3/8")
             |> should
-            |> read_on_server(sessions, codec.ip_network, "inet")
+            |> read_on_server(sessions, network.ip_network, "inet")
             |> be_ok()
             |> be_equal(IpNetwork(Ipv4(10, 1, 2, 3), 8))
             |> or_fail_with(
@@ -1851,7 +1839,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             IpNetwork(Ipv6(0, 0, 0, 0, 0, 0, 0, 1), 128)
             |> should
-            |> write_on_server(sessions, codec.ip_network, "inet")
+            |> write_on_server(sessions, network.ip_network, "inet")
             |> be_ok()
             |> be_some()
             |> be_equal("::1/128")
@@ -1861,7 +1849,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("::1/128")
             |> should
-            |> read_on_server(sessions, codec.ip_network, "inet")
+            |> read_on_server(sessions, network.ip_network, "inet")
             |> be_ok()
             |> be_equal(IpNetwork(Ipv6(0, 0, 0, 0, 0, 0, 0, 1), 128))
             |> or_fail_with(
@@ -1872,7 +1860,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             IpNetwork(Ipv6(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 64)
             |> should
-            |> write_on_server(sessions, codec.ip_network, "inet")
+            |> write_on_server(sessions, network.ip_network, "inet")
             |> be_ok()
             |> be_some()
             |> be_equal("2001:db8::1/64")
@@ -1882,7 +1870,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("2001:db8::1/64")
             |> should
-            |> read_on_server(sessions, codec.ip_network, "inet")
+            |> read_on_server(sessions, network.ip_network, "inet")
             |> be_ok()
             |> be_equal(IpNetwork(Ipv6(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 64))
             |> or_fail_with(
@@ -1893,7 +1881,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             IpNetwork(Ipv4(10, 0, 0, 0), 8)
             |> should
-            |> write_on_server(sessions, codec.ip_network, "cidr")
+            |> write_on_server(sessions, network.ip_network, "cidr")
             |> be_ok()
             |> be_some()
             |> be_equal("10.0.0.0/8")
@@ -1903,7 +1891,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("10.0.0.0/8")
             |> should
-            |> read_on_server(sessions, codec.ip_network, "cidr")
+            |> read_on_server(sessions, network.ip_network, "cidr")
             |> be_ok()
             |> be_equal(IpNetwork(Ipv4(10, 0, 0, 0), 8))
             |> or_fail_with(
@@ -1914,7 +1902,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             IpNetwork(Ipv4(192, 168, 0, 1), 32)
             |> should
-            |> write_on_server(sessions, codec.ip_network, "cidr")
+            |> write_on_server(sessions, network.ip_network, "cidr")
             |> be_ok()
             |> be_some()
             |> be_equal("192.168.0.1/32")
@@ -1924,7 +1912,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("192.168.0.1/32")
             |> should
-            |> read_on_server(sessions, codec.ip_network, "cidr")
+            |> read_on_server(sessions, network.ip_network, "cidr")
             |> be_ok()
             |> be_equal(IpNetwork(Ipv4(192, 168, 0, 1), 32))
             |> or_fail_with(
@@ -1935,7 +1923,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             IpNetwork(Ipv6(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32)
             |> should
-            |> write_on_server(sessions, codec.ip_network, "cidr")
+            |> write_on_server(sessions, network.ip_network, "cidr")
             |> be_ok()
             |> be_some()
             |> be_equal("2001:db8::/32")
@@ -1945,7 +1933,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("2001:db8::/32")
             |> should
-            |> read_on_server(sessions, codec.ip_network, "cidr")
+            |> read_on_server(sessions, network.ip_network, "cidr")
             |> be_ok()
             |> be_equal(IpNetwork(Ipv6(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32))
             |> or_fail_with(
@@ -1957,7 +1945,7 @@ pub fn tests() -> TestSuite {
             network.mac_address_from_string("08:00:2b:01:02:03")
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.mac_address, "macaddr")
+            |> write_on_server(sessions, network.mac_address, "macaddr")
             |> be_ok()
             |> be_some()
             |> be_equal("08:00:2b:01:02:03")
@@ -1969,7 +1957,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("08:00:2b:01:02:03")
             |> should
-            |> read_on_server(sessions, codec.mac_address, "macaddr")
+            |> read_on_server(sessions, network.mac_address, "macaddr")
             |> be_ok()
             |> have_mac_address_text()
             |> be_equal("08:00:2b:01:02:03")
@@ -1982,7 +1970,7 @@ pub fn tests() -> TestSuite {
             network.mac_address_from_string("08:00:2b:01:02:03:04:05")
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.mac_address, "macaddr8")
+            |> write_on_server(sessions, network.mac_address, "macaddr8")
             |> be_ok()
             |> be_some()
             |> be_equal("08:00:2b:01:02:03:04:05")
@@ -1994,7 +1982,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("08:00:2b:01:02:03:04:05")
             |> should
-            |> read_on_server(sessions, codec.mac_address, "macaddr8")
+            |> read_on_server(sessions, network.mac_address, "macaddr8")
             |> be_ok()
             |> have_mac_address_text()
             |> be_equal("08:00:2b:01:02:03:04:05")
@@ -2090,7 +2078,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Tid(0, 1)
             |> should
-            |> write_on_server(sessions, codec.tid, "tid")
+            |> write_on_server(sessions, tid.tid, "tid")
             |> be_ok()
             |> be_some()
             |> be_equal("(0,1)")
@@ -2100,7 +2088,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("(0,1)")
             |> should
-            |> read_on_server(sessions, codec.tid, "tid")
+            |> read_on_server(sessions, tid.tid, "tid")
             |> be_ok()
             |> be_equal(Tid(0, 1))
             |> or_fail_with("Expected the tid (0,1) to read as its Gleam value")
@@ -2109,7 +2097,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Tid(4_294_967_295, 65_535)
             |> should
-            |> write_on_server(sessions, codec.tid, "tid")
+            |> write_on_server(sessions, tid.tid, "tid")
             |> be_ok()
             |> be_some()
             |> be_equal("(4294967295,65535)")
@@ -2121,7 +2109,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("(4294967295,65535)")
             |> should
-            |> read_on_server(sessions, codec.tid, "tid")
+            |> read_on_server(sessions, tid.tid, "tid")
             |> be_ok()
             |> be_equal(Tid(4_294_967_295, 65_535))
             |> or_fail_with(
@@ -2133,7 +2121,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Point(1.5, -2.0)
             |> should
-            |> write_on_server(sessions, codec.point, "point")
+            |> write_on_server(sessions, geometry.point, "point")
             |> be_ok()
             |> be_some()
             |> be_equal("(1.5,-2)")
@@ -2143,7 +2131,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("(1.5,-2)")
             |> should
-            |> read_on_server(sessions, codec.point, "point")
+            |> read_on_server(sessions, geometry.point, "point")
             |> be_ok()
             |> be_equal(Point(1.5, -2.0))
             |> or_fail_with(
@@ -2154,7 +2142,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Line(1.0, -1.0, 0.0)
             |> should
-            |> write_on_server(sessions, codec.line, "line")
+            |> write_on_server(sessions, geometry.line, "line")
             |> be_ok()
             |> be_some()
             |> be_equal("{1,-1,0}")
@@ -2164,7 +2152,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("{1,-1,0}")
             |> should
-            |> read_on_server(sessions, codec.line, "line")
+            |> read_on_server(sessions, geometry.line, "line")
             |> be_ok()
             |> be_equal(Line(1.0, -1.0, 0.0))
             |> or_fail_with(
@@ -2175,7 +2163,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             LineSegment(Point(0.0, 0.0), Point(1.0, 1.0))
             |> should
-            |> write_on_server(sessions, codec.line_segment, "lseg")
+            |> write_on_server(sessions, geometry.line_segment, "lseg")
             |> be_ok()
             |> be_some()
             |> be_equal("[(0,0),(1,1)]")
@@ -2185,7 +2173,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[(0,0),(1,1)]")
             |> should
-            |> read_on_server(sessions, codec.line_segment, "lseg")
+            |> read_on_server(sessions, geometry.line_segment, "lseg")
             |> be_ok()
             |> be_equal(LineSegment(Point(0.0, 0.0), Point(1.0, 1.0)))
             |> or_fail_with(
@@ -2196,7 +2184,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Box(Point(2.0, 3.0), Point(0.0, 1.0))
             |> should
-            |> write_on_server(sessions, codec.box, "box")
+            |> write_on_server(sessions, geometry.box, "box")
             |> be_ok()
             |> be_some()
             |> be_equal("(2,3),(0,1)")
@@ -2206,7 +2194,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("(2,3),(0,1)")
             |> should
-            |> read_on_server(sessions, codec.box, "box")
+            |> read_on_server(sessions, geometry.box, "box")
             |> be_ok()
             |> be_equal(Box(Point(2.0, 3.0), Point(0.0, 1.0)))
             |> or_fail_with(
@@ -2217,7 +2205,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Box(Point(0.0, 1.0), Point(2.0, 3.0))
             |> should
-            |> write_on_server(sessions, codec.box, "box")
+            |> write_on_server(sessions, geometry.box, "box")
             |> be_ok()
             |> be_some()
             |> be_equal("(2,3),(0,1)")
@@ -2227,7 +2215,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("(2,3),(0,1)")
             |> should
-            |> read_on_server(sessions, codec.box, "box")
+            |> read_on_server(sessions, geometry.box, "box")
             |> be_ok()
             |> be_equal(Box(Point(2.0, 3.0), Point(0.0, 1.0)))
             |> or_fail_with(
@@ -2238,7 +2226,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Path(True, [Point(0.0, 0.0), Point(1.0, 1.0), Point(2.0, 0.0)])
             |> should
-            |> write_on_server(sessions, codec.path, "path")
+            |> write_on_server(sessions, geometry.path, "path")
             |> be_ok()
             |> be_some()
             |> be_equal("[(0,0),(1,1),(2,0)]")
@@ -2250,7 +2238,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[(0,0),(1,1),(2,0)]")
             |> should
-            |> read_on_server(sessions, codec.path, "path")
+            |> read_on_server(sessions, geometry.path, "path")
             |> be_ok()
             |> be_equal(
               Path(True, [Point(0.0, 0.0), Point(1.0, 1.0), Point(2.0, 0.0)]),
@@ -2263,7 +2251,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Path(False, [Point(0.0, 0.0), Point(1.0, 1.0), Point(2.0, 0.0)])
             |> should
-            |> write_on_server(sessions, codec.path, "path")
+            |> write_on_server(sessions, geometry.path, "path")
             |> be_ok()
             |> be_some()
             |> be_equal("((0,0),(1,1),(2,0))")
@@ -2275,7 +2263,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("((0,0),(1,1),(2,0))")
             |> should
-            |> read_on_server(sessions, codec.path, "path")
+            |> read_on_server(sessions, geometry.path, "path")
             |> be_ok()
             |> be_equal(
               Path(False, [Point(0.0, 0.0), Point(1.0, 1.0), Point(2.0, 0.0)]),
@@ -2288,7 +2276,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Polygon([Point(0.0, 0.0), Point(1.0, 1.0), Point(1.0, 0.0)])
             |> should
-            |> write_on_server(sessions, codec.polygon, "polygon")
+            |> write_on_server(sessions, geometry.polygon, "polygon")
             |> be_ok()
             |> be_some()
             |> be_equal("((0,0),(1,1),(1,0))")
@@ -2300,7 +2288,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("((0,0),(1,1),(1,0))")
             |> should
-            |> read_on_server(sessions, codec.polygon, "polygon")
+            |> read_on_server(sessions, geometry.polygon, "polygon")
             |> be_ok()
             |> be_equal(
               Polygon([Point(0.0, 0.0), Point(1.0, 1.0), Point(1.0, 0.0)]),
@@ -2313,7 +2301,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Circle(Point(0.5, 0.0), 1.5)
             |> should
-            |> write_on_server(sessions, codec.circle, "circle")
+            |> write_on_server(sessions, geometry.circle, "circle")
             |> be_ok()
             |> be_some()
             |> be_equal("<(0.5,0),1.5>")
@@ -2323,7 +2311,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("<(0.5,0),1.5>")
             |> should
-            |> read_on_server(sessions, codec.circle, "circle")
+            |> read_on_server(sessions, geometry.circle, "circle")
             |> be_ok()
             |> be_equal(Circle(Point(0.5, 0.0), 1.5))
             |> or_fail_with(
@@ -2335,7 +2323,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             range.Range(Inclusive(1), Exclusive(10))
             |> should
-            |> write_on_server(sessions, codec.range(codec.int), "int4range")
+            |> write_on_server(sessions, range.range(codec.int), "int4range")
             |> be_ok()
             |> be_some()
             |> be_equal("[1,10)")
@@ -2345,7 +2333,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[1,10)")
             |> should
-            |> read_on_server(sessions, codec.range(codec.int), "int4range")
+            |> read_on_server(sessions, range.range(codec.int), "int4range")
             |> be_ok()
             |> be_equal(range.Range(Inclusive(1), Exclusive(10)))
             |> or_fail_with(
@@ -2356,7 +2344,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             range.Range(Exclusive(0), Inclusive(5))
             |> should
-            |> write_on_server(sessions, codec.range(codec.int), "int4range")
+            |> write_on_server(sessions, range.range(codec.int), "int4range")
             |> be_ok()
             |> be_some()
             |> be_equal("[1,6)")
@@ -2366,7 +2354,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[1,6)")
             |> should
-            |> read_on_server(sessions, codec.range(codec.int), "int4range")
+            |> read_on_server(sessions, range.range(codec.int), "int4range")
             |> be_ok()
             |> be_equal(range.Range(Inclusive(1), Exclusive(6)))
             |> or_fail_with(
@@ -2377,7 +2365,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             range.Range(Unbounded, Exclusive(5))
             |> should
-            |> write_on_server(sessions, codec.range(codec.int), "int4range")
+            |> write_on_server(sessions, range.range(codec.int), "int4range")
             |> be_ok()
             |> be_some()
             |> be_equal("(,5)")
@@ -2387,7 +2375,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("(,5)")
             |> should
-            |> read_on_server(sessions, codec.range(codec.int), "int4range")
+            |> read_on_server(sessions, range.range(codec.int), "int4range")
             |> be_ok()
             |> be_equal(range.Range(Unbounded, Exclusive(5)))
             |> or_fail_with(
@@ -2398,7 +2386,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             range.Range(Inclusive(-3), Unbounded)
             |> should
-            |> write_on_server(sessions, codec.range(codec.int), "int8range")
+            |> write_on_server(sessions, range.range(codec.int), "int8range")
             |> be_ok()
             |> be_some()
             |> be_equal("[-3,)")
@@ -2408,7 +2396,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[-3,)")
             |> should
-            |> read_on_server(sessions, codec.range(codec.int), "int8range")
+            |> read_on_server(sessions, range.range(codec.int), "int8range")
             |> be_ok()
             |> be_equal(range.Range(Inclusive(-3), Unbounded))
             |> or_fail_with(
@@ -2419,7 +2407,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             EmptyRange
             |> should
-            |> write_on_server(sessions, codec.range(codec.int), "int4range")
+            |> write_on_server(sessions, range.range(codec.int), "int4range")
             |> be_ok()
             |> be_some()
             |> be_equal("empty")
@@ -2429,7 +2417,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("empty")
             |> should
-            |> read_on_server(sessions, codec.range(codec.int), "int4range")
+            |> read_on_server(sessions, range.range(codec.int), "int4range")
             |> be_ok()
             |> be_equal(EmptyRange)
             |> or_fail_with(
@@ -2440,7 +2428,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             range.Range(Inclusive("1.5"), Inclusive("2.50"))
             |> should
-            |> write_on_server(sessions, codec.range(codec.numeric), "numrange")
+            |> write_on_server(sessions, range.range(codec.numeric), "numrange")
             |> be_ok()
             |> be_some()
             |> be_equal("[1.5,2.50]")
@@ -2450,7 +2438,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[1.5,2.50]")
             |> should
-            |> read_on_server(sessions, codec.range(codec.numeric), "numrange")
+            |> read_on_server(sessions, range.range(codec.numeric), "numrange")
             |> be_ok()
             |> be_equal(range.Range(Inclusive("1.5"), Inclusive("2.50")))
             |> or_fail_with(
@@ -2476,7 +2464,7 @@ pub fn tests() -> TestSuite {
               |> should
               |> write_on_server(
                 sessions,
-                codec.range(codec.timestamp),
+                range.range(time.timestamp),
                 "tsrange",
               )
               |> be_ok()
@@ -2495,7 +2483,7 @@ pub fn tests() -> TestSuite {
               |> should
               |> read_on_server(
                 sessions,
-                codec.range(codec.timestamp),
+                range.range(time.timestamp),
                 "tsrange",
               )
               |> be_ok()
@@ -2529,7 +2517,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.range(codec.timestamp_with_time_zone),
+              range.range(time.timestamp_with_time_zone),
               "tstzrange",
             )
             |> be_ok()
@@ -2545,7 +2533,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.range(codec.timestamp_with_time_zone),
+              range.range(time.timestamp_with_time_zone),
               "tstzrange",
             )
             |> be_ok()
@@ -2568,7 +2556,7 @@ pub fn tests() -> TestSuite {
               Exclusive(Date(2024, February, 1)),
             )
             |> should
-            |> write_on_server(sessions, codec.range(codec.date), "daterange")
+            |> write_on_server(sessions, range.range(time.date), "daterange")
             |> be_ok()
             |> be_some()
             |> be_equal("[2024-01-01,2024-02-01)")
@@ -2580,7 +2568,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[2024-01-01,2024-02-01)")
             |> should
-            |> read_on_server(sessions, codec.range(codec.date), "daterange")
+            |> read_on_server(sessions, range.range(time.date), "daterange")
             |> be_ok()
             |> be_equal(range.Range(
               Inclusive(Date(2024, January, 1)),
@@ -2599,7 +2587,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.multirange(codec.int),
+              range.multirange(codec.int),
               "int4multirange",
             )
             |> be_ok()
@@ -2615,7 +2603,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.multirange(codec.int),
+              range.multirange(codec.int),
               "int4multirange",
             )
             |> be_ok()
@@ -2636,7 +2624,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.multirange(codec.int),
+              range.multirange(codec.int),
               "int4multirange",
             )
             |> be_ok()
@@ -2652,7 +2640,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.multirange(codec.int),
+              range.multirange(codec.int),
               "int4multirange",
             )
             |> be_ok()
@@ -2667,7 +2655,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.multirange(codec.int),
+              range.multirange(codec.int),
               "int4multirange",
             )
             |> be_ok()
@@ -2681,7 +2669,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.multirange(codec.int),
+              range.multirange(codec.int),
               "int4multirange",
             )
             |> be_ok()
@@ -2701,7 +2689,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.multirange(codec.date),
+              range.multirange(time.date),
               "datemultirange",
             )
             |> be_ok()
@@ -2717,7 +2705,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.multirange(codec.date),
+              range.multirange(time.date),
               "datemultirange",
             )
             |> be_ok()
@@ -2740,7 +2728,11 @@ pub fn tests() -> TestSuite {
               Lexeme("fat", [#(2, WeightD), #(3, WeightD)]),
             ]
             |> should
-            |> write_on_server(sessions, codec.text_search_vector, "tsvector")
+            |> write_on_server(
+              sessions,
+              text_search.text_search_vector,
+              "tsvector",
+            )
             |> be_ok()
             |> be_some()
             |> be_equal("'a':1A 'cat' 'fat':2,3")
@@ -2752,7 +2744,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("'a':1A 'cat' 'fat':2,3")
             |> should
-            |> read_on_server(sessions, codec.text_search_vector, "tsvector")
+            |> read_on_server(
+              sessions,
+              text_search.text_search_vector,
+              "tsvector",
+            )
             |> be_ok()
             |> be_equal([
               Lexeme("a", [#(1, WeightA)]),
@@ -2767,7 +2763,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             [Lexeme("it's", [#(16_383, WeightB)])]
             |> should
-            |> write_on_server(sessions, codec.text_search_vector, "tsvector")
+            |> write_on_server(
+              sessions,
+              text_search.text_search_vector,
+              "tsvector",
+            )
             |> be_ok()
             |> be_some()
             |> be_equal("'it''s':16383B")
@@ -2779,7 +2779,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("'it''s':16383B")
             |> should
-            |> read_on_server(sessions, codec.text_search_vector, "tsvector")
+            |> read_on_server(
+              sessions,
+              text_search.text_search_vector,
+              "tsvector",
+            )
             |> be_ok()
             |> be_equal([Lexeme("it's", [#(16_383, WeightB)])])
             |> or_fail_with(
@@ -2790,7 +2794,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             []
             |> should
-            |> write_on_server(sessions, codec.text_search_vector, "tsvector")
+            |> write_on_server(
+              sessions,
+              text_search.text_search_vector,
+              "tsvector",
+            )
             |> be_ok()
             |> be_some()
             |> be_equal("")
@@ -2800,7 +2808,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("")
             |> should
-            |> read_on_server(sessions, codec.text_search_vector, "tsvector")
+            |> read_on_server(
+              sessions,
+              text_search.text_search_vector,
+              "tsvector",
+            )
             |> be_ok()
             |> be_equal([])
             |> or_fail_with(
@@ -2814,7 +2826,11 @@ pub fn tests() -> TestSuite {
               Or(Term("rat", [], False), Term("cat", [], False)),
             )
             |> should
-            |> write_on_server(sessions, codec.text_search_query, "tsquery")
+            |> write_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_some()
             |> be_equal("'fat' & ( 'rat' | 'cat' )")
@@ -2826,7 +2842,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("'fat' & ( 'rat' | 'cat' )")
             |> should
-            |> read_on_server(sessions, codec.text_search_query, "tsquery")
+            |> read_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_equal(And(
               Term("fat", [], False),
@@ -2840,7 +2860,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Term("sup", [WeightA, WeightB], True)
             |> should
-            |> write_on_server(sessions, codec.text_search_query, "tsquery")
+            |> write_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_some()
             |> be_equal("'sup':*AB")
@@ -2850,7 +2874,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("'sup':*AB")
             |> should
-            |> read_on_server(sessions, codec.text_search_query, "tsquery")
+            |> read_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_equal(Term("sup", [WeightA, WeightB], True))
             |> or_fail_with(
@@ -2861,7 +2889,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Not(Term("a", [], False))
             |> should
-            |> write_on_server(sessions, codec.text_search_query, "tsquery")
+            |> write_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_some()
             |> be_equal("!'a'")
@@ -2871,7 +2903,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("!'a'")
             |> should
-            |> read_on_server(sessions, codec.text_search_query, "tsquery")
+            |> read_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_equal(Not(Term("a", [], False)))
             |> or_fail_with(
@@ -2882,7 +2918,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Phrase(1, Term("a", [], False), Term("b", [], False))
             |> should
-            |> write_on_server(sessions, codec.text_search_query, "tsquery")
+            |> write_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_some()
             |> be_equal("'a' <-> 'b'")
@@ -2892,7 +2932,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("'a' <-> 'b'")
             |> should
-            |> read_on_server(sessions, codec.text_search_query, "tsquery")
+            |> read_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_equal(Phrase(1, Term("a", [], False), Term("b", [], False)))
             |> or_fail_with(
@@ -2903,7 +2947,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Phrase(3, Term("a", [], False), Term("b", [], False))
             |> should
-            |> write_on_server(sessions, codec.text_search_query, "tsquery")
+            |> write_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_some()
             |> be_equal("'a' <3> 'b'")
@@ -2913,7 +2961,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("'a' <3> 'b'")
             |> should
-            |> read_on_server(sessions, codec.text_search_query, "tsquery")
+            |> read_on_server(
+              sessions,
+              text_search.text_search_query,
+              "tsquery",
+            )
             |> be_ok()
             |> be_equal(Phrase(3, Term("a", [], False), Term("b", [], False)))
             |> or_fail_with(
@@ -2925,7 +2977,7 @@ pub fn tests() -> TestSuite {
             vector.vector_from_list([1.0, 2.5, -3.0])
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.vector, "vector")
+            |> write_on_server(sessions, vector.vector, "vector")
             |> be_ok()
             |> be_some()
             |> be_equal("[1,2.5,-3]")
@@ -2935,7 +2987,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[1,2.5,-3]")
             |> should
-            |> read_on_server(sessions, codec.vector, "vector")
+            |> read_on_server(sessions, vector.vector, "vector")
             |> be_ok()
             |> have_vector_floats()
             |> be_equal([1.0, 2.5, -3.0])
@@ -2948,7 +3000,7 @@ pub fn tests() -> TestSuite {
             vector.vector_from_list([0.1])
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.vector, "vector")
+            |> write_on_server(sessions, vector.vector, "vector")
             |> be_ok()
             |> be_some()
             |> be_equal("[0.1]")
@@ -2958,7 +3010,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[0.1]")
             |> should
-            |> read_on_server(sessions, codec.vector, "vector")
+            |> read_on_server(sessions, vector.vector, "vector")
             |> be_ok()
             |> have_vector_floats()
             |> be_equal([0.10000000149011612])
@@ -2971,7 +3023,7 @@ pub fn tests() -> TestSuite {
             vector.half_vector_from_list([1.0, 2.5, -3.0])
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.half_vector, "halfvec")
+            |> write_on_server(sessions, vector.half_vector, "halfvec")
             |> be_ok()
             |> be_some()
             |> be_equal("[1,2.5,-3]")
@@ -2981,7 +3033,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[1,2.5,-3]")
             |> should
-            |> read_on_server(sessions, codec.half_vector, "halfvec")
+            |> read_on_server(sessions, vector.half_vector, "halfvec")
             |> be_ok()
             |> have_half_vector_floats()
             |> be_equal([1.0, 2.5, -3.0])
@@ -2994,7 +3046,7 @@ pub fn tests() -> TestSuite {
             vector.half_vector_from_list([65_504.0])
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.half_vector, "halfvec")
+            |> write_on_server(sessions, vector.half_vector, "halfvec")
             |> be_ok()
             |> be_some()
             |> be_equal("[65504]")
@@ -3004,7 +3056,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[65504]")
             |> should
-            |> read_on_server(sessions, codec.half_vector, "halfvec")
+            |> read_on_server(sessions, vector.half_vector, "halfvec")
             |> be_ok()
             |> have_half_vector_floats()
             |> be_equal([65_504.0])
@@ -3020,7 +3072,7 @@ pub fn tests() -> TestSuite {
             )
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.sparse_vector, "sparsevec")
+            |> write_on_server(sessions, vector.sparse_vector, "sparsevec")
             |> be_ok()
             |> be_some()
             |> be_equal("{1:1.5,3:-2}/5")
@@ -3032,7 +3084,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("{1:1.5,3:-2}/5")
             |> should
-            |> read_on_server(sessions, codec.sparse_vector, "sparsevec")
+            |> read_on_server(sessions, vector.sparse_vector, "sparsevec")
             |> be_ok()
             |> have_sparse_vector_parts()
             |> be_equal(#(5, dict.from_list([#(0, 1.5), #(2, -2.0)])))
@@ -3045,7 +3097,7 @@ pub fn tests() -> TestSuite {
             vector.sparse_vector_from_dict(3, dict.from_list([]))
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.sparse_vector, "sparsevec")
+            |> write_on_server(sessions, vector.sparse_vector, "sparsevec")
             |> be_ok()
             |> be_some()
             |> be_equal("{}/3")
@@ -3055,7 +3107,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("{}/3")
             |> should
-            |> read_on_server(sessions, codec.sparse_vector, "sparsevec")
+            |> read_on_server(sessions, vector.sparse_vector, "sparsevec")
             |> be_ok()
             |> have_sparse_vector_parts()
             |> be_equal(#(3, dict.from_list([])))
@@ -3325,7 +3377,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             [Date(2024, January, 1), Date(2024, February, 29)]
             |> should
-            |> write_on_server(sessions, codec.array(codec.date), "date[]")
+            |> write_on_server(sessions, codec.array(time.date), "date[]")
             |> be_ok()
             |> be_some()
             |> be_equal("{2024-01-01,2024-02-29}")
@@ -3337,7 +3389,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("{2024-01-01,2024-02-29}")
             |> should
-            |> read_on_server(sessions, codec.array(codec.date), "date[]")
+            |> read_on_server(sessions, codec.array(time.date), "date[]")
             |> be_ok()
             |> be_equal([Date(2024, January, 1), Date(2024, February, 29)])
             |> or_fail_with(
@@ -3412,7 +3464,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.array(codec.range(codec.int)),
+              codec.array(range.range(codec.int)),
               "int4range[]",
             )
             |> be_ok()
@@ -3428,7 +3480,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.array(codec.range(codec.int)),
+              codec.array(range.range(codec.int)),
               "int4range[]",
             )
             |> be_ok()
@@ -4194,7 +4246,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             TimeWithOffset(TimeOfDay(24, 0, 0, 0), 0)
             |> should
-            |> write_on_server(sessions, codec.time_with_offset, "timetz")
+            |> write_on_server(sessions, time.time_with_offset, "timetz")
             |> be_ok()
             |> be_some()
             |> be_equal("24:00:00+00")
@@ -4204,7 +4256,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("24:00:00+00")
             |> should
-            |> read_on_server(sessions, codec.time_with_offset, "timetz")
+            |> read_on_server(sessions, time.time_with_offset, "timetz")
             |> be_ok()
             |> be_equal(TimeWithOffset(TimeOfDay(24, 0, 0, 0), 0))
             |> or_fail_with(
@@ -4217,7 +4269,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.array(codec.time_with_offset),
+              codec.array(time.time_with_offset),
               "timetz[]",
             )
             |> be_ok()
@@ -4233,7 +4285,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.array(codec.time_with_offset),
+              codec.array(time.time_with_offset),
               "timetz[]",
             )
             |> be_ok()
@@ -4246,7 +4298,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Interval(0, 0, 90_000_000_000)
             |> should
-            |> write_on_server(sessions, codec.interval, "interval")
+            |> write_on_server(sessions, time.interval, "interval")
             |> be_ok()
             |> be_some()
             |> be_equal("25:00:00")
@@ -4256,7 +4308,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("25:00:00")
             |> should
-            |> read_on_server(sessions, codec.interval, "interval")
+            |> read_on_server(sessions, time.interval, "interval")
             |> be_ok()
             |> be_equal(Interval(0, 0, 90_000_000_000))
             |> or_fail_with(
@@ -4272,7 +4324,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.multirange(codec.numeric),
+              range.multirange(codec.numeric),
               "nummultirange",
             )
             |> be_ok()
@@ -4288,7 +4340,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.multirange(codec.numeric),
+              range.multirange(codec.numeric),
               "nummultirange",
             )
             |> be_ok()
@@ -4306,7 +4358,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.array(codec.range(codec.numeric)),
+              codec.array(range.range(codec.numeric)),
               "numrange[]",
             )
             |> be_ok()
@@ -4322,7 +4374,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.array(codec.range(codec.numeric)),
+              codec.array(range.range(codec.numeric)),
               "numrange[]",
             )
             |> be_ok()
@@ -4363,7 +4415,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> write_on_server(
               sessions,
-              codec.range(codec.numeric),
+              range.range(codec.numeric),
               "pg_temp.probe_span",
             )
             |> be_ok()
@@ -4379,7 +4431,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> read_on_server(
               sessions,
-              codec.range(codec.numeric),
+              range.range(codec.numeric),
               "pg_temp.probe_span",
             )
             |> be_ok()
@@ -4395,7 +4447,7 @@ pub fn tests() -> TestSuite {
             |> be_ok()
             |> write_on_server(
               sessions,
-              codec.vector,
+              vector.vector,
               "pg_temp.probe_embedding",
             )
             |> be_ok()
@@ -4409,7 +4461,11 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("[1,2,3]")
             |> should
-            |> read_on_server(sessions, codec.vector, "pg_temp.probe_embedding")
+            |> read_on_server(
+              sessions,
+              vector.vector,
+              "pg_temp.probe_embedding",
+            )
             |> be_ok()
             |> have_vector_floats()
             |> be_equal([1.0, 2.0, 3.0])
@@ -4586,7 +4642,7 @@ pub fn tests() -> TestSuite {
             )
             |> should
             |> be_ok()
-            |> write_on_server(sessions, codec.array(codec.vector), "vector[]")
+            |> write_on_server(sessions, codec.array(vector.vector), "vector[]")
             |> be_ok()
             |> be_some()
             |> be_equal("{\"[1,2,3]\",\"[4,5,6]\"}")
@@ -4598,7 +4654,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("{\"[1,2,3]\",\"[4,5,6]\"}")
             |> should
-            |> read_on_server(sessions, codec.array(codec.vector), "vector[]")
+            |> read_on_server(sessions, codec.array(vector.vector), "vector[]")
             |> be_ok()
             |> have_each_vector_floats()
             |> be_equal([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
@@ -4618,7 +4674,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             PositiveInfinity
             |> should
-            |> write_on_server(sessions, codec.interval_or_infinite, "interval")
+            |> write_on_server(sessions, time.interval_or_infinite, "interval")
             |> be_ok()
             |> be_some()
             |> be_equal("infinity")
@@ -4628,7 +4684,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("infinity")
             |> should
-            |> read_on_server(sessions, codec.interval_or_infinite, "interval")
+            |> read_on_server(sessions, time.interval_or_infinite, "interval")
             |> be_ok()
             |> be_equal(PositiveInfinity)
             |> or_fail_with(
@@ -4639,7 +4695,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             NegativeInfinity
             |> should
-            |> write_on_server(sessions, codec.interval_or_infinite, "interval")
+            |> write_on_server(sessions, time.interval_or_infinite, "interval")
             |> be_ok()
             |> be_some()
             |> be_equal("-infinity")
@@ -4649,7 +4705,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("-infinity")
             |> should
-            |> read_on_server(sessions, codec.interval_or_infinite, "interval")
+            |> read_on_server(sessions, time.interval_or_infinite, "interval")
             |> be_ok()
             |> be_equal(NegativeInfinity)
             |> or_fail_with(
@@ -4660,7 +4716,7 @@ pub fn tests() -> TestSuite {
             // Act and assert
             Some("infinity")
             |> should
-            |> read_on_server(sessions, codec.interval, "interval")
+            |> read_on_server(sessions, time.interval, "interval")
             |> be_error()
             |> be_equal(ReadDecodeFailed(OutOfRange("infinity")))
             |> or_fail_with(

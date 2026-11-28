@@ -7,6 +7,7 @@
 //// channel `jobs` never get each other's notifications.
 
 import dream_postgres/codec
+import dream_postgres/codecs/range.{Exclusive, Inclusive, Range}
 import dream_postgres/config.{type PoolEvent, type ServerNotice, Connected}
 import dream_postgres/error
 import dream_postgres/listener.{
@@ -14,7 +15,6 @@ import dream_postgres/listener.{
 }
 import dream_postgres/pool.{with_connection}
 import dream_postgres/query.{affected, named, one, parameter, query, run_sql}
-import dream_postgres/range.{Exclusive, Inclusive, Range}
 import dream_postgres/recorder
 import dream_postgres/recording
 import dream_postgres/row.{single}

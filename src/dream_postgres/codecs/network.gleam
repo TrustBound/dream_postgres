@@ -1,33 +1,328 @@
-//// The codecs of `inet`, `cidr`, `macaddr`, `macaddr8`, `bit`, `varbit`,
-//// `tid` and the extension type `hstore`, in PostgreSQL's binary formats:
+//// The Gleam values of PostgreSQL's network types: `inet`, `cidr`,
+//// `macaddr` and `macaddr8`.
+////
+//// In PostgreSQL's binary formats:
 ////
 //// - `inet`, `cidr`: the family (2 for IPv4, 3 for IPv6), the prefix
 ////   length, 1 for `cidr` or 0, the address length, then the address.
 //// - `macaddr`, `macaddr8`: the 6 or 8 bytes.
-//// - `bit`, `varbit`: the number of bits (32 bits), then the bits, padded
-////   with zeros to whole bytes.
-//// - `tid`: the block number (32 bits), then the offset (16 bits).
-//// - `hstore`: the number of pairs (32 bits), then each key and value as a
-////   length (32 bits, -1 for a NULL value) and its bytes.
 
 import dream_postgres/codecs/codec_type.{
-  type DecodeIssue, type TypeLookup, Codec, Malformed, binary_bytes, is_base,
-  utf8_bytes, wrong_size,
+  type DecodeIssue, type TypeLookup, Codec, binary_bytes, is_base, wrong_size,
 }
 import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
-import dream_postgres/network.{
-  type IpAddress, type IpNetwork, type MacAddress, IpNetwork, Ipv4, Ipv6,
-}
-import dream_postgres/tid.{type Tid, Tid}
 import gleam/bit_array
-import gleam/dict.{type Dict}
 import gleam/int
 import gleam/list
-import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 
-// --- inet and cidr ------------------------------------------------------------
+/// An IP address. Each part of `Ipv4` is from 0 to 255, and each part of
+/// `Ipv6` is from 0 to 65535.
+pub type IpAddress {
+  Ipv4(Int, Int, Int, Int)
+  Ipv6(Int, Int, Int, Int, Int, Int, Int, Int)
+}
 
+/// An `inet` or a `cidr` value: an address and the length of its network
+/// prefix. A plain address has the full length, 32 or 128.
+pub type IpNetwork {
+  IpNetwork(address: IpAddress, prefix_length: Int)
+}
+
+/// A text that is not an IP address or network.
+pub type NotAnIpNetwork {
+  NotAnIpNetwork(text: String)
+}
+
+/// A MAC address of 6 bytes (`macaddr`) or 8 bytes (`macaddr8`). The type
+/// is opaque, so each byte is always from 0 to 255.
+pub opaque type MacAddress {
+  MacAddress6(Int, Int, Int, Int, Int, Int)
+  MacAddress8(Int, Int, Int, Int, Int, Int, Int, Int)
+}
+
+/// The MAC address 00:00:00:00:00:00, the placeholder of the MAC address
+/// codec.
+@internal
+pub const placeholder_mac_address = MacAddress6(0, 0, 0, 0, 0, 0)
+
+/// A value that is not a MAC address.
+pub type NotAMacAddress {
+  NotAMacAddress
+}
+
+/// Whether each part of a network is in range: the address parts, and a
+/// prefix length of at most 32 (IPv4) or 128 (IPv6).
+pub fn is_valid(network: IpNetwork) -> Bool {
+  valid_ip_network(network)
+}
+
+/// The network of a text such as `10.0.0.0/8`, `::1` or `192.168.0.1`.
+pub fn ip_network_from_string(
+  text: String,
+) -> Result(IpNetwork, NotAnIpNetwork) {
+  parse_network(text) |> result.replace_error(NotAnIpNetwork(text))
+}
+
+// PostgreSQL's inet takes no zone index (`fe80::1%eth0`), and OTP's
+// parser does, so a `%` is refused here.
+fn parse_network(text: String) -> Result(IpNetwork, Nil) {
+  case string.contains(text, "%") {
+    True -> Error(Nil)
+    False -> parse_network_text(text)
+  }
+}
+
+fn parse_network_text(text: String) -> Result(IpNetwork, Nil) {
+  case string.split_once(text, "/") {
+    Ok(#(address_text, length_text)) -> {
+      use address <- result.try(parse_address(address_text))
+      use length <- result.try(int.parse(length_text))
+      checked_network(
+        IpNetwork(address: address, prefix_length: length),
+        length_text,
+      )
+    }
+    Error(Nil) ->
+      parse_address(text)
+      |> result.map(fn(address) {
+        IpNetwork(address: address, prefix_length: full_prefix_length(address))
+      })
+  }
+}
+
+fn checked_network(
+  network: IpNetwork,
+  length_text: String,
+) -> Result(IpNetwork, Nil) {
+  case
+    int.to_string(network.prefix_length) == length_text
+    && valid_ip_network(network)
+  {
+    True -> Ok(network)
+    False -> Error(Nil)
+  }
+}
+
+@external(erlang, "dream_postgres_network_ffi", "parse_address")
+fn parse_address(text: String) -> Result(IpAddress, Nil)
+
+/// The text of a network, as PostgreSQL writes an `inet` value: the
+/// address alone when the prefix is the full length.
+pub fn ip_network_to_string(value: IpNetwork) -> String {
+  let address = ip_address_text(value.address)
+  case value.prefix_length == full_prefix_length(value.address) {
+    True -> address
+    False -> address <> "/" <> int.to_string(value.prefix_length)
+  }
+}
+
+/// The length of a full prefix: 32 for IPv4, 128 for IPv6.
+pub fn full_prefix_length(address: IpAddress) -> Int {
+  case address {
+    Ipv4(..) -> 32
+    Ipv6(..) -> 128
+  }
+}
+
+fn valid_ip_network(value: IpNetwork) -> Bool {
+  case value.address {
+    Ipv4(a, b, c, d) ->
+      list.all([a, b, c, d], in_range(_, 0, 255))
+      && in_range(value.prefix_length, 0, 32)
+    Ipv6(a, b, c, d, e, f, g, h) ->
+      list.all([a, b, c, d, e, f, g, h], in_range(_, 0, 65_535))
+      && in_range(value.prefix_length, 0, 128)
+  }
+}
+
+fn in_range(value: Int, lowest: Int, highest: Int) -> Bool {
+  value >= lowest && value <= highest
+}
+
+fn ip_address_text(address: IpAddress) -> String {
+  case address {
+    Ipv4(a, b, c, d) -> string.join(list.map([a, b, c, d], int.to_string), ".")
+    Ipv6(a, b, c, d, e, f, g, h) -> ipv6_text([a, b, c, d, e, f, g, h])
+  }
+}
+
+// The text that PostgreSQL gives for an IPv6 address. The longest run of
+// two or more zero parts, the first one of two runs of the same length,
+// becomes `::`. When the run is the first 6 parts, or the first 5 parts
+// before a part `ffff`, the last 2 parts are an IPv4 address.
+fn ipv6_text(parts: List(Int)) -> String {
+  let #(start, length) = longest_zero_run(parts, 0, #(0, 0), #(0, 0))
+  let ipv4_end =
+    start == 0
+    && {
+      length == 6
+      || { length == 5 && list.drop(parts, 5) |> list.first == Ok(0xffff) }
+    }
+  let text = ipv6_parts_text(parts, 0, start, length, ipv4_end, "")
+  case length > 0 && start + length == 8 {
+    True -> text <> ":"
+    False -> text
+  }
+}
+
+// The start and the length of the longest run of zero parts, from `index`
+// on. `best` and `current` are the runs that the parts before gave. A run
+// of 1 part does not count.
+fn longest_zero_run(
+  parts: List(Int),
+  index: Int,
+  best: #(Int, Int),
+  current: #(Int, Int),
+) -> #(Int, Int) {
+  case parts {
+    [] -> zero_run_worth_shortening(longer_run(best, current))
+    [0, ..rest] ->
+      longest_zero_run(rest, index + 1, best, extended_run(current, index))
+    [_, ..rest] ->
+      longest_zero_run(rest, index + 1, longer_run(best, current), #(0, 0))
+  }
+}
+
+fn zero_run_worth_shortening(run: #(Int, Int)) -> #(Int, Int) {
+  case run.1 >= 2 {
+    True -> run
+    False -> #(0, 0)
+  }
+}
+
+fn extended_run(current: #(Int, Int), index: Int) -> #(Int, Int) {
+  case current.1 {
+    0 -> #(index, 1)
+    length -> #(current.0, length + 1)
+  }
+}
+
+fn longer_run(best: #(Int, Int), current: #(Int, Int)) -> #(Int, Int) {
+  case current.1 > best.1 {
+    True -> current
+    False -> best
+  }
+}
+
+fn run_colon(text: String, at_start: Bool) -> String {
+  case at_start {
+    True -> text <> ":"
+    False -> text
+  }
+}
+
+fn part_separator(index: Int) -> String {
+  case index {
+    0 -> ""
+    _ -> ":"
+  }
+}
+
+fn ipv6_parts_text(
+  parts: List(Int),
+  index: Int,
+  start: Int,
+  length: Int,
+  ipv4_end: Bool,
+  text: String,
+) -> String {
+  case parts {
+    [] -> text
+    [_, ..rest] if index >= start && index < start + length ->
+      ipv6_parts_text(
+        rest,
+        index + 1,
+        start,
+        length,
+        ipv4_end,
+        run_colon(text, index == start),
+      )
+    [high, low] if index == 6 && ipv4_end ->
+      text
+      <> ":"
+      <> string.join(
+        list.map([high / 256, high % 256, low / 256, low % 256], int.to_string),
+        ".",
+      )
+    [part, ..rest] -> {
+      let text =
+        text <> part_separator(index) <> string.lowercase(int.to_base16(part))
+      ipv6_parts_text(rest, index + 1, start, length, ipv4_end, text)
+    }
+  }
+}
+
+/// The MAC address of 6 or 8 bytes.
+pub fn mac_address_from_bit_array(
+  bytes: BitArray,
+) -> Result(MacAddress, NotAMacAddress) {
+  case bytes {
+    <<a, b, c, d, e, f>> -> Ok(MacAddress6(a, b, c, d, e, f))
+    <<a, b, c, d, e, f, g, h>> -> Ok(MacAddress8(a, b, c, d, e, f, g, h))
+    _ -> Error(NotAMacAddress)
+  }
+}
+
+/// The 6 or 8 bytes of a MAC address.
+pub fn mac_address_to_bit_array(value: MacAddress) -> BitArray {
+  case value {
+    MacAddress6(a, b, c, d, e, f) -> <<a, b, c, d, e, f>>
+    MacAddress8(a, b, c, d, e, f, g, h) -> <<a, b, c, d, e, f, g, h>>
+  }
+}
+
+/// The MAC address of a text such as `08:00:2b:01:02:03` or
+/// `08-00-2b-01-02-03-04-05`.
+pub fn mac_address_from_string(
+  text: String,
+) -> Result(MacAddress, NotAMacAddress) {
+  let separator = case string.contains(text, "-") {
+    True -> "-"
+    False -> ":"
+  }
+  string.split(text, separator)
+  |> list.try_map(hex_byte)
+  |> result.replace_error(NotAMacAddress)
+  |> result.try(fn(bytes) {
+    list.fold(bytes, <<>>, fn(all, byte) { <<all:bits, byte>> })
+    |> mac_address_from_bit_array
+  })
+}
+
+fn hex_byte(text: String) -> Result(Int, Nil) {
+  use byte <- result.try(int.base_parse(text, 16))
+  case string.lowercase(text) == hex_text(byte) {
+    True -> Ok(byte)
+    False -> Error(Nil)
+  }
+}
+
+fn hex_text(byte: Int) -> String {
+  int.to_base16(byte)
+  |> string.lowercase
+  |> string.pad_start(to: 2, with: "0")
+}
+
+/// The text of a MAC address, as PostgreSQL writes it: `08:00:2b:01:02:03`.
+pub fn mac_address_to_string(value: MacAddress) -> String {
+  bytes_of(mac_address_to_bit_array(value))
+  |> list.map(hex_text)
+  |> string.join(":")
+}
+
+fn bytes_of(bytes: BitArray) -> List(Int) {
+  case bytes {
+    <<byte, rest:bytes>> -> [byte, ..bytes_of(rest)]
+    _ -> []
+  }
+}
+
+// --- Codecs ---------------------------------------------------------------------
+
+/// `inet` and `cidr`, as an `IpNetwork`. A `cidr` parameter with bits set
+/// right of its prefix is refused before the query is sent.
 pub const ip_network =
   Codec(
     name: "ip network",
@@ -52,15 +347,14 @@ fn encode_ip_network(
   _lookup: TypeLookup,
 ) -> Result(Cell, String) {
   let is_cidr = description.name == "cidr"
-  use Nil <- result.try(case network.is_valid(value) {
+  use Nil <- result.try(case is_valid(value) {
     True -> Ok(Nil)
-    False ->
-      Error(network.ip_network_to_string(value) <> " is not a valid network")
+    False -> Error(ip_network_to_string(value) <> " is not a valid network")
   })
   use Nil <- result.try(case is_cidr && has_host_bits(value) {
     True ->
       Error(
-        network.ip_network_to_string(value)
+        ip_network_to_string(value)
         <> " has bits set right of its prefix, which cidr does not take",
       )
     False -> Ok(Nil)
@@ -140,8 +434,7 @@ fn decode_ip_network(
   }
 }
 
-// --- macaddr and macaddr8 -----------------------------------------------------
-
+/// `macaddr` and `macaddr8`, as a `MacAddress`.
 pub const mac_address =
   Codec(
     name: "mac address",
@@ -152,8 +445,6 @@ pub const mac_address =
     decode: decode_mac_address,
     placeholder: placeholder_mac_address,
   )
-
-const placeholder_mac_address = network.placeholder_mac_address
 
 fn accepts_mac_address(
   description: TypeDescription,
@@ -169,13 +460,10 @@ fn encode_mac_address(
   description: TypeDescription,
   _lookup: TypeLookup,
 ) -> Result(Cell, String) {
-  let bytes = network.mac_address_to_bit_array(value)
+  let bytes = mac_address_to_bit_array(value)
   case description.name, bit_array.byte_size(bytes) {
     "macaddr", 8 ->
-      Error(
-        network.mac_address_to_string(value)
-        <> " has 8 bytes, and macaddr holds 6",
-      )
+      Error(mac_address_to_string(value) <> " has 8 bytes, and macaddr holds 6")
     _, _ -> Ok(Binary(bytes))
   }
 }
@@ -186,207 +474,6 @@ fn decode_mac_address(
   _lookup: TypeLookup,
 ) -> Result(MacAddress, DecodeIssue) {
   use bytes <- result.try(binary_bytes(value))
-  network.mac_address_from_bit_array(bytes)
+  mac_address_from_bit_array(bytes)
   |> result.replace_error(wrong_size(description, bytes))
-}
-
-// --- bit and varbit -----------------------------------------------------------
-
-pub const bit_string =
-  Codec(
-    name: "bit string",
-    gleam_type: "BitArray",
-    format: cell.BinaryFormat,
-    accepts: accepts_bit_string,
-    encode: encode_bit_string,
-    decode: decode_bit_string,
-    placeholder: <<>>,
-  )
-
-fn accepts_bit_string(
-  description: TypeDescription,
-  _lookup: TypeLookup,
-) -> Bool {
-  is_base(description, ["bit", "varbit"])
-}
-
-fn encode_bit_string(
-  value: BitArray,
-  _description: TypeDescription,
-  _lookup: TypeLookup,
-) -> Result(Cell, String) {
-  let length = bit_array.bit_size(value)
-  let padding = { 8 - length % 8 } % 8
-  Ok(Binary(<<length:size(32), value:bits, 0:size(padding)>>))
-}
-
-fn decode_bit_string(
-  value: Cell,
-  description: TypeDescription,
-  _lookup: TypeLookup,
-) -> Result(BitArray, DecodeIssue) {
-  use bytes <- result.try(binary_bytes(value))
-  case bytes {
-    <<length:size(32), rest:bits>> -> take_bit_string(rest, length)
-    _ -> Error(wrong_size(description, bytes))
-  }
-}
-
-fn take_bit_string(
-  rest: BitArray,
-  length: Int,
-) -> Result(BitArray, DecodeIssue) {
-  case rest {
-    <<bits:bits-size(length), _padding:bits>> -> Ok(bits)
-    _ -> Error(Malformed("the bit string is shorter than its length"))
-  }
-}
-
-// --- tid ----------------------------------------------------------------------
-
-pub const tid_codec =
-  Codec(
-    name: "tid",
-    gleam_type: "Tid",
-    format: cell.BinaryFormat,
-    accepts: accepts_tid,
-    encode: encode_tid,
-    decode: decode_tid,
-    placeholder: Tid(0, 0),
-  )
-
-fn accepts_tid(description: TypeDescription, _lookup: TypeLookup) -> Bool {
-  is_base(description, ["tid"])
-}
-
-fn encode_tid(
-  value: Tid,
-  _description: TypeDescription,
-  _lookup: TypeLookup,
-) -> Result(Cell, String) {
-  let Tid(block:, offset:) = value
-  case block >= 0 && block <= 4_294_967_295 && offset >= 0 && offset <= 65_535 {
-    True -> Ok(Binary(<<block:size(32), offset:size(16)>>))
-    False ->
-      Error(
-        "("
-        <> int.to_string(block)
-        <> ","
-        <> int.to_string(offset)
-        <> ") is out of range for tid",
-      )
-  }
-}
-
-fn decode_tid(
-  value: Cell,
-  description: TypeDescription,
-  _lookup: TypeLookup,
-) -> Result(Tid, DecodeIssue) {
-  use bytes <- result.try(binary_bytes(value))
-  case bytes {
-    <<block:size(32), offset:size(16)>> -> Ok(Tid(block:, offset:))
-    _ -> Error(wrong_size(description, bytes))
-  }
-}
-
-// --- hstore -------------------------------------------------------------------
-
-// A function, not a constant: a constant cannot hold a Dict.
-pub fn hstore() -> codec_type.Codec(Dict(String, Option(String))) {
-  Codec(
-    name: "hstore",
-    gleam_type: "Dict(String, Option(String))",
-    format: cell.BinaryFormat,
-    accepts: accepts_hstore,
-    encode: encode_hstore,
-    decode: decode_hstore,
-    placeholder: dict.new(),
-  )
-}
-
-fn accepts_hstore(description: TypeDescription, _lookup: TypeLookup) -> Bool {
-  is_base(description, ["hstore"])
-}
-
-fn encode_hstore(
-  value: Dict(String, Option(String)),
-  _description: TypeDescription,
-  _lookup: TypeLookup,
-) -> Result(Cell, String) {
-  let pairs = dict.to_list(value)
-  let body =
-    list.fold(pairs, <<>>, fn(bytes, pair) {
-      let #(key, text) = pair
-      let key_bytes = bit_array.from_string(key)
-      let value_bytes = case text {
-        Some(present) -> {
-          let present_bytes = bit_array.from_string(present)
-          <<
-            { bit_array.byte_size(present_bytes) }:size(32),
-            present_bytes:bits,
-          >>
-        }
-        None -> <<-1:size(32)>>
-      }
-      <<
-        bytes:bits,
-        { bit_array.byte_size(key_bytes) }:size(32),
-        key_bytes:bits,
-        value_bytes:bits,
-      >>
-    })
-  Ok(Binary(<<{ list.length(pairs) }:size(32), body:bits>>))
-}
-
-fn decode_hstore(
-  value: Cell,
-  description: TypeDescription,
-  _lookup: TypeLookup,
-) -> Result(Dict(String, Option(String)), DecodeIssue) {
-  use bytes <- result.try(binary_bytes(value))
-  case bytes {
-    <<count:size(32), pairs:bits>> -> decode_pairs(pairs, count, dict.new())
-    _ -> Error(wrong_size(description, bytes))
-  }
-}
-
-fn decode_pairs(
-  bytes: BitArray,
-  remaining: Int,
-  pairs: Dict(String, Option(String)),
-) -> Result(Dict(String, Option(String)), DecodeIssue) {
-  case remaining, bytes {
-    0, <<>> -> Ok(pairs)
-    0, _ -> Error(Malformed("the hstore has bytes after its last pair"))
-    _,
-      <<
-        key_length:size(32),
-        key:bytes-size(key_length),
-        -1:signed-size(32),
-        rest:bits,
-      >>
-    -> {
-      use key_text <- result.try(utf8_bytes(key))
-      decode_pairs(rest, remaining - 1, dict.insert(pairs, key_text, None))
-    }
-    _,
-      <<
-        key_length:size(32),
-        key:bytes-size(key_length),
-        value_length:size(32),
-        text:bytes-size(value_length),
-        rest:bits,
-      >>
-    -> {
-      use key_text <- result.try(utf8_bytes(key))
-      use value_text <- result.try(utf8_bytes(text))
-      decode_pairs(
-        rest,
-        remaining - 1,
-        dict.insert(pairs, key_text, Some(value_text)),
-      )
-    }
-    _, _ -> Error(Malformed("the hstore's pairs are cut short"))
-  }
 }

@@ -1,16 +1,15 @@
 //// The text search and pgvector codecs against the exact bytes of their
 //// binary formats, and the vector values' checks.
 
-import dream_postgres/codec
 import dream_postgres/codecs/codec_type.{Malformed, NullValue}
-import dream_postgres/driver/cell.{Binary, Null}
-import dream_postgres/text_search.{
+import dream_postgres/codecs/text_search.{
   And, EmptyQuery, Lexeme, Not, Phrase, Term, WeightA, WeightB, WeightC, WeightD,
 }
-import dream_postgres/vector.{
+import dream_postgres/codecs/vector.{
   DimensionsOutOfRange, ElementTooLarge, FloatTooLarge, IndexOutOfRange,
   NoDimensions, TooManyDimensions, TooManyElements,
 }
+import dream_postgres/driver/cell.{Binary, Null}
 import dream_test/matchers.{
   be_equal, be_error, be_false, be_ok, be_true, or_fail_with, should,
 }
@@ -356,7 +355,7 @@ pub fn tests() -> TestSuite {
     group("vector codecs", [
       it("takes vector", fn() {
         // Arrange
-        let subject = codec.vector
+        let subject = vector.vector
 
         // Act and assert
         subject
@@ -367,7 +366,7 @@ pub fn tests() -> TestSuite {
       }),
       it("takes halfvec", fn() {
         // Arrange
-        let subject = codec.half_vector
+        let subject = vector.half_vector
 
         // Act and assert
         subject
@@ -378,7 +377,7 @@ pub fn tests() -> TestSuite {
       }),
       it("takes sparsevec", fn() {
         // Arrange
-        let subject = codec.sparse_vector
+        let subject = vector.sparse_vector
 
         // Act and assert
         subject
@@ -389,7 +388,7 @@ pub fn tests() -> TestSuite {
       }),
       it("does not take halfvec as a vector", fn() {
         // Arrange
-        let subject = codec.vector
+        let subject = vector.vector
 
         // Act and assert
         subject
@@ -409,7 +408,7 @@ pub fn tests() -> TestSuite {
         created
         |> should
         |> be_ok()
-        |> encode_as(codec.vector, type_catalog.base("vector"))
+        |> encode_as(vector.vector, type_catalog.base("vector"))
         |> be_ok()
         |> be_equal(Binary(vector_bytes.vector_of_two()))
         |> or_fail_with(
@@ -423,7 +422,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.vector, type_catalog.base("vector"))
+        |> decode_as(vector.vector, type_catalog.base("vector"))
         |> be_ok()
         |> have_vector_floats()
         |> be_equal([1.5, -2.0])
@@ -436,7 +435,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.vector, type_catalog.base("vector"))
+        |> decode_as(vector.vector, type_catalog.base("vector"))
         |> be_error()
         |> be_equal(Malformed("the vector's dimensions do not match its floats"))
         |> or_fail_with("Expected a vector of 0 dimensions to be malformed")
@@ -448,7 +447,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.vector, type_catalog.base("vector"))
+        |> decode_as(vector.vector, type_catalog.base("vector"))
         |> be_error()
         |> be_equal(Malformed("the vector's dimensions do not match its floats"))
         |> or_fail_with("Expected 2 dimensions with one float to be malformed")
@@ -460,7 +459,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.vector, type_catalog.base("vector"))
+        |> decode_as(vector.vector, type_catalog.base("vector"))
         |> be_error()
         |> be_equal(Malformed("the vector holds a float that is not finite"))
         |> or_fail_with("Expected a vector that holds NaN to be malformed")
@@ -472,7 +471,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.vector, type_catalog.base("vector"))
+        |> decode_as(vector.vector, type_catalog.base("vector"))
         |> be_error()
         |> be_equal(NullValue)
         |> or_fail_with("Expected NULL to be refused as a vector")
@@ -488,7 +487,7 @@ pub fn tests() -> TestSuite {
         created
         |> should
         |> be_ok()
-        |> encode_as(codec.half_vector, type_catalog.base("halfvec"))
+        |> encode_as(vector.half_vector, type_catalog.base("halfvec"))
         |> be_ok()
         |> be_equal(Binary(vector_bytes.half_vector_of_two()))
         |> or_fail_with(
@@ -502,7 +501,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.half_vector, type_catalog.base("halfvec"))
+        |> decode_as(vector.half_vector, type_catalog.base("halfvec"))
         |> be_ok()
         |> have_half_vector_floats()
         |> be_equal([1.5, -2.0])
@@ -515,7 +514,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.half_vector, type_catalog.base("halfvec"))
+        |> decode_as(vector.half_vector, type_catalog.base("halfvec"))
         |> be_error()
         |> be_equal(Malformed(
           "the half vector's dimensions do not match its floats",
@@ -531,7 +530,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.half_vector, type_catalog.base("halfvec"))
+        |> decode_as(vector.half_vector, type_catalog.base("halfvec"))
         |> be_error()
         |> be_equal(Malformed(
           "the half vector holds a float that is not finite",
@@ -551,7 +550,7 @@ pub fn tests() -> TestSuite {
         created
         |> should
         |> be_ok()
-        |> encode_as(codec.sparse_vector, type_catalog.base("sparsevec"))
+        |> encode_as(vector.sparse_vector, type_catalog.base("sparsevec"))
         |> be_ok()
         |> be_equal(Binary(vector_bytes.sparse_vector_of_two()))
         |> or_fail_with(
@@ -565,7 +564,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.sparse_vector, type_catalog.base("sparsevec"))
+        |> decode_as(vector.sparse_vector, type_catalog.base("sparsevec"))
         |> be_ok()
         |> have_sparse_vector_elements()
         |> be_equal(dict.from_list([#(0, 1.5), #(3, -2.0)]))
@@ -578,7 +577,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.sparse_vector, type_catalog.base("sparsevec"))
+        |> decode_as(vector.sparse_vector, type_catalog.base("sparsevec"))
         |> be_ok()
         |> have_sparse_vector_dimensions()
         |> be_equal(5)
@@ -591,7 +590,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.sparse_vector, type_catalog.base("sparsevec"))
+        |> decode_as(vector.sparse_vector, type_catalog.base("sparsevec"))
         |> be_error()
         |> be_equal(Malformed(
           "the sparse vector's sizes do not match its elements",
@@ -616,7 +615,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.sparse_vector, type_catalog.base("sparsevec"))
+        |> decode_as(vector.sparse_vector, type_catalog.base("sparsevec"))
         |> be_error()
         |> be_equal(Malformed(
           "the sparse vector holds an index out of order or out of range, or a float that is not finite",
@@ -637,7 +636,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.sparse_vector, type_catalog.base("sparsevec"))
+        |> decode_as(vector.sparse_vector, type_catalog.base("sparsevec"))
         |> be_error()
         |> be_equal(Malformed(
           "the sparse vector holds an index out of order or out of range, or a float that is not finite",
@@ -658,7 +657,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.sparse_vector, type_catalog.base("sparsevec"))
+        |> decode_as(vector.sparse_vector, type_catalog.base("sparsevec"))
         |> be_error()
         |> be_equal(Malformed(
           "the sparse vector holds an index out of order or out of range, or a float that is not finite",
@@ -671,7 +670,7 @@ pub fn tests() -> TestSuite {
     group("text search vectors", [
       it("takes tsvector", fn() {
         // Arrange
-        let subject = codec.text_search_vector
+        let subject = text_search.text_search_vector
 
         // Act and assert
         subject
@@ -690,7 +689,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_ok()
         |> be_equal(Binary(text_search_samples.cat_and_dog_vector_bytes()))
         |> or_fail_with(
@@ -704,7 +706,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> decode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_ok()
         |> be_equal([
           Lexeme("cat", [#(1, WeightA), #(3, WeightD)]),
@@ -719,7 +724,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_ok()
         |> be_equal(Binary(text_search_samples.weights_b_and_c_vector_bytes()))
         |> or_fail_with("Expected the weight bits 10 for B and 01 for C")
@@ -731,7 +739,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> decode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_ok()
         |> be_equal([Lexeme("cat", [#(1, WeightB), #(16_383, WeightC)])])
         |> or_fail_with("Expected the weights B and C")
@@ -743,7 +754,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_ok()
         |> be_equal(Binary(<<0:size(32)>>))
         |> or_fail_with("Expected the count 0")
@@ -755,7 +769,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal("a lexeme or a query word cannot be empty")
         |> or_fail_with("Expected an empty lexeme to be refused")
@@ -767,7 +784,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         [Lexeme(word, [])]
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal("the word " <> word <> " is longer than 2047 bytes")
         |> or_fail_with("Expected a lexeme of 2048 bytes to be too long")
@@ -779,7 +799,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_ok()
         |> or_fail_with("Expected a lexeme of 2047 bytes to be written")
       }),
@@ -790,7 +813,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal("a lexeme or a query word cannot hold a 0 byte")
         |> or_fail_with("Expected a lexeme that holds a 0 byte to be refused")
@@ -802,7 +828,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal("the lexeme cat is in the vector twice")
         |> or_fail_with("Expected the lexeme cat twice to be refused")
@@ -816,7 +845,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         [Lexeme("cat", positions)]
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal("the lexeme cat has more than 256 positions")
         |> or_fail_with("Expected 257 positions to be refused")
@@ -828,7 +860,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal("the position 0 of cat is outside 1 to 16383")
         |> or_fail_with("Expected the position 0 to be refused")
@@ -840,7 +875,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal("the position 16384 of cat is outside 1 to 16383")
         |> or_fail_with("Expected the position 16384 to be refused")
@@ -852,7 +890,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> encode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal("the positions of cat must go up, each once")
         |> or_fail_with("Expected the position 2 twice to be refused")
@@ -864,7 +905,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> decode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal(Malformed("1 bytes are not a tsvector value"))
         |> or_fail_with("Expected a count of one byte to be malformed")
@@ -876,7 +920,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> decode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal(Malformed("the vector has bytes after its last lexeme"))
         |> or_fail_with("Expected a byte after the last lexeme to be malformed")
@@ -888,7 +935,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> decode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal(Malformed("the lexeme cat is cut short"))
         |> or_fail_with(
@@ -903,7 +953,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> decode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal(Malformed("the positions are cut short"))
         |> or_fail_with("Expected one of two positions to be malformed")
@@ -915,7 +968,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> decode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal(Malformed("a word has no 0 byte at its end"))
         |> or_fail_with(
@@ -929,7 +985,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_vector, type_catalog.base("tsvector"))
+        |> decode_as(
+          text_search.text_search_vector,
+          type_catalog.base("tsvector"),
+        )
         |> be_error()
         |> be_equal(Malformed("the text is not UTF-8"))
         |> or_fail_with(
@@ -940,7 +999,7 @@ pub fn tests() -> TestSuite {
     group("text search queries", [
       it("takes tsquery", fn() {
         // Arrange
-        let subject = codec.text_search_query
+        let subject = text_search.text_search_query
 
         // Act and assert
         subject
@@ -956,7 +1015,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> encode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_ok()
         |> be_equal(Binary(text_search_samples.query_bytes()))
         |> or_fail_with(
@@ -970,7 +1032,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> decode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_ok()
         |> be_equal(text_search_samples.query())
         |> or_fail_with("Expected the query cat & (dog:AC* | !fox)")
@@ -982,7 +1047,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> encode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_ok()
         |> be_equal(Binary(text_search_samples.phrase_bytes()))
         |> or_fail_with("Expected the phrase operator with the distance 2")
@@ -994,7 +1062,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> decode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_ok()
         |> be_equal(text_search_samples.phrase())
         |> or_fail_with("Expected the phrase a:ABCD <2> b:B")
@@ -1006,7 +1077,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> encode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_ok()
         |> be_equal(Binary(<<0:size(32)>>))
         |> or_fail_with("Expected the empty query as the count 0")
@@ -1018,7 +1092,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> decode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_ok()
         |> be_equal(EmptyQuery)
         |> or_fail_with("Expected the count 0 to be the empty query")
@@ -1030,7 +1107,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> encode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal(
           "an empty query can only be the whole query, not a part of one",
@@ -1044,7 +1124,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> encode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal("a lexeme or a query word cannot be empty")
         |> or_fail_with("Expected an empty query word to be refused")
@@ -1056,7 +1139,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> encode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal("the phrase distance -1 is outside 0 to 16384")
         |> or_fail_with("Expected the phrase distance -1 to be refused")
@@ -1068,7 +1154,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> encode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal("the phrase distance 16385 is outside 0 to 16384")
         |> or_fail_with("Expected the phrase distance 16385 to be refused")
@@ -1080,7 +1169,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> encode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal(
           "an empty query can only be the whole query, not a part of one",
@@ -1096,7 +1188,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> decode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal(Malformed("1 bytes are not a tsquery value"))
         |> or_fail_with("Expected a count of one byte to be malformed")
@@ -1108,7 +1203,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> decode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal(Malformed("the query has bytes after its last item"))
         |> or_fail_with("Expected a byte after the last item to be malformed")
@@ -1120,7 +1218,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> decode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal(Malformed("the query has an item of an unknown kind"))
         |> or_fail_with("Expected the item kind 7 to be malformed")
@@ -1132,7 +1233,10 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text_search_query, type_catalog.base("tsquery"))
+        |> decode_as(
+          text_search.text_search_query,
+          type_catalog.base("tsquery"),
+        )
         |> be_error()
         |> be_equal(Malformed("a word has no 0 byte at its end"))
         |> or_fail_with(

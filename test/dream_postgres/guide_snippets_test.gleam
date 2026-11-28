@@ -5,6 +5,7 @@
 
 import dream_errors.{Failed, Invalid, NotFound, Retry, Timeout, Unavailable}
 import dream_postgres/codec
+import dream_postgres/codecs/json
 import dream_postgres/config
 import dream_postgres/error
 import dream_postgres/query.{one, parameter, query, run_sql}
@@ -676,8 +677,8 @@ fn codec_tests() {
       |> should
       |> run_on_pool(fn(connection) {
         query("SELECT $1::jsonb")
-        |> parameter(codec.jsonb, theme_document(theme))
-        |> one(single(codec.jsonb), connection)
+        |> parameter(json.jsonb, theme_document(theme))
+        |> one(single(json.jsonb), connection)
         |> result.map(theme_from_document)
       })
       |> be_ok()

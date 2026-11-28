@@ -1,3 +1,7 @@
+//// The Gleam values of PostgreSQL's geometric types. Every coordinate is a
+//// finite `Float`: a `NaN` or an infinite coordinate, which PostgreSQL can
+//// store, gives `OutOfRange` when it is read.
+////
 //// The codecs of the geometric types, in PostgreSQL's binary formats. Each
 //// coordinate is a float8:
 ////
@@ -12,13 +16,48 @@ import dream_postgres/codecs/codec_type.{
   read_float8,
 }
 import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
-import dream_postgres/geometry.{
-  type Box, type Circle, type Line, type LineSegment, type Path, type Point,
-  type Polygon, Box, Circle, Line, LineSegment, Path, Point, Polygon,
-}
 import gleam/list
 import gleam/result
 
+/// A `point`.
+pub type Point {
+  Point(x: Float, y: Float)
+}
+
+/// A `line`: the points where `a * x + b * y + c = 0`.
+pub type Line {
+  Line(a: Float, b: Float, c: Float)
+}
+
+/// An `lseg`: the segment from `start` to `end`.
+pub type LineSegment {
+  LineSegment(start: Point, end: Point)
+}
+
+/// A `box`, by two opposite corners. PostgreSQL keeps the upper right
+/// corner first.
+pub type Box {
+  Box(upper_right: Point, lower_left: Point)
+}
+
+/// A `path`: open or closed, through its points in order.
+pub type Path {
+  Path(open: Bool, points: List(Point))
+}
+
+/// A `polygon`, by its vertices in order.
+pub type Polygon {
+  Polygon(vertices: List(Point))
+}
+
+/// A `circle`: its center and radius.
+pub type Circle {
+  Circle(center: Point, radius: Float)
+}
+
+// --- Codecs ---------------------------------------------------------------------
+
+/// `point`, as a `Point`.
 pub const point =
   Codec(
     name: "point",
@@ -30,6 +69,7 @@ pub const point =
     placeholder: Point(0.0, 0.0),
   )
 
+/// `line`, as a `Line`.
 pub const line =
   Codec(
     name: "line",
@@ -41,6 +81,7 @@ pub const line =
     placeholder: Line(0.0, 1.0, 0.0),
   )
 
+/// `lseg`, as a `LineSegment`.
 pub const line_segment =
   Codec(
     name: "line segment",
@@ -52,6 +93,7 @@ pub const line_segment =
     placeholder: LineSegment(Point(0.0, 0.0), Point(0.0, 0.0)),
   )
 
+/// `box`, as a `Box`.
 pub const box =
   Codec(
     name: "box",
@@ -63,6 +105,7 @@ pub const box =
     placeholder: Box(Point(0.0, 0.0), Point(0.0, 0.0)),
   )
 
+/// `path`, as a `Path`.
 pub const path =
   Codec(
     name: "path",
@@ -74,6 +117,7 @@ pub const path =
     placeholder: Path(True, []),
   )
 
+/// `polygon`, as a `Polygon`.
 pub const polygon =
   Codec(
     name: "polygon",
@@ -85,6 +129,7 @@ pub const polygon =
     placeholder: Polygon([]),
   )
 
+/// `circle`, as a `Circle`.
 pub const circle =
   Codec(
     name: "circle",
