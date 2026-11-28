@@ -34,15 +34,15 @@
 //// that PostgreSQL gives the parameter or the column. A codec that does not
 //// take that type stops the query before anything runs.
 
-import dream_postgres/codecs/array as array_codecs
-import dream_postgres/codecs/bit_string as bit_string_codec
+import dream_postgres/codecs/array
+import dream_postgres/codecs/bit_string
 import dream_postgres/codecs/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, OutOfRange, binary_bytes,
   is_base, special_float, utf8_text, wrong_size,
 }
-import dream_postgres/codecs/composite as composite_codecs
-import dream_postgres/codecs/hstore as hstore_codec
-import dream_postgres/codecs/numeric as numeric_codec
+import dream_postgres/codecs/composite
+import dream_postgres/codecs/hstore
+import dream_postgres/codecs/numeric
 import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, Array, Base, Binary, BinaryFormat, Composite,
   Domain, Enum, Multirange, Null, Pseudo, Range, Text, TextFormat,
@@ -140,7 +140,7 @@ pub fn nullable(inner: Codec(a)) -> Codec(Option(a)) {
 /// }
 /// ```
 pub fn array(element: Codec(a)) -> Codec(List(a)) {
-  array_codecs.array(element)
+  array.array(element)
 }
 
 /// A codec of a PostgreSQL enum. The labels must be the labels of the
@@ -369,15 +369,15 @@ pub const uuid =
 /// `numeric`, as its exact text, for example `"1234.5600"`, `"NaN"` or
 /// `"Infinity"`. No digit is lost, and no float rounding happens. It uses
 /// the binary format, so it also reads a numeric field of a composite.
-pub const numeric = numeric_codec.numeric
+pub const numeric = numeric.numeric
 
 /// `bit` and `varbit`, as a `BitArray` of exactly their bits.
-pub const bit_string = bit_string_codec.bit_string
+pub const bit_string = bit_string.bit_string
 
 /// The extension type `hstore`, as a `Dict` of keys to values that can be
 /// NULL. A function, because a constant cannot hold a `Dict`.
 pub fn hstore() -> Codec(Dict(String, Option(String))) {
-  hstore_codec.hstore()
+  hstore.hstore()
 }
 
 /// A field of a composite value, with its codec, for the `write` function
@@ -436,12 +436,7 @@ pub fn composite(
   write to_fields: fn(a) -> List(Field),
   placeholder placeholder: a,
 ) -> Codec(a) {
-  composite_codecs.composite(
-    type_name:,
-    read: reader,
-    write: to_fields,
-    placeholder:,
-  )
+  composite.composite(type_name:, read: reader, write: to_fields, placeholder:)
 }
 
 // --- int -----------------------------------------------------------------------

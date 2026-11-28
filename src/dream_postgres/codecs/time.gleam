@@ -22,7 +22,7 @@ import dream_postgres/driver/cell.{type Cell, type TypeDescription, Binary}
 import gleam/int
 import gleam/result
 import gleam/time/calendar.{type Date, type TimeOfDay, Date, TimeOfDay}
-import gleam/time/timestamp.{type Timestamp} as gleam_timestamp
+import gleam/time/timestamp.{type Timestamp}
 
 /// An `interval`, as PostgreSQL stores it: months, days and microseconds,
 /// each kept apart. A month has no fixed number of days and a day has no
@@ -126,12 +126,12 @@ fn days_of_date(value: Date) -> Result(Int, String) {
 
 fn days_in_range(value: Date) -> Result(Int, String) {
   let #(seconds, _) =
-    gleam_timestamp.from_calendar(
+    timestamp.from_calendar(
       date: value,
       time: TimeOfDay(0, 0, 0, 0),
       offset: calendar.utc_offset,
     )
-    |> gleam_timestamp.to_unix_seconds_and_nanoseconds
+    |> timestamp.to_unix_seconds_and_nanoseconds
   let days = { seconds - postgres_epoch_unix_seconds } / seconds_per_day
   case days > int32_smallest && days < int32_largest {
     True -> Ok(days)
@@ -167,10 +167,10 @@ fn decode_infinite_date(
 
 fn date_of_days(days: Int) -> Date {
   let #(found, _) =
-    gleam_timestamp.from_unix_seconds(
+    timestamp.from_unix_seconds(
       postgres_epoch_unix_seconds + days * seconds_per_day,
     )
-    |> gleam_timestamp.to_calendar(calendar.utc_offset)
+    |> timestamp.to_calendar(calendar.utc_offset)
   found
 }
 
@@ -325,7 +325,7 @@ pub const timestamp =
     accepts: accepts_timestamp,
     encode: encode_timestamp,
     decode: decode_timestamp,
-    placeholder: gleam_timestamp.unix_epoch,
+    placeholder: timestamp.unix_epoch,
   )
 
 /// `timestamp`, as a `MaybeInfinite(Timestamp)`, which holds `infinity` too.
@@ -349,7 +349,7 @@ pub const timestamp_with_time_zone =
     accepts: accepts_timestamp_with_time_zone,
     encode: encode_timestamp,
     decode: decode_timestamp,
-    placeholder: gleam_timestamp.unix_epoch,
+    placeholder: timestamp.unix_epoch,
   )
 
 /// `timestamptz`, as a `MaybeInfinite(Timestamp)`.
@@ -385,8 +385,7 @@ fn encode_timestamp(
   _description: TypeDescription,
   _lookup: TypeLookup,
 ) -> Result(Cell, String) {
-  let #(seconds, nanoseconds) =
-    gleam_timestamp.to_unix_seconds_and_nanoseconds(value)
+  let #(seconds, nanoseconds) = timestamp.to_unix_seconds_and_nanoseconds(value)
   let microseconds =
     { seconds - postgres_epoch_unix_seconds }
     * microseconds_per_second
@@ -444,7 +443,7 @@ fn timestamp_of_microseconds(microseconds: Int) -> Timestamp {
     True -> #(whole_seconds - 1, rest + microseconds_per_second)
     False -> #(whole_seconds, rest)
   }
-  gleam_timestamp.from_unix_seconds_and_nanoseconds(
+  timestamp.from_unix_seconds_and_nanoseconds(
     postgres_epoch_unix_seconds + seconds,
     positive_rest * 1000,
   )

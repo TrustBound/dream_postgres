@@ -14,7 +14,7 @@ import dream_postgres/driver/cell.{
 }
 import gleam/bit_array
 import gleam/dynamic/decode.{type Decoder}
-import gleam/json as gleam_json
+import gleam/json
 import gleam/result
 
 /// A valid JSON document.
@@ -26,13 +26,13 @@ pub opaque type Json {
 pub const null = Json("null")
 
 /// The document of a `gleam/json` value.
-pub fn from_json(value: gleam_json.Json) -> Json {
-  Json(gleam_json.to_string(value))
+pub fn from_json(value: json.Json) -> Json {
+  Json(json.to_string(value))
 }
 
 /// The document of a text, if the text is valid JSON.
-pub fn from_string(text: String) -> Result(Json, gleam_json.DecodeError) {
-  gleam_json.parse(text, decode.dynamic)
+pub fn from_string(text: String) -> Result(Json, json.DecodeError) {
+  json.parse(text, decode.dynamic)
   |> result.replace(Json(text))
 }
 
@@ -42,11 +42,8 @@ pub fn to_string(value: Json) -> String {
 }
 
 /// Decodes a document with a `gleam/dynamic/decode` decoder.
-pub fn parse(
-  value: Json,
-  decoder: Decoder(a),
-) -> Result(a, gleam_json.DecodeError) {
-  gleam_json.parse(value.text, decoder)
+pub fn parse(value: Json, decoder: Decoder(a)) -> Result(a, json.DecodeError) {
+  json.parse(value.text, decoder)
 }
 
 // --- Codecs ---------------------------------------------------------------------
