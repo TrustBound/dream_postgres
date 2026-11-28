@@ -5,6 +5,7 @@ import dream_postgres/driver/cell.{Idle}
 import dream_postgres/driver/connection/event as connection_event
 import dream_postgres/driver/connection/outcome as connection_outcome
 import dream_postgres/driver/listener
+import dream_postgres/driver/listener/process_message
 import dream_postgres/error
 import dream_postgres/listener.{
   ListenFailed, Listening, NotListening, NotificationArrived, listen,
@@ -328,7 +329,7 @@ fn listen_message_tests() {
   unit.group("listen messages", [
     unit.it("a notification keeps its channel, payload and process", fn() {
       // Act and assert
-      listener.NotificationArrived(connection_outcome.Notification(
+      process_message.NotificationArrived(connection_outcome.Notification(
         process_id: 42,
         channel: "jobs",
         payload: "hello",
@@ -344,7 +345,7 @@ fn listen_message_tests() {
     }),
     unit.it("NotListening stays NotListening", fn() {
       // Act and assert
-      listener.NotListening
+      process_message.NotListening
       |> should
       |> map_listen_message()
       |> be_equal(NotListening)
@@ -352,7 +353,7 @@ fn listen_message_tests() {
     }),
     unit.it("Listening keeps its channel", fn() {
       // Act and assert
-      listener.Listening("jobs")
+      process_message.Listening("jobs")
       |> should
       |> map_listen_message()
       |> be_equal(Listening("jobs"))
@@ -360,7 +361,10 @@ fn listen_message_tests() {
     }),
     unit.it("a failed LISTEN keeps its channel and its reason", fn() {
       // Act and assert
-      listener.ListenFailed("jobs", listener.ListenDeadlinePassed(True))
+      process_message.ListenFailed(
+        "jobs",
+        process_message.ListenDeadlinePassed(True),
+      )
       |> should
       |> map_listen_message()
       |> be_equal(ListenFailed(
@@ -381,7 +385,7 @@ fn listen_failure_tests() {
       let report = server_reports.administrator_shutdown()
 
       // Act and assert
-      listener.ListenRefused(report, Idle)
+      process_message.ListenRefused(report, Idle)
       |> should
       |> map_listen_failure()
       |> be_equal(error.Server(error.server_error_from_report(report)))
@@ -389,7 +393,7 @@ fn listen_failure_tests() {
     }),
     unit.it("an unexpected answer is UnexpectedListenAnswer", fn() {
       // Act and assert
-      listener.ListenAnswerUnexpected
+      process_message.ListenAnswerUnexpected
       |> should
       |> map_listen_failure()
       |> be_equal(error.UnexpectedListenAnswer)
@@ -397,7 +401,7 @@ fn listen_failure_tests() {
     }),
     unit.it("a passed deadline is QueryTimeout", fn() {
       // Act and assert
-      listener.ListenDeadlinePassed(False)
+      process_message.ListenDeadlinePassed(False)
       |> should
       |> map_listen_failure()
       |> be_equal(error.QueryTimeout(stopped_on_server: False))
@@ -405,7 +409,7 @@ fn listen_failure_tests() {
     }),
     unit.it("a zero byte in the channel is RequestNotWritable", fn() {
       // Act and assert
-      listener.ChannelHasZeroByte
+      process_message.ChannelHasZeroByte
       |> should
       |> map_listen_failure()
       |> be_equal(
@@ -415,7 +419,7 @@ fn listen_failure_tests() {
     }),
     unit.it("a connection process that is gone is ConnectionProcessDown", fn() {
       // Act and assert
-      listener.ListenerConnectionDown
+      process_message.ListenerConnectionDown
       |> should
       |> map_listen_failure()
       |> be_equal(error.ConnectionProcessDown)
@@ -428,7 +432,7 @@ fn listener_error_tests() {
   unit.group("refused subscribes", [
     unit.it("a long channel name is ChannelTooLong", fn() {
       // Act and assert
-      listener.ChannelTooLong(too_long_channel)
+      process_message.ChannelTooLong(too_long_channel)
       |> should
       |> map_listener_error()
       |> be_equal(error.ChannelTooLong(too_long_channel))
@@ -436,7 +440,7 @@ fn listener_error_tests() {
     }),
     unit.it("a subject with no process is SubscriberHasNoProcess", fn() {
       // Act and assert
-      listener.SubscriberHasNoProcess
+      process_message.SubscriberHasNoProcess
       |> should
       |> map_listener_error()
       |> be_equal(error.SubscriberHasNoProcess)
@@ -444,7 +448,7 @@ fn listener_error_tests() {
     }),
     unit.it("a failed LISTEN gives the reason of its failure", fn() {
       // Act and assert
-      listener.SubscribeFailed(listener.ListenAnswerUnexpected)
+      process_message.SubscribeFailed(process_message.ListenAnswerUnexpected)
       |> should
       |> map_listener_error()
       |> be_equal(error.UnexpectedListenAnswer)
@@ -452,7 +456,7 @@ fn listener_error_tests() {
     }),
     unit.it("a listener that is gone is ListenerStopped", fn() {
       // Act and assert
-      listener.ListenerProcessDown
+      process_message.ListenerProcessDown
       |> should
       |> map_listener_error()
       |> be_equal(error.ListenerStopped)

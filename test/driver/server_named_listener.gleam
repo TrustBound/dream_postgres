@@ -6,8 +6,10 @@ import dream_postgres/driver/connection
 import dream_postgres/driver/connection/backoff.{Backoff}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/listener.{
-  type Listener, type ListenerConfig, type ListenerMessage,
-  type ListenerProcessMessage, from_name, monitor_registry, supervised,
+  type Listener, from_name, monitor_registry, supervised,
+}
+import dream_postgres/driver/listener/process_message.{
+  type ListenerConfig, type ListenerMessage, type ListenerProcessMessage,
 }
 import dream_test/context.{type Context}
 import driver/listener_gate.{

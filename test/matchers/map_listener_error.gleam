@@ -1,6 +1,6 @@
 //// A matcher that maps a refused subscribe of the driver to its client reason.
 
-import dream_postgres/driver/listener.{type ListenerError}
+import dream_postgres/driver/listener/process_message.{type ListenerError}
 import dream_postgres/error.{type Reason}
 import dream_postgres/query/driver_executor
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}

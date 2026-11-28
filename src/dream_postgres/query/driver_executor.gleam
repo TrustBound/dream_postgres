@@ -17,8 +17,9 @@ import dream_postgres/driver/connection/request_failure.{
   type SimpleQueryError,
 } as connection_request_failure
 import dream_postgres/driver/connection/statement.{type Statement} as connection_statement
-import dream_postgres/driver/listener.{
-  type ListenFailure, type ListenerError, type UnsubscribeError,
+import dream_postgres/driver/listener.{type UnsubscribeError}
+import dream_postgres/driver/listener/process_message.{
+  type ListenFailure, type ListenerError,
 }
 import dream_postgres/driver/login.{
   type ConfigError, type LoginError, type LoginMethod,
@@ -570,14 +571,14 @@ fn exit_reason_text(exit_reason: process.ExitReason) -> String {
 @internal
 pub fn listen_failure_reason(failure: ListenFailure) -> Reason {
   case failure {
-    listener.ListenRefused(report:, transaction_status: _) ->
+    process_message.ListenRefused(report:, transaction_status: _) ->
       error.Server(error.server_error_from_report(report))
-    listener.ListenAnswerUnexpected -> error.UnexpectedListenAnswer
-    listener.ListenDeadlinePassed(cancelled:) ->
+    process_message.ListenAnswerUnexpected -> error.UnexpectedListenAnswer
+    process_message.ListenDeadlinePassed(cancelled:) ->
       error.QueryTimeout(stopped_on_server: cancelled)
-    listener.ChannelHasZeroByte ->
+    process_message.ChannelHasZeroByte ->
       error.RequestNotWritable(error.ZeroByteInString(field: "channel name"))
-    listener.ListenerConnectionDown -> error.ConnectionProcessDown
+    process_message.ListenerConnectionDown -> error.ConnectionProcessDown
   }
 }
 
@@ -585,10 +586,11 @@ pub fn listen_failure_reason(failure: ListenFailure) -> Reason {
 @internal
 pub fn listener_error_reason(listener_error: ListenerError) -> Reason {
   case listener_error {
-    listener.ChannelTooLong(channel:) -> error.ChannelTooLong(channel:)
-    listener.SubscriberHasNoProcess -> error.SubscriberHasNoProcess
-    listener.SubscribeFailed(error: failure) -> listen_failure_reason(failure)
-    listener.ListenerProcessDown -> error.ListenerStopped
+    process_message.ChannelTooLong(channel:) -> error.ChannelTooLong(channel:)
+    process_message.SubscriberHasNoProcess -> error.SubscriberHasNoProcess
+    process_message.SubscribeFailed(error: failure) ->
+      listen_failure_reason(failure)
+    process_message.ListenerProcessDown -> error.ListenerStopped
   }
 }
 

@@ -13,12 +13,14 @@ import dream_postgres/driver/connection/backoff.{Backoff}
 import dream_postgres/driver/connection/event.{TransportRefused}
 import dream_postgres/driver/connection/outcome.{Notification}
 import dream_postgres/driver/listener.{
+  ConnectFailed, ListenerGone, ListenerNotStarted, start, stop, subscribe,
+  supervised, unsubscribe,
+}
+import dream_postgres/driver/listener/process_message.{
   type ListenerConfig, type ListenerMessage, ChannelHasZeroByte, ChannelTooLong,
-  ConnectFailed, ListenAnswerUnexpected, ListenDeadlinePassed, ListenFailed,
-  ListenRefused, ListenerConnectionDown, ListenerGone, ListenerNotStarted,
-  ListenerProcessDown, Listening, NotListening, NotificationArrived,
-  SubscribeFailed, SubscriberHasNoProcess, start, stop, subscribe, supervised,
-  unsubscribe,
+  ListenAnswerUnexpected, ListenDeadlinePassed, ListenFailed, ListenRefused,
+  ListenerConnectionDown, ListenerProcessDown, Listening, NotListening,
+  NotificationArrived, SubscribeFailed, SubscriberHasNoProcess,
 }
 import dream_postgres/driver/transport.{ConnectRefused}
 import dream_test/context

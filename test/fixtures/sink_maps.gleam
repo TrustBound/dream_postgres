@@ -3,7 +3,7 @@
 
 import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/outcome.{type Notification}
-import dream_postgres/driver/listener.{
+import dream_postgres/driver/listener/process_message.{
   type ListenerMessage, ListenFailed, Listening, NotListening,
   NotificationArrived,
 }

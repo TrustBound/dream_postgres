@@ -4,6 +4,7 @@
 import dream_errors.{type Error}
 import dream_postgres/config.{type Config, pool_config}
 import dream_postgres/driver/listener as driver_listener
+import dream_postgres/driver/listener/process_message
 import dream_postgres/driver/sink
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/error/failure.{failure_with_no_query}
@@ -33,14 +34,14 @@ pub opaque type Listener {
 
 /// One subscription of a subject to a channel. `unlisten` ends it.
 pub opaque type Subscription {
-  Subscription(subscription: driver_listener.Subscription)
+  Subscription(subscription: process_message.Subscription)
 }
 
 /// The name of a listener that runs under a supervisor. Make it one time
 /// when the program starts, with `process.new_name("notifications")`:
 /// each name is an atom.
 pub type ListenerName =
-  process.Name(driver_listener.ListenerProcessMessage)
+  process.Name(process_message.ListenerProcessMessage)
 
 /// What the subject of a subscription gets.
 pub type ListenMessage {
@@ -90,7 +91,7 @@ pub fn start_listener(
   config: Config,
 ) -> Result(Listener, Error(PostgresError)) {
   use checked <- result.try(pool_config(config, [], None))
-  driver_listener.start(driver_listener.ListenerConfig(
+  driver_listener.start(process_message.ListenerConfig(
     connection: checked.connection,
     deadline_milliseconds: settings_query_timeout_milliseconds(
       checked.attachment,
@@ -145,7 +146,7 @@ pub fn supervised_listener(
 ) -> Result(ChildSpecification(Listener), Error(PostgresError)) {
   use checked <- result.try(pool_config(config, [], None))
   driver_listener.supervised(
-    driver_listener.ListenerConfig(
+    process_message.ListenerConfig(
       connection: checked.connection,
       deadline_milliseconds: settings_query_timeout_milliseconds(
         checked.attachment,
@@ -344,18 +345,18 @@ pub fn unlisten(
 /// listener.
 @internal
 pub fn listen_message(
-  message: driver_listener.ListenerMessage,
+  message: process_message.ListenerMessage,
 ) -> ListenMessage {
   case message {
-    driver_listener.NotificationArrived(notification:) ->
+    process_message.NotificationArrived(notification:) ->
       NotificationArrived(
         channel: notification.channel,
         payload: notification.payload,
         process_id: notification.process_id,
       )
-    driver_listener.NotListening -> NotListening
-    driver_listener.Listening(channel:) -> Listening(channel:)
-    driver_listener.ListenFailed(channel:, error: failure) ->
+    process_message.NotListening -> NotListening
+    process_message.Listening(channel:) -> Listening(channel:)
+    process_message.ListenFailed(channel:, error: failure) ->
       ListenFailed(
         channel:,
         error: failure_with_no_query(driver_executor.listen_failure_reason(

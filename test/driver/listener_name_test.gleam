@@ -4,9 +4,9 @@
 //// session keeps the subscriptions, and a crash of the registry reaches a
 //// monitor of it.
 
-import dream_postgres/driver/listener.{
-  ListenerProcessDown, Listening, NotListening, from_name, monitor_registry,
-  subscribe,
+import dream_postgres/driver/listener.{from_name, monitor_registry, subscribe}
+import dream_postgres/driver/listener/process_message.{
+  ListenerProcessDown, Listening, NotListening,
 }
 import dream_test/context
 import dream_test/matchers.{be_equal, be_error, be_ok, or_fail_with, should}

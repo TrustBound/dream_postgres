@@ -7,8 +7,9 @@ import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/event.{type ConnectionEvent}
 import dream_postgres/driver/connection/outcome.{type Notification}
 import dream_postgres/driver/connection/settings.{ConnectionConfig}
-import dream_postgres/driver/listener.{
-  type Listener, type ListenerMessage, type Subscription, subscribe,
+import dream_postgres/driver/listener.{type Listener, subscribe}
+import dream_postgres/driver/listener/process_message.{
+  type ListenerMessage, type Subscription,
 }
 import dream_postgres/driver/pool
 import dream_postgres/driver/pool/holds as pool_holds

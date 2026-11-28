@@ -17,8 +17,10 @@ import dream_postgres/driver/connection/backoff.{type Backoff, Backoff}
 import dream_postgres/driver/connection/call.{type Connection}
 import dream_postgres/driver/connection/settings.{ConnectionConfig}
 import dream_postgres/driver/listener.{
-  type Listener, type ListenerConfig, type ListenerMessage, type Subscription,
-  ListenerConfig, start, stop, subscribe, unsubscribe,
+  type Listener, start, stop, subscribe, unsubscribe,
+}
+import dream_postgres/driver/listener/process_message.{
+  type ListenerConfig, type ListenerMessage, type Subscription, ListenerConfig,
 }
 import dream_test/context.{type Context}
 import driver/listener_gate.{type Gate, start_gate, stop_gate}
