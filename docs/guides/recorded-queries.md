@@ -42,10 +42,10 @@ import dream_postgres/config.{type Config, intercept, set_secrets}
 import dream_postgres/secrets.{secrets}
 import snippets/request_tagging.{tag_with_app_name}
 
-/// The config of the app, shared by the app and its tests. `server` holds
-/// the settings of the server of each run.
-pub fn app_config(server: Config) -> Config {
-  server
+/// The config of the app, shared by the app and its tests. `config` points
+/// at the server of each run.
+pub fn app_config(config: Config) -> Config {
+  config
   |> intercept(tag_with_app_name)
   |> set_secrets(
     secrets()
@@ -162,12 +162,12 @@ import snippets/with_api_keys_table.{with_api_keys_table}
 /// One run of the test: in `Record` mode on the database of the app
 /// config, in `Playback` mode on the recording alone.
 pub fn run_create_api_key(
-  server: Config,
+  config: Config,
   test_recorder: Recorder,
   owner: Int,
 ) -> Result(ApiKey, Error(PostgresError)) {
   use connection <- result.try(
-    app_config(server)
+    app_config(config)
     |> record(test_recorder)
     |> start_pool,
   )
@@ -235,12 +235,12 @@ import snippets/app_config.{app_config}
 /// `pool_name`. With a recorder in `Playback` mode, the pool has no
 /// database, and `named_connection(pool_name)` answers from the recording.
 pub fn start_app_supervisor(
-  server: Config,
+  config: Config,
   test_recorder: Recorder,
   pool_name: PoolName,
 ) -> Result(actor.Started(Supervisor), String) {
   use pool_child <- result.try(
-    app_config(server)
+    app_config(config)
     |> record(test_recorder)
     |> supervised(name: pool_name)
     |> result.map_error(describe_error),

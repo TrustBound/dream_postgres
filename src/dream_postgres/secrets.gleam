@@ -13,10 +13,10 @@
 //// import dream_postgres/secrets.{secrets}
 //// import snippets/request_tagging.{tag_with_app_name}
 ////
-//// /// The config of the app, shared by the app and its tests. `server` holds
-//// /// the settings of the server of each run.
-//// pub fn app_config(server: Config) -> Config {
-////   server
+//// /// The config of the app, shared by the app and its tests. `config` points
+//// /// at the server of each run.
+//// pub fn app_config(config: Config) -> Config {
+////   config
 ////   |> intercept(tag_with_app_name)
 ////   |> set_secrets(
 ////     secrets()
@@ -66,10 +66,10 @@ type SecretColumn {
 /// import dream_postgres/secrets.{secrets}
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
-/// /// The config of the app, shared by the app and its tests. `server` holds
-/// /// the settings of the server of each run.
-/// pub fn app_config(server: Config) -> Config {
-///   server
+/// /// The config of the app, shared by the app and its tests. `config` points
+/// /// at the server of each run.
+/// pub fn app_config(config: Config) -> Config {
+///   config
 ///   |> intercept(tag_with_app_name)
 ///   |> set_secrets(
 ///     secrets()
@@ -93,10 +93,10 @@ pub fn secrets() -> Secrets {
 /// import dream_postgres/secrets.{secrets}
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
-/// /// The config of the app, shared by the app and its tests. `server` holds
-/// /// the settings of the server of each run.
-/// pub fn app_config(server: Config) -> Config {
-///   server
+/// /// The config of the app, shared by the app and its tests. `config` points
+/// /// at the server of each run.
+/// pub fn app_config(config: Config) -> Config {
+///   config
 ///   |> intercept(tag_with_app_name)
 ///   |> set_secrets(
 ///     secrets()
@@ -128,10 +128,10 @@ pub fn text(
 /// import dream_postgres/secrets.{secrets}
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
-/// /// The config of the app, shared by the app and its tests. `server` holds
-/// /// the settings of the server of each run.
-/// pub fn app_config(server: Config) -> Config {
-///   server
+/// /// The config of the app, shared by the app and its tests. `config` points
+/// /// at the server of each run.
+/// pub fn app_config(config: Config) -> Config {
+///   config
 ///   |> intercept(tag_with_app_name)
 ///   |> set_secrets(
 ///     secrets()

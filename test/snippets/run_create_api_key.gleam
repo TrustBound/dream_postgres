@@ -11,12 +11,12 @@ import snippets/with_api_keys_table.{with_api_keys_table}
 /// One run of the test: in `Record` mode on the database of the app
 /// config, in `Playback` mode on the recording alone.
 pub fn run_create_api_key(
-  server: Config,
+  config: Config,
   test_recorder: Recorder,
   owner: Int,
 ) -> Result(ApiKey, Error(PostgresError)) {
   use connection <- result.try(
-    app_config(server)
+    app_config(config)
     |> record(test_recorder)
     |> start_pool,
   )
