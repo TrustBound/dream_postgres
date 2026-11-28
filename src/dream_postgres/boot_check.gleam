@@ -32,7 +32,7 @@ pub opaque type QueryCheck {
 ///
 /// ```gleam
 /// import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
-/// import dream_postgres/codec.{int, placeholder, text}
+/// import dream_postgres/codecs.{int, placeholder, text}
 /// import dream_postgres/query.{named, parameter, query}
 /// import dream_postgres/row.{column, row}
 ///
@@ -65,7 +65,7 @@ pub fn checked(query: Query, reader: Row(a)) -> QueryCheck {
 ///
 /// ```gleam
 /// import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
-/// import dream_postgres/codec.{int, placeholder, text}
+/// import dream_postgres/codecs.{int, placeholder, text}
 /// import dream_postgres/query.{named, parameter, query}
 /// import dream_postgres/row.{column, row}
 ///

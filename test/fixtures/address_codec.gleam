@@ -1,7 +1,8 @@
 //// A composite codec for the composite type `address` of the test catalog
 //// (`type_catalog.address()`), and the bytes of its values.
 
-import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs.{type Codec}
+import dream_postgres/codecs/composite
 import dream_postgres/row/reader.{column, row}
 import gleam/option.{type Option, None}
 
@@ -20,11 +21,11 @@ pub type Address {
 /// |> encode_as(address_codec(), type_catalog.address())
 /// ```
 pub fn address_codec() -> Codec(Address) {
-  codec.composite(
+  composite.composite(
     "address",
     read: {
-      use street <- column(codec.text)
-      use city <- column(codec.nullable(codec.text))
+      use street <- column(codecs.text)
+      use city <- column(codecs.nullable(codecs.text))
       row(Address(street:, city:))
     },
     write: address_fields,
@@ -32,10 +33,10 @@ pub fn address_codec() -> Codec(Address) {
   )
 }
 
-fn address_fields(address: Address) -> List(codec.Field) {
+fn address_fields(address: Address) -> List(composite.Field) {
   [
-    codec.field(codec.text, address.street),
-    codec.field(codec.nullable(codec.text), address.city),
+    composite.field(codecs.text, address.street),
+    composite.field(codecs.nullable(codecs.text), address.city),
   ]
 }
 

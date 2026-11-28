@@ -1,4 +1,4 @@
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/config.{type Config, intercept, secrets}
 import dream_postgres/secrets
 import snippets/request_tagging.{tag_with_app_name}

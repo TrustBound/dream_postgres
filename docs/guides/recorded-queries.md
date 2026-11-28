@@ -37,7 +37,7 @@ The app and its tests share one config. It holds the interceptors of the app and
 ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/config.{type Config, intercept, secrets}
 import dream_postgres/secrets
 import snippets/request_tagging.{tag_with_app_name}
@@ -63,7 +63,7 @@ This function creates an API key, then reads it back by the id that the database
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int, text, uuid}
+import dream_postgres/codecs.{int, text, uuid}
 import dream_postgres/codecs/time.{timestamp_with_time_zone}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
@@ -323,7 +323,7 @@ In playback, a secret parameter matches any value with the same codec at the sam
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{bool, text}
+import dream_postgres/codecs.{bool, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query, secret_parameter}

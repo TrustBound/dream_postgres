@@ -1,7 +1,7 @@
 //// The runners against a fake executor: the prepare, the checks, the run
 //// and the read of the rows.
 
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/driver/cell.{
   Binary, BinaryFormat, ParameterDescription, StatementDescription, TextFormat,
 }
@@ -212,7 +212,7 @@ pub fn tests() -> TestSuite {
       // Arrange
       let subject =
         definition.query("UPDATE posts SET title = title WHERE user_id = $1")
-        |> definition.parameter(codec.int, 7)
+        |> definition.parameter(codecs.int, 7)
       let executor =
         fake_executor.returning(
           StatementDescription(
@@ -308,7 +308,7 @@ pub fn tests() -> TestSuite {
       let found =
         runner.all(
           subject,
-          single(codec.int),
+          single(codecs.int),
           runner.DatabaseLayer(executor),
           [],
         )
@@ -360,7 +360,7 @@ pub fn tests() -> TestSuite {
       let found =
         runner.all(
           posts.query(),
-          single(codec.int),
+          single(codecs.int),
           runner.DatabaseLayer(executor),
           [],
         )
@@ -430,7 +430,7 @@ pub fn tests() -> TestSuite {
       let found =
         runner.all(
           posts.query(),
-          single(codec.int),
+          single(codecs.int),
           runner.DatabaseLayer(executor),
           [],
         )

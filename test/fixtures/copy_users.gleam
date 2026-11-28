@@ -1,7 +1,8 @@
 //// Rows of a users table `(id int4, email text)` for the COPY tests, with
 //// the functions that write and read them.
 
-import dream_postgres/codec.{type Codec, type Field}
+import dream_postgres/codecs.{type Codec}
+import dream_postgres/codecs/composite.{type Field}
 import dream_postgres/row.{type Row, column, row, single}
 import gleam/int
 import gleam/list
@@ -38,8 +39,8 @@ pub fn users() -> List(User) {
 /// ```
 pub fn user_fields(user: User) -> List(Field) {
   [
-    codec.field(codec.int, user.id),
-    codec.field(codec.nullable(codec.text), user.email),
+    composite.field(codecs.int, user.id),
+    composite.field(codecs.nullable(codecs.text), user.email),
   ]
 }
 
@@ -51,8 +52,8 @@ pub fn user_fields(user: User) -> List(Field) {
 /// copy_to(held, query("SELECT id, email FROM users"), read: copy_users.user_row(), from: [], with: list.prepend)
 /// ```
 pub fn user_row() -> Row(User) {
-  use id <- column(codec.int)
-  use email <- column(codec.nullable(codec.text))
+  use id <- column(codecs.int)
+  use email <- column(codecs.nullable(codecs.text))
   row(User(id:, email:))
 }
 
@@ -77,7 +78,7 @@ pub fn ids(count: Int) -> List(Int) {
 /// // -> [codec.field(codec.int, 7)]
 /// ```
 pub fn id_fields(id: Int) -> List(Field) {
-  [codec.field(codec.int, id)]
+  [composite.field(codecs.int, id)]
 }
 
 /// The field of an id with the text codec, which does not take an `int4`
@@ -90,7 +91,7 @@ pub fn id_fields(id: Int) -> List(Field) {
 /// // -> [codec.field(codec.text, "7")]
 /// ```
 pub fn text_id_fields(id: Int) -> List(Field) {
-  [codec.field(codec.text, int.to_string(id))]
+  [composite.field(codecs.text, int.to_string(id))]
 }
 
 /// The field of an id with `custom_int4`, a codec in the text format.
@@ -102,7 +103,7 @@ pub fn text_id_fields(id: Int) -> List(Field) {
 /// // -> [codec.field(copy_users.custom_int4(), 7)]
 /// ```
 pub fn custom_id_fields(id: Int) -> List(Field) {
-  [codec.field(custom_int4(), id)]
+  [composite.field(custom_int4(), id)]
 }
 
 /// A reader of one column with `custom_int4`.
@@ -124,7 +125,7 @@ pub fn custom_int4_row() -> Row(Int) {
 /// codec.field(copy_users.custom_int4(), 7)
 /// ```
 pub fn custom_int4() -> Codec(Int) {
-  codec.custom(
+  codecs.custom(
     type_name: "int4",
     to_text: int.to_string,
     from_text: parse_int,

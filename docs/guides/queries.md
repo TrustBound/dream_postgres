@@ -18,7 +18,7 @@ This guide shows how to build a query, how to read its rows, which function runs
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}
@@ -47,7 +47,7 @@ A parameter goes to the server apart from the SQL text, so a value never becomes
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{maybe_one, named, parameter, query}
@@ -73,7 +73,7 @@ pub fn find_user(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{bool, text}
+import dream_postgres/codecs.{bool, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query, secret_parameter}
@@ -95,13 +95,14 @@ pub fn password_matches(
 }
 ```
 
-A list goes to the server as one array parameter. `codec.array` makes the codec of a list from the codec of its elements:
+A list goes to the server as one array parameter. `array.array` makes the codec of a list from the codec of its elements:
 
 ### Find the users of a list of ids <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/find_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{array, int}
+import dream_postgres/codecs.{int}
+import dream_postgres/codecs/array.{array}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{all, parameter, query}
@@ -137,7 +138,7 @@ Use `column` with `use`, one line for each column, and end with `row`:
 ### A row reader for users <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/row.{type Row, column, row}
 
 pub type User {
@@ -159,7 +160,7 @@ pub fn user_row() -> Row(User) {
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{all, query}
@@ -189,7 +190,7 @@ A reader cannot mix `column` with `column_at` or `column_named`. A reader that r
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int}
+import dream_postgres/codecs.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, query}
@@ -223,7 +224,7 @@ Four functions run a query. Each takes the query, a row reader where it reads ro
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{affected, parameter, query}

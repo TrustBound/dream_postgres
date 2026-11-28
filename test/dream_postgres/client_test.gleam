@@ -6,7 +6,7 @@
 //// temporary table on it, so no table stays on the server.
 
 import dream_errors.{Invalid, Unavailable}
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/config
 import dream_postgres/error
 import dream_postgres/pool.{with_connection, with_interceptor}
@@ -60,8 +60,8 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_pool(fn(connection) {
             query("SELECT generate_series(1, $1)")
-            |> parameter(codec.int, 3)
-            |> all(single(codec.int), connection)
+            |> parameter(codecs.int, 3)
+            |> all(single(codecs.int), connection)
           })
           |> be_ok()
           |> be_equal([1, 2, 3])
@@ -76,8 +76,8 @@ pub fn tests() -> TestSuite {
             |> named("seven")
             |> one(
               {
-                use number <- column(codec.int)
-                use name <- column(codec.text)
+                use number <- column(codecs.int)
+                use name <- column(codecs.text)
                 row(#(number, name))
               },
               connection,
@@ -95,8 +95,8 @@ pub fn tests() -> TestSuite {
             query("SELECT 1 AS first, 'two'::text AS second, 3 AS third")
             |> one(
               {
-                use third <- column_at(3, codec.int)
-                use second <- column_named("second", codec.text)
+                use third <- column_at(3, codecs.int)
+                use second <- column_named("second", codecs.text)
                 row(#(third, second))
               },
               connection,
@@ -112,7 +112,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_pool(fn(connection) {
             query("SELECT 1 WHERE false")
-            |> maybe_one(single(codec.int), connection)
+            |> maybe_one(single(codecs.int), connection)
           })
           |> be_ok()
           |> be_none()
@@ -206,7 +206,7 @@ pub fn tests() -> TestSuite {
                 query(
                   "SELECT to_regclass('pg_temp.run_sql_rolled_back') IS NULL",
                 )
-                  |> one(single(codec.bool), held),
+                  |> one(single(codecs.bool), held),
               )
             })
           })
@@ -221,7 +221,7 @@ pub fn tests() -> TestSuite {
           |> run_on_stopped_pool(fn(connection) {
             [
               query("SELECT 1")
-                |> all(single(codec.int), connection)
+                |> all(single(codecs.int), connection)
                 |> result.replace(Nil),
               run_sql("SELECT 1", connection),
               with_connection(connection, fn(_held) { Nil }),
@@ -352,13 +352,13 @@ pub fn tests() -> TestSuite {
             )
             |> step(fn(transaction_connection) {
               query("SELECT 5")
-              |> one(single(codec.int), transaction_connection)
+              |> one(single(codecs.int), transaction_connection)
             })
             |> check(transfer_error.require_more_than(_, 1))
             |> step_with(fn(transaction_connection, found) {
               query("SELECT $1 * 10")
-              |> parameter(codec.int, found)
-              |> one(single(codec.int), transaction_connection)
+              |> parameter(codecs.int, found)
+              |> one(single(codecs.int), transaction_connection)
             })
             |> commit
           })
@@ -378,7 +378,7 @@ pub fn tests() -> TestSuite {
             )
             |> step(fn(transaction_connection) {
               query("SELECT 4")
-              |> one(single(codec.int), transaction_connection)
+              |> one(single(codecs.int), transaction_connection)
             })
             |> step_with(fn(transaction_connection, id) {
               client_statements.insert(
@@ -528,7 +528,7 @@ pub fn tests() -> TestSuite {
             ))
             use found <- result.try(
               query("SELECT 2")
-              |> one(single(codec.int), transaction_connection),
+              |> one(single(codecs.int), transaction_connection),
             )
             use <- bool.lazy_guard(when: found <= 1, return: fn() {
               client_statements.insert(transaction_connection, "branch_rows", 0)
@@ -696,7 +696,7 @@ pub fn tests() -> TestSuite {
             )
             |> step(fn(transaction_connection) {
               query("SELECT 1")
-              |> one(single(codec.int), transaction_connection)
+              |> one(single(codecs.int), transaction_connection)
             })
             |> check(transfer_error.require_more_than(_, 1))
             |> commit
@@ -1006,7 +1006,7 @@ pub fn unit_tests() -> TestSuite {
         config
         |> should
         |> run_on_started_pool(fn(connection) {
-          query("SELECT 1") |> all(single(codec.int), connection)
+          query("SELECT 1") |> all(single(codecs.int), connection)
         })
         |> be_error()
         |> have_kind_name()

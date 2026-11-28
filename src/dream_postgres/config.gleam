@@ -284,7 +284,7 @@ pub fn intercept(config: Config, added_interceptor: Interceptor) -> Config {
 /// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/codec.{text}
+/// import dream_postgres/codecs.{text}
 /// import dream_postgres/config.{type Config, intercept, secrets}
 /// import dream_postgres/secrets
 /// import snippets/request_tagging.{tag_with_app_name}

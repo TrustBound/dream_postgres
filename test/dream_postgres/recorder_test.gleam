@@ -2,7 +2,7 @@
 //// the setup, and each test plays one back on a connection whose port has
 //// no server, so playback cannot reach a database.
 
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/config
 import dream_postgres/copy.{copy_from, copy_to, table}
 import dream_postgres/error.{
@@ -640,7 +640,7 @@ pub fn tests() -> TestSuite {
                 interceptors.answer_with(Ok(SqlAnswer(results: []))),
               ),
               query("SELECT 1"),
-              read: single(codec.int),
+              read: single(codecs.int),
               from: [],
               with: list.prepend,
             )
@@ -900,7 +900,7 @@ pub fn tests() -> TestSuite {
           |> run_with_recorder(
             server_pools.config(recorded_scenarios.server_port)
               |> config.secrets(
-                secrets.new() |> secrets.column("token", codec.int, with: 1),
+                secrets.new() |> secrets.column("token", codecs.int, with: 1),
               ),
             recorded_scenarios.read_token,
           )

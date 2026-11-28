@@ -252,7 +252,7 @@ pub type Reason {
   )
   /// A field of `copy_from`, or a column that the row reader of `copy_to`
   /// reads, has a codec in the text format. A binary COPY needs a codec in
-  /// the binary format, as every codec of `dream_postgres/codec` is except
+  /// the binary format, as every codec of `dream_postgres/codecs` is except
   /// `custom`. `position` counts from 1.
   CopyNeedsBinaryCodec(position: Int, name: String, codec: String)
   /// The query of `copy_to` has `count` parameters. PostgreSQL takes no

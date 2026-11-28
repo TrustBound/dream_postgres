@@ -1,5 +1,6 @@
 import dream_errors.{type Error}
-import dream_postgres/codec.{array, int}
+import dream_postgres/codecs.{int}
+import dream_postgres/codecs/array.{array}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{all, parameter, query}

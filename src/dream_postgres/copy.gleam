@@ -2,7 +2,7 @@
 //// one at a time.
 
 import dream_errors.{type Error}
-import dream_postgres/codec
+import dream_postgres/codecs/composite
 import dream_postgres/copy/executor
 import dream_postgres/copy/request
 import dream_postgres/error.{type PostgresError}
@@ -38,7 +38,8 @@ import gleam/result
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres/codec.{type Field, field, int, nullable, text}
+/// import dream_postgres/codecs.{int, nullable, text}
+/// import dream_postgres/codecs/composite.{type Field, field}
 /// import dream_postgres/copy.{copy_from, table}
 /// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/pool.{type Connection}
@@ -79,7 +80,7 @@ pub fn copy_from(
   into table: Table,
   columns columns: List(String),
   rows rows: List(a),
-  write write: fn(a) -> List(codec.Field),
+  write write: fn(a) -> List(composite.Field),
 ) -> Result(Int, Error(PostgresError)) {
   hold(connection, fn(held) {
     executor.copy_from(

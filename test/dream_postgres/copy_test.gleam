@@ -4,7 +4,7 @@
 //// holds one connection and makes its own temporary table on it, so no
 //// table stays on the server.
 
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/copy.{copy_from, copy_to, table, table_in_schema}
 import dream_postgres/pool
 import dream_postgres/query.{parameter, query}
@@ -85,7 +85,7 @@ pub fn tests() -> TestSuite {
                 write: copy_users.user_fields,
               ))
               query("SELECT id FROM copy_null_users WHERE email IS NULL")
-              |> query.all(single(codec.int), held)
+              |> query.all(single(codecs.int), held)
             },
           )
           |> be_ok()
@@ -340,7 +340,7 @@ pub fn tests() -> TestSuite {
           |> run_on_pool(copy_to(
             _,
             query("SELECT g FROM generate_series(1, 20000) AS g"),
-            read: single(codec.int),
+            read: single(codecs.int),
             from: 0,
             with: int.add,
           ))
@@ -357,7 +357,7 @@ pub fn tests() -> TestSuite {
             query(
               "SELECT NULLIF(g, 3) AS id FROM generate_series(1, 5000) AS g",
             ),
-            read: single(codec.int),
+            read: single(codecs.int),
             from: 0,
             with: int.add,
           ))
@@ -378,7 +378,7 @@ pub fn tests() -> TestSuite {
                 query(
                   "SELECT NULLIF(g, 3) AS id FROM generate_series(1, 5000) AS g",
                 ),
-                read: single(codec.int),
+                read: single(codecs.int),
                 from: 0,
                 with: int.add,
               )
@@ -399,7 +399,7 @@ pub fn tests() -> TestSuite {
           |> run_on_pool(copy_to(
             _,
             query("SELECT 1 / (g - 3) AS id FROM generate_series(1, 5) AS g"),
-            read: single(codec.int),
+            read: single(codecs.int),
             from: 0,
             with: int.add,
           ))
@@ -416,15 +416,15 @@ pub fn tests() -> TestSuite {
             [
               copy_to(
                 connection,
-                query("SELECT $1::int4 AS id") |> parameter(codec.int, 1),
-                read: single(codec.int),
+                query("SELECT $1::int4 AS id") |> parameter(codecs.int, 1),
+                read: single(codecs.int),
                 from: 0,
                 with: int.add,
               ),
               copy_to(
                 connection,
                 query("SELECT $1::int4 AS id"),
-                read: single(codec.int),
+                read: single(codecs.int),
                 from: 0,
                 with: int.add,
               ),

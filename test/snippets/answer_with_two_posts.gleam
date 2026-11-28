@@ -1,4 +1,5 @@
-import dream_postgres/codec.{field, int, text}
+import dream_postgres/codecs.{int, text}
+import dream_postgres/codecs/composite.{field}
 import dream_postgres/interceptor.{type Outcome, type Request, column, rows}
 import gleam/option.{None, Some}
 

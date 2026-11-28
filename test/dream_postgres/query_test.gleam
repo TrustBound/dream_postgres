@@ -1,6 +1,7 @@
 //// Queries: the builder, and the check and write of the parameters.
 
-import dream_postgres/codec
+import dream_postgres/codecs
+import dream_postgres/codecs/numeric
 import dream_postgres/driver/cell.{Binary, BinaryFormat, Null}
 import dream_postgres/error.{
   EncodeFailed, ParameterCountMismatch, ParameterTypeMismatch,
@@ -65,9 +66,9 @@ pub fn tests() -> TestSuite {
           definition.query(
             "INSERT INTO posts (user_id, body, score) VALUES ($1, $2, $3)",
           )
-          |> definition.parameter(codec.int, 7)
-          |> definition.parameter(codec.nullable(codec.text), None)
-          |> definition.parameter(codec.numeric, "9.5")
+          |> definition.parameter(codecs.int, 7)
+          |> definition.parameter(codecs.nullable(codecs.text), None)
+          |> definition.parameter(numeric.numeric, "9.5")
 
         // Act
         let count = definition.parameter_count(subject)
@@ -88,9 +89,9 @@ pub fn tests() -> TestSuite {
             definition.query(
               "INSERT INTO posts (user_id, body, score) VALUES ($1, $2, $3)",
             )
-            |> definition.parameter(codec.int, 7)
-            |> definition.parameter(codec.nullable(codec.text), None)
-            |> definition.parameter(codec.numeric, "9.5")
+            |> definition.parameter(codecs.int, 7)
+            |> definition.parameter(codecs.nullable(codecs.text), None)
+            |> definition.parameter(numeric.numeric, "9.5")
 
           // Act and assert
           subject
@@ -132,9 +133,9 @@ pub fn tests() -> TestSuite {
           definition.query(
             "INSERT INTO posts (user_id, body, score) VALUES ($1, $2, $3)",
           )
-          |> definition.parameter(codec.int, 7)
-          |> definition.parameter(codec.nullable(codec.text), None)
-          |> definition.parameter(codec.numeric, "9.5")
+          |> definition.parameter(codecs.int, 7)
+          |> definition.parameter(codecs.nullable(codecs.text), None)
+          |> definition.parameter(numeric.numeric, "9.5")
 
         // Act and assert
         subject
@@ -150,9 +151,9 @@ pub fn tests() -> TestSuite {
           definition.query(
             "INSERT INTO posts (user_id, body, score) VALUES ($1, $2, $3)",
           )
-          |> definition.parameter(codec.int, 7)
-          |> definition.parameter(codec.nullable(codec.text), None)
-          |> definition.parameter(codec.numeric, "9.5")
+          |> definition.parameter(codecs.int, 7)
+          |> definition.parameter(codecs.nullable(codecs.text), None)
+          |> definition.parameter(numeric.numeric, "9.5")
 
         // Act and assert
         subject
@@ -174,7 +175,7 @@ pub fn tests() -> TestSuite {
         // Arrange
         let subject =
           definition.query("SELECT $1")
-          |> definition.parameter(codec.int, 40_000)
+          |> definition.parameter(codecs.int, 40_000)
 
         // Act and assert
         subject

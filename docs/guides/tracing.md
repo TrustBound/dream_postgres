@@ -30,7 +30,7 @@ Give a query a name with `named`. The name becomes the name of the span, and the
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query}
@@ -56,7 +56,7 @@ A query with no name gets the name `{operation} {database}` when the span ends, 
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int}
+import dream_postgres/codecs.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, query}

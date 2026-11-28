@@ -137,7 +137,7 @@ In 3.0, a row reader reads each column with a codec, and `one` gives the one row
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query}
@@ -244,7 +244,7 @@ In 3.0, a unique violation has the kind `Conflict`. `error.constraint_name` give
 
 ```gleam
 import dream_errors.{type Error, Conflict}
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{named, one, parameter, query}
@@ -303,7 +303,7 @@ pub fn start_supervised(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/config.{type Config}
 import dream_postgres/error.{type PostgresError, describe}
 import dream_postgres/pool.{type PoolName, named_connection, supervised}

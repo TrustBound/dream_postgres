@@ -1,7 +1,7 @@
 //// How to read one row of a result into a value: the columns in order, by
 //// position or by name, or a result of one column.
 
-import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs.{type Codec}
 import dream_postgres/row/reader
 
 /// How to read one row of a result into a value.

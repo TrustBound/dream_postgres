@@ -1,7 +1,7 @@
 //// The options of a pool: TLS, the statement cache, the notices subject
 //// and the pool events subject, with the mapping of each to the driver.
 
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/config.{
   AuthorityCertificates, AuthorityFile, CacheStatements, CheckAuthority,
   CheckAuthorityAndHost, ConnectFailed, Connected, Disconnected, Free, Held,
@@ -413,7 +413,7 @@ fn tls_tests() {
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
-        |> one(single(codec.bool), connection)
+        |> one(single(codecs.bool), connection)
       })
       |> be_ok()
       |> be_equal(True)
@@ -426,7 +426,7 @@ fn tls_tests() {
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
-        |> one(single(codec.bool), connection)
+        |> one(single(codecs.bool), connection)
       })
       |> be_ok()
       |> be_equal(False)
@@ -439,7 +439,7 @@ fn tls_tests() {
       |> config.pool_size(1)
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> all(single(codec.int), connection)
+        query("SELECT 1") |> all(single(codecs.int), connection)
       })
       |> be_error()
       |> have_cause()
@@ -460,10 +460,10 @@ fn statement_cache_tests() {
       |> run_on_started_pool(fn(connection) {
         with_connection(connection, fn(held) {
           use _rows <- result.try(
-            query("SELECT 1") |> all(single(codec.int), held),
+            query("SELECT 1") |> all(single(codecs.int), held),
           )
           query("SELECT count(*)::int FROM pg_prepared_statements")
-          |> one(single(codec.int), held)
+          |> one(single(codecs.int), held)
         })
       })
       |> be_ok()
@@ -507,7 +507,7 @@ fn pool_event_tests() {
       |> config.pool_events(events)
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> all(single(codec.int), connection)
+        query("SELECT 1") |> all(single(codecs.int), connection)
       })
       |> receive_all_messages(events, within: 100)
       |> contain(Connected(slot: 0))
@@ -523,7 +523,7 @@ fn pool_event_tests() {
       |> config.pool_events(events)
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> all(single(codec.int), connection)
+        query("SELECT 1") |> all(single(codecs.int), connection)
       })
       |> receive_all_messages(events, within: 100)
       |> contain(Held(slot: 0))
@@ -539,7 +539,7 @@ fn pool_event_tests() {
       |> config.pool_events(events)
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> all(single(codec.int), connection)
+        query("SELECT 1") |> all(single(codecs.int), connection)
       })
       |> receive_all_messages(events, within: 100)
       |> contain(Returned(slot: 0))
@@ -555,7 +555,7 @@ fn pool_event_tests() {
       |> config.pool_events(events)
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> all(single(codec.int), connection)
+        query("SELECT 1") |> all(single(codecs.int), connection)
       })
       |> receive_all_messages(events, within: 0)
       |> contain(Stopping)
@@ -581,7 +581,7 @@ fn pool_event_tests() {
       |> config.pool_events(events)
       |> should
       |> run_on_supervised_pool(name, fn(_supervisor) {
-        all(query("SELECT 1"), single(codec.int), named_connection(name))
+        all(query("SELECT 1"), single(codecs.int), named_connection(name))
       })
       |> receive_all_messages(events, within: 200)
       |> contain(Held(slot: 0))

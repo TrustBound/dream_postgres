@@ -2,7 +2,8 @@
 //// tests need no server; the tests against PostgreSQL 16 to 19 come with
 //// the driver.
 
-import dream_postgres/codec
+import dream_postgres/codecs
+import dream_postgres/codecs/array
 import dream_postgres/codecs/codec_type.{Malformed, NullValue, OutOfRange}
 import dream_postgres/codecs/json
 import dream_postgres/driver/cell.{
@@ -31,7 +32,7 @@ pub fn tests() -> TestSuite {
     group("accessors", [
       it("names a codec", fn() {
         // Arrange
-        let subject = codec.array(codec.int)
+        let subject = array.array(codecs.int)
 
         // Act
         let name = codec_type.name(subject)
@@ -44,7 +45,7 @@ pub fn tests() -> TestSuite {
       }),
       it("gives the Gleam type", fn() {
         // Arrange
-        let subject = codec.nullable(codec.text)
+        let subject = codecs.nullable(codecs.text)
 
         // Act
         let gleam_type = codec_type.gleam_type(subject)
@@ -57,7 +58,7 @@ pub fn tests() -> TestSuite {
       }),
       it("gives the format of a binary codec", fn() {
         // Arrange
-        let subject = codec.int
+        let subject = codecs.int
 
         // Act
         let format = codec_type.format(subject)
@@ -83,7 +84,7 @@ pub fn tests() -> TestSuite {
       }),
       it("gives the placeholder", fn() {
         // Arrange
-        let subject = codec.bool
+        let subject = codecs.bool
 
         // Act
         let placeholder = codec_type.placeholder(subject)
@@ -98,7 +99,7 @@ pub fn tests() -> TestSuite {
     group("domains", [
       it("takes a domain over a type it takes", fn() {
         // Arrange
-        let subject = codec.int
+        let subject = codecs.int
 
         // Act and assert
         subject
@@ -109,7 +110,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a domain whose base is unknown", fn() {
         // Arrange
-        let subject = codec.int
+        let subject = codecs.int
 
         // Act and assert
         subject
@@ -125,7 +126,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.positive_int())
+        |> encode_as(codecs.int, type_catalog.positive_int())
         |> be_ok()
         |> be_equal(Binary(<<7:size(32)>>))
         |> or_fail_with("Expected 7 as the four bytes of int4")
@@ -137,7 +138,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.int, type_catalog.positive_int())
+        |> decode_as(codecs.int, type_catalog.positive_int())
         |> be_ok()
         |> be_equal(7)
         |> or_fail_with("Expected 7 from the four bytes of int4")
@@ -146,7 +147,7 @@ pub fn tests() -> TestSuite {
     group("int", [
       it("takes int2", fn() {
         // Arrange
-        let subject = codec.int
+        let subject = codecs.int
 
         // Act and assert
         subject
@@ -157,7 +158,7 @@ pub fn tests() -> TestSuite {
       }),
       it("takes oid", fn() {
         // Arrange
-        let subject = codec.int
+        let subject = codecs.int
 
         // Act and assert
         subject
@@ -168,7 +169,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses text", fn() {
         // Arrange
-        let subject = codec.int
+        let subject = codecs.int
 
         // Act and assert
         subject
@@ -184,7 +185,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.int2())
+        |> encode_as(codecs.int, type_catalog.int2())
         |> be_ok()
         |> be_equal(Binary(<<-2:size(16)>>))
         |> or_fail_with("Expected -2 as two bytes")
@@ -196,7 +197,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.int4())
+        |> encode_as(codecs.int, type_catalog.int4())
         |> be_ok()
         |> be_equal(Binary(<<7:size(32)>>))
         |> or_fail_with("Expected 7 as four bytes")
@@ -208,7 +209,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.int8())
+        |> encode_as(codecs.int, type_catalog.int8())
         |> be_ok()
         |> be_equal(Binary(<<9_223_372_036_854_775_807:size(64)>>))
         |> or_fail_with("Expected the largest int8 as eight bytes")
@@ -220,7 +221,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.oid())
+        |> encode_as(codecs.int, type_catalog.oid())
         |> be_ok()
         |> be_equal(Binary(<<4_294_967_295:size(32)>>))
         |> or_fail_with("Expected the largest oid as four bytes")
@@ -232,7 +233,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.int2())
+        |> encode_as(codecs.int, type_catalog.int2())
         |> be_error()
         |> be_equal("32768 is out of range for int2")
         |> or_fail_with("Expected 32768 to be out of range for int2")
@@ -244,7 +245,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.int4())
+        |> encode_as(codecs.int, type_catalog.int4())
         |> be_error()
         |> be_equal("-2147483649 is out of range for int4")
         |> or_fail_with("Expected -2147483649 to be out of range for int4")
@@ -256,7 +257,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.oid())
+        |> encode_as(codecs.int, type_catalog.oid())
         |> be_error()
         |> be_equal("-1 is out of range for oid")
         |> or_fail_with("Expected -1 to be out of range for oid")
@@ -268,7 +269,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.int, type_catalog.int8())
+        |> encode_as(codecs.int, type_catalog.int8())
         |> be_error()
         |> be_equal("9223372036854775808 is out of range for int8")
         |> or_fail_with("Expected 2 to the 63 to be out of range for int8")
@@ -280,7 +281,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.int, type_catalog.int2())
+        |> decode_as(codecs.int, type_catalog.int2())
         |> be_ok()
         |> be_equal(-2)
         |> or_fail_with("Expected -2 from two bytes")
@@ -292,7 +293,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.int, type_catalog.int4())
+        |> decode_as(codecs.int, type_catalog.int4())
         |> be_ok()
         |> be_equal(-7)
         |> or_fail_with("Expected -7 from four bytes")
@@ -304,7 +305,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.int, type_catalog.int8())
+        |> decode_as(codecs.int, type_catalog.int8())
         |> be_ok()
         |> be_equal(-9)
         |> or_fail_with("Expected -9 from eight bytes")
@@ -316,7 +317,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.int, type_catalog.oid())
+        |> decode_as(codecs.int, type_catalog.oid())
         |> be_ok()
         |> be_equal(4_294_967_295)
         |> or_fail_with("Expected the largest oid, not -1")
@@ -328,7 +329,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.int, type_catalog.int4())
+        |> decode_as(codecs.int, type_catalog.int4())
         |> be_error()
         |> be_equal(Malformed("3 bytes are not a int4 value"))
         |> or_fail_with("Expected three bytes to be no int4 value")
@@ -340,7 +341,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.int, type_catalog.int4())
+        |> decode_as(codecs.int, type_catalog.int4())
         |> be_error()
         |> be_equal(NullValue)
         |> or_fail_with("Expected int to give NullValue for NULL")
@@ -349,7 +350,7 @@ pub fn tests() -> TestSuite {
     group("float", [
       it("takes float4", fn() {
         // Arrange
-        let subject = codec.float
+        let subject = codecs.float
 
         // Act and assert
         subject
@@ -365,7 +366,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.float, type_catalog.float4())
+        |> encode_as(codecs.float, type_catalog.float4())
         |> be_ok()
         |> be_equal(Binary(<<1.5:float-size(32)>>))
         |> or_fail_with("Expected 1.5 as four bytes")
@@ -377,7 +378,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.float, type_catalog.float8())
+        |> encode_as(codecs.float, type_catalog.float8())
         |> be_ok()
         |> be_equal(Binary(<<1.5:float-size(64)>>))
         |> or_fail_with("Expected 1.5 as eight bytes")
@@ -389,7 +390,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.float, type_catalog.float4())
+        |> encode_as(codecs.float, type_catalog.float4())
         |> be_error()
         |> be_equal("1.0e39 is out of range for float4")
         |> or_fail_with("Expected 1.0e39 to be out of range for float4")
@@ -401,7 +402,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.float, type_catalog.float4())
+        |> encode_as(codecs.float, type_catalog.float4())
         |> be_error()
         |> be_equal("-1.0e39 is out of range for float4")
         |> or_fail_with("Expected -1.0e39 to be out of range for float4")
@@ -413,7 +414,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.float, type_catalog.float4())
+        |> decode_as(codecs.float, type_catalog.float4())
         |> be_ok()
         |> be_equal(1.5)
         |> or_fail_with("Expected 1.5 from four bytes")
@@ -425,7 +426,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.float, type_catalog.float8())
+        |> decode_as(codecs.float, type_catalog.float8())
         |> be_ok()
         |> be_equal(1.5)
         |> or_fail_with("Expected 1.5 from eight bytes")
@@ -437,7 +438,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.float, type_catalog.float4())
+        |> decode_as(codecs.float, type_catalog.float4())
         |> be_error()
         |> be_equal(OutOfRange("NaN"))
         |> or_fail_with("Expected OutOfRange for the float4 NaN")
@@ -449,7 +450,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.float, type_catalog.float8())
+        |> decode_as(codecs.float, type_catalog.float8())
         |> be_error()
         |> be_equal(OutOfRange("Infinity"))
         |> or_fail_with("Expected OutOfRange for the float8 Infinity")
@@ -461,7 +462,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.float, type_catalog.float8())
+        |> decode_as(codecs.float, type_catalog.float8())
         |> be_error()
         |> be_equal(OutOfRange("-Infinity"))
         |> or_fail_with("Expected OutOfRange for the float8 -Infinity")
@@ -473,7 +474,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.float, type_catalog.float8())
+        |> decode_as(codecs.float, type_catalog.float8())
         |> be_error()
         |> be_equal(Malformed("2 bytes are not a float8 value"))
         |> or_fail_with("Expected two bytes to be no float8 value")
@@ -487,7 +488,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.bool, type_catalog.base_with_id(16, "bool"))
+        |> encode_as(codecs.bool, type_catalog.base_with_id(16, "bool"))
         |> be_ok()
         |> be_equal(Binary(<<1>>))
         |> or_fail_with("Expected True as the byte 1")
@@ -499,7 +500,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.bool, type_catalog.base_with_id(16, "bool"))
+        |> encode_as(codecs.bool, type_catalog.base_with_id(16, "bool"))
         |> be_ok()
         |> be_equal(Binary(<<0>>))
         |> or_fail_with("Expected False as the byte 0")
@@ -511,7 +512,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.bool, type_catalog.base_with_id(16, "bool"))
+        |> decode_as(codecs.bool, type_catalog.base_with_id(16, "bool"))
         |> be_ok()
         |> be_true()
         |> or_fail_with("Expected True from the byte 1")
@@ -523,7 +524,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.bool, type_catalog.base_with_id(16, "bool"))
+        |> decode_as(codecs.bool, type_catalog.base_with_id(16, "bool"))
         |> be_ok()
         |> be_false()
         |> or_fail_with("Expected False from the byte 0")
@@ -535,14 +536,14 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.bool, type_catalog.base_with_id(16, "bool"))
+        |> decode_as(codecs.bool, type_catalog.base_with_id(16, "bool"))
         |> be_error()
         |> be_equal(Malformed("1 bytes are not a bool value"))
         |> or_fail_with("Expected the byte 2 to be no bool value")
       }),
       it("takes bool", fn() {
         // Arrange
-        let subject = codec.bool
+        let subject = codecs.bool
 
         // Act and assert
         subject
@@ -555,7 +556,7 @@ pub fn tests() -> TestSuite {
     group("text", [
       it("takes citext", fn() {
         // Arrange
-        let subject = codec.text
+        let subject = codecs.text
 
         // Act and assert
         subject
@@ -571,7 +572,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.text, type_catalog.text())
+        |> encode_as(codecs.text, type_catalog.text())
         |> be_ok()
         |> be_equal(Binary(<<"héllo":utf8>>))
         |> or_fail_with("Expected the UTF-8 bytes of héllo")
@@ -583,7 +584,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text, type_catalog.text())
+        |> decode_as(codecs.text, type_catalog.text())
         |> be_ok()
         |> be_equal("héllo")
         |> or_fail_with("Expected héllo from its UTF-8 bytes")
@@ -595,7 +596,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text, type_catalog.text())
+        |> decode_as(codecs.text, type_catalog.text())
         |> be_ok()
         |> be_equal("hi")
         |> or_fail_with("Expected hi from a text cell")
@@ -607,7 +608,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.text, type_catalog.text())
+        |> decode_as(codecs.text, type_catalog.text())
         |> be_error()
         |> be_equal(Malformed("the text is not UTF-8"))
         |> or_fail_with("Expected the byte 255 to be no UTF-8 text")
@@ -616,7 +617,7 @@ pub fn tests() -> TestSuite {
     group("bytea", [
       it("takes bytea", fn() {
         // Arrange
-        let subject = codec.bytea
+        let subject = codecs.bytea
 
         // Act and assert
         subject
@@ -632,7 +633,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.bytea, type_catalog.base_with_id(17, "bytea"))
+        |> encode_as(codecs.bytea, type_catalog.base_with_id(17, "bytea"))
         |> be_ok()
         |> be_equal(Binary(<<1, 2>>))
         |> or_fail_with("Expected the bytes as they are")
@@ -644,7 +645,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.bytea, type_catalog.base_with_id(17, "bytea"))
+        |> decode_as(codecs.bytea, type_catalog.base_with_id(17, "bytea"))
         |> be_ok()
         |> be_equal(<<1, 2>>)
         |> or_fail_with("Expected the bytes as they are")
@@ -653,7 +654,7 @@ pub fn tests() -> TestSuite {
     group("uuid", [
       it("takes uuid", fn() {
         // Arrange
-        let subject = codec.uuid
+        let subject = codecs.uuid
 
         // Act and assert
         subject
@@ -669,7 +670,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.uuid, type_catalog.base_with_id(2950, "uuid"))
+        |> encode_as(codecs.uuid, type_catalog.base_with_id(2950, "uuid"))
         |> be_ok()
         |> be_equal(Binary(dream_uuid.to_bit_array(dream_uuid.max)))
         |> or_fail_with("Expected the 16 bytes of the max UUID")
@@ -681,7 +682,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.uuid, type_catalog.base_with_id(2950, "uuid"))
+        |> decode_as(codecs.uuid, type_catalog.base_with_id(2950, "uuid"))
         |> be_ok()
         |> be_equal(dream_uuid.max)
         |> or_fail_with("Expected the max UUID from its 16 bytes")
@@ -693,14 +694,14 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.uuid, type_catalog.base_with_id(2950, "uuid"))
+        |> decode_as(codecs.uuid, type_catalog.base_with_id(2950, "uuid"))
         |> be_error()
         |> be_equal(Malformed("15 bytes are not a uuid value"))
         |> or_fail_with("Expected 15 bytes to be no uuid value")
       }),
       it("has the nil placeholder", fn() {
         // Arrange
-        let subject = codec.uuid
+        let subject = codecs.uuid
 
         // Act
         let placeholder = codec_type.placeholder(subject)
@@ -849,7 +850,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.nullable(codec.int), type_catalog.int4())
+        |> encode_as(codecs.nullable(codecs.int), type_catalog.int4())
         |> be_ok()
         |> be_equal(Binary(<<7:size(32)>>))
         |> or_fail_with("Expected Some(7) as the four bytes of 7")
@@ -861,7 +862,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.nullable(codec.int), type_catalog.int4())
+        |> encode_as(codecs.nullable(codecs.int), type_catalog.int4())
         |> be_ok()
         |> be_equal(Null)
         |> or_fail_with("Expected None as NULL")
@@ -873,7 +874,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.nullable(codec.int), type_catalog.int4())
+        |> decode_as(codecs.nullable(codecs.int), type_catalog.int4())
         |> be_ok()
         |> be_none()
         |> or_fail_with("Expected None from NULL")
@@ -885,7 +886,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.nullable(codec.int), type_catalog.int4())
+        |> decode_as(codecs.nullable(codecs.int), type_catalog.int4())
         |> be_ok()
         |> be_some()
         |> be_equal(7)
@@ -893,7 +894,7 @@ pub fn tests() -> TestSuite {
       }),
       it("takes what its inner codec takes", fn() {
         // Arrange
-        let subject = codec.nullable(codec.int)
+        let subject = codecs.nullable(codecs.int)
 
         // Act and assert
         subject
@@ -904,7 +905,7 @@ pub fn tests() -> TestSuite {
       }),
       it("has the placeholder None", fn() {
         // Arrange
-        let subject = codec.nullable(codec.int)
+        let subject = codecs.nullable(codecs.int)
 
         // Act
         let placeholder = codec_type.placeholder(subject)
@@ -924,7 +925,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(codec.int), type_catalog.int2_vector())
+        |> encode_as(array.array(codecs.int), type_catalog.int2_vector())
         |> be_ok()
         |> be_equal(
           Binary(<<
@@ -948,7 +949,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(codec.int), type_catalog.int2_vector())
+        |> encode_as(array.array(codecs.int), type_catalog.int2_vector())
         |> be_error()
         |> be_equal("int2vector cannot be empty in the binary format")
         |> or_fail_with("Expected an empty int2vector to be refused")
@@ -961,7 +962,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          codec.array(codec.nullable(codec.int)),
+          array.array(codecs.nullable(codecs.int)),
           type_catalog.int2_vector(),
         )
         |> be_error()
@@ -970,7 +971,7 @@ pub fn tests() -> TestSuite {
       }),
       it("takes int4[]", fn() {
         // Arrange
-        let subject = codec.array(codec.int)
+        let subject = array.array(codecs.int)
 
         // Act and assert
         subject
@@ -981,7 +982,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses an array of an unknown type", fn() {
         // Arrange
-        let subject = codec.array(codec.int)
+        let subject = array.array(codecs.int)
 
         // Act and assert
         subject
@@ -992,7 +993,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a type that is not an array", fn() {
         // Arrange
-        let subject = codec.array(codec.int)
+        let subject = array.array(codecs.int)
 
         // Act and assert
         subject
@@ -1008,7 +1009,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> encode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_ok()
         |> be_equal(Binary(int4_array_bytes.one_and_two()))
         |> or_fail_with("Expected the int4[] {1,2}")
@@ -1020,7 +1021,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> encode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_ok()
         |> be_equal(Binary(int4_array_bytes.empty()))
         |> or_fail_with("Expected the empty int4[] with no dimensions")
@@ -1033,7 +1034,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          codec.array(codec.nullable(codec.int)),
+          array.array(codecs.nullable(codecs.int)),
           type_catalog.int4_array(),
         )
         |> be_ok()
@@ -1047,7 +1048,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> encode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_error()
         |> be_equal("9999999999 is out of range for int4")
         |> or_fail_with("Expected the element 9999999999 to be refused")
@@ -1059,7 +1060,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(codec.int), type_catalog.int4())
+        |> encode_as(array.array(codecs.int), type_catalog.int4())
         |> be_error()
         |> be_equal("int4 is not an array type")
         |> or_fail_with("Expected int4 to be refused as an array type")
@@ -1071,7 +1072,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(codec.int), type_catalog.lost_array())
+        |> encode_as(array.array(codecs.int), type_catalog.lost_array())
         |> be_error()
         |> be_equal("the element type 99999 is unknown")
         |> or_fail_with("Expected the element type 99999 to be unknown")
@@ -1083,7 +1084,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> decode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_ok()
         |> be_equal([1, 2])
         |> or_fail_with("Expected [1, 2] from the int4[] {1,2}")
@@ -1095,7 +1096,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> decode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_ok()
         |> be_empty()
         |> or_fail_with("Expected [] from the empty int4[]")
@@ -1108,7 +1109,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          codec.array(codec.nullable(codec.int)),
+          array.array(codecs.nullable(codecs.int)),
           type_catalog.int4_array(),
         )
         |> be_ok()
@@ -1122,7 +1123,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> decode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_error()
         |> be_equal(NullValue)
         |> or_fail_with("Expected NullValue for the NULL element")
@@ -1134,7 +1135,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> decode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_error()
         |> be_equal(NullValue)
         |> or_fail_with("Expected NullValue for a NULL array")
@@ -1146,7 +1147,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> decode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_error()
         |> be_equal(Malformed(
           "the array has 2 dimensions, and a List holds one",
@@ -1160,7 +1161,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> decode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_error()
         |> be_equal(Malformed("the array's header is cut short"))
         |> or_fail_with("Expected a header of one byte to be cut short")
@@ -1172,7 +1173,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> decode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_error()
         |> be_equal(Malformed("the array has bytes after its last element"))
         |> or_fail_with("Expected a byte after the last element to be refused")
@@ -1188,7 +1189,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.int4_array())
+        |> decode_as(array.array(codecs.int), type_catalog.int4_array())
         |> be_error()
         |> be_equal(Malformed("the array's elements are cut short"))
         |> or_fail_with("Expected one element of two to be cut short")
@@ -1200,14 +1201,14 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(codec.int), type_catalog.lost_array())
+        |> decode_as(array.array(codecs.int), type_catalog.lost_array())
         |> be_error()
         |> be_equal(Malformed("the element type 99999 is unknown"))
         |> or_fail_with("Expected the element type 99999 to be unknown")
       }),
       it("has the placeholder []", fn() {
         // Arrange
-        let subject = codec.array(codec.int)
+        let subject = array.array(codecs.int)
 
         // Act
         let placeholder = codec_type.placeholder(subject)
@@ -1222,7 +1223,7 @@ pub fn tests() -> TestSuite {
     group("text arrays", [
       it("takes ltree[]", fn() {
         // Arrange
-        let subject = codec.array(ltree_codec())
+        let subject = array.array(ltree_codec())
 
         // Act and assert
         subject
@@ -1238,7 +1239,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> encode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_ok()
         |> be_equal(Text(<<"{\"a.b\",\"q\\\"x\\\\y\"}":utf8>>))
         |> or_fail_with("Expected each element quoted, with \" and \\ escaped")
@@ -1251,7 +1252,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          codec.array(codec.nullable(ltree_codec())),
+          array.array(codecs.nullable(ltree_codec())),
           type_catalog.ltree_array(),
         )
         |> be_ok()
@@ -1265,7 +1266,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> encode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_ok()
         |> be_equal(Text(<<"{}":utf8>>))
         |> or_fail_with("Expected the text {}")
@@ -1277,7 +1278,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_ok()
         |> be_empty()
         |> or_fail_with("Expected [] from the text {}")
@@ -1289,7 +1290,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_ok()
         |> be_equal(["a.b", "c \"d\"", "e,f"])
         |> or_fail_with("Expected a.b, c \"d\" and e,f with the escapes read")
@@ -1302,7 +1303,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          codec.array(codec.nullable(ltree_codec())),
+          array.array(codecs.nullable(ltree_codec())),
           type_catalog.ltree_array(),
         )
         |> be_ok()
@@ -1316,7 +1317,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_error()
         |> be_equal(Malformed("not an ltree"))
         |> or_fail_with("Expected the ltree parser's error for bad")
@@ -1328,7 +1329,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_error()
         |> be_equal(Malformed(
           "the array has more than one dimension, and a List holds one",
@@ -1342,7 +1343,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_error()
         |> be_equal(Malformed("the array text has no closing brace"))
         |> or_fail_with("Expected the text {a to be refused")
@@ -1354,7 +1355,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_error()
         |> be_equal(Malformed("the array text does not start with a brace"))
         |> or_fail_with("Expected the text a} to be refused")
@@ -1366,7 +1367,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_error()
         |> be_equal(Malformed(
           "the array text has a character after a quoted element",
@@ -1380,7 +1381,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_error()
         |> be_equal(Malformed("the array text has a quote that does not close"))
         |> or_fail_with("Expected the text {\"a} to be refused")
@@ -1392,7 +1393,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.array(ltree_codec()), type_catalog.ltree_array())
+        |> decode_as(array.array(ltree_codec()), type_catalog.ltree_array())
         |> be_error()
         |> be_equal(Malformed("the text is not UTF-8"))
         |> or_fail_with("Expected the byte 255 to be no UTF-8 text")
@@ -1600,7 +1601,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "pg_catalog", "int4", Enum(["a"]))
 
         // Act and assert
-        codec.int
+        codecs.int
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1612,7 +1613,7 @@ pub fn tests() -> TestSuite {
           TypeDescription(1, "pg_catalog", "int4", Composite([#("x", 23)]))
 
         // Act and assert
-        codec.int
+        codecs.int
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1623,7 +1624,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "pg_catalog", "int4", Range(23))
 
         // Act and assert
-        codec.int
+        codecs.int
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1635,7 +1636,7 @@ pub fn tests() -> TestSuite {
           TypeDescription(1, "pg_catalog", "int4", Multirange(3904))
 
         // Act and assert
-        codec.int
+        codecs.int
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1646,7 +1647,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "pg_catalog", "int4", Array(23))
 
         // Act and assert
-        codec.int
+        codecs.int
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1657,7 +1658,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "pg_catalog", "int4", Pseudo)
 
         // Act and assert
-        codec.int
+        codecs.int
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1668,7 +1669,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "public", "x", Base)
 
         // Act and assert
-        codec.array(codec.int)
+        array.array(codecs.int)
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1679,7 +1680,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "public", "x", Enum(["a"]))
 
         // Act and assert
-        codec.array(codec.int)
+        array.array(codecs.int)
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1690,7 +1691,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "public", "x", Composite([]))
 
         // Act and assert
-        codec.array(codec.int)
+        array.array(codecs.int)
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1701,7 +1702,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "public", "x", Domain(99_999))
 
         // Act and assert
-        codec.array(codec.int)
+        array.array(codecs.int)
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1712,7 +1713,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "public", "x", Range(23))
 
         // Act and assert
-        codec.array(codec.int)
+        array.array(codecs.int)
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1723,7 +1724,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "public", "x", Multirange(3904))
 
         // Act and assert
-        codec.array(codec.int)
+        array.array(codecs.int)
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1734,7 +1735,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "public", "x", Pseudo)
 
         // Act and assert
-        codec.array(codec.int)
+        array.array(codecs.int)
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1797,7 +1798,7 @@ pub fn tests() -> TestSuite {
       }),
       it("a domain resolve leaves an enum as it is", fn() {
         // Arrange
-        let subject = codec.text
+        let subject = codecs.text
 
         // Act and assert
         subject
@@ -1811,7 +1812,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "public", "pair", Composite([]))
 
         // Act and assert
-        codec.text
+        codecs.text
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1823,7 +1824,7 @@ pub fn tests() -> TestSuite {
           TypeDescription(1, "pg_catalog", "int4range", Range(23))
 
         // Act and assert
-        codec.text
+        codecs.text
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1835,7 +1836,7 @@ pub fn tests() -> TestSuite {
           TypeDescription(1, "pg_catalog", "int4multirange", Multirange(3904))
 
         // Act and assert
-        codec.text
+        codecs.text
         |> should
         |> accept_type(description)
         |> be_false()
@@ -1843,7 +1844,7 @@ pub fn tests() -> TestSuite {
       }),
       it("a domain resolve leaves an array as it is", fn() {
         // Arrange
-        let subject = codec.text
+        let subject = codecs.text
 
         // Act and assert
         subject
@@ -1857,7 +1858,7 @@ pub fn tests() -> TestSuite {
         let description = TypeDescription(1, "pg_catalog", "void", Pseudo)
 
         // Act and assert
-        codec.text
+        codecs.text
         |> should
         |> accept_type(description)
         |> be_false()

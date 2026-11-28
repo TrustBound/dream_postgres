@@ -215,7 +215,7 @@ A pool that runs for the whole life of an app goes under the app's supervisor. `
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/config.{type Config}
 import dream_postgres/error.{type PostgresError, describe}
 import dream_postgres/pool.{type PoolName, named_connection, supervised}

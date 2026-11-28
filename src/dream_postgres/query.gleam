@@ -4,7 +4,7 @@
 ////
 //// ```gleam
 //// import dream_errors.{type Error}
-//// import dream_postgres/codec.{int, text}
+//// import dream_postgres/codecs.{int, text}
 //// import dream_postgres/error.{type PostgresError}
 //// import dream_postgres/pool.{type Connection}
 //// import dream_postgres/query.{named, one, parameter, query}
@@ -38,7 +38,7 @@
 //// ```
 
 import dream_errors.{type Error}
-import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs.{type Codec}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/error/failure.{failure}
 import dream_postgres/interceptor.{type Interceptor}
@@ -77,7 +77,7 @@ pub fn parameter(query: Query, codec: Codec(a), value: a) -> Query {
 ///
 /// ```gleam
 /// import dream_errors.{type Error}
-/// import dream_postgres/codec.{bool, text}
+/// import dream_postgres/codecs.{bool, text}
 /// import dream_postgres/error.{type PostgresError}
 /// import dream_postgres/pool.{type Connection}
 /// import dream_postgres/query.{named, one, parameter, query, secret_parameter}

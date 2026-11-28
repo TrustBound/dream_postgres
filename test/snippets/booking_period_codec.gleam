@@ -1,4 +1,4 @@
-import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs.{type Codec}
 import dream_postgres/codecs/range.{type Range, range}
 import dream_postgres/codecs/time.{date}
 import gleam/time/calendar.{type Date}

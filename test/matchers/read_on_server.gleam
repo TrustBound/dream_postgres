@@ -1,6 +1,6 @@
 //// A matcher that reads a literal of a type on a probe server with a codec.
 
-import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs.{type Codec}
 import dream_test/types.{type MatchResult, MatchFailed, MatchOk}
 import fixtures/probe_sessions.{type ProbeSessions, type ReadFailure}
 import gleam/option.{type Option, None, Some}

@@ -1,5 +1,5 @@
 //// The codec type and its helpers, for the modules of dream_postgres that
-//// define codecs. An app uses `dream_postgres/codec` and never this module.
+//// define codecs. An app uses `dream_postgres/codecs` and never this module.
 
 import dream_postgres/driver/cell.{
   type Cell, type Format, type TypeDescription, Array, Base, Binary, Composite,

@@ -2,7 +2,7 @@
 //// version, with the tables of the docs' examples in a new schema of its
 //// own, for some work.
 
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/error
 import dream_postgres/pool.{type Connection, with_connection}
 import dream_postgres/query.{one, query, run_sql}
@@ -74,7 +74,7 @@ fn run_in_schema(
 ) -> Result(a, String) {
   use process_id <- result.try(
     query("SELECT pg_backend_pid()")
-    |> one(single(codec.int), held)
+    |> one(single(codecs.int), held)
     |> result.map_error(error.describe),
   )
   let schema = "examples_" <> int.to_string(process_id)

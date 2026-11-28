@@ -15,7 +15,7 @@
 //// the text format: `empty`, or `[lower,upper)` with each bound quoted, and
 //// a multirange is `{[1,3),[5,7)}`.
 
-import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs.{type Codec}
 import dream_postgres/codecs/codec_type.{
   type DecodeIssue, type TypeLookup, Codec, Malformed, NullValue, accepts,
   decode, encode, utf8_bytes,
@@ -64,7 +64,7 @@ const no_upper_flag = 16
 /// ### A codec of a date range <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/booking_period_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/codec.{type Codec}
+/// import dream_postgres/codecs.{type Codec}
 /// import dream_postgres/codecs/range.{type Range, range}
 /// import dream_postgres/codecs/time.{date}
 /// import gleam/time/calendar.{type Date}

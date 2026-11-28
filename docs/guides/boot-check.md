@@ -18,13 +18,13 @@ A `QueryCheck` is a query and how its rows are read:
 - `checked(query, reader)` is the check of a query whose rows the reader reads, as `all`, `one` and `maybe_one` read them.
 - `checked_command(query)` is the check of a command whose rows are not read, as `affected` runs it.
 
-A check uses the codec of each parameter, not its value. So a query that is built only for its check gives each parameter `codec.placeholder` of its codec. Each codec has a placeholder: the [codecs guide](codecs.md) lists them.
+A check uses the codec of each parameter, not its value. So a query that is built only for its check gives each parameter `codecs.placeholder` of its codec. Each codec has a placeholder: the [codecs guide](codecs.md) lists them.
 
 ### Make the checks of the queries of a module <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_checks.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_postgres/boot_check.{type QueryCheck, checked, checked_command}
-import dream_postgres/codec.{int, placeholder, text}
+import dream_postgres/codecs.{int, placeholder, text}
 import dream_postgres/query.{named, parameter, query}
 import dream_postgres/row.{column, row}
 
@@ -91,9 +91,9 @@ Each message is the text of `dream_postgres/error.describe`: the kind of `dream_
 
 | Change | Message |
 |---|---|
-| The column `email` is now `int4`, and the reader reads it with `codec.text` | `failed: user.find: column 2 (email) is int4, and the query reads it with the text codec` |
+| The column `email` is now `int4`, and the reader reads it with `codecs.text` | `failed: user.find: column 2 (email) is int4, and the query reads it with the text codec` |
 | The column `nickname` is now `int4`, and the reader reads it as nullable text | `failed: user.read: column 3 (nickname) is int4, and the query reads it with the nullable text codec` |
-| The parameter `$1` is `text`, and the query gives it with `codec.int` | `failed: user.find_by_email: parameter $1 is text, and the query gives it with the int codec` |
+| The parameter `$1` is `text`, and the query gives it with `codecs.int` | `failed: user.find_by_email: parameter $1 is text, and the query gives it with the int codec` |
 | The column `nickname` does not exist | `failed: user.read: column "nickname" does not exist (42703)` |
 | The pool is stopped | `unavailable: the pool is stopped` |
 | The connection has no database, such as a recorder in playback mode | `failed: the connection has no database to check the queries against` |

@@ -4,7 +4,8 @@
 //// tests play them back with no database. `remove` deletes the directory.
 
 import dream_errors.{type Error}
-import dream_postgres/codec
+import dream_postgres/codecs
+import dream_postgres/codecs/array
 import dream_postgres/config.{type Config}
 import dream_postgres/copy.{copy_from, copy_to, table}
 import dream_postgres/error.{type PostgresError}
@@ -408,7 +409,7 @@ pub fn api_key() -> Scenario {
 /// ```
 pub fn read_token(connection: Connection) -> ScenarioResult {
   query("SELECT 'sk_live_abc' AS token")
-  |> one(single(codec.text), connection)
+  |> one(single(codecs.text), connection)
   |> inspected
 }
 
@@ -439,7 +440,7 @@ pub fn identical() -> Scenario {
 /// // -> Ok("[1, 2, 3]")
 /// ```
 pub fn select_series(connection: Connection) -> ScenarioResult {
-  series_query(3) |> all(single(codec.int), connection) |> inspected
+  series_query(3) |> all(single(codecs.int), connection) |> inspected
 }
 
 /// `select_series` two times: one request more than the recording
@@ -466,8 +467,10 @@ pub fn select_series_twice(connection: Connection) -> ScenarioResult {
 /// // -> Error(RequestNotMatched) in playback of "two_parameters"
 /// ```
 pub fn select_three_then_two(connection: Connection) -> ScenarioResult {
-  use three <- result.try(series_query(3) |> all(single(codec.int), connection))
-  use two <- result.try(series_query(2) |> all(single(codec.int), connection))
+  use three <- result.try(
+    series_query(3) |> all(single(codecs.int), connection),
+  )
+  use two <- result.try(series_query(2) |> all(single(codecs.int), connection))
   Ok(string.inspect(#(three, two)))
 }
 
@@ -481,8 +484,10 @@ pub fn select_three_then_two(connection: Connection) -> ScenarioResult {
 /// // -> Ok("#([1, 2], [1, 2, 3])")
 /// ```
 pub fn select_two_series(connection: Connection) -> ScenarioResult {
-  use two <- result.try(series_query(2) |> all(single(codec.int), connection))
-  use three <- result.try(series_query(3) |> all(single(codec.int), connection))
+  use two <- result.try(series_query(2) |> all(single(codecs.int), connection))
+  use three <- result.try(
+    series_query(3) |> all(single(codecs.int), connection),
+  )
   Ok(string.inspect(#(two, three)))
 }
 
@@ -496,7 +501,7 @@ pub fn select_two_series(connection: Connection) -> ScenarioResult {
 /// // -> Error(RequestNotRecorded) in playback of "all"
 /// ```
 pub fn select_four(connection: Connection) -> ScenarioResult {
-  series_query(4) |> all(single(codec.int), connection) |> inspected
+  series_query(4) |> all(single(codecs.int), connection) |> inspected
 }
 
 /// The password whose hash `stored_hash` is.
@@ -562,15 +567,15 @@ pub fn check_password_in_plain(connection: Connection) -> ScenarioResult {
   "SELECT encode(sha256(convert_to($1, 'UTF8')), 'hex') = $2"
   |> query
   |> named("password.matches")
-  |> parameter(codec.text, password)
-  |> parameter(codec.text, stored_hash)
-  |> one(single(codec.bool), connection)
+  |> parameter(codecs.text, password)
+  |> parameter(codecs.text, stored_hash)
+  |> one(single(codecs.bool), connection)
   |> inspected
 }
 
 fn series_query(count: Int) -> query.Query {
   query("SELECT x FROM generate_series(1, $1) AS x")
-  |> parameter(codec.int, count)
+  |> parameter(codecs.int, count)
 }
 
 /// `one` of the length of an int4 array parameter.
@@ -583,8 +588,8 @@ fn series_query(count: Int) -> query.Query {
 /// ```
 pub fn count_array(connection: Connection) -> ScenarioResult {
   query("SELECT cardinality($1::int4[])")
-  |> parameter(codec.array(codec.int), [1, 2, 3])
-  |> one(single(codec.int), connection)
+  |> parameter(array.array(codecs.int), [1, 2, 3])
+  |> one(single(codecs.int), connection)
   |> inspected
 }
 
@@ -599,8 +604,8 @@ pub fn count_array(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn count_with_text(connection: Connection) -> ScenarioResult {
   query("SELECT cardinality($1::int4[])")
-  |> parameter(codec.text, "{1,2,3}")
-  |> one(single(codec.int), connection)
+  |> parameter(codecs.text, "{1,2,3}")
+  |> one(single(codecs.int), connection)
   |> inspected
 }
 
@@ -614,7 +619,7 @@ pub fn count_with_text(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn select_nothing(connection: Connection) -> ScenarioResult {
   query("SELECT 1 WHERE false")
-  |> maybe_one(single(codec.int), connection)
+  |> maybe_one(single(codecs.int), connection)
   |> inspected
 }
 
@@ -633,7 +638,7 @@ pub fn update_rows(connection: Connection) -> ScenarioResult {
       held,
     ))
     query("UPDATE counters SET id = id + $1")
-    |> parameter(codec.int, 10)
+    |> parameter(codecs.int, 10)
     |> affected(held)
   })
   |> result.flatten
@@ -683,7 +688,7 @@ pub fn count_in_transaction(connection: Connection) -> ScenarioResult {
     _,
   ))
   |> step(fn(held) {
-    query("SELECT count(*)::int4 FROM notes") |> one(single(codec.int), held)
+    query("SELECT count(*)::int4 FROM notes") |> one(single(codecs.int), held)
   })
   |> commit
   |> inspected
@@ -710,7 +715,7 @@ pub fn commit_after_conflict(connection: Connection) -> ScenarioResult {
       held,
     ))
     query("INSERT INTO tags VALUES ($1)")
-    |> parameter(codec.text, "a")
+    |> parameter(codecs.text, "a")
     |> affected(held)
     |> result.is_error
     |> Ok
@@ -740,7 +745,7 @@ pub fn store_users(connection: Connection) -> ScenarioResult {
       write: copy_users.user_fields,
     ))
     query("SELECT count(*)::int4 FROM copied_users")
-    |> one(single(codec.int), held)
+    |> one(single(codecs.int), held)
     |> result.map(fn(counted) { #(stored, counted) })
   })
   |> result.flatten
@@ -778,7 +783,7 @@ pub fn read_series(connection: Connection) -> ScenarioResult {
   copy_to(
     connection,
     query("SELECT x FROM generate_series(1, 3) AS x"),
-    read: single(codec.int),
+    read: single(codecs.int),
     from: [],
     with: list.prepend,
   )
@@ -797,7 +802,7 @@ pub fn read_series_divided_by_zero(connection: Connection) -> ScenarioResult {
   copy_to(
     connection,
     query("SELECT 1 / (3 - x) FROM generate_series(1, 5) AS x"),
-    read: single(codec.int),
+    read: single(codecs.int),
     from: [],
     with: list.prepend,
   )
@@ -816,7 +821,7 @@ pub fn read_missing_column(connection: Connection) -> ScenarioResult {
   copy_to(
     connection,
     query("SELECT no_such_column"),
-    read: single(codec.int),
+    read: single(codecs.int),
     from: [],
     with: list.prepend,
   )
@@ -836,7 +841,7 @@ pub fn read_null(connection: Connection) -> ScenarioResult {
   copy_to(
     connection,
     query("SELECT NULL::int4"),
-    read: single(codec.int),
+    read: single(codecs.int),
     from: [],
     with: list.prepend,
   )
@@ -859,7 +864,7 @@ pub fn insert_twice(connection: Connection) -> ScenarioResult {
       held,
     ))
     let insert =
-      query("INSERT INTO names VALUES ($1)") |> parameter(codec.text, "ada")
+      query("INSERT INTO names VALUES ($1)") |> parameter(codecs.text, "ada")
     use _first <- result.try(affected(insert, held))
     affected(insert, held)
   })
@@ -878,8 +883,8 @@ pub fn insert_twice(connection: Connection) -> ScenarioResult {
 /// ```
 pub fn select_missing_column(connection: Connection) -> ScenarioResult {
   query("SELECT no_such_column + $1")
-  |> parameter(codec.int, 1)
-  |> one(single(codec.int), connection)
+  |> parameter(codecs.int, 1)
+  |> one(single(codecs.int), connection)
   |> inspected
 }
 

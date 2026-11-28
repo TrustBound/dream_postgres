@@ -1,8 +1,9 @@
 //// The network, bit string, tid and hstore codecs against the exact bytes
 //// of PostgreSQL's binary formats, and the network value functions.
 
-import dream_postgres/codec
+import dream_postgres/codecs/bit_string
 import dream_postgres/codecs/codec_type.{Malformed}
+import dream_postgres/codecs/hstore
 import dream_postgres/codecs/network.{
   IpNetwork, Ipv4, Ipv6, NotAMacAddress, NotAnIpNetwork,
 }
@@ -598,7 +599,7 @@ pub fn tests() -> TestSuite {
     group("bit strings", [
       it("takes varbit", fn() {
         // Arrange
-        let subject = codec.bit_string
+        let subject = bit_string.bit_string
 
         // Act and assert
         subject
@@ -614,7 +615,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.bit_string, type_catalog.base("varbit"))
+        |> encode_as(bit_string.bit_string, type_catalog.base("varbit"))
         |> be_ok()
         |> be_equal(Binary(<<3:size(32), 0b10100000>>))
         |> or_fail_with(
@@ -628,7 +629,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.bit_string, type_catalog.base("bit"))
+        |> encode_as(bit_string.bit_string, type_catalog.base("bit"))
         |> be_ok()
         |> be_equal(Binary(<<16:size(32), 1, 2>>))
         |> or_fail_with("Expected the length 16 and the two bytes")
@@ -640,7 +641,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.bit_string, type_catalog.base("varbit"))
+        |> decode_as(bit_string.bit_string, type_catalog.base("varbit"))
         |> be_ok()
         |> be_equal(<<5:size(3)>>)
         |> or_fail_with("Expected the three bits 101")
@@ -652,7 +653,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.bit_string, type_catalog.base("varbit"))
+        |> decode_as(bit_string.bit_string, type_catalog.base("varbit"))
         |> be_error()
         |> be_equal(Malformed("the bit string is shorter than its length"))
         |> or_fail_with("Expected 8 bits for a length of 9 to be malformed")
@@ -664,7 +665,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.bit_string, type_catalog.base("varbit"))
+        |> decode_as(bit_string.bit_string, type_catalog.base("varbit"))
         |> be_error()
         |> be_equal(Malformed("2 bytes are not a varbit value"))
         |> or_fail_with("Expected a length of two bytes to be malformed")
@@ -736,7 +737,7 @@ pub fn tests() -> TestSuite {
     group("hstore", [
       it("takes hstore", fn() {
         // Arrange
-        let subject = codec.hstore()
+        let subject = hstore.hstore()
 
         // Act and assert
         subject
@@ -752,7 +753,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> encode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_ok()
         |> be_equal(Binary(hstore_bytes.one_pair()))
         |> or_fail_with("Expected the bytes of the pair a, b")
@@ -764,7 +765,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> encode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_ok()
         |> be_equal(Binary(hstore_bytes.null_pair()))
         |> or_fail_with("Expected the bytes of the key a with the length -1")
@@ -776,7 +777,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_ok()
         |> be_equal(dict.from_list([#("a", Some("b"))]))
         |> or_fail_with("Expected the pair a, b")
@@ -788,7 +789,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_ok()
         |> be_equal(dict.from_list([#("a", None)]))
         |> or_fail_with("Expected the key a with no value")
@@ -800,7 +801,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> be_equal(Malformed("the hstore has bytes after its last pair"))
         |> or_fail_with("Expected a byte after the last pair to be malformed")
@@ -812,7 +813,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> be_equal(Malformed("the hstore's pairs are cut short"))
         |> or_fail_with("Expected two pairs with no bytes to be malformed")
@@ -824,7 +825,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> be_equal(Malformed("the text is not UTF-8"))
         |> or_fail_with("Expected the key byte 255 to be refused as not UTF-8")
@@ -836,7 +837,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> be_equal(Malformed("1 bytes are not a hstore value"))
         |> or_fail_with("Expected a count of one byte to be malformed")
@@ -848,13 +849,13 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.hstore(), type_catalog.base("hstore"))
+        |> decode_as(hstore.hstore(), type_catalog.base("hstore"))
         |> be_error()
         |> or_fail_with("Expected NULL to be refused as an hstore")
       }),
       it("has an empty placeholder", fn() {
         // Arrange
-        let subject = codec.hstore()
+        let subject = hstore.hstore()
 
         // Act
         let placeholder = codec_type.placeholder(subject)

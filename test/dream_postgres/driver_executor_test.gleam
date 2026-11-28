@@ -5,7 +5,9 @@
 //// tests. A test that writes rows makes its own temporary table, so no
 //// table stays on the server.
 
-import dream_postgres/codec
+import dream_postgres/codecs
+import dream_postgres/codecs/array
+import dream_postgres/codecs/numeric
 import dream_postgres/driver/catalog
 import dream_postgres/driver/catalog_table
 import dream_postgres/driver/cell.{BinaryFormat, Idle, Text}
@@ -90,11 +92,11 @@ pub fn tests() -> TestSuite {
                   <> ") AS mixed(id, name, maybe, amount, items) ORDER BY id",
                 ),
                 {
-                  use id <- column(codec.int)
-                  use name <- column(codec.text)
-                  use maybe <- column(codec.nullable(codec.int))
-                  use amount <- column(codec.numeric)
-                  use items <- column(codec.array(codec.int))
+                  use id <- column(codecs.int)
+                  use name <- column(codecs.text)
+                  use maybe <- column(codecs.nullable(codecs.int))
+                  use amount <- column(numeric.numeric)
+                  use items <- column(array.array(codecs.int))
                   row(#(id, name, maybe, amount, items))
                 },
                 runner.DatabaseLayer(executor),
@@ -116,8 +118,8 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.one(
               definition.query("SELECT 41 + $1")
-                |> definition.parameter(codec.int, 1),
-              single(codec.int),
+                |> definition.parameter(codecs.int, 1),
+              single(codecs.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -133,8 +135,8 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
               definition.query("SELECT generate_series(1, $1)")
-                |> definition.parameter(codec.int, 0),
-              single(codec.int),
+                |> definition.parameter(codecs.int, 0),
+              single(codecs.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -150,8 +152,8 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
               definition.query("SELECT generate_series(1, $1)")
-                |> definition.parameter(codec.int, 1),
-              single(codec.int),
+                |> definition.parameter(codecs.int, 1),
+              single(codecs.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -168,8 +170,8 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.maybe_one(
               definition.query("SELECT generate_series(1, $1)")
-                |> definition.parameter(codec.int, 2),
-              single(codec.int),
+                |> definition.parameter(codecs.int, 2),
+              single(codecs.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -202,7 +204,7 @@ pub fn tests() -> TestSuite {
                 definition.query(
                   "UPDATE executor_counts SET id = id + 10 WHERE id > $1",
                 )
-                  |> definition.parameter(codec.int, 1),
+                  |> definition.parameter(codecs.int, 1),
                 runner.DatabaseLayer(executor),
                 [],
               ),
@@ -226,14 +228,14 @@ pub fn tests() -> TestSuite {
               let inserted =
                 runner.affected(
                   definition.query("INSERT INTO executor_mismatch VALUES ($1)")
-                    |> definition.parameter(codec.text, "1"),
+                    |> definition.parameter(codecs.text, "1"),
                   runner.DatabaseLayer(executor),
                   [],
                 )
               use count <- result.try(
                 runner.one(
                   definition.query("SELECT count(*) FROM executor_mismatch"),
-                  single(codec.int),
+                  single(codecs.int),
                   runner.DatabaseLayer(executor),
                   [],
                 ),
@@ -273,14 +275,14 @@ pub fn tests() -> TestSuite {
                   definition.query(
                     "INSERT INTO executor_returning VALUES (5) RETURNING id",
                   ),
-                  single(codec.text),
+                  single(codecs.text),
                   runner.DatabaseLayer(executor),
                   [],
                 )
               use count <- result.try(
                 runner.one(
                   definition.query("SELECT count(*) FROM executor_returning"),
-                  single(codec.int),
+                  single(codecs.int),
                   runner.DatabaseLayer(executor),
                   [],
                 ),
@@ -317,7 +319,7 @@ pub fn tests() -> TestSuite {
             |> run_on_executor(fn(executor) {
               runner.one(
                 definition.query("SELECT NULL::int4 AS total"),
-                single(codec.int),
+                single(codecs.int),
                 runner.DatabaseLayer(executor),
                 [],
               )
@@ -343,7 +345,7 @@ pub fn tests() -> TestSuite {
             |> run_on_executor(fn(executor) {
               runner.affected(
                 definition.query("INSERT INTO executor_unique VALUES ($1)")
-                  |> definition.parameter(codec.int, 1),
+                  |> definition.parameter(codecs.int, 1),
                 runner.DatabaseLayer(executor),
                 [],
               )
@@ -361,7 +363,7 @@ pub fn tests() -> TestSuite {
           |> run_on_executor(fn(executor) {
             runner.all(
               definition.query("SELEC 1"),
-              single(codec.int),
+              single(codecs.int),
               runner.DatabaseLayer(executor),
               [],
             )
@@ -411,7 +413,7 @@ pub fn tests() -> TestSuite {
               use _first <- result.try(
                 runner.all(
                   select_all,
-                  single(codec.int),
+                  single(codecs.int),
                   runner.DatabaseLayer(executor),
                   [],
                 ),
@@ -427,7 +429,7 @@ pub fn tests() -> TestSuite {
               )
               runner.all(
                 select_all,
-                single(codec.int),
+                single(codecs.int),
                 runner.DatabaseLayer(executor),
                 [],
               )

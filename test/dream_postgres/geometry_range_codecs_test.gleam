@@ -1,7 +1,7 @@
 //// The geometric, range and multirange codecs against the exact bytes and
 //// texts of PostgreSQL's formats.
 
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/codecs/codec_type.{Malformed, NullValue, OutOfRange}
 import dream_postgres/codecs/geometry.{
   Box, Circle, Line, LineSegment, Path, Point, Polygon,
@@ -423,7 +423,7 @@ pub fn tests() -> TestSuite {
     group("binary ranges", [
       it("takes int4range", fn() {
         // Arrange
-        let subject = range.range(codec.int)
+        let subject = range.range(codecs.int)
 
         // Act and assert
         subject
@@ -434,7 +434,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a range of an unknown element", fn() {
         // Arrange
-        let subject = range.range(codec.int)
+        let subject = range.range(codecs.int)
 
         // Act and assert
         subject
@@ -447,7 +447,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a type that is not a range", fn() {
         // Arrange
-        let subject = range.range(codec.int)
+        let subject = range.range(codecs.int)
 
         // Act and assert
         subject
@@ -463,7 +463,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(range.range(codec.int), type_catalog.int4_range())
+        |> encode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_ok()
         |> be_equal(
           Binary(<<
@@ -481,7 +481,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(range.range(codec.int), type_catalog.int4_range())
+        |> encode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_ok()
         |> be_equal(
           Binary(<<
@@ -499,7 +499,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(range.range(codec.int), type_catalog.int4_range())
+        |> encode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_ok()
         |> be_equal(Binary(<<18, range_bytes.int4_bound(1):bits>>))
         |> or_fail_with("Expected the flags 18 and only the lower bound 1")
@@ -511,7 +511,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(range.range(codec.int), type_catalog.int4_range())
+        |> encode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_ok()
         |> be_equal(Binary(<<8, range_bytes.int4_bound(5):bits>>))
         |> or_fail_with("Expected the flags 8 and only the upper bound 5")
@@ -523,7 +523,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(range.range(codec.int), type_catalog.int4_range())
+        |> encode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_ok()
         |> be_equal(Binary(<<1>>))
         |> or_fail_with("Expected the empty range as the flags 1")
@@ -535,7 +535,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(range.range(codec.int), type_catalog.int4_range())
+        |> encode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_error()
         |> be_equal("9999999999 is out of range for int4")
         |> or_fail_with(
@@ -550,7 +550,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          range.range(codec.nullable(codec.int)),
+          range.range(codecs.nullable(codecs.int)),
           type_catalog.int4_range(),
         )
         |> be_error()
@@ -564,7 +564,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(range.range(codec.int), type_catalog.int4())
+        |> encode_as(range.range(codecs.int), type_catalog.int4())
         |> be_error()
         |> be_equal("int4 is not a range type")
         |> or_fail_with("Expected a range of int to refuse to write int4")
@@ -581,7 +581,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.range(codec.int), type_catalog.int4_range())
+        |> decode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_ok()
         |> be_equal(range.Range(Inclusive(1), Exclusive(5)))
         |> or_fail_with("Expected the range [1,5)")
@@ -593,7 +593,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.range(codec.int), type_catalog.int4_range())
+        |> decode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_ok()
         |> be_equal(range.Range(Unbounded, Inclusive(5)))
         |> or_fail_with("Expected the range (,5]")
@@ -605,7 +605,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.range(codec.int), type_catalog.int4_range())
+        |> decode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_ok()
         |> be_equal(EmptyRange)
         |> or_fail_with("Expected the empty range")
@@ -617,7 +617,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.range(codec.int), type_catalog.int4_range())
+        |> decode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_error()
         |> be_equal(Malformed("the range is empty bytes"))
         |> or_fail_with("Expected a range of no bytes to be malformed")
@@ -629,7 +629,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.range(codec.int), type_catalog.int4_range())
+        |> decode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_error()
         |> be_equal(Malformed("a range bound is cut short"))
         |> or_fail_with("Expected a bound with no value bytes to be malformed")
@@ -641,7 +641,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.range(codec.int), type_catalog.int4_range())
+        |> decode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_error()
         |> be_equal(Malformed("the range has bytes after its bounds"))
         |> or_fail_with(
@@ -655,7 +655,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.range(codec.int), type_catalog.int4_range())
+        |> decode_as(range.range(codecs.int), type_catalog.int4_range())
         |> be_error()
         |> be_equal(NullValue)
         |> or_fail_with("Expected NULL to be refused as a range")
@@ -667,7 +667,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.range(codec.int), type_catalog.int4())
+        |> decode_as(range.range(codecs.int), type_catalog.int4())
         |> be_error()
         |> be_equal(Malformed("int4 is not a range type"))
         |> or_fail_with("Expected a range of int to refuse to read int4")
@@ -676,7 +676,7 @@ pub fn tests() -> TestSuite {
     group("binary multiranges", [
       it("takes int4multirange", fn() {
         // Arrange
-        let subject = range.multirange(codec.int)
+        let subject = range.multirange(codecs.int)
 
         // Act and assert
         subject
@@ -687,7 +687,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a multirange of an unknown range", fn() {
         // Arrange
-        let subject = range.multirange(codec.int)
+        let subject = range.multirange(codecs.int)
 
         // Act and assert
         subject
@@ -700,7 +700,7 @@ pub fn tests() -> TestSuite {
       }),
       it("refuses a type that is not a multirange", fn() {
         // Arrange
-        let subject = range.multirange(codec.int)
+        let subject = range.multirange(codecs.int)
 
         // Act and assert
         subject
@@ -720,7 +720,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_ok()
@@ -737,7 +737,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_error()
@@ -753,7 +753,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         value
         |> should
-        |> encode_as(range.multirange(codec.int), type_catalog.int4_range())
+        |> encode_as(range.multirange(codecs.int), type_catalog.int4_range())
         |> be_error()
         |> be_equal("int4range is not a multirange type")
         |> or_fail_with(
@@ -768,7 +768,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_ok()
@@ -786,7 +786,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_ok()
@@ -801,7 +801,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_error()
@@ -816,7 +816,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_error()
@@ -831,7 +831,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_error()
@@ -848,7 +848,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_error()
@@ -863,7 +863,7 @@ pub fn tests() -> TestSuite {
         cell
         |> should
         |> decode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.int4_multirange(),
         )
         |> be_error()
@@ -877,7 +877,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(range.multirange(codec.int), type_catalog.int4_range())
+        |> decode_as(range.multirange(codecs.int), type_catalog.int4_range())
         |> be_error()
         |> be_equal(Malformed("int4range is not a multirange type"))
         |> or_fail_with(
@@ -892,7 +892,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          range.multirange(codec.int),
+          range.multirange(codecs.int),
           type_catalog.multirange_of_int4(),
         )
         |> be_error()
@@ -960,7 +960,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          range.range(codec.nullable(path_codec.path())),
+          range.range(codecs.nullable(path_codec.path())),
           type_catalog.path_range(),
         )
         |> be_error()
@@ -1199,7 +1199,7 @@ pub fn tests() -> TestSuite {
         value
         |> should
         |> encode_as(
-          range.multirange(codec.nullable(path_codec.path())),
+          range.multirange(codecs.nullable(path_codec.path())),
           type_catalog.path_multirange(),
         )
         |> be_error()

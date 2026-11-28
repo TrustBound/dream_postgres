@@ -1,7 +1,8 @@
 //// Requests and answers for the tests of the normalizers, the keys and
 //// the secrets, with cells written already as a recorder sees them.
 
-import dream_postgres/codec
+import dream_postgres/codecs
+import dream_postgres/codecs/composite
 import dream_postgres/copy/request.{CopyRows, RecordedRows}
 import dream_postgres/driver/cell.{
   type Cell, type TypeDescription, Base, Binary, CommandResult,
@@ -126,7 +127,7 @@ pub fn copied_rows_of(type_name: String, rows: List(List(Cell))) -> Outcome {
 /// ```
 pub fn written(type_name: String, cell: Cell) -> Value {
   definition.written_as(
-    codec.field(codec.bytea, <<>>),
+    composite.field(codecs.bytea, <<>>),
     type_named(type_name),
     cell,
   )
@@ -142,7 +143,7 @@ pub fn written(type_name: String, cell: Cell) -> Value {
 /// ```
 pub fn written_secret() -> List(Value) {
   definition.query("SELECT $1")
-  |> definition.secret_parameter(codec.text, "hunter2")
+  |> definition.secret_parameter(codecs.text, "hunter2")
   |> definition.values
   |> list.map(definition.written_as(
     _,
@@ -159,7 +160,7 @@ pub fn written_secret() -> List(Value) {
 /// normalize_inputs.not_written()
 /// ```
 pub fn not_written() -> Value {
-  codec.field(codec.int, 1)
+  composite.field(codecs.int, 1)
 }
 
 /// A statement with the SQL and the parameters.

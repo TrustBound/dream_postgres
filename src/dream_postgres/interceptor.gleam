@@ -49,7 +49,7 @@
 //// reader and the same error mapping as a real one: a simulated deadlock
 //// is `Retry`, and in a transaction it rolls the transaction back.
 
-import dream_postgres/codec.{type Field}
+import dream_postgres/codecs/composite.{type Field}
 import dream_postgres/copy/request
 import dream_postgres/driver/cell.{
   type CommandResult, type StatementDescription, type TypeDescription, Base,
@@ -162,7 +162,8 @@ pub type Column {
 /// ### Answer a query with rows <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/answer_with_two_posts.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/codec.{field, int, text}
+/// import dream_postgres/codecs.{int, text}
+/// import dream_postgres/codecs/composite.{field}
 /// import dream_postgres/interceptor.{type Outcome, type Request, column, rows}
 /// import gleam/option.{None, Some}
 ///
@@ -192,7 +193,8 @@ pub fn column(name: String, type_name: String) -> Column {
 /// ### Answer a query with rows <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/answer_with_two_posts.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
-/// import dream_postgres/codec.{field, int, text}
+/// import dream_postgres/codecs.{int, text}
+/// import dream_postgres/codecs/composite.{field}
 /// import dream_postgres/interceptor.{type Outcome, type Request, column, rows}
 /// import gleam/option.{None, Some}
 ///

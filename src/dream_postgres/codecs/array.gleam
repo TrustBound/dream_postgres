@@ -1,8 +1,6 @@
-//// The codec of an array: PostgreSQL's binary array format
-//// (`array_send` and `array_recv` in PostgreSQL's source) and the text form
-//// `{a,"b c",NULL}`. `dream_postgres/codec.array` gives it to a program.
-////
-//// This module is internal to dream_postgres.
+//// The codec of PostgreSQL's one-dimensional arrays, as a `List`, in the
+//// binary array format (`array_send` and `array_recv` in PostgreSQL's
+//// source) and the text form `{a,"b c",NULL}`.
 
 import dream_postgres/codecs/codec_type.{
   type Codec, type DecodeIssue, type TypeLookup, Codec, Malformed, NullValue,
@@ -19,7 +17,21 @@ import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 
-/// The codec of an array whose elements have the codec `element`.
+/// A codec of a one-dimensional array, as a `List`. An element that is NULL
+/// needs a nullable element codec:
+///
+/// ### An array whose elements can be NULL <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/scores_codec.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/codecs.{type Codec, int, nullable}
+/// import dream_postgres/codecs/array.{array}
+/// import gleam/option.{type Option}
+///
+/// /// A codec of `int4[]` whose elements can be NULL.
+/// pub fn scores_codec() -> Codec(List(Option(Int))) {
+///   array(nullable(int))
+/// }
+/// ```
 pub fn array(element: Codec(a)) -> Codec(List(a)) {
   Codec(
     name: "array of " <> element.name,

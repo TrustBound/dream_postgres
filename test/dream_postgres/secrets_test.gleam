@@ -1,7 +1,7 @@
 //// The secrets of a config, on text and on the rows of answers, with no
 //// database.
 
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/driver/cell.{Binary, Null, StatementDescription}
 import dream_postgres/error.{SecretColumnNotReplaced}
 import dream_postgres/pool.{named_connection}
@@ -33,7 +33,7 @@ pub fn unit_tests() -> TestSuite {
     unit.it("an error of a name that no pool has keeps no SQL", fn() {
       // Act and assert
       query("SELECT 'sk_live_1'")
-      |> one(single(codec.text), named_connection(process.new_name("no_pool")))
+      |> one(single(codecs.text), named_connection(process.new_name("no_pool")))
       |> should
       |> be_error()
       |> have_cause()
@@ -54,7 +54,7 @@ pub fn unit_tests() -> TestSuite {
     unit.it("replace_columns replaces the value of a secret column", fn() {
       // Act and assert
       secrets.new()
-      |> secrets.column("token", codec.text, with: "token-redacted")
+      |> secrets.column("token", codecs.text, with: "token-redacted")
       |> secrets.replace_columns(
         StatementDescription(parameters: [], columns: [
           column_description.new("id", 1),
@@ -72,7 +72,7 @@ pub fn unit_tests() -> TestSuite {
     unit.it("replace_columns leaves a NULL of a secret column", fn() {
       // Act and assert
       secrets.new()
-      |> secrets.column("token", codec.text, with: "token-redacted")
+      |> secrets.column("token", codecs.text, with: "token-redacted")
       |> secrets.replace_columns(
         StatementDescription(parameters: [], columns: [
           column_description.new("token", 1),
@@ -87,7 +87,7 @@ pub fn unit_tests() -> TestSuite {
     unit.it("replace_columns refuses a codec that does not take the type", fn() {
       // Act and assert
       secrets.new()
-      |> secrets.column("token", codec.int, with: 1)
+      |> secrets.column("token", codecs.int, with: 1)
       |> secrets.replace_columns(
         StatementDescription(parameters: [], columns: [
           column_description.new("token", 1),
@@ -107,7 +107,7 @@ pub fn unit_tests() -> TestSuite {
     unit.it("replace_columns gives the reason a value cannot be written", fn() {
       // Act and assert
       secrets.new()
-      |> secrets.column("small", codec.int, with: 100_000)
+      |> secrets.column("small", codecs.int, with: 100_000)
       |> secrets.replace_columns(
         StatementDescription(parameters: [], columns: [
           column_description.new("small", 1),
@@ -129,7 +129,7 @@ pub fn unit_tests() -> TestSuite {
       fn() {
         // Act and assert
         secrets.new()
-        |> secrets.column("token", codec.text, with: "token-redacted")
+        |> secrets.column("token", codecs.text, with: "token-redacted")
         |> secrets.replace_columns(
           StatementDescription(parameters: [], columns: [
             column_description.new("token", 2),
@@ -167,7 +167,7 @@ pub fn tests() -> TestSuite {
             |> should
             |> run_on_configured_pool(app_config, fn(connection) {
               query("SELECT 'sk_live_1' +")
-              |> one(single(codec.text), connection)
+              |> one(single(codecs.text), connection)
             })
             |> be_error()
             |> have_cause()
@@ -187,7 +187,7 @@ pub fn tests() -> TestSuite {
               record_spans_here()
               let _token =
                 query("SELECT 'sk_live_1'")
-                |> one(single(codec.text), connection)
+                |> one(single(codecs.text), connection)
               spans_now()
             })
             |> extract_span_attributes()
@@ -201,7 +201,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> run_on_configured_pool(app_config, fn(connection) {
             query("SELECT 'sk_live_1' AS token")
-            |> one(single(codec.text), connection)
+            |> one(single(codecs.text), connection)
           })
           |> be_equal(Ok("sk_live_1"))
           |> or_fail_with("Expected the live value")

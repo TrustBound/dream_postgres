@@ -100,7 +100,7 @@ A row reader says how to read one row of a result. `column` reads the next colum
 ### A row reader for users <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/user_row.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/row.{type Row, column, row}
 
 pub type User {
@@ -116,7 +116,7 @@ pub fn user_row() -> Row(User) {
 }
 ```
 
-A codec connects a Gleam type and a PostgreSQL type. `codec.int` reads `int2`, `int4`, `int8` and `oid` as `Int`. `codec.text` reads `text`, `varchar` and the other text types as `String`. The [codecs guide](codecs.md) lists each codec.
+A codec connects a Gleam type and a PostgreSQL type. `codecs.int` reads `int2`, `int4`, `int8` and `oid` as `Int`. `codecs.text` reads `text`, `varchar` and the other text types as `String`. The [codecs guide](codecs.md) lists each codec.
 
 ## Step 4: Store a user
 
@@ -126,7 +126,7 @@ A codec connects a Gleam type and a PostgreSQL type. `codec.int` reads `int2`, `
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}
@@ -157,7 +157,7 @@ The server prepares each statement and describes its parameters and columns. Bef
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{maybe_one, named, parameter, query}
@@ -206,7 +206,7 @@ pub fn list_users(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{affected, parameter, query}

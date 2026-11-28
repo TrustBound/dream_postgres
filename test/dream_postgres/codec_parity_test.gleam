@@ -2,9 +2,12 @@
 //// against the exact bytes of PostgreSQL's binary formats. CODEC_PARITY.md
 //// maps each value case of the fork to its test.
 
-import dream_postgres/codec.{type Codec}
+import dream_postgres/codecs.{type Codec}
+import dream_postgres/codecs/array
 import dream_postgres/codecs/codec_type.{OutOfRange}
+import dream_postgres/codecs/composite
 import dream_postgres/codecs/geometry.{type Point}
+import dream_postgres/codecs/numeric
 import dream_postgres/codecs/range.{Inclusive, Unbounded}
 import dream_postgres/driver/cell.{Binary}
 import dream_postgres/row/reader.{column, row}
@@ -144,7 +147,7 @@ pub fn tests() -> TestSuite {
       }),
       it("gives OutOfRange for a point array with a NaN coordinate", fn() {
         // Arrange
-        let points: Codec(List(Point)) = codec.array(geometry.point)
+        let points: Codec(List(Point)) = array.array(geometry.point)
         let cell =
           Binary(<<
             1:size(32),
@@ -174,7 +177,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         cell
         |> should
-        |> decode_as(codec.numeric, type_catalog.numeric())
+        |> decode_as(numeric.numeric, type_catalog.numeric())
         |> be_ok()
         |> be_equal("0")
         |> or_fail_with("Expected a negative zero to read as 0")
@@ -186,7 +189,7 @@ pub fn tests() -> TestSuite {
         // Act and assert
         bounds
         |> should
-        |> encode_as(range.range(codec.numeric), type_catalog.numeric_range())
+        |> encode_as(range.range(numeric.numeric), type_catalog.numeric_range())
         |> be_error()
         |> be_equal("\"abc\" is not a numeric value")
         |> or_fail_with("Expected the bound abc to be refused")
@@ -195,7 +198,7 @@ pub fn tests() -> TestSuite {
     group("types with no built-in codec", [
       it("int does not take aclitem", fn() {
         // Arrange
-        let subject = codec.int
+        let subject = codecs.int
 
         // Act and assert
         subject
@@ -206,7 +209,7 @@ pub fn tests() -> TestSuite {
       }),
       it("text does not take pg_node_tree", fn() {
         // Arrange
-        let subject = codec.text
+        let subject = codecs.text
 
         // Act and assert
         subject
@@ -218,7 +221,7 @@ pub fn tests() -> TestSuite {
       it("a custom codec takes pg_node_tree", fn() {
         // Arrange
         let subject =
-          codec.custom(
+          codecs.custom(
             type_name: "pg_node_tree",
             to_text: fn(text) { text },
             from_text: Ok,
@@ -234,7 +237,7 @@ pub fn tests() -> TestSuite {
       }),
       it("an array does not take anyarray", fn() {
         // Arrange
-        let subject = codec.array(codec.int)
+        let subject = array.array(codecs.int)
 
         // Act and assert
         subject
@@ -246,13 +249,13 @@ pub fn tests() -> TestSuite {
       it("a composite does not take the anonymous record", fn() {
         // Arrange
         let subject =
-          codec.composite(
+          composite.composite(
             "record",
             read: {
-              use first <- column(codec.int)
+              use first <- column(codecs.int)
               row(first)
             },
-            write: fn(first) { [codec.field(codec.int, first)] },
+            write: fn(first) { [composite.field(codecs.int, first)] },
             placeholder: 0,
           )
 

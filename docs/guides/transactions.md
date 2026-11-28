@@ -39,7 +39,7 @@ This example has its own cause type, so that a rule can refuse the move:
 
 ```gleam
 import dream_errors.{type Error, Invalid}
-import dream_postgres/codec.{int}
+import dream_postgres/codecs.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{affected, one, parameter, query}
@@ -134,7 +134,7 @@ A plan where every error is a database error uses `function.identity` and `trans
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int}
+import dream_postgres/codecs.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}
@@ -191,7 +191,7 @@ fn open_account(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int}
+import dream_postgres/codecs.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, query}
@@ -243,7 +243,7 @@ A serialization failure is a `Retry` error: nothing happened, and a new run of t
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int}
+import dream_postgres/codecs.{int}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{one, parameter, query}

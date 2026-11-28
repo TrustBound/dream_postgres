@@ -6,7 +6,7 @@
 //// listener test on PostgreSQL 17, so that the two listeners of the
 //// channel `jobs` never get each other's notifications.
 
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/codecs/range.{Exclusive, Inclusive, Range}
 import dream_postgres/config.{type PoolEvent, type ServerNotice, Connected}
 import dream_postgres/error
@@ -171,7 +171,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> be_ok()
           |> run_and_stop_pool(fn(pool) {
-            query("SELECT current_query()") |> one(single(codec.text), pool)
+            query("SELECT current_query()") |> one(single(codecs.text), pool)
           })
           |> be_ok()
           |> be_equal("/* billing */ SELECT current_query()")
@@ -210,7 +210,7 @@ pub fn tests() -> TestSuite {
           |> should
           |> be_ok()
           |> run_and_stop_pool(fn(pool) {
-            query("SELECT 1") |> one(single(codec.int), pool)
+            query("SELECT 1") |> one(single(codecs.int), pool)
           })
           |> be_ok()
           |> be_equal(1)
@@ -631,13 +631,13 @@ CREATE TYPE pg_temp.address AS (street text, city text)",
                 fn(held) {
                   use _deleted <- result.try(
                     query("DELETE FROM users WHERE id = $1")
-                    |> parameter(codec.int, 1)
+                    |> parameter(codecs.int, 1)
                     |> affected(held)
                     |> result.map_error(list.wrap),
                   )
                   use _found <- result.try(
                     query("SELECT id, email FROM users WHERE id = $1")
-                    |> parameter(codec.int, 1)
+                    |> parameter(codecs.int, 1)
                     |> affected(held)
                     |> result.map_error(list.wrap),
                   )

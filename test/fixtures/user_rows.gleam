@@ -1,7 +1,8 @@
 //// A result of three user columns, `id int4, name text, score numeric`,
 //// with its readers and the cells of one row.
 
-import dream_postgres/codec
+import dream_postgres/codecs
+import dream_postgres/codecs/numeric
 import dream_postgres/driver/cell.{type Cell, Binary}
 import dream_postgres/row/reader.{
   type DescribedColumn, type Row, column, column_at, column_named, row,
@@ -37,9 +38,9 @@ pub fn columns() -> List(DescribedColumn) {
 /// // -> Ok(#(7, "Ada", "9.5"))
 /// ```
 pub fn reader() -> Row(#(Int, String, String)) {
-  use id <- column(codec.int)
-  use name <- column(codec.text)
-  use score <- column(codec.numeric)
+  use id <- column(codecs.int)
+  use name <- column(codecs.text)
+  use score <- column(numeric.numeric)
   row(#(id, name, score))
 }
 
@@ -55,8 +56,8 @@ pub fn reader() -> Row(#(Int, String, String)) {
 /// // -> Ok(#("9.5", 7))
 /// ```
 pub fn score_and_id_reader() -> Row(#(String, Int)) {
-  use score <- column_at(3, codec.numeric)
-  use id <- column_named("id", codec.int)
+  use score <- column_at(3, numeric.numeric)
+  use id <- column_named("id", codecs.int)
   row(#(score, id))
 }
 

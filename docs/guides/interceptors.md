@@ -22,7 +22,7 @@ A `Request` has four fields:
 |---|---|
 | `sql` | the SQL text |
 | `name` | the name that `named` gave the query, or `None` |
-| `parameters` | the parameters with their codecs, `$1` first, as `codec.field` makes them. A `run_sql` call has none. |
+| `parameters` | the parameters with their codecs, `$1` first, as `composite.field` makes them. A `run_sql` call has none. |
 | `kind` | `Statement`, `Sql`, `CopyFrom(table, columns, rows)` or `CopyTo` |
 
 These two interceptors change the request, and watch the time of each request:
@@ -95,7 +95,7 @@ pub fn start_tagged_pool(
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{text}
+import dream_postgres/codecs.{text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection, with_interceptor}
 import dream_postgres/query.{one, query}
@@ -149,7 +149,8 @@ The outcome of the chain goes through the same row reader and the same error map
 ### Answer a query with rows <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/answer_with_two_posts.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
-import dream_postgres/codec.{field, int, text}
+import dream_postgres/codecs.{int, text}
+import dream_postgres/codecs/composite.{field}
 import dream_postgres/interceptor.{type Outcome, type Request, column, rows}
 import gleam/option.{None, Some}
 
@@ -174,7 +175,7 @@ The code under test reads this answer with its own row reader:
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
 import dream_postgres/query.{all, named, query}

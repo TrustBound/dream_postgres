@@ -4,7 +4,7 @@
 //// server.
 
 import dream_errors.{Failed, Invalid, NotFound, Retry, Timeout, Unavailable}
-import dream_postgres/codec
+import dream_postgres/codecs
 import dream_postgres/codecs/json
 import dream_postgres/config
 import dream_postgres/error
@@ -103,7 +103,7 @@ fn connecting_tests() {
       |> should
       |> be_ok()
       |> run_and_stop_pool(fn(connection) {
-        query("SELECT 1") |> one(single(codec.int), connection)
+        query("SELECT 1") |> one(single(codecs.int), connection)
       })
       |> be_ok()
       |> be_equal(1)
@@ -119,7 +119,7 @@ fn connecting_tests() {
       |> should
       |> be_ok()
       |> run_and_stop_pool(fn(connection) {
-        query("SELECT 1") |> one(single(codec.int), connection)
+        query("SELECT 1") |> one(single(codecs.int), connection)
       })
       |> be_ok()
       |> be_equal(1)
@@ -132,7 +132,7 @@ fn connecting_tests() {
       |> should
       |> run_on_started_pool(fn(connection) {
         query("SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
-        |> one(single(codec.bool), connection)
+        |> one(single(codecs.bool), connection)
       })
       |> be_ok()
       |> be_equal(True)
@@ -144,7 +144,7 @@ fn connecting_tests() {
       |> slow_reconnects
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> one(single(codec.int), connection)
+        query("SELECT 1") |> one(single(codecs.int), connection)
       })
       |> be_ok()
       |> be_equal(1)
@@ -173,12 +173,12 @@ fn connecting_tests() {
       |> run_on_started_pool(fn(connection) {
         use _first <- result.try(
           query("SELECT $1::int8")
-          |> parameter(codec.int, 1)
-          |> one(single(codec.int), connection),
+          |> parameter(codecs.int, 1)
+          |> one(single(codecs.int), connection),
         )
         query("SELECT $1::int8")
-        |> parameter(codec.int, 2)
-        |> one(single(codec.int), connection)
+        |> parameter(codecs.int, 2)
+        |> one(single(codecs.int), connection)
       })
       |> be_ok()
       |> be_equal(2)
@@ -190,7 +190,7 @@ fn connecting_tests() {
       |> busy_service
       |> should
       |> run_on_started_pool(fn(connection) {
-        query("SELECT 1") |> one(single(codec.int), connection)
+        query("SELECT 1") |> one(single(codecs.int), connection)
       })
       |> be_ok()
       |> be_equal(1)

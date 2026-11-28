@@ -25,7 +25,9 @@ import gleam/list
 import gleam/result
 import gleam/string
 
-/// `numeric`, as its exact text, in the binary format.
+/// `numeric`, as its exact text, for example `"1234.5600"`, `"NaN"` or
+/// `"Infinity"`. No digit is lost, and no float rounding happens. It uses
+/// the binary format, so it also reads a numeric field of a composite.
 pub const numeric =
   Codec(
     name: "numeric",

@@ -1,4 +1,4 @@
-import dream_postgres/codec.{int, text}
+import dream_postgres/codecs.{int, text}
 import dream_postgres/row.{type Row, column, row}
 
 pub type User {

@@ -27,13 +27,14 @@ The examples use this table:
 CREATE TABLE users (id int4, email text)
 ```
 
-A `User` has an id and an email that can be NULL. `user_fields` gives the fields of one user, one for each column, in the order of the columns. `codec.field` pairs a codec with a value, as `parameter` does for a query:
+A `User` has an id and an email that can be NULL. `user_fields` gives the fields of one user, one for each column, in the order of the columns. `composite.field` pairs a codec with a value, as `parameter` does for a query:
 
 ### Store users with one COPY <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/copy_users.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{type Field, field, int, nullable, text}
+import dream_postgres/codecs.{int, nullable, text}
+import dream_postgres/codecs/composite.{type Field, field}
 import dream_postgres/copy.{copy_from, table}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
@@ -84,7 +85,8 @@ For a table in a schema, use `table_in_schema`. It quotes the schema and the nam
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{type Field, field, int}
+import dream_postgres/codecs.{int}
+import dream_postgres/codecs/composite.{type Field, field}
 import dream_postgres/copy.{copy_from, table_in_schema}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
@@ -151,7 +153,7 @@ A fold does not have to make a list. This one keeps only a sum:
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int}
+import dream_postgres/codecs.{int}
 import dream_postgres/copy.{copy_to}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
@@ -178,13 +180,13 @@ pub fn sum_of_totals(
 
 A row that the reader cannot read stops `copy_to`, with the reason of that row, for example `UnexpectedNull`. The driver then reads the rest of the COPY from the server and drops it. The session stays usable, and so does a transaction that the COPY runs in. The time that this takes grows with the rows that are left, and the query timeout of the config limits it.
 
-This function reads each total with `codec.int`, which takes no NULL. A NULL total stops the COPY. The transaction goes on, and a query counts the invoices instead:
+This function reads each total with `codecs.int`, which takes no NULL. A NULL total stops the COPY. The transaction goes on, and a query counts the invoices instead:
 
 ### Go on in the transaction after a stopped COPY <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/count_invoices.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 
 ```gleam
 import dream_errors.{type Error}
-import dream_postgres/codec.{int}
+import dream_postgres/codecs.{int}
 import dream_postgres/copy.{copy_to}
 import dream_postgres/error.{type PostgresError}
 import dream_postgres/pool.{type Connection}
@@ -236,7 +238,7 @@ A failed row of `copy_from` stops that COPY too. The server gets a CopyFail mess
 
 | Failure | Reason | Kind |
 |---|---|---|
-| A field or a column reader has the codec of `codec.custom`, which uses the text format. A binary COPY needs codecs in the binary format. | `CopyNeedsBinaryCodec` | `Failed` |
+| A field or a column reader has the codec of `codecs.custom`, which uses the text format. A binary COPY needs codecs in the binary format. | `CopyNeedsBinaryCodec` | `Failed` |
 | The query of `copy_to` has parameters. PostgreSQL takes no parameters in a COPY statement. | `CopyQueryHasParameters` | `Failed` |
 | A field of the first row does not fit the type of its column. | `ParameterTypeMismatch` | `Failed` |
 | The reader of `copy_to` does not fit the columns of the query. | as for `all` | `Failed` |
