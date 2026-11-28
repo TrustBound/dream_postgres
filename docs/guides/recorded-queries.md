@@ -38,8 +38,7 @@ The app and its tests share one config. It holds the interceptors of the app and
 
 ```gleam
 import dream_postgres/codec.{text}
-import dream_postgres/config.{type Config, intercept, set_secrets}
-import dream_postgres/secrets.{secrets}
+import dream_postgres/config.{type Config, intercept, secret_column, secret_text}
 import snippets/request_tagging.{tag_with_app_name}
 
 /// The config of the app, shared by the app and its tests. `config` points
@@ -47,11 +46,8 @@ import snippets/request_tagging.{tag_with_app_name}
 pub fn app_config(config: Config) -> Config {
   config
   |> intercept(tag_with_app_name)
-  |> set_secrets(
-    secrets()
-    |> secrets.text("sk_live_", with: "sk_test_")
-    |> secrets.column("token", text, with: "token-redacted"),
-  )
+  |> secret_text("sk_live_", with: "sk_test_")
+  |> secret_column("token", text, with: "token-redacted")
 }
 ```
 
@@ -302,12 +298,12 @@ Each recording starts with no UUID known. A placeholder does not change, so the 
 
 ## Secrets
 
-`config.set_secrets` declares the secrets of the config one time. They apply to each copy of a request that leaves the process:
+`secret_text` and `secret_column` declare the secrets of the config one time. They apply to each copy of a request that leaves the process:
 
 | Secret | The recording | `PostgresError.sql` | The text of the trace span |
 |---|---|---|---|
-| `secrets.text(secret, with:)` | the SQL of each request | yes | yes |
-| `secrets.column(name, codec, with:)` | the value of the column in each saved row. A NULL stays NULL | no | no |
+| `secret_text(secret, with:)` | the SQL of each request | yes | yes |
+| `secret_column(name, codec, with:)` | the value of the column in each saved row. A NULL stays NULL | no | no |
 
 The database and the app always get the real values. The recorder reads the secrets of the config that it is attached to, and applies them before its own interceptors. When no pool runs under the name of a `named_connection`, the secrets of that pool are not known, so its error holds no SQL.
 

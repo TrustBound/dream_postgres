@@ -1,6 +1,5 @@
 import dream_postgres/codec.{text}
-import dream_postgres/config.{type Config, intercept, set_secrets}
-import dream_postgres/secrets.{secrets}
+import dream_postgres/config.{type Config, intercept, secret_column, secret_text}
 import snippets/request_tagging.{tag_with_app_name}
 
 /// The config of the app, shared by the app and its tests. `config` points
@@ -8,9 +7,6 @@ import snippets/request_tagging.{tag_with_app_name}
 pub fn app_config(config: Config) -> Config {
   config
   |> intercept(tag_with_app_name)
-  |> set_secrets(
-    secrets()
-    |> secrets.text("sk_live_", with: "sk_test_")
-    |> secrets.column("token", text, with: "token-redacted"),
-  )
+  |> secret_text("sk_live_", with: "sk_test_")
+  |> secret_column("token", text, with: "token-redacted")
 }

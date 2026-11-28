@@ -186,7 +186,7 @@ pub type Reason {
   /// recording in place of a connection.
   PoolHasNoDatabase
   /// A recorder could not write the replacement value of a secret column
-  /// of `secrets.column`, so the answer is not saved.
+  /// of `config.secret_column`, so the answer is not saved.
   SecretColumnNotReplaced(column: String, reason: String)
   /// A COPY statement went to a query runner or a `run_sql` call. A query runner
   /// and a `run_sql` call do not run COPY. `statements_run` is the number of

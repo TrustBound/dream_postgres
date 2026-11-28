@@ -14,6 +14,7 @@ internal_modules = [
     "dream_postgres/query/*",
     "dream_postgres/recorder/*",
     "dream_postgres/row/*",
+    "dream_postgres/secrets",
     "dream_postgres/url/*",
 ]
 links = [

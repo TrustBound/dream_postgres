@@ -1,30 +1,10 @@
 //// The secrets of a config: text to replace in SQL, and columns whose
-//// values to replace. Declare them once on the config with
-//// `config.set_secrets`. They apply to each copy of a request that
-//// leaves the process: the recording of a recorder, the SQL of a
-//// `PostgresError`, and the text of the trace span of each statement. The
-//// database and the app always get the real values.
+//// values to replace. A program declares them with `config.secret_text` and
+//// `config.secret_column`. They apply to each copy of a request that leaves
+//// the process: the recording of a recorder, the SQL of a `PostgresError`,
+//// and the text of the trace span of each statement.
 ////
-//// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-////
-//// ```gleam
-//// import dream_postgres/codec.{text}
-//// import dream_postgres/config.{type Config, intercept, set_secrets}
-//// import dream_postgres/secrets.{secrets}
-//// import snippets/request_tagging.{tag_with_app_name}
-////
-//// /// The config of the app, shared by the app and its tests. `config` points
-//// /// at the server of each run.
-//// pub fn app_config(config: Config) -> Config {
-////   config
-////   |> intercept(tag_with_app_name)
-////   |> set_secrets(
-////     secrets()
-////     |> secrets.text("sk_live_", with: "sk_test_")
-////     |> secrets.column("token", text, with: "token-redacted"),
-////   )
-//// }
-//// ```
+//// This module is internal to dream_postgres.
 
 import dream_postgres/codec.{type Codec}
 import dream_postgres/codec/codec_type.{type TypeLookup}
@@ -57,54 +37,12 @@ type SecretColumn {
 }
 
 /// No secrets.
-///
-/// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/codec.{text}
-/// import dream_postgres/config.{type Config, intercept, set_secrets}
-/// import dream_postgres/secrets.{secrets}
-/// import snippets/request_tagging.{tag_with_app_name}
-///
-/// /// The config of the app, shared by the app and its tests. `config` points
-/// /// at the server of each run.
-/// pub fn app_config(config: Config) -> Config {
-///   config
-///   |> intercept(tag_with_app_name)
-///   |> set_secrets(
-///     secrets()
-///     |> secrets.text("sk_live_", with: "sk_test_")
-///     |> secrets.column("token", text, with: "token-redacted"),
-///   )
-/// }
-/// ```
 pub fn secrets() -> Secrets {
   Secrets(texts: [], columns: [])
 }
 
 /// Replaces each `secret` in the SQL of each copy with `replacement`. The
 /// texts are replaced in the order they were added.
-///
-/// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/codec.{text}
-/// import dream_postgres/config.{type Config, intercept, set_secrets}
-/// import dream_postgres/secrets.{secrets}
-/// import snippets/request_tagging.{tag_with_app_name}
-///
-/// /// The config of the app, shared by the app and its tests. `config` points
-/// /// at the server of each run.
-/// pub fn app_config(config: Config) -> Config {
-///   config
-///   |> intercept(tag_with_app_name)
-///   |> set_secrets(
-///     secrets()
-///     |> secrets.text("sk_live_", with: "sk_test_")
-///     |> secrets.column("token", text, with: "token-redacted"),
-///   )
-/// }
-/// ```
 pub fn text(
   declared: Secrets,
   secret: String,
@@ -119,27 +57,6 @@ pub fn text(
 /// Replaces the value of each column called `name` in the rows that a
 /// recorder saves with `replacement`, written with `codec`. A NULL stays
 /// NULL. The rows of a `run_sql` call are not read, so they do not change.
-///
-/// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
-///
-/// ```gleam
-/// import dream_postgres/codec.{text}
-/// import dream_postgres/config.{type Config, intercept, set_secrets}
-/// import dream_postgres/secrets.{secrets}
-/// import snippets/request_tagging.{tag_with_app_name}
-///
-/// /// The config of the app, shared by the app and its tests. `config` points
-/// /// at the server of each run.
-/// pub fn app_config(config: Config) -> Config {
-///   config
-///   |> intercept(tag_with_app_name)
-///   |> set_secrets(
-///     secrets()
-///     |> secrets.text("sk_live_", with: "sk_test_")
-///     |> secrets.column("token", text, with: "token-redacted"),
-///   )
-/// }
-/// ```
 pub fn column(
   declared: Secrets,
   name: String,
@@ -162,8 +79,8 @@ pub fn column(
 
 /// The text with each secret text replaced.
 @internal
-pub fn replace_text(declared: Secrets, text: String) -> String {
-  list.fold(declared.texts, text, fn(replaced, secret_text) {
+pub fn replace_text(declared: Secrets, sql: String) -> String {
+  list.fold(declared.texts, sql, fn(replaced, secret_text) {
     string.replace(
       replaced,
       each: secret_text.secret,

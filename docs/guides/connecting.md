@@ -40,7 +40,7 @@ This guide shows each setting of a pool: the server and the login, TLS, a pool u
 | Subject for notices | `notices` | none |
 | Subject for pool events | `pool_events` | none |
 | Interceptors | `intercept` | none, see the [interceptors guide](interceptors.md) |
-| Secrets | `set_secrets` | none, see the [recorded queries guide](recorded-queries.md) |
+| Secrets | `secret_text`, `secret_column` | none, see the [recorded queries guide](recorded-queries.md) |
 | Recorder | `record` | none, see the [recorded queries guide](recorded-queries.md) |
 
 The login uses the method that the server asks for: SCRAM-SHA-256, MD5, a cleartext password, or no password. With TLS on, SCRAM uses channel binding when the server offers SCRAM-SHA-256-PLUS, as libpq does by default.

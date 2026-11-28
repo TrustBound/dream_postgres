@@ -5,6 +5,7 @@
 //// to `pool.start_pool` or `pool.supervised`.
 
 import dream_errors.{type Error}
+import dream_postgres/codec.{type Codec}
 import dream_postgres/driver/cell.{type ServerReport}
 import dream_postgres/driver/connection/backoff as connection_backoff
 import dream_postgres/driver/connection/settings as connection_settings
@@ -22,7 +23,7 @@ import dream_postgres/query/driver_executor
 import dream_postgres/reconnect.{type ReconnectStep, ReconnectStep, full_jitter}
 import dream_postgres/recorder.{type Recorder}
 import dream_postgres/recorder/replay.{type Replay}
-import dream_postgres/secrets.{type Secrets, secrets}
+import dream_postgres/secrets.{type Secrets, column, secrets, text}
 import dream_postgres/sql_state.{type SqlState}
 import gleam/erlang/process.{type Subject}
 import gleam/list
@@ -275,18 +276,17 @@ pub fn intercept(config: Config, added_interceptor: Interceptor) -> Config {
   )
 }
 
-/// Sets the secrets of the config. They apply to each copy of a request
-/// that leaves the process: the recording of a recorder, the SQL of a
-/// `PostgresError`, and the text of the trace span of each statement. The
-/// database and the app always get the real values. See
-/// `dream_postgres/secrets`.
+/// Replaces each `secret` with `replacement` in each copy of a request that
+/// leaves the process: the SQL of a recording, the SQL of a `PostgresError`,
+/// and the text of the trace span of each statement. The database and the
+/// app always get the real values. The texts are replaced in the order they
+/// were added.
 ///
 /// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
 ///
 /// ```gleam
 /// import dream_postgres/codec.{text}
-/// import dream_postgres/config.{type Config, intercept, set_secrets}
-/// import dream_postgres/secrets.{secrets}
+/// import dream_postgres/config.{type Config, intercept, secret_column, secret_text}
 /// import snippets/request_tagging.{tag_with_app_name}
 ///
 /// /// The config of the app, shared by the app and its tests. `config` points
@@ -294,15 +294,48 @@ pub fn intercept(config: Config, added_interceptor: Interceptor) -> Config {
 /// pub fn app_config(config: Config) -> Config {
 ///   config
 ///   |> intercept(tag_with_app_name)
-///   |> set_secrets(
-///     secrets()
-///     |> secrets.text("sk_live_", with: "sk_test_")
-///     |> secrets.column("token", text, with: "token-redacted"),
-///   )
+///   |> secret_text("sk_live_", with: "sk_test_")
+///   |> secret_column("token", text, with: "token-redacted")
 /// }
 /// ```
-pub fn set_secrets(config: Config, declared: Secrets) -> Config {
-  Config(..config, secrets: declared)
+pub fn secret_text(
+  config: Config,
+  secret: String,
+  with replacement: String,
+) -> Config {
+  Config(..config, secrets: text(config.secrets, secret, with: replacement))
+}
+
+/// Replaces the value of each column called `name` in the rows that a
+/// recorder saves with `replacement`, written with `codec`. A NULL stays
+/// NULL. The rows of a `run_sql` call are not read, so they do not change.
+///
+/// ### Declare the secrets of the app <a href="https://github.com/TrustBound/dream_postgres/blob/3.0.0/test/snippets/app_config.gleam"><img align="right" alt="Tested snippet" src="https://img.shields.io/badge/%F0%9F%A7%AA_tested-snippet-lightgreen.svg?style=flat-square"></a>
+///
+/// ```gleam
+/// import dream_postgres/codec.{text}
+/// import dream_postgres/config.{type Config, intercept, secret_column, secret_text}
+/// import snippets/request_tagging.{tag_with_app_name}
+///
+/// /// The config of the app, shared by the app and its tests. `config` points
+/// /// at the server of each run.
+/// pub fn app_config(config: Config) -> Config {
+///   config
+///   |> intercept(tag_with_app_name)
+///   |> secret_text("sk_live_", with: "sk_test_")
+///   |> secret_column("token", text, with: "token-redacted")
+/// }
+/// ```
+pub fn secret_column(
+  config: Config,
+  name: String,
+  codec: Codec(a),
+  with replacement: a,
+) -> Config {
+  Config(
+    ..config,
+    secrets: column(config.secrets, name, codec, with: replacement),
+  )
 }
 
 /// Attaches a started recorder: `start_pool` and `supervised` then make the
